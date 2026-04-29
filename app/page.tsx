@@ -23,7 +23,7 @@ export default function ConcreteOrderPage() {
   const [orderId, setOrderId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Расчёт стоимости
+  // === ИСПРАВЛЕННАЯ ЛОГИКА ДОСТАВКИ ===
   const volume = parseFloat(form.volume) || 0;
   const pricePerCubic: Record<string, number> = {
     'М100': 6380, 'М150': 6500, 'М200': 6600, 'М250': 6950,
@@ -31,12 +31,30 @@ export default function ConcreteOrderPage() {
   };
 
   const concreteCost = volume > 0 ? Math.round(volume * (pricePerCubic[form.grade] || 7230)) : 0;
+
   let deliveryCost = 0;
+  let deliveryNote = '';
+
   if (volume > 0) {
-    if (volume <= 12) deliveryCost = 7500;
-    else if (volume <= 50) deliveryCost = Math.ceil(volume / 10) * 6000;
-    else deliveryCost = Math.round(volume * 600);
+    if (volume <= 10) {
+      deliveryCost = 6000;
+      deliveryNote = '6000 ₽ за рейс (до 10 м³)';
+    } 
+    else if (volume <= 12) {
+      deliveryCost = 7500;
+      deliveryNote = '7500 ₽ за рейс (миксер 12 м³)';
+    } 
+    else if (volume <= 50) {
+      const trips = Math.ceil(volume / 10);
+      deliveryCost = trips * 6000;
+      deliveryNote = `${trips} рейса × 6000 ₽`;
+    } 
+    else {
+      deliveryCost = Math.round(volume * 600);
+      deliveryNote = '600 ₽ за 1 м³ (при большом объёме)';
+    }
   }
+
   const totalPrice = concreteCost + deliveryCost;
 
   useEffect(() => {
@@ -154,6 +172,8 @@ export default function ConcreteOrderPage() {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
+        {/* ... (все поля формы остаются такими же) ... */}
+
         <div>
           <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Марка бетона</label>
           <select name="grade" value={form.grade} onChange={handleChange}
@@ -191,8 +211,11 @@ export default function ConcreteOrderPage() {
             <div style={{ borderTop: '1px solid #7dd3fc', paddingTop: '10px', fontSize: '19px', fontWeight: '700', color: '#1e40af' }}>
               Итого: {totalPrice.toLocaleString('ru-RU')} ₽
             </div>
+            <p style={{ fontSize: '13px', color: '#0369a1', marginTop: '8px' }}>{deliveryNote}</p>
           </div>
         )}
+
+        {/* Остальные поля формы (дата, время, адрес, тип заказчика, ФИО/организация, телефон, комментарий) — оставляем как было */}
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
           <div>
@@ -245,7 +268,7 @@ export default function ConcreteOrderPage() {
         )}
 
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
             <label style={{ fontWeight: '600', fontSize: '15px' }}>Телефон для связи</label>
             <span 
               onClick={requestPhone}
@@ -284,11 +307,10 @@ export default function ConcreteOrderPage() {
           {isSubmitting ? 'Отправляем...' : 'Отправить заявку'}
         </button>
 
-        {/* Логотип */}
         <div style={{ display: 'flex', justifyContent: 'center', marginTop: '40px', opacity: 0.75 }}>
           <Image 
             src="/logo.jpg" 
-            alt="Логотип бетонного завода" 
+            alt="Логотип" 
             width={130} 
             height={65}
             style={{ objectFit: 'contain' }} 
