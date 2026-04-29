@@ -85,58 +85,62 @@ export default function ConcreteOrderPage() {
   };
 
   const handleSubmit = async () => {
-    const wa = (window as any).WebApp;
-    const showAlert = wa?.showAlert || alert;
+  const wa = (window as any).WebApp;
+  const showAlert = wa?.showAlert || alert;
 
-    if (!form.grade || !form.volume || !form.deliveryDate || !form.address || !form.phone) {
-      showAlert('Пожалуйста, заполните все обязательные поля!');
-      return;
-    }
-    if (form.customerType === 'legal' && !form.organizationName) {
-      showAlert('Укажите название организации!');
-      return;
-    }
-    if (form.customerType === 'physical' && !form.fullName) {
-      showAlert('Укажите ФИО!');
-      return;
-    }
+  // Получаем userId надёжным способом
+  const userId = wa?.initDataUnsafe?.user?.id || wa?.initData?.user?.id;
 
-    setIsSubmitting(true);
-    if (wa?.MainButton) wa.MainButton.showProgress();
+  if (!form.grade || !form.volume || !form.deliveryDate || !form.address || !form.phone) {
+    showAlert('Пожалуйста, заполните все обязательные поля!');
+    return;
+  }
+  if (form.customerType === 'legal' && !form.organizationName) {
+    showAlert('Укажите название организации!');
+    return;
+  }
+  if (form.customerType === 'physical' && !form.fullName) {
+    showAlert('Укажите ФИО!');
+    return;
+  }
 
-    const payload = {
-      ...form,
-      volume,
-      concreteCost,
-      deliveryCost,
-      totalPrice,
-      customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
-      timestamp: new Date().toISOString(),
-      userId: wa?.initDataUnsafe?.user?.id,
-    };
+  setIsSubmitting(true);
+  if (wa?.MainButton) wa.MainButton.showProgress();
 
-    try {
-      const response = await fetch('/api/order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setOrderId(data.orderId || Date.now());
-        setCurrentScreen('success');
-        if (wa?.MainButton) wa.MainButton.hide();
-      } else {
-        throw new Error();
-      }
-    } catch (error) {
-      showAlert('Ошибка отправки. Попробуйте ещё раз.');
-    } finally {
-      setIsSubmitting(false);
-      if (wa?.MainButton) wa.MainButton.hideProgress();
-    }
+  const payload = {
+    ...form,
+    volume,
+    concreteCost,
+    deliveryCost,
+    totalPrice,
+    customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
+    timestamp: new Date().toISOString(),
+    userId: userId,                    // ← Важно!
   };
+
+  try {
+    const response = await fetch('/api/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      setOrderId(data.orderId || Date.now());
+      setCurrentScreen('success');
+      if (wa?.MainButton) wa.MainButton.hide();
+    } else {
+      throw new Error();
+    }
+  } catch (error) {
+    showAlert('Ошибка отправки. Попробуйте ещё раз.');
+  } finally {
+    setIsSubmitting(false);
+    if (wa?.MainButton) wa.MainButton.hideProgress();
+  }
+};
 
   if (currentScreen === 'success') {
     return (
