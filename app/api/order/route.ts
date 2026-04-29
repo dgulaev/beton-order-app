@@ -10,38 +10,34 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export async function POST(request: NextRequest) {
   try {
-    const rawOrder = await request.json();
+    const payload = await request.json();
 
-    // Более надёжное извлечение user_id из MAX
-    const userId = rawOrder.userId 
-      || rawOrder.user_id 
-      || rawOrder.initDataUnsafe?.user?.id 
+    // Извлекаем userId максимально надёжно
+    const userId = payload.userId 
+      || payload.user_id 
+      || payload.initDataUnsafe?.user?.id 
+      || payload.initData?.user?.id 
       || null;
 
-    console.log('Received userId:', userId);
-    console.log('Full payload:', rawOrder);
-
-    if (!userId) {
-      console.warn('Warning: userId is null. Saving without user_id.');
-    }
+    console.log('🔍 Received userId:', userId);
 
     const { error } = await supabase
       .from('orders')
       .insert([{
-        user_id: userId,                    // может быть null
-        grade: rawOrder.grade,
-        volume: rawOrder.volume,
-        delivery_date: rawOrder.deliveryDate,
-        delivery_time: rawOrder.deliveryTime,
-        address: rawOrder.address,
-        customer_type: rawOrder.customerType,
-        full_name: rawOrder.fullName,
-        organization_name: rawOrder.organizationName,
-        phone: rawOrder.phone,
-        comment: rawOrder.comment || null,
-        concrete_cost: rawOrder.concreteCost,
-        delivery_cost: rawOrder.deliveryCost,
-        total_price: rawOrder.totalPrice,
+        user_id: userId,
+        grade: payload.grade,
+        volume: payload.volume,
+        delivery_date: payload.deliveryDate,
+        delivery_time: payload.deliveryTime,
+        address: payload.address,
+        customer_type: payload.customerType,
+        full_name: payload.fullName,
+        organization_name: payload.organizationName,
+        phone: payload.phone,
+        comment: payload.comment || null,
+        concrete_cost: payload.concreteCost,
+        delivery_cost: payload.deliveryCost,
+        total_price: payload.totalPrice,
       }]);
 
     if (error) {
@@ -50,24 +46,24 @@ export async function POST(request: NextRequest) {
       console.log('✅ Заявка успешно сохранена в Supabase');
     }
 
-    // Отправка в группу MAX
+    // Уведомление в группу
     const messageText = `
 ✅ *Новая заявка на отгрузку бетона*
 
-📌 Марка: ${rawOrder.grade}
-📦 Объём: ${rawOrder.volume} м³
-📅 Дата: ${rawOrder.deliveryDate} ${rawOrder.deliveryTime}
-📍 Адрес: ${rawOrder.address}
+📌 Марка: ${payload.grade}
+📦 Объём: ${payload.volume} м³
+📅 Дата: ${payload.deliveryDate} ${payload.deliveryTime}
+📍 Адрес: ${payload.address}
 
-👤 Тип: ${rawOrder.customerType}
-${rawOrder.customerType?.includes('Юридическое') ? `🏢 ${rawOrder.organizationName || '—'}` : `🙍 ${rawOrder.fullName || '—'}`}
+👤 Тип: ${payload.customerType}
+${payload.customerType?.includes('Юридическое') ? `🏢 ${payload.organizationName || '—'}` : `🙍 ${payload.fullName || '—'}`}
 
-📞 Телефон: ${rawOrder.phone}
-💰 Бетон: ${rawOrder.concreteCost?.toLocaleString('ru-RU')} ₽
-🚚 Доставка: ${rawOrder.deliveryCost?.toLocaleString('ru-RU')} ₽
-💵 *Итого: ${rawOrder.totalPrice?.toLocaleString('ru-RU')} ₽*
+📞 Телефон: ${payload.phone}
+💰 Бетон: ${payload.concreteCost?.toLocaleString('ru-RU')} ₽
+🚚 Доставка: ${payload.deliveryCost?.toLocaleString('ru-RU')} ₽
+💵 *Итого: ${payload.totalPrice?.toLocaleString('ru-RU')} ₽*
 
-💬 Комментарий: ${rawOrder.comment || '—'}
+💬 Комментарий: ${payload.comment || '—'}
 🕒 ${new Date().toLocaleString('ru-RU')}
 👤 MAX ID: ${userId || '—'}
     `.trim();
@@ -80,13 +76,13 @@ ${rawOrder.customerType?.includes('Юридическое') ? `🏢 ${rawOrder.o
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ text: messageText }),
-      }).catch(err => console.error('MAX send error:', err));
+      }).catch(err => console.error('MAX error:', err));
     }
 
     return NextResponse.json({ success: true, orderId: Date.now() });
 
   } catch (error) {
     console.error('API Error:', error);
-    return NextResponse.json({ success: false, message: 'Server error' }, { status: 500 });
+    return NextResponse.json({ success: false }, { status: 500 });
   }
 }
