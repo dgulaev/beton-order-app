@@ -2,18 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = 'https://nhudnzdgtidocwwzpqge.supabase.co';
-const supabaseKey = process.env.SUPABASE_ANON_KEY!;
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
 const BOT_TOKEN = process.env.MAX_BOT_TOKEN;
 const CHAT_ID = process.env.MANAGER_CHAT_ID;
 
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export async function POST(request: NextRequest) {
   try {
     const order = await request.json();
 
-    // Сохраняем заявку в Supabase
-    const { data, error } = await supabase
+    // Сохраняем заявку в базу
+    const { error } = await supabase
       .from('orders')
       .insert([{
         user_id: order.userId,
@@ -26,19 +26,15 @@ export async function POST(request: NextRequest) {
         full_name: order.fullName,
         organization_name: order.organizationName,
         phone: order.phone,
-        comment: order.comment,
+        comment: order.comment || null,
         concrete_cost: order.concreteCost,
         delivery_cost: order.deliveryCost,
         total_price: order.totalPrice,
-      }])
-      .select()
-      .single();
+      }]);
 
-    if (error) {
-      console.error('Supabase error:', error);
-    }
+    if (error) console.error('Supabase error:', error);
 
-    // Отправляем уведомление в группу MAX
+    // Отправка уведомления в группу MAX
     const messageText = `
 ✅ *Новая заявка на отгрузку бетона*
 
@@ -48,7 +44,7 @@ export async function POST(request: NextRequest) {
 📍 Адрес: ${order.address}
 
 👤 Тип: ${order.customerType}
-${order.customerType.includes('Юридическое') ? `🏢 ${order.organizationName || '—'}` : `🙍 ${order.fullName || '—'}`}
+${order.customerType?.includes('Юридическое') ? `🏢 ${order.organizationName || '—'}` : `🙍 ${order.fullName || '—'}`}
 
 📞 Телефон: ${order.phone}
 💰 Бетон: ${order.concreteCost?.toLocaleString('ru-RU')} ₽
@@ -67,16 +63,13 @@ ${order.customerType.includes('Юридическое') ? `🏢 ${order.organiza
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ text: messageText }),
-      }).catch(err => console.error('MAX send error:', err));
+      }).catch(err => console.error('MAX error:', err));
     }
 
-    return NextResponse.json({ 
-      success: true, 
-      orderId: data?.id || Date.now() 
-    });
+    return NextResponse.json({ success: true, orderId: Date.now() });
 
   } catch (error) {
-    console.error('Error:', error);
+    console.error('API Error:', error);
     return NextResponse.json({ success: false }, { status: 500 });
   }
 }
