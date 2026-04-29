@@ -12,11 +12,14 @@ export async function POST(request: NextRequest) {
   try {
     const order = await request.json();
 
-    // Сохраняем заявку в базу
+    // Получаем user_id из MAX (более надёжный способ)
+    const userId = order.userId || order.user_id;
+
+    // Сохраняем заявку в Supabase
     const { error } = await supabase
       .from('orders')
       .insert([{
-        user_id: order.userId,
+        user_id: userId,                    // ← Исправлено
         grade: order.grade,
         volume: order.volume,
         delivery_date: order.deliveryDate,
@@ -32,9 +35,13 @@ export async function POST(request: NextRequest) {
         total_price: order.totalPrice,
       }]);
 
-    if (error) console.error('Supabase error:', error);
+    if (error) {
+      console.error('Supabase insert error:', error);
+    } else {
+      console.log('Заявка успешно сохранена в Supabase с user_id:', userId);
+    }
 
-    // Отправка уведомления в группу MAX
+    // Отправка уведомления в группу
     const messageText = `
 ✅ *Новая заявка на отгрузку бетона*
 
@@ -53,6 +60,7 @@ ${order.customerType?.includes('Юридическое') ? `🏢 ${order.organiz
 
 💬 Комментарий: ${order.comment || '—'}
 🕒 ${new Date().toLocaleString('ru-RU')}
+👤 MAX ID: ${userId || '—'}
     `.trim();
 
     if (BOT_TOKEN && CHAT_ID) {
