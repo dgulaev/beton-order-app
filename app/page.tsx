@@ -1,23 +1,9 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import Image from 'next/image';
 
 declare const WebApp: any;
-
-type Screen = 'form' | 'success';
-
-const pricePerCubic: Record<string, number> = {
-  'М100': 6380,
-  'М150': 6500,
-  'М200': 6600,
-  'М250': 6950,
-  'М300': 7230,
-  'М350': 7400,
-  'М400': 8050,
-  'М450': 8350,
-  'М500': 8700,
-};
 
 export default function ConcreteOrderPage() {
   const [form, setForm] = useState({
@@ -33,39 +19,25 @@ export default function ConcreteOrderPage() {
     comment: '',
   });
 
-  const [currentScreen, setCurrentScreen] = useState<Screen>('form');
+  const [currentScreen, setCurrentScreen] = useState<'form' | 'success'>('form');
   const [orderId, setOrderId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Расчёт стоимости
-  const calculations = useMemo(() => {
-    const volume = parseFloat(form.volume) || 0;
-    if (volume <= 0) return { concreteCost: 0, deliveryCost: 0, total: 0 };
+  const volume = parseFloat(form.volume) || 0;
+  const pricePerCubic: Record<string, number> = {
+    'М100': 6380, 'М150': 6500, 'М200': 6600, 'М250': 6950,
+    'М300': 7230, 'М350': 7400, 'М400': 8050, 'М450': 8350, 'М500': 8700,
+  };
 
-    const concreteCost = Math.round(volume * (pricePerCubic[form.grade] || 7230));
-
-    let deliveryCost = 0;
-
-    if (volume <= 12) {
-      deliveryCost = 7500;                    // один рейс 12 м³
-    } 
-    else if (volume <= 50) {
-      const trips = Math.ceil(volume / 10);
-      deliveryCost = trips * 6000;            // рейсы по 10 м³
-    } 
-    else {
-      deliveryCost = Math.round(volume * 600); // больше 50 м³ — 600 ₽/м³
-    }
-
-    const total = concreteCost + deliveryCost;
-
-    return { 
-      concreteCost, 
-      deliveryCost, 
-      total,
-      trips: volume > 12 && volume <= 50 ? Math.ceil(volume / 10) : 1
-    };
-  }, [form.volume, form.grade]);
+  const concreteCost = volume > 0 ? Math.round(volume * (pricePerCubic[form.grade] || 7230)) : 0;
+  let deliveryCost = 0;
+  if (volume > 0) {
+    if (volume <= 12) deliveryCost = 7500;
+    else if (volume <= 50) deliveryCost = Math.ceil(volume / 10) * 6000;
+    else deliveryCost = Math.round(volume * 600);
+  }
+  const totalPrice = concreteCost + deliveryCost;
 
   useEffect(() => {
     const wa = (window as any).WebApp;
@@ -79,9 +51,8 @@ export default function ConcreteOrderPage() {
     }
   }, []);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
-    setForm(prev => ({ ...prev, [name]: value }));
+  const handleChange = (e: React.ChangeEvent<any>) => {
+    setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
   const handleCustomerTypeChange = (type: 'physical' | 'legal') => {
@@ -90,11 +61,8 @@ export default function ConcreteOrderPage() {
 
   const requestPhone = async () => {
     try {
-      const wa = (window as any).WebApp;
-      if (wa) {
-        const result = await wa.requestContact();
-        if (result?.phone) setForm(prev => ({ ...prev, phone: result.phone }));
-      }
+      const result = await (window as any).WebApp.requestContact();
+      if (result?.phone) setForm(prev => ({ ...prev, phone: result.phone }));
     } catch (e) {}
   };
 
@@ -120,10 +88,10 @@ export default function ConcreteOrderPage() {
 
     const payload = {
       ...form,
-      volume: parseFloat(form.volume) || 0,
-      concreteCost: calculations.concreteCost,
-      deliveryCost: calculations.deliveryCost,
-      totalPrice: calculations.total,
+      volume,
+      concreteCost,
+      deliveryCost,
+      totalPrice,
       customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
       timestamp: new Date().toISOString(),
       userId: wa?.initDataUnsafe?.user?.id,
@@ -136,9 +104,8 @@ export default function ConcreteOrderPage() {
         body: JSON.stringify(payload),
       });
 
-      const data = await response.json();
-
-      if (data.success) {
+      if (response.ok) {
+        const data = await response.json();
         setOrderId(data.orderId || Date.now());
         setCurrentScreen('success');
         if (wa?.MainButton) wa.MainButton.hide();
@@ -146,7 +113,6 @@ export default function ConcreteOrderPage() {
         throw new Error();
       }
     } catch (error) {
-      console.error(error);
       showAlert('Ошибка отправки. Попробуйте ещё раз.');
     } finally {
       setIsSubmitting(false);
@@ -156,161 +122,177 @@ export default function ConcreteOrderPage() {
 
   if (currentScreen === 'success') {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-5">
-        <div className="max-w-md text-center">
-          <div className="text-7xl mb-6">✅</div>
-          <h2 className="text-3xl font-bold text-gray-900 mb-3">Заявка отправлена!</h2>
-          <p className="text-gray-600 mb-8">
-            Номер заявки: <span className="font-medium">#{orderId}</span><br />
-            Менеджер свяжется с вами в ближайшее время.
-          </p>
-          <button
-            onClick={() => window.location.reload()}
-            className="w-full bg-blue-600 text-white py-4 rounded-2xl font-medium text-lg"
-          >
-            Создать новую заявку
-          </button>
-        </div>
+      <div style={{ padding: '40px 20px', textAlign: 'center', minHeight: '100vh', backgroundColor: '#f8fafc' }}>
+        <div style={{ fontSize: '80px', marginBottom: '24px' }}>✅</div>
+        <h2 style={{ fontSize: '28px', marginBottom: '16px' }}>Заявка отправлена!</h2>
+        <p style={{ fontSize: '18px', color: '#444', marginBottom: '32px' }}>
+          Номер заявки: <strong>#{orderId}</strong><br />
+          Менеджер свяжется с вами в ближайшее время.
+        </p>
+        <button 
+          onClick={() => window.location.reload()}
+          style={{ width: '100%', maxWidth: '420px', padding: '16px', fontSize: '18px', backgroundColor: '#2563eb', color: 'white', border: 'none', borderRadius: '12px' }}
+        >
+          Создать новую заявку
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-28">
-      <div className="max-w-xl mx-auto p-5">
-        <div className="text-center mb-10 mt-6">
-          <h1 className="text-3xl font-bold text-gray-900">Заявка на отгрузку бетона</h1>
-          <p className="text-base text-gray-600 mt-2">Бетонный завод</p>
+    <div style={{ 
+      padding: '20px', 
+      maxWidth: '640px', 
+      margin: '0 auto', 
+      backgroundColor: '#f8fafc',
+      minHeight: '100vh',
+      fontFamily: 'system-ui, -apple-system, sans-serif'
+    }}>
+      <h1 style={{ textAlign: 'center', fontSize: '26px', fontWeight: '700', marginBottom: '30px', color: '#1f2937' }}>
+        Заявка на отгрузку бетона
+      </h1>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Марка бетона</label>
+          <select name="grade" value={form.grade} onChange={handleChange}
+            style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }}>
+            {Object.keys(pricePerCubic).map(g => (
+              <option key={g} value={g}>{g} — {pricePerCubic[g]} ₽/м³</option>
+            ))}
+          </select>
         </div>
 
-        <div className="space-y-6">
-          {/* Марка бетона */}
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Объём, м³</label>
+          <input 
+            type="number" 
+            name="volume" 
+            value={form.volume} 
+            onChange={handleChange}
+            step="0.1"
+            min="0.5"
+            placeholder="Например: 12.5"
+            style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }}
+          />
+        </div>
+
+        {totalPrice > 0 && (
+          <div style={{ backgroundColor: '#f0f9ff', padding: '18px', borderRadius: '10px', border: '1px solid #bae6fd' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <span>Бетон:</span>
+              <strong>{concreteCost.toLocaleString('ru-RU')} ₽</strong>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <span>Доставка:</span>
+              <strong>{deliveryCost.toLocaleString('ru-RU')} ₽</strong>
+            </div>
+            <div style={{ borderTop: '1px solid #7dd3fc', paddingTop: '10px', fontSize: '19px', fontWeight: '700', color: '#1e40af' }}>
+              Итого: {totalPrice.toLocaleString('ru-RU')} ₽
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
           <div>
-            <label className="block text-sm font-medium mb-2">Марка бетона</label>
-            <select 
-              name="grade" 
-              value={form.grade} 
-              onChange={handleChange} 
-              className="w-full p-4 border border-gray-300 rounded-2xl text-lg bg-white"
-            >
-              <option value="М100">М100 (B7.5) — 6380 ₽/м³</option>
-              <option value="М150">М150 (B12.5) — 6500 ₽/м³</option>
-              <option value="М200">М200 (B15) — 6600 ₽/м³</option>
-              <option value="М250">М250 (B20) — 6950 ₽/м³</option>
-              <option value="М300">М300 (B22.5) — 7230 ₽/м³</option>
-              <option value="М350">М350 (B25) — 7400 ₽/м³</option>
-              <option value="М400">М400 (B30) — 8050 ₽/м³</option>
-              <option value="М450">М450 — 8350 ₽/м³</option>
-              <option value="М500">М500 — 8700 ₽/м³</option>
-            </select>
+            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Дата доставки</label>
+            <input type="date" name="deliveryDate" value={form.deliveryDate} onChange={handleChange}
+              style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
           </div>
-
-          {/* Объём */}
           <div>
-            <label className="block text-sm font-medium mb-2">Объём, м³</label>
-            <input
-              type="number"
-              name="volume"
-              value={form.volume}
-              onChange={handleChange}
-              step="0.1"
-              min="0.5"
-              placeholder="Например: 12.5"
-              className="w-full p-4 border border-gray-300 rounded-2xl text-lg"
-            />
+            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Время доставки</label>
+            <input type="time" name="deliveryTime" value={form.deliveryTime} onChange={handleChange}
+              style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
           </div>
+        </div>
 
-          {/* Блок стоимости */}
-          {calculations.total > 0 && (
-            <div className="bg-blue-50 border border-blue-200 p-5 rounded-2xl space-y-3">
-              <div className="flex justify-between">
-                <span className="text-gray-600">Стоимость бетона:</span>
-                <span className="font-medium">{calculations.concreteCost.toLocaleString('ru-RU')} ₽</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Доставка миксером:</span>
-                <span className="font-medium">{calculations.deliveryCost.toLocaleString('ru-RU')} ₽</span>
-              </div>
-              <div className="border-t pt-3 flex justify-between text-lg font-semibold text-blue-900">
-                <span>Итого к оплате:</span>
-                <span>{calculations.total.toLocaleString('ru-RU')} ₽</span>
-              </div>
-              
-              <p className="text-xs text-blue-600 pt-1">
-                {parseFloat(form.volume) <= 12 
-                  ? "Доставка: 7500 ₽ за один рейс (миксер 12 м³)" 
-                  : parseFloat(form.volume) <= 50 
-                    ? `Доставка: ${calculations.trips} рейса × 6000 ₽` 
-                    : "Доставка: 600 ₽ за 1 м³"}
-              </p>
-            </div>
-          )}
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Адрес доставки</label>
+          <textarea name="address" value={form.address} onChange={handleChange} rows={3}
+            placeholder="Город, улица, дом, подъезд, этаж..."
+            style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db', resize: 'vertical' }} />
+        </div>
 
-          {/* Дата и время */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">Дата доставки</label>
-              <input type="date" name="deliveryDate" value={form.deliveryDate} onChange={handleChange} className="w-full p-4 border border-gray-300 rounded-2xl" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-2">Время доставки</label>
-              <input type="time" name="deliveryTime" value={form.deliveryTime} onChange={handleChange} className="w-full p-4 border border-gray-300 rounded-2xl" />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2">Адрес доставки</label>
-            <textarea name="address" value={form.address} onChange={handleChange} rows={3} placeholder="Город, улица, дом, подъезд, этаж..." className="w-full p-4 border border-gray-300 rounded-2xl resize-y" />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-3">Тип заказчика</label>
-            <div className="flex gap-3">
-              <button type="button" onClick={() => handleCustomerTypeChange('physical')} className={`flex-1 py-4 rounded-2xl border font-medium ${form.customerType === 'physical' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300'}`}>Физическое лицо</button>
-              <button type="button" onClick={() => handleCustomerTypeChange('legal')} className={`flex-1 py-4 rounded-2xl border font-medium ${form.customerType === 'legal' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300'}`}>Юридическое лицо</button>
-            </div>
-          </div>
-
-          {form.customerType === 'physical' ? (
-            <div>
-              <label className="block text-sm font-medium mb-2">ФИО заказчика</label>
-              <input type="text" name="fullName" value={form.fullName} onChange={handleChange} placeholder="Иванов Иван Иванович" className="w-full p-4 border border-gray-300 rounded-2xl" />
-            </div>
-          ) : (
-            <div>
-              <label className="block text-sm font-medium mb-2">Название организации</label>
-              <input type="text" name="organizationName" value={form.organizationName} onChange={handleChange} placeholder="ООО «БетонСтрой»" className="w-full p-4 border border-gray-300 rounded-2xl" />
-            </div>
-          )}
-
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <label className="text-sm font-medium">Телефон для связи</label>
-              <button type="button" onClick={requestPhone} className="text-blue-600 text-sm font-medium">Запросить мой контакт</button>
-            </div>
-            <input type="tel" name="phone" value={form.phone} onChange={handleChange} placeholder="+7 (___) ___-__-__" className="w-full p-4 border border-gray-300 rounded-2xl" />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2">Комментарий</label>
-            <textarea name="comment" value={form.comment} onChange={handleChange} rows={2} placeholder="Дополнительная информация (необязательно)" className="w-full p-4 border border-gray-300 rounded-2xl resize-y" />
-          </div>
-
-          <div className="pt-6">
-            <button
-              onClick={handleSubmit}
-              disabled={isSubmitting}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium py-4 rounded-2xl text-lg transition-colors"
-            >
-              {isSubmitting ? 'Отправляем...' : 'Отправить заявку'}
+        <div>
+          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '15px' }}>Тип заказчика</label>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button type="button" onClick={() => handleCustomerTypeChange('physical')}
+              style={{ flex: 1, padding: '16px', borderRadius: '10px', border: form.customerType === 'physical' ? '2px solid #2563eb' : '1px solid #d1d5db', backgroundColor: form.customerType === 'physical' ? '#f0f9ff' : 'white' }}>
+              Физ. лицо
+            </button>
+            <button type="button" onClick={() => handleCustomerTypeChange('legal')}
+              style={{ flex: 1, padding: '16px', borderRadius: '10px', border: form.customerType === 'legal' ? '2px solid #2563eb' : '1px solid #d1d5db', backgroundColor: form.customerType === 'legal' ? '#f0f9ff' : 'white' }}>
+              Юр. лицо
             </button>
           </div>
+        </div>
 
-          <div className="flex justify-center pt-12 pb-8">
-            <div className="relative w-20 h-20 opacity-70">
-              <Image src="/logo.jpg" alt="Логотип" fill className="object-contain" priority />
-            </div>
+        {form.customerType === 'physical' ? (
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>ФИО заказчика</label>
+            <input type="text" name="fullName" value={form.fullName} onChange={handleChange}
+              placeholder="Иванов Иван Иванович"
+              style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
           </div>
+        ) : (
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Название организации</label>
+            <input type="text" name="organizationName" value={form.organizationName} onChange={handleChange}
+              placeholder="ООО «БетонСтрой»"
+              style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
+          </div>
+        )}
+
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <label style={{ fontWeight: '600', fontSize: '15px' }}>Телефон для связи</label>
+            <span 
+              onClick={requestPhone}
+              style={{ color: '#2563eb', fontSize: '15px', textDecoration: 'underline', cursor: 'pointer' }}
+            >
+              Запросить мой контакт
+            </span>
+          </div>
+          <input type="tel" name="phone" value={form.phone} onChange={handleChange}
+            placeholder="+7 (___) ___-__-__"
+            style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
+        </div>
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Комментарий</label>
+          <textarea name="comment" value={form.comment} onChange={handleChange} rows={2}
+            placeholder="Дополнительная информация (необязательно)"
+            style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db', resize: 'vertical' }} />
+        </div>
+
+        <button 
+          onClick={handleSubmit}
+          disabled={isSubmitting}
+          style={{ 
+            marginTop: '10px',
+            width: '100%', 
+            padding: '18px', 
+            fontSize: '18px', 
+            backgroundColor: isSubmitting ? '#9ca3af' : '#2563eb',
+            color: 'white', 
+            border: 'none', 
+            borderRadius: '12px',
+            fontWeight: '600'
+          }}
+        >
+          {isSubmitting ? 'Отправляем...' : 'Отправить заявку'}
+        </button>
+
+        {/* Логотип */}
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: '40px', opacity: 0.75 }}>
+          <Image 
+            src="/logo.jpg" 
+            alt="Логотип бетонного завода" 
+            width={130} 
+            height={65}
+            style={{ objectFit: 'contain' }} 
+          />
         </div>
       </div>
     </div>
