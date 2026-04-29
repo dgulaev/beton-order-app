@@ -1,12 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
+const supabaseUrl = 'https://nhudnzdgtidocwwzpqge.supabase.co';
+const supabaseKey = process.env.SUPABASE_ANON_KEY!;
 const BOT_TOKEN = process.env.MAX_BOT_TOKEN;
 const CHAT_ID = process.env.MANAGER_CHAT_ID;
+
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 export async function POST(request: NextRequest) {
   try {
     const order = await request.json();
 
+    // Сохраняем заявку в Supabase
+    const { data, error } = await supabase
+      .from('orders')
+      .insert([{
+        user_id: order.userId,
+        grade: order.grade,
+        volume: order.volume,
+        delivery_date: order.deliveryDate,
+        delivery_time: order.deliveryTime,
+        address: order.address,
+        customer_type: order.customerType,
+        full_name: order.fullName,
+        organization_name: order.organizationName,
+        phone: order.phone,
+        comment: order.comment,
+        concrete_cost: order.concreteCost,
+        delivery_cost: order.deliveryCost,
+        total_price: order.totalPrice,
+      }])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Supabase error:', error);
+    }
+
+    // Отправляем уведомление в группу MAX
     const messageText = `
 ✅ *Новая заявка на отгрузку бетона*
 
@@ -27,36 +59,24 @@ ${order.customerType.includes('Юридическое') ? `🏢 ${order.organiza
 🕒 ${new Date().toLocaleString('ru-RU')}
     `.trim();
 
-    console.log('Отправка в MAX. Chat ID:', CHAT_ID);
-    console.log('Токен присутствует:', !!BOT_TOKEN);
-
     if (BOT_TOKEN && CHAT_ID) {
-      const url = `https://platform-api.max.ru/messages?chat_id=${CHAT_ID}`;
-
-      const res = await fetch(url, {
+      await fetch(`https://platform-api.max.ru/messages?chat_id=${CHAT_ID}`, {
         method: 'POST',
         headers: {
-          'Authorization': BOT_TOKEN,        // пробуем без Bearer
+          'Authorization': BOT_TOKEN,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ text: messageText }),
-      });
-
-      const responseText = await res.text();
-      console.log('MAX Response Status:', res.status);
-      console.log('MAX Response Body:', responseText);
-
-      if (!res.ok) {
-        console.error('Ошибка от MAX API:', responseText);
-      }
-    } else {
-      console.error('Отсутствует BOT_TOKEN или CHAT_ID');
+      }).catch(err => console.error('MAX send error:', err));
     }
 
-    return NextResponse.json({ success: true, orderId: Date.now() });
+    return NextResponse.json({ 
+      success: true, 
+      orderId: data?.id || Date.now() 
+    });
 
   } catch (error) {
-    console.error('Ошибка в /api/order:', error);
+    console.error('Error:', error);
     return NextResponse.json({ success: false }, { status: 500 });
   }
 }
