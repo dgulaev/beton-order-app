@@ -14,14 +14,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'No userId' }, { status: 400 });
     }
 
-    // Ищем пользователя
+    // Проверяем, есть ли уже пользователь
     let { data: user } = await supabase
       .from('users')
       .select('referral_code, balance')
       .eq('user_id', userId)
       .single();
 
-    // Если пользователя нет — создаём
+    // Если пользователя нет — создаём с реферальным кодом
     if (!user) {
       const referralCode = 'R' + Math.random().toString(36).substring(2, 8).toUpperCase();
 
