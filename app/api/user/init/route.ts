@@ -9,23 +9,30 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export async function POST(request: NextRequest) {
   try {
     const { userId } = await request.json();
+    console.log('🔍 [INIT] Received userId:', userId);
 
     if (!userId) {
+      console.log('❌ [INIT] No userId provided');
       return NextResponse.json({ success: false, message: 'No userId' }, { status: 400 });
     }
 
-    // Проверяем, есть ли уже пользователь
-    let { data: user } = await supabase
+    // Проверяем пользователя
+    let { data: user, error: selectError } = await supabase
       .from('users')
       .select('referral_code, balance')
       .eq('user_id', userId)
       .single();
 
-    // Если пользователя нет — создаём с реферальным кодом
+    if (selectError && selectError.code !== 'PGRST116') { // PGRST116 = no rows
+      console.error('❌ [INIT] Select error:', selectError);
+    }
+
+    // Если пользователя нет — создаём
     if (!user) {
       const referralCode = 'R' + Math.random().toString(36).substring(2, 8).toUpperCase();
+      console.log('🆕 [INIT] Creating new user with code:', referralCode);
 
-      const { error } = await supabase
+      const { error: insertError } = await supabase
         .from('users')
         .insert([{
           user_id: userId,
@@ -33,19 +40,23 @@ export async function POST(request: NextRequest) {
           balance: 0,
         }]);
 
-      if (error) console.error('User insert error:', error);
-
-      user = { referral_code: referralCode, balance: 0 };
+      if (insertError) {
+        console.error('❌ [INIT] Insert error:', insertError);
+      } else {
+        user = { referral_code: referralCode, balance: 0 };
+      }
     }
+
+    console.log('✅ [INIT] Success, returning code:', user?.referral_code);
 
     return NextResponse.json({
       success: true,
-      referralCode: user.referral_code,
-      balance: user.balance || 0,
+      referralCode: user?.referral_code || 'ERROR',
+      balance: user?.balance || 0,
     });
 
   } catch (error) {
-    console.error('Init user error:', error);
-    return NextResponse.json({ success: false }, { status: 500 });
+    console.error('💥 [INIT] Critical error:', error);
+    return NextResponse.json({ success: false, message: 'Server error' }, { status: 500 });
   }
 }
