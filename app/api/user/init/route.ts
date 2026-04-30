@@ -14,15 +14,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'No userId' }, { status: 400 });
     }
 
-    // Проверяем, есть ли уже пользователь
+    // Ищем пользователя
     let { data: user } = await supabase
       .from('users')
-      .select('*')
+      .select('referral_code, balance')
       .eq('user_id', userId)
       .single();
 
+    // Если пользователя нет — создаём
     if (!user) {
-      // Создаём нового пользователя с реферальным кодом
       const referralCode = 'R' + Math.random().toString(36).substring(2, 8).toUpperCase();
 
       const { error } = await supabase
@@ -33,9 +33,9 @@ export async function POST(request: NextRequest) {
           balance: 0,
         }]);
 
-      if (error) console.error('User creation error:', error);
+      if (error) console.error('User insert error:', error);
 
-      user = { user_id: userId, referral_code: referralCode, balance: 0 };
+      user = { referral_code: referralCode, balance: 0 };
     }
 
     return NextResponse.json({
@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error(error);
+    console.error('Init user error:', error);
     return NextResponse.json({ success: false }, { status: 500 });
   }
 }
