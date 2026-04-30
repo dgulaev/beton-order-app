@@ -49,7 +49,7 @@ export default function ConcreteOrderPage() {
       deliveryNote = '6000 ₽ за рейс (до 10 м³)';
     } else if (volume <= 12) {
       deliveryCost = 7500;
-      deliveryNote = '7500 ₽ за рейс (миксер 12 м³)';
+      deliveryNote = '7500 ₽ за рейс (12 м³)';
     } else if (volume <= 50) {
       const trips = Math.ceil(volume / 10);
       deliveryCost = trips * 6000;
@@ -61,43 +61,31 @@ export default function ConcreteOrderPage() {
   }
   const totalPrice = concreteCost + deliveryCost;
 
-    useEffect(() => {
-    console.log('🚀 useEffect запущен');
-
+  useEffect(() => {
     const wa = (window as any).WebApp;
-    console.log('🌐 WebApp object:', !!wa);
-
     if (wa) {
       wa.ready();
       wa.expand();
       wa.enableClosingConfirmation();
 
       const uid = wa.initDataUnsafe?.user?.id || wa.initData?.user?.id;
-      console.log('👤 User ID from MAX:', uid);
-
       if (uid) {
         setUserId(uid);
         initializeUser(uid);
-      } else {
-        console.log('⚠️ User ID не найден!');
-        setReferralCode('User ID не найден');
       }
 
+      // Поддержка реферальной ссылки
       const urlParams = new URLSearchParams(window.location.search);
       const ref = urlParams.get('ref');
-      console.log('🔗 ref параметр:', ref);
       if (ref) setReferredBy(parseInt(ref));
 
       wa.MainButton.setText('Отправить заявку');
       wa.MainButton.show();
       wa.MainButton.onClick(handleSubmit);
-    } else {
-      console.log('❌ WebApp не найден (не MAX?)');
     }
   }, []);
 
   const initializeUser = async (uid: number) => {
-    console.log('📡 Запрос к /api/user/init с uid:', uid);
     try {
       const res = await fetch('/api/user/init', {
         method: 'POST',
@@ -105,15 +93,12 @@ export default function ConcreteOrderPage() {
         body: JSON.stringify({ userId: uid }),
       });
 
-      console.log('📨 Ответ сервера status:', res.status);
       const data = await res.json();
-      console.log('📦 Данные от сервера:', data);
-
       if (data.referralCode) setReferralCode(data.referralCode);
       if (data.balance !== undefined) setBalance(data.balance);
     } catch (e) {
-      console.error('💥 Ошибка fetch:', e);
-      setReferralCode('Ошибка соединения');
+      console.error(e);
+      setReferralCode('Ошибка загрузки');
     }
   };
 
@@ -220,31 +205,17 @@ export default function ConcreteOrderPage() {
         Заявка на отгрузку бетона
       </h1>
 
-      {/* Табы с голубой подсветкой */}
+      {/* Табы */}
       <div style={{ display: 'flex', backgroundColor: '#e5e7eb', borderRadius: '12px', padding: '4px', marginBottom: '30px' }}>
         <button 
           onClick={() => setActiveTab('new')}
-          style={{ 
-            flex: 1, 
-            padding: '12px', 
-            borderRadius: '10px', 
-            fontWeight: activeTab === 'new' ? '700' : '500', 
-            backgroundColor: activeTab === 'new' ? '#2563eb' : 'transparent', 
-            color: activeTab === 'new' ? 'white' : '#374151' 
-          }}
+          style={{ flex: 1, padding: '12px', borderRadius: '10px', fontWeight: activeTab === 'new' ? '700' : '500', backgroundColor: activeTab === 'new' ? '#2563eb' : 'transparent', color: activeTab === 'new' ? 'white' : '#374151' }}
         >
           Новая заявка
         </button>
         <button 
           onClick={() => setActiveTab('referral')}
-          style={{ 
-            flex: 1, 
-            padding: '12px', 
-            borderRadius: '10px', 
-            fontWeight: activeTab === 'referral' ? '700' : '500', 
-            backgroundColor: activeTab === 'referral' ? '#2563eb' : 'transparent', 
-            color: activeTab === 'referral' ? 'white' : '#374151' 
-          }}
+          style={{ flex: 1, padding: '12px', borderRadius: '10px', fontWeight: activeTab === 'referral' ? '700' : '500', backgroundColor: activeTab === 'referral' ? '#2563eb' : 'transparent', color: activeTab === 'referral' ? 'white' : '#374151' }}
         >
           Мои баллы
         </button>
@@ -268,17 +239,9 @@ export default function ConcreteOrderPage() {
 
           {totalPrice > 0 && (
             <div style={{ backgroundColor: '#f0f9ff', padding: '18px', borderRadius: '10px', border: '1px solid #bae6fd' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                <span>Бетон:</span>
-                <strong>{concreteCost.toLocaleString('ru-RU')} ₽</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                <span>Доставка:</span>
-                <strong>{deliveryCost.toLocaleString('ru-RU')} ₽</strong>
-              </div>
-              <div style={{ borderTop: '1px solid #7dd3fc', paddingTop: '10px', fontSize: '19px', fontWeight: '700', color: '#1e40af' }}>
-                Итого: {totalPrice.toLocaleString('ru-RU')} ₽
-              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span>Бетон:</span><strong>{concreteCost.toLocaleString('ru-RU')} ₽</strong></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}><span>Доставка:</span><strong>{deliveryCost.toLocaleString('ru-RU')} ₽</strong></div>
+              <div style={{ borderTop: '1px solid #7dd3fc', paddingTop: '10px', fontSize: '19px', fontWeight: '700', color: '#1e40af' }}>Итого: {totalPrice.toLocaleString('ru-RU')} ₽</div>
               <p style={{ fontSize: '13px', color: '#0369a1', marginTop: '8px' }}>{deliveryNote}</p>
             </div>
           )}
@@ -302,12 +265,8 @@ export default function ConcreteOrderPage() {
           <div>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '15px' }}>Тип заказчика</label>
             <div style={{ display: 'flex', gap: '12px' }}>
-              <button type="button" onClick={() => handleCustomerTypeChange('physical')} style={{ flex: 1, padding: '16px', borderRadius: '10px', border: form.customerType === 'physical' ? '2px solid #2563eb' : '1px solid #d1d5db', backgroundColor: form.customerType === 'physical' ? '#f0f9ff' : 'white' }}>
-                Физ. лицо
-              </button>
-              <button type="button" onClick={() => handleCustomerTypeChange('legal')} style={{ flex: 1, padding: '16px', borderRadius: '10px', border: form.customerType === 'legal' ? '2px solid #2563eb' : '1px solid #d1d5db', backgroundColor: form.customerType === 'legal' ? '#f0f9ff' : 'white' }}>
-                Юр. лицо
-              </button>
+              <button type="button" onClick={() => handleCustomerTypeChange('physical')} style={{ flex: 1, padding: '16px', borderRadius: '10px', border: form.customerType === 'physical' ? '2px solid #2563eb' : '1px solid #d1d5db', backgroundColor: form.customerType === 'physical' ? '#f0f9ff' : 'white' }}>Физ. лицо</button>
+              <button type="button" onClick={() => handleCustomerTypeChange('legal')} style={{ flex: 1, padding: '16px', borderRadius: '10px', border: form.customerType === 'legal' ? '2px solid #2563eb' : '1px solid #d1d5db', backgroundColor: form.customerType === 'legal' ? '#f0f9ff' : 'white' }}>Юр. лицо</button>
             </div>
           </div>
 
@@ -326,9 +285,7 @@ export default function ConcreteOrderPage() {
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
               <label style={{ fontWeight: '600', fontSize: '15px' }}>Телефон для связи</label>
-              <span onClick={requestPhone} style={{ color: '#2563eb', fontSize: '15px', textDecoration: 'underline', cursor: 'pointer' }}>
-                Запросить мой контакт
-              </span>
+              <span onClick={requestPhone} style={{ color: '#2563eb', fontSize: '15px', textDecoration: 'underline', cursor: 'pointer' }}>Запросить мой контакт</span>
             </div>
             <input type="tel" name="phone" value={form.phone} onChange={handleChange} placeholder="+7 (___) ___-__-__" style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
           </div>
