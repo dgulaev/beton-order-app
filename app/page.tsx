@@ -74,7 +74,6 @@ export default function ConcreteOrderPage() {
         initializeUser(uid);
       }
 
-      // Получаем реферера из URL (?ref=CODE)
       const urlParams = new URLSearchParams(window.location.search);
       const ref = urlParams.get('ref');
       if (ref) setReferredBy(parseInt(ref));
@@ -97,7 +96,7 @@ export default function ConcreteOrderPage() {
       if (data.referralCode) setReferralCode(data.referralCode);
       if (data.balance !== undefined) setBalance(data.balance);
     } catch (e) {
-      console.error('Ошибка инициализации пользователя:', e);
+      console.error(e);
       setReferralCode('Ошибка загрузки');
     }
   };
@@ -201,34 +200,45 @@ export default function ConcreteOrderPage() {
       minHeight: '100vh',
       fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
-      {/* Табы */}
-      <div style={{ display: 'flex', marginBottom: '30px', borderBottom: '1px solid #e5e7eb' }}>
+      <h1 style={{ textAlign: 'center', fontSize: '26px', fontWeight: '700', marginBottom: '30px', color: '#1f2937' }}>
+        Заявка на отгрузку бетона
+      </h1>
+
+      {/* Табы с голубой подсветкой */}
+      <div style={{ display: 'flex', backgroundColor: '#e5e7eb', borderRadius: '12px', padding: '4px', marginBottom: '30px' }}>
         <button 
           onClick={() => setActiveTab('new')}
-          style={{ flex: 1, padding: '12px', fontWeight: activeTab === 'new' ? '700' : '500',
-                   borderBottom: activeTab === 'new' ? '3px solid #2563eb' : 'none',
-                   color: activeTab === 'new' ? '#2563eb' : '#6b7280' }}
+          style={{ 
+            flex: 1, 
+            padding: '12px', 
+            borderRadius: '10px', 
+            fontWeight: activeTab === 'new' ? '700' : '500', 
+            backgroundColor: activeTab === 'new' ? '#2563eb' : 'transparent', 
+            color: activeTab === 'new' ? 'white' : '#374151' 
+          }}
         >
           Новая заявка
         </button>
         <button 
           onClick={() => setActiveTab('referral')}
-          style={{ flex: 1, padding: '12px', fontWeight: activeTab === 'referral' ? '700' : '500',
-                   borderBottom: activeTab === 'referral' ? '3px solid #2563eb' : 'none',
-                   color: activeTab === 'referral' ? '#2563eb' : '#6b7280' }}
+          style={{ 
+            flex: 1, 
+            padding: '12px', 
+            borderRadius: '10px', 
+            fontWeight: activeTab === 'referral' ? '700' : '500', 
+            backgroundColor: activeTab === 'referral' ? '#2563eb' : 'transparent', 
+            color: activeTab === 'referral' ? 'white' : '#374151' 
+          }}
         >
           Мои баллы
         </button>
       </div>
 
       {activeTab === 'new' ? (
-        /* ==================== ФОРМА ЗАЯВКИ ==================== */
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-
           <div>
             <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Марка бетона</label>
-            <select name="grade" value={form.grade} onChange={handleChange}
-              style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }}>
+            <select name="grade" value={form.grade} onChange={handleChange} style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }}>
               {Object.keys(pricePerCubic).map(g => (
                 <option key={g} value={g}>{g} — {pricePerCubic[g]} ₽/м³</option>
               ))}
@@ -237,9 +247,7 @@ export default function ConcreteOrderPage() {
 
           <div>
             <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Объём, м³</label>
-            <input type="number" name="volume" value={form.volume} onChange={handleChange}
-              step="0.1" min="0.5" placeholder="Например: 12.5"
-              style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
+            <input type="number" name="volume" value={form.volume} onChange={handleChange} step="0.1" min="0.5" placeholder="Например: 12.5" style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
           </div>
 
           {totalPrice > 0 && (
@@ -262,32 +270,26 @@ export default function ConcreteOrderPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Дата доставки</label>
-              <input type="date" name="deliveryDate" value={form.deliveryDate} onChange={handleChange}
-                style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
+              <input type="date" name="deliveryDate" value={form.deliveryDate} onChange={handleChange} style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Время доставки</label>
-              <input type="time" name="deliveryTime" value={form.deliveryTime} onChange={handleChange}
-                style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
+              <input type="time" name="deliveryTime" value={form.deliveryTime} onChange={handleChange} style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
             </div>
           </div>
 
           <div>
             <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Адрес доставки</label>
-            <textarea name="address" value={form.address} onChange={handleChange} rows={3}
-              placeholder="Город, улица, дом, подъезд, этаж..."
-              style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db', resize: 'vertical' }} />
+            <textarea name="address" value={form.address} onChange={handleChange} rows={3} placeholder="Город, улица, дом, подъезд, этаж..." style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db', resize: 'vertical' }} />
           </div>
 
           <div>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '15px' }}>Тип заказчика</label>
             <div style={{ display: 'flex', gap: '12px' }}>
-              <button type="button" onClick={() => handleCustomerTypeChange('physical')}
-                style={{ flex: 1, padding: '16px', borderRadius: '10px', border: form.customerType === 'physical' ? '2px solid #2563eb' : '1px solid #d1d5db', backgroundColor: form.customerType === 'physical' ? '#f0f9ff' : 'white' }}>
+              <button type="button" onClick={() => handleCustomerTypeChange('physical')} style={{ flex: 1, padding: '16px', borderRadius: '10px', border: form.customerType === 'physical' ? '2px solid #2563eb' : '1px solid #d1d5db', backgroundColor: form.customerType === 'physical' ? '#f0f9ff' : 'white' }}>
                 Физ. лицо
               </button>
-              <button type="button" onClick={() => handleCustomerTypeChange('legal')}
-                style={{ flex: 1, padding: '16px', borderRadius: '10px', border: form.customerType === 'legal' ? '2px solid #2563eb' : '1px solid #d1d5db', backgroundColor: form.customerType === 'legal' ? '#f0f9ff' : 'white' }}>
+              <button type="button" onClick={() => handleCustomerTypeChange('legal')} style={{ flex: 1, padding: '16px', borderRadius: '10px', border: form.customerType === 'legal' ? '2px solid #2563eb' : '1px solid #d1d5db', backgroundColor: form.customerType === 'legal' ? '#f0f9ff' : 'white' }}>
                 Юр. лицо
               </button>
             </div>
@@ -296,16 +298,12 @@ export default function ConcreteOrderPage() {
           {form.customerType === 'physical' ? (
             <div>
               <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>ФИО заказчика</label>
-              <input type="text" name="fullName" value={form.fullName} onChange={handleChange}
-                placeholder="Иванов Иван Иванович"
-                style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
+              <input type="text" name="fullName" value={form.fullName} onChange={handleChange} placeholder="Иванов Иван Иванович" style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
             </div>
           ) : (
             <div>
               <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Название организации</label>
-              <input type="text" name="organizationName" value={form.organizationName} onChange={handleChange}
-                placeholder="ООО «БетонСтрой»"
-                style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
+              <input type="text" name="organizationName" value={form.organizationName} onChange={handleChange} placeholder="ООО «БетонСтрой»" style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
             </div>
           )}
 
@@ -316,16 +314,12 @@ export default function ConcreteOrderPage() {
                 Запросить мой контакт
               </span>
             </div>
-            <input type="tel" name="phone" value={form.phone} onChange={handleChange}
-              placeholder="+7 (___) ___-__-__"
-              style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
+            <input type="tel" name="phone" value={form.phone} onChange={handleChange} placeholder="+7 (___) ___-__-__" style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db' }} />
           </div>
 
           <div>
             <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '15px' }}>Комментарий</label>
-            <textarea name="comment" value={form.comment} onChange={handleChange} rows={2}
-              placeholder="Дополнительная информация (необязательно)"
-              style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db', resize: 'vertical' }} />
+            <textarea name="comment" value={form.comment} onChange={handleChange} rows={2} placeholder="Дополнительная информация (необязательно)" style={{ width: '100%', padding: '14px', fontSize: '16px', borderRadius: '10px', border: '1px solid #d1d5db', resize: 'vertical' }} />
           </div>
 
           <button 
@@ -341,7 +335,6 @@ export default function ConcreteOrderPage() {
           </div>
         </div>
       ) : (
-        /* ==================== ЭКРАН РЕФЕРАЛЬНОЙ СИСТЕМЫ ==================== */
         <div style={{ textAlign: 'center', padding: '60px 20px' }}>
           <h2 style={{ fontSize: '28px', marginBottom: '8px' }}>Мои баллы</h2>
           <div style={{ fontSize: '64px', fontWeight: '700', color: '#2563eb', marginBottom: '8px' }}>
@@ -351,15 +344,7 @@ export default function ConcreteOrderPage() {
 
           <div style={{ marginTop: '50px' }}>
             <h3 style={{ marginBottom: '12px' }}>Твой реферальный код</h3>
-            <div style={{ 
-              backgroundColor: '#f1f5f9', 
-              padding: '20px', 
-              borderRadius: '12px', 
-              fontSize: '26px', 
-              fontWeight: '700',
-              letterSpacing: '3px',
-              marginBottom: '20px'
-            }}>
+            <div style={{ backgroundColor: '#f1f5f9', padding: '20px', borderRadius: '12px', fontSize: '26px', fontWeight: '700', letterSpacing: '3px', marginBottom: '20px' }}>
               {referralCode}
             </div>
             <button 
