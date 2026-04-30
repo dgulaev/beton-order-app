@@ -27,7 +27,7 @@ export default function ConcreteOrderPage() {
 
   // Реферальная система
   const [userId, setUserId] = useState<number | null>(null);
-  const [referralCode, setReferralCode] = useState<string>('');
+  const [referralCode, setReferralCode] = useState<string>('Загрузка...');
   const [balance, setBalance] = useState(0);
   const [referredBy, setReferredBy] = useState<number | null>(null);
 
@@ -61,7 +61,7 @@ export default function ConcreteOrderPage() {
   }
   const totalPrice = concreteCost + deliveryCost;
 
-      useEffect(() => {
+  useEffect(() => {
     const wa = (window as any).WebApp;
     if (wa) {
       wa.ready();
@@ -71,20 +71,10 @@ export default function ConcreteOrderPage() {
       const uid = wa.initDataUnsafe?.user?.id || wa.initData?.user?.id;
       if (uid) {
         setUserId(uid);
-        // Инициализируем пользователя и получаем реферальный код + баланс
-        fetch('/api/user/init', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: uid }),
-        })
-          .then(res => res.json())
-          .then(data => {
-            if (data.referralCode) setReferralCode(data.referralCode);
-            if (data.balance !== undefined) setBalance(data.balance);
-          });
+        initializeUser(uid);
       }
 
-      // Получаем реферера из URL
+      // Получаем реферера из URL (?ref=CODE)
       const urlParams = new URLSearchParams(window.location.search);
       const ref = urlParams.get('ref');
       if (ref) setReferredBy(parseInt(ref));
@@ -94,6 +84,23 @@ export default function ConcreteOrderPage() {
       wa.MainButton.onClick(handleSubmit);
     }
   }, []);
+
+  const initializeUser = async (uid: number) => {
+    try {
+      const res = await fetch('/api/user/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: uid }),
+      });
+
+      const data = await res.json();
+      if (data.referralCode) setReferralCode(data.referralCode);
+      if (data.balance !== undefined) setBalance(data.balance);
+    } catch (e) {
+      console.error('Ошибка инициализации пользователя:', e);
+      setReferralCode('Ошибка загрузки');
+    }
+  };
 
   const handleChange = (e: React.ChangeEvent<any>) => {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -215,7 +222,7 @@ export default function ConcreteOrderPage() {
       </div>
 
       {activeTab === 'new' ? (
-        /* ==================== ОСНОВНАЯ ФОРМА ==================== */
+        /* ==================== ФОРМА ЗАЯВКИ ==================== */
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
           <div>
@@ -324,11 +331,7 @@ export default function ConcreteOrderPage() {
           <button 
             onClick={handleSubmit}
             disabled={isSubmitting}
-            style={{ 
-              marginTop: '10px', width: '100%', padding: '18px', fontSize: '18px',
-              backgroundColor: isSubmitting ? '#9ca3af' : '#2563eb',
-              color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600'
-            }}
+            style={{ marginTop: '10px', width: '100%', padding: '18px', fontSize: '18px', backgroundColor: isSubmitting ? '#9ca3af' : '#2563eb', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
           >
             {isSubmitting ? 'Отправляем...' : 'Отправить заявку'}
           </button>
@@ -339,12 +342,12 @@ export default function ConcreteOrderPage() {
         </div>
       ) : (
         /* ==================== ЭКРАН РЕФЕРАЛЬНОЙ СИСТЕМЫ ==================== */
-        <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+        <div style={{ textAlign: 'center', padding: '60px 20px' }}>
           <h2 style={{ fontSize: '28px', marginBottom: '8px' }}>Мои баллы</h2>
           <div style={{ fontSize: '64px', fontWeight: '700', color: '#2563eb', marginBottom: '8px' }}>
             {balance} ₽
           </div>
-          <p style={{ color: '#666' }}>Баллы можно использовать как скидку на будущие заказы</p>
+          <p style={{ color: '#666' }}>Баллы можно использовать как скидку</p>
 
           <div style={{ marginTop: '50px' }}>
             <h3 style={{ marginBottom: '12px' }}>Твой реферальный код</h3>
@@ -357,16 +360,17 @@ export default function ConcreteOrderPage() {
               letterSpacing: '3px',
               marginBottom: '20px'
             }}>
-              {referralCode || 'Загрузка...'}
+              {referralCode}
             </div>
             <button 
               onClick={() => {
                 const link = `https://beton-order-app-nlnv.vercel.app/?ref=${referralCode}`;
-                navigator.clipboard.writeText(link).then(() => alert('Реферальная ссылка скопирована в буфер обмена!'));
+                navigator.clipboard.writeText(link);
+                alert('Реферальная ссылка скопирована!');
               }}
               style={{ padding: '14px 32px', backgroundColor: '#2563eb', color: 'white', border: 'none', borderRadius: '12px', fontSize: '16px' }}
             >
-              Скопировать реферальную ссылку
+              Скопировать ссылку
             </button>
           </div>
         </div>
