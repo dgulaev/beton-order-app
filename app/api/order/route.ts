@@ -6,26 +6,22 @@ const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
 const BOT_TOKEN = process.env.MAX_BOT_TOKEN;
 const CHAT_ID = process.env.MANAGER_CHAT_ID;
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: false,
-  },
-});
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export async function POST(request: NextRequest) {
   try {
     const payload = await request.json();
 
-    // Извлекаем userId максимально надёжно
     const userId = payload.userId 
       || payload.user_id 
       || payload.initDataUnsafe?.user?.id 
       || payload.initData?.user?.id 
       || null;
 
-    console.log('🔍 Received userId:', userId);
+    const referredBy = payload.referred_by || null;
 
-    const { error } = await supabase
+    // Сохраняем заявку
+    await supabase
       .from('orders')
       .insert([{
         user_id: userId,
@@ -42,12 +38,19 @@ export async function POST(request: NextRequest) {
         concrete_cost: payload.concreteCost,
         delivery_cost: payload.deliveryCost,
         total_price: payload.totalPrice,
+        referred_by: referredBy,
       }]);
 
-    if (error) {
-      console.error('Supabase insert error:', error);
-    } else {
-      console.log('✅ Заявка успешно сохранена в Supabase');
+    // Начисляем баллы рефереру (100 баллов за 1 м³)
+    if (referredBy && payload.volume) {
+      const bonusPoints = Math.round(payload.volume * 100);
+
+      await supabase.rpc('increment_balance', {
+        user_id: referredBy,
+        points: bonusPoints
+      });
+
+      console.log(`✅ Начислено ${bonusPoints} баллов пользователю ${referredBy}`);
     }
 
     // Уведомление в группу
