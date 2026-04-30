@@ -61,30 +61,43 @@ export default function ConcreteOrderPage() {
   }
   const totalPrice = concreteCost + deliveryCost;
 
-  useEffect(() => {
+    useEffect(() => {
+    console.log('🚀 useEffect запущен');
+
     const wa = (window as any).WebApp;
+    console.log('🌐 WebApp object:', !!wa);
+
     if (wa) {
       wa.ready();
       wa.expand();
       wa.enableClosingConfirmation();
 
       const uid = wa.initDataUnsafe?.user?.id || wa.initData?.user?.id;
+      console.log('👤 User ID from MAX:', uid);
+
       if (uid) {
         setUserId(uid);
         initializeUser(uid);
+      } else {
+        console.log('⚠️ User ID не найден!');
+        setReferralCode('User ID не найден');
       }
 
       const urlParams = new URLSearchParams(window.location.search);
       const ref = urlParams.get('ref');
+      console.log('🔗 ref параметр:', ref);
       if (ref) setReferredBy(parseInt(ref));
 
       wa.MainButton.setText('Отправить заявку');
       wa.MainButton.show();
       wa.MainButton.onClick(handleSubmit);
+    } else {
+      console.log('❌ WebApp не найден (не MAX?)');
     }
   }, []);
 
   const initializeUser = async (uid: number) => {
+    console.log('📡 Запрос к /api/user/init с uid:', uid);
     try {
       const res = await fetch('/api/user/init', {
         method: 'POST',
@@ -92,12 +105,15 @@ export default function ConcreteOrderPage() {
         body: JSON.stringify({ userId: uid }),
       });
 
+      console.log('📨 Ответ сервера status:', res.status);
       const data = await res.json();
+      console.log('📦 Данные от сервера:', data);
+
       if (data.referralCode) setReferralCode(data.referralCode);
       if (data.balance !== undefined) setBalance(data.balance);
     } catch (e) {
-      console.error(e);
-      setReferralCode('Ошибка загрузки');
+      console.error('💥 Ошибка fetch:', e);
+      setReferralCode('Ошибка соединения');
     }
   };
 
