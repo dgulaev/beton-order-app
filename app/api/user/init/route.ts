@@ -9,54 +9,57 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export async function POST(request: NextRequest) {
   try {
     const { userId } = await request.json();
-    console.log('🔍 [INIT] Received userId:', userId);
 
-    if (!userId) {
-      console.log('❌ [INIT] No userId provided');
+    if (!userId || userId.toString().trim() === '') {
       return NextResponse.json({ success: false, message: 'No userId' }, { status: 400 });
     }
 
-    // Проверяем пользователя
-    let { data: user, error: selectError } = await supabase
-      .from('users')
-      .select('referral_code, balance')
-      .eq('user_id', userId)
-      .single();
-
-    if (selectError && selectError.code !== 'PGRST116') { // PGRST116 = no rows
-      console.error('❌ [INIT] Select error:', selectError);
+    const parsedUserId = parseInt(userId.toString(), 10);
+    if (isNaN(parsedUserId)) {
+      return NextResponse.json({ success: false, message: 'Invalid userId' }, { status: 400 });
     }
+
+    // ←←← Важно для RLS
+    await supabase.rpc('set_current_user_id', { p_user_id: parsedUserId });
+
+    // Проверяем, есть ли уже пользователь
+    let { data: user } = await supabase
+      .from('users')
+      .select('referral_code, balance, role')
+      .eq('user_id', parsedUserId)
+      .single();
 
     // Если пользователя нет — создаём
     if (!user) {
       const referralCode = 'R' + Math.random().toString(36).substring(2, 8).toUpperCase();
-      console.log('🆕 [INIT] Creating new user with code:', referralCode);
 
-      const { error: insertError } = await supabase
+      const { error } = await supabase
         .from('users')
         .insert([{
-          user_id: userId,
+          user_id: parsedUserId,
           referral_code: referralCode,
           balance: 0,
+          role: 'client'
         }]);
 
-      if (insertError) {
-        console.error('❌ [INIT] Insert error:', insertError);
-      } else {
-        user = { referral_code: referralCode, balance: 0 };
+      if (error) {
+        console.error('User insert error:', error);
+        // Если дубликат — просто продолжаем (уже существует)
+        if (error.code !== '23505') throw error;
       }
-    }
 
-    console.log('✅ [INIT] Success, returning code:', user?.referral_code);
+      user = { referral_code: referralCode, balance: 0, role: 'client' };
+    }
 
     return NextResponse.json({
       success: true,
-      referralCode: user?.referral_code || 'ERROR',
-      balance: user?.balance || 0,
+      referralCode: user.referral_code,
+      balance: user.balance || 0,
+      role: user.role || 'client'
     });
 
   } catch (error) {
-    console.error('💥 [INIT] Critical error:', error);
-    return NextResponse.json({ success: false, message: 'Server error' }, { status: 500 });
+    console.error('Init user error:', error);
+    return NextResponse.json({ success: false }, { status: 500 });
   }
 }
