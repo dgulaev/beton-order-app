@@ -31,15 +31,21 @@ interface Shipment extends Order {
   loadingMinutes: number;
 }
 
+// Ленивая инициализация клиента (чтобы не падал билд)
+function getSupabaseClient() {
+  // Если у тебя уже есть утилита — используем её
+  return createClient();
+}
+
 export default function CifraSchedulePage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Shipment | null>(null);
   const [currentHourPercent, setCurrentHourPercent] = useState(50);
-
-  const supabase = createClient();
   const [zoomLevel, setZoomLevel] = useState(1.0);
+
+  const supabase = getSupabaseClient();   // ←←← Изменено здесь
 
   // Загрузка заказов
   useEffect(() => {
