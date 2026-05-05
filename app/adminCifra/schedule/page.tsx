@@ -41,7 +41,7 @@ export default function CifraSchedulePage() {
   const [currentHourPercent, setCurrentHourPercent] = useState(50);
   const [zoomLevel, setZoomLevel] = useState(1.0);
 
-  // Ленивая инициализация клиента внутри компонента
+  // Создаём Supabase клиент ВНУТРИ компонента — это решает проблему билда
   const supabase = createClient();
 
   // Загрузка заказов
@@ -174,127 +174,126 @@ export default function CifraSchedulePage() {
           </div>
         </div>
 
- {/* Таймлайн — с зумом колесом мыши */}
-<div 
-  id="timeline-container"
-  style={{ 
-    backgroundColor: '#1E2937', 
-    borderRadius: '20px', 
-    padding: '32px', 
-    border: '1px solid #334155', 
-    position: 'relative',
-    width: '100%',
-    overflow: 'hidden'
-  }}
-  onWheel={(e) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1; // 10% зум
-    setZoomLevel(prev => Math.max(0.5, Math.min(3, prev * delta)));
-  }}
->
-
-  {/* Шапка с часами */}
-  <div style={{ 
-    display: 'grid', 
-    gridTemplateColumns: 'repeat(24, 1fr)', 
-    textAlign: 'center', 
-    color: '#94A3B8', 
-    marginBottom: '24px',
-    width: '100%',
-    fontSize: '14px',
-    userSelect: 'none'
-  }}>
-    {Array.from({ length: 24 }, (_, i) => <div key={i}>{i}:00</div>)}
-  </div>
-
-  {/* Область таймлайна с зумом */}
-  <div 
-    style={{ 
-      position: 'relative', 
-      height: '820px', 
-      border: '2px dashed #475569', 
-      borderRadius: '16px', 
-      backgroundColor: '#111827',
-      width: '100%',
-      overflow: 'hidden',
-      cursor: 'grab'
-    }}
-  >
-    {shipments.map((shipment) => {
-      const left = (shipment.tripStartHour / 24) * 100 * zoomLevel;
-      const width = Math.max(6, (shipment.tripVolume || 10) / 3.2 * zoomLevel);
-
-      const rowIndex = orders.findIndex(o => o.id === shipment.id);
-      const topPosition = 80 + rowIndex * 160;
-
-      return (
-        <div
-          key={shipment.tripId}
-          onClick={() => setSelected(shipment)}
-          style={{
-            position: 'absolute',
-            left: `${left}%`,
-            width: `${width}%`,
-            top: `${topPosition}px`,
-            height: '78px',
-            backgroundColor: '#10b981',
-            borderRadius: '10px',
-            display: 'flex',
-            alignItems: 'center',
-            padding: '0 20px',
-            color: '#fff',
-            cursor: 'pointer',
-            boxShadow: '0 6px 16px rgba(0,0,0,0.4)',
-            transition: 'left 0.1s ease, width 0.1s ease',
+        {/* Таймлайн */}
+        <div 
+          id="timeline-container"
+          style={{ 
+            backgroundColor: '#1E2937', 
+            borderRadius: '20px', 
+            padding: '32px', 
+            border: '1px solid #334155', 
+            position: 'relative',
+            width: '100%',
+            overflow: 'hidden'
+          }}
+          onWheel={(e) => {
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? 0.9 : 1.1;
+            setZoomLevel(prev => Math.max(0.5, Math.min(3, prev * delta)));
           }}
         >
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: '700', fontSize: '18px' }}>
-              #{shipment.id} ({shipment.tripNumber}/{shipment.totalTrips})
-            </div>
-            <div style={{ fontSize: '14px' }}>{getClient(shipment)}</div>
+          {/* Шапка с часами */}
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(24, 1fr)', 
+            textAlign: 'center', 
+            color: '#94A3B8', 
+            marginBottom: '24px',
+            width: '100%',
+            fontSize: '14px',
+            userSelect: 'none'
+          }}>
+            {Array.from({ length: 24 }, (_, i) => <div key={i}>{i}:00</div>)}
           </div>
-          <div style={{ textAlign: 'right', fontSize: '15px', lineHeight: '1.3' }}>
-            <div>{shipment.tripVolume} м³</div>
-            <div style={{ fontSize: '13px', opacity: 0.9 }}>{shipment.vehicle || '—'}</div>
-            <div style={{ fontSize: '13px', opacity: 0.9 }}>{shipment.driver || '—'}</div>
+
+          {/* Область таймлайна */}
+          <div 
+            style={{ 
+              position: 'relative', 
+              height: '820px', 
+              border: '2px dashed #475569', 
+              borderRadius: '16px', 
+              backgroundColor: '#111827',
+              width: '100%',
+              overflow: 'hidden',
+              cursor: 'grab'
+            }}
+          >
+            {shipments.map((shipment) => {
+              const left = (shipment.tripStartHour / 24) * 100 * zoomLevel;
+              const width = Math.max(6, (shipment.tripVolume || 10) / 3.2 * zoomLevel);
+
+              const rowIndex = orders.findIndex(o => o.id === shipment.id);
+              const topPosition = 80 + rowIndex * 160;
+
+              return (
+                <div
+                  key={shipment.tripId}
+                  onClick={() => setSelected(shipment)}
+                  style={{
+                    position: 'absolute',
+                    left: `${left}%`,
+                    width: `${width}%`,
+                    top: `${topPosition}px`,
+                    height: '78px',
+                    backgroundColor: '#10b981',
+                    borderRadius: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '0 20px',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    boxShadow: '0 6px 16px rgba(0,0,0,0.4)',
+                    transition: 'left 0.1s ease, width 0.1s ease',
+                  }}
+                >
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: '700', fontSize: '18px' }}>
+                      #{shipment.id} ({shipment.tripNumber}/{shipment.totalTrips})
+                    </div>
+                    <div style={{ fontSize: '14px' }}>{getClient(shipment)}</div>
+                  </div>
+                  <div style={{ textAlign: 'right', fontSize: '15px', lineHeight: '1.3' }}>
+                    <div>{shipment.tripVolume} м³</div>
+                    <div style={{ fontSize: '13px', opacity: 0.9 }}>{shipment.vehicle || '—'}</div>
+                    <div style={{ fontSize: '13px', opacity: 0.9 }}>{shipment.driver || '—'}</div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Вертикальная линия + текущее время */}
+            <div style={{
+              position: 'absolute',
+              left: `${currentHourPercent * zoomLevel}%`,
+              top: '0',
+              bottom: '0',
+              width: '3px',
+              backgroundColor: '#3B82F6',
+              boxShadow: '0 0 12px #3B82F6',
+              zIndex: 30,
+              transition: 'left 0.1s ease'
+            }} />
+
+            <div style={{
+              position: 'absolute',
+              left: `${currentHourPercent * zoomLevel}%`,
+              bottom: '-32px',
+              transform: 'translateX(-50%)',
+              backgroundColor: '#1E2937',
+              padding: '6px 16px',
+              borderRadius: '9999px',
+              fontSize: '15px',
+              fontWeight: '700',
+              color: '#3B82F6',
+              zIndex: 35,
+              border: '2px solid #3B82F6',
+              transition: 'left 0.1s ease'
+            }}>
+              {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+            </div>
           </div>
         </div>
-      );
-    })}
-
-    {/* Вертикальная линия + текущее время */}
-    <div style={{
-      position: 'absolute',
-      left: `${currentHourPercent * zoomLevel}%`,
-      top: '0',
-      bottom: '0',
-      width: '3px',
-      backgroundColor: '#3B82F6',
-      boxShadow: '0 0 12px #3B82F6',
-      zIndex: 30,
-      transition: 'left 0.1s ease'
-    }} />
-
-    <div style={{
-      position: 'absolute',
-      left: `${currentHourPercent * zoomLevel}%`,
-      bottom: '-32px',
-      transform: 'translateX(-50%)',
-      backgroundColor: '#1E2937',
-      padding: '6px 16px',
-      borderRadius: '9999px',
-      fontSize: '15px',
-      fontWeight: '700',
-      color: '#3B82F6',
-      zIndex: 35,
-      border: '2px solid #3B82F6',
-      transition: 'left 0.1s ease'
-    }}>
-      {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
-    </div>
-  </div>
-</div>
       </div>
 
       {/* Модалка */}
