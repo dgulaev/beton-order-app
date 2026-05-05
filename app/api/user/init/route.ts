@@ -1,65 +1,83 @@
-import { NextRequest, NextResponse } from 'next/server';
+// app/api/user/init/route.ts
 import { createClient } from '@supabase/supabase-js';
+import { NextRequest, NextResponse } from 'next/server';
 
-const supabaseUrl = 'https://nhudnzdgtidocwwzpqge.supabase.co';
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
+const supabaseUrl = process.env.SUPABASE_URL!;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 export async function POST(request: NextRequest) {
   try {
     const { userId } = await request.json();
 
-    if (!userId || userId.toString().trim() === '') {
-      return NextResponse.json({ success: false, message: 'No userId' }, { status: 400 });
+    if (!userId) {
+      return NextResponse.json({ 
+        success: false, 
+        message: 'userId обязателен' 
+      }, { status: 400 });
     }
 
-    const parsedUserId = parseInt(userId.toString(), 10);
-    if (isNaN(parsedUserId)) {
-      return NextResponse.json({ success: false, message: 'Invalid userId' }, { status: 400 });
-    }
+    const parsedUserId = typeof userId === 'string' ? parseInt(userId, 10) : Number(userId);
 
-    // ←←← Важно для RLS
-    await supabase.rpc('set_current_user_id', { p_user_id: parsedUserId });
-
-    // Проверяем, есть ли уже пользователь
-    let { data: user } = await supabase
+    // Получаем пользователя
+    let { data: user, error } = await supabase
       .from('users')
-      .select('referral_code, balance, role')
+      .select('id, referral_code, balance, role, referred_by')
       .eq('user_id', parsedUserId)
       .single();
 
-    // Если пользователя нет — создаём
-    if (!user) {
-      const referralCode = 'R' + Math.random().toString(36).substring(2, 8).toUpperCase();
+    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows
+      throw error;
+    }
 
-      const { error } = await supabase
+    if (!user) {
+      const referralCode = 'R' + Math.random().toString(36).substring(2, 9).toUpperCase();
+
+      const { data: newUser, error: insertError } = await supabase
         .from('users')
-        .insert([{
+        .insert({
           user_id: parsedUserId,
           referral_code: referralCode,
           balance: 0,
-          role: 'client'
-        }]);
+          role: 'client',
+          referred_by: null,
+        })
+        .select()
+        .single();
 
-      if (error) {
-        console.error('User insert error:', error);
-        // Если дубликат — просто продолжаем (уже существует)
-        if (error.code !== '23505') throw error;
+      if (insertError) {
+        console.error('Insert error:', insertError);
+        
+        if (insertError.code === '23505') {
+          // Уже существует — повторно получаем
+          const { data: retryUser } = await supabase
+            .from('users')
+            .select('id, referral_code, balance, role, referred_by')
+            .eq('user_id', parsedUserId)
+            .single();
+          
+          user = retryUser;
+        } else {
+          throw insertError;
+        }
+      } else {
+        user = newUser;
       }
-
-      user = { referral_code: referralCode, balance: 0, role: 'client' };
     }
 
     return NextResponse.json({
       success: true,
-      referralCode: user.referral_code,
-      balance: user.balance || 0,
-      role: user.role || 'client'
+      referralCode: user?.referral_code || 'ERROR',
+      balance: user?.balance || 0,
+      role: user?.role || 'client'
     });
 
-  } catch (error) {
-    console.error('Init user error:', error);
-    return NextResponse.json({ success: false }, { status: 500 });
+  } catch (error: any) {
+    console.error('Init error:', error);
+    return NextResponse.json({ 
+      success: false, 
+      message: error.message || 'Ошибка инициализации' 
+    }, { status: 500 });
   }
 }

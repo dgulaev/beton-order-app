@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import Image from 'next/image';
 
 declare const WebApp: any;
@@ -65,23 +65,42 @@ export default function ConcreteOrderPage() {
     }
   };
 
+  // ==================== РАСЧЁТ СТОИМОСТИ В РЕАЛЬНОМ ВРЕМЕНИ ====================
   const volume = parseFloat(form.volume) || 0;
+
   const pricePerCubic: Record<string, number> = {
     'М100': 6380, 'М150': 6500, 'М200': 6600, 'М250': 6950,
     'М300': 7230, 'М350': 7400, 'М400': 8050, 'М450': 8350, 'М500': 8700,
   };
 
-  const concreteCost = volume > 0 ? Math.round(volume * (pricePerCubic[form.grade] || 7230)) : 0;
+  const concreteCost = useMemo(() => {
+    return volume > 0 ? Math.round(volume * (pricePerCubic[form.grade] || 7230)) : 0;
+  }, [volume, form.grade]);
+
   let deliveryCost = 0;
   let deliveryNote = '';
 
   if (volume > 0) {
-    if (volume <= 10) { deliveryCost = 6000; deliveryNote = '6000 ₽ за рейс (до 10 м³)'; }
-    else if (volume <= 12) { deliveryCost = 7500; deliveryNote = '7500 ₽ за рейс (12 м³)'; }
-    else if (volume <= 50) { deliveryCost = Math.ceil(volume / 10) * 6000; deliveryNote = `${Math.ceil(volume / 10)} рейса × 6000 ₽`; }
-    else { deliveryCost = Math.round(volume * 600); deliveryNote = '600 ₽ за 1 м³'; }
+    if (volume <= 10) { 
+      deliveryCost = 6000; 
+      deliveryNote = '6000 ₽ за рейс (до 10 м³)'; 
+    }
+    else if (volume <= 12) { 
+      deliveryCost = 7500; 
+      deliveryNote = '7500 ₽ за рейс (12 м³)'; 
+    }
+    else if (volume <= 50) { 
+      deliveryCost = Math.ceil(volume / 10) * 6000; 
+      deliveryNote = `${Math.ceil(volume / 10)} рейса × 6000 ₽`; 
+    }
+    else { 
+      deliveryCost = Math.round(volume * 600); 
+      deliveryNote = '600 ₽ за 1 м³'; 
+    }
   }
+
   const totalPrice = concreteCost + deliveryCost;
+  // ============================================================================
 
   const handleChange = (e: React.ChangeEvent<any>) => {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -104,7 +123,7 @@ export default function ConcreteOrderPage() {
     }
   };
 
-  const registerByPhone = async (phoneNumber: string) => {
+const registerByPhone = async (phoneNumber: string) => {
     try {
       const res = await fetch('/api/user/register', {
         method: 'POST',
@@ -113,10 +132,14 @@ export default function ConcreteOrderPage() {
       });
 
       const data = await res.json();
+
       if (data.success) {
         setUserId(data.userId);
         setPhone(phoneNumber);
         setIsVerified(true);
+
+        // ←←← Важно: заполняем также form.phone
+        setForm(prev => ({ ...prev, phone: phoneNumber }));
 
         localStorage.setItem('userPhone', phoneNumber);
         localStorage.setItem('userId', data.userId.toString());
@@ -208,29 +231,46 @@ export default function ConcreteOrderPage() {
     } catch (e) { console.error(e); } finally { setLoadingReferrals(false); }
   };
 
-    const handleSubmit = async () => {
+   const handleSubmit = async () => {
     const wa = (window as any).WebApp;
     const showAlert = wa?.showAlert || alert;
 
-    if (!form.volume || !form.address || !form.phone) {
-      showAlert('Пожалуйста, заполните обязательные поля!');
-      return;
-    }
-    if (form.customerType === 'legal' && !form.organizationName) {
-      showAlert('Укажите название организации!');
-      return;
-    }
-    if (form.customerType === 'physical' && !form.fullName) {
-      showAlert('Укажите ФИО!');
+    // === Улучшенная валидация ===
+    if (!form.volume || parseFloat(form.volume) <= 0) {
+      showAlert('Укажите объём бетона больше 0 м³');
       return;
     }
 
+    if (!form.address || form.address.trim().length < 5) {
+      showAlert('Укажите полный адрес доставки');
+      return;
+    }
+
+    // ←←← Улучшенная проверка телефона (учитываем и form.phone, и phone)
+    const currentPhone = form.phone || phone || '';
+    if (!currentPhone || currentPhone.replace(/\D/g, '').length < 10) {
+      showAlert('Укажите корректный номер телефона');
+      return;
+    }
+
+    if (form.customerType === 'legal' && (!form.organizationName || form.organizationName.trim().length < 3)) {
+      showAlert('Укажите название организации');
+      return;
+    }
+
+    if (form.customerType === 'physical' && (!form.fullName || form.fullName.trim().length < 5)) {
+      showAlert('Укажите ФИО полностью');
+      return;
+    }
+
+    // === Если всё заполнено — отправляем ===
     setIsSubmitting(true);
     if (wa?.MainButton) wa.MainButton.showProgress();
 
     const payload = {
       ...form,
-      volume,
+      phone: currentPhone,           // ← используем актуальный номер
+      volume: volume,
       concreteCost,
       deliveryCost,
       totalPrice,
@@ -249,9 +289,11 @@ export default function ConcreteOrderPage() {
       const data = await response.json();
 
       if (data.success) {
-        console.log('✅ Заявка отправлена, переключаем на success screen');
-        setOrderId(data.orderId);
+        setOrderId(data.orderId || Date.now());
         setCurrentScreen('success');
+        if (wa?.MainButton) wa.MainButton.hide();
+
+        // Сброс формы
         setForm({
           grade: 'М300',
           volume: '',
@@ -264,31 +306,15 @@ export default function ConcreteOrderPage() {
           phone: '',
           comment: '',
         });
-      } 
-      else if (response.status === 409) {
-        // === КРАСИВОЕ УВЕДОМЛЕНИЕ О КОНФЛИКТЕ ===
-        const errorMessage = data.message || 'На выбранное время уже запланирована отгрузка бетона.';
-
-        if (wa && typeof wa.showPopup === 'function') {
-          // Красивое native popup в MAX / Telegram Mini App
-          wa.showPopup({
-            title: '⏰ Время занято',
-            message: errorMessage,
-            buttons: [
-              { id: 'ok', type: 'default', text: 'Понятно' }
-            ]
-          });
-        } else {
-          // Красивый fallback для браузера / localhost
-          showAlert('⏰ Время занято\n\n' + errorMessage);
-        }
-      } 
-      else {
-        showAlert('Ошибка при отправке: ' + (data.message || 'Неизвестная ошибка'));
+      } else if (response.status === 409) {
+        const errorMessage = data.message || 'На выбранное время уже запланирована отгрузка.';
+        showAlert('⏰ Время занято\n\n' + errorMessage);
+      } else {
+        showAlert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
       }
     } catch (error) {
       console.error('Submit error:', error);
-      showAlert('Ошибка соединения. Попробуйте ещё раз.');
+      showAlert('Ошибка соединения с сервером. Попробуйте ещё раз.');
     } finally {
       setIsSubmitting(false);
       if (wa?.MainButton) wa.MainButton.hideProgress();
@@ -342,7 +368,21 @@ export default function ConcreteOrderPage() {
           type="tel"
           placeholder="+7 (___) ___-__-__"
           value={phone}
-          onChange={(e) => setPhone(e.target.value)}
+          onChange={(e) => {
+            let value = e.target.value.replace(/\D/g, '');
+            if (value.length > 0 && !value.startsWith('7')) {
+              value = '7' + value;
+            }
+            if (value.length > 11) value = value.substring(0, 11);
+            
+            let formatted = '+7';
+            if (value.length > 1) formatted += ' (' + value.substring(1, 4);
+            if (value.length > 4) formatted += ') ' + value.substring(4, 7);
+            if (value.length > 7) formatted += '-' + value.substring(7, 9);
+            if (value.length > 9) formatted += '-' + value.substring(9, 11);
+
+            setPhone(formatted);
+          }}
           style={{
             width: '100%',
             maxWidth: '420px',
@@ -353,17 +393,18 @@ export default function ConcreteOrderPage() {
             fontSize: '17px',
             textAlign: 'center'
           }}
+          maxLength={18}
         />
 
         <button 
           onClick={() => phone && registerByPhone(phone)}
-          disabled={!phone}
+          disabled={!phone || phone.length < 12}
           style={{
             width: '100%',
             maxWidth: '420px',
             margin: '0 auto',
             padding: '16px',
-            backgroundColor: phone ? '#2563eb' : '#9ca3af',
+            backgroundColor: (phone && phone.length >= 12) ? '#2563eb' : '#9ca3af',
             color: 'white',
             border: 'none',
             borderRadius: '12px',
@@ -436,11 +477,12 @@ export default function ConcreteOrderPage() {
         overflow: 'hidden'
       }}>
 
-        {/* Основное содержимое */}
-        <div style={{ padding: '20px' }}>
-          {activeTab === 'new' && (
+       {/* ОСНОВНОЕ СОДЕРЖИМОЕ */}
+        <div  style={{ padding: '1px' }}>
+        {activeTab === 'new' && (
   <div style={{ 
-    maxWidth: '640px', 
+    width: '100%', 
+    maxWidth: '100%', 
     margin: '0 auto', 
     background: 'white', 
     borderRadius: '24px', 
@@ -503,7 +545,12 @@ export default function ConcreteOrderPage() {
     </div>
 
     {/* ====================== САМА ФОРМА ====================== */}
-    <div style={{ padding: '28px' }}>
+ <div style={{ 
+      paddingTop: '28px', 
+      paddingBottom: '28px', 
+      paddingLeft: '10px', 
+      paddingRight: '10px' 
+    }}>
       <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
@@ -512,54 +559,129 @@ export default function ConcreteOrderPage() {
             <select
               value={form.grade}
               onChange={(e) => setForm({ ...form, grade: e.target.value })}
-              style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '12px', fontSize: '16px' }}
+              style={{ 
+                width: '100%', 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px' 
+              }}
             >
+              <option value="М100">М100</option>
+              <option value="М150">М150</option>
+              <option value="М200">М200</option>
+              <option value="М250">М250</option>
               <option value="М300">М300</option>
               <option value="М350">М350</option>
               <option value="М400">М400</option>
               <option value="М450">М450</option>
+              <option value="М500">М500</option>         
             </select>
           </div>
 
-          <div>
+           <div>
             <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Объём (м³)</label>
             <input
               type="number"
               value={form.volume}
               onChange={(e) => setForm({ ...form, volume: e.target.value })}
-              style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '12px', fontSize: '16px' }}
+              style={{ 
+                width: '80%', 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px' 
+              }}
               placeholder="20"
               min="1"
               step="0.5"
             />
           </div>
         </div>
+      {/* Блок расчёта цены + информация о доставке */}
+      {volume > 0 && (
+        <div style={{ 
+          backgroundColor: '#f8fafc', 
+          padding: '16px', 
+          borderRadius: '16px', 
+          border: '1px solid #e2e8f0',
+          marginTop: '8px'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+            <span style={{ color: '#475569' }}>Бетон:</span>
+            <span style={{ fontWeight: '600' }}>{concreteCost.toLocaleString('ru-RU')} ₽</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+            <span style={{ color: '#475569' }}>Доставка:</span>
+            <span style={{ fontWeight: '600' }}>{deliveryCost.toLocaleString('ru-RU')} ₽</span>
+          </div>
+
+          {/* Информация о миксере / рейсах */}
+          {deliveryNote && (
+            <div style={{ 
+              marginTop: '10px', 
+              padding: '10px', 
+              backgroundColor: '#e0f2fe', 
+              borderRadius: '10px', 
+              fontSize: '14.5px', 
+              color: '#0369a1',
+              textAlign: 'center'
+            }}>
+              🚚 {deliveryNote}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: '700', color: '#1e40af', borderTop: '1px solid #cbd5e1', paddingTop: '10px', marginTop: '12px' }}>
+            <span>Итого:</span>
+            <span>{totalPrice.toLocaleString('ru-RU')} ₽</span>
+          </div>
+        </div>
+      )}
 
         <div>
           <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Дата и время доставки</label>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             <input
               type="date"
               value={form.deliveryDate}
               onChange={(e) => setForm({ ...form, deliveryDate: e.target.value })}
-              style={{ padding: '12px', border: '1px solid #d1d5db', borderRadius: '12px', fontSize: '16px' }}
+              style={{ 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px',
+                width: '80%'
+              }}
             />
             <input
               type="time"
               value={form.deliveryTime}
               onChange={(e) => setForm({ ...form, deliveryTime: e.target.value })}
-              style={{ padding: '12px', border: '1px solid #d1d5db', borderRadius: '12px', fontSize: '16px' }}
+              style={{ 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px',
+                width: '80%'
+              }}
             />
           </div>
         </div>
-
         <div>
           <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Адрес доставки</label>
           <textarea
             value={form.address}
             onChange={(e) => setForm({ ...form, address: e.target.value })}
-            rows={2}
-            style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '16px', resize: 'vertical', minHeight: '70px' }}
+            rows={3}
+            style={{ 
+              width: '90%', 
+              padding: '14px', 
+              border: '1px solid #d1d5db', 
+              borderRadius: '16px', 
+              resize: 'vertical', 
+              minHeight: '80px',
+              fontSize: '16px'
+            }}
             placeholder="Укажите полный адрес"
           />
         </div>
@@ -570,14 +692,36 @@ export default function ConcreteOrderPage() {
             <button
               type="button"
               onClick={() => setForm({ ...form, customerType: 'physical' })}
-              style={{ flex: 1, padding: '12px', borderRadius: '12px', fontWeight: '500', background: form.customerType === 'physical' ? '#2563eb' : '#f3f4f6', color: form.customerType === 'physical' ? 'white' : '#374151' }}
+              style={{ 
+                flex: 1,                    // ← меняй это значение
+                minWidth: '150px',          // - минимальная ширина
+                maxWidth: '170px',          // - максимальная ширина
+                padding: '10px', 
+                borderRadius: '12px', 
+                fontWeight: '600', 
+                fontSize: '16px',
+                background: form.customerType === 'physical' ? '#2563eb' : '#f3f4f6', 
+                color: form.customerType === 'physical' ? 'white' : '#374151',
+                border: 'none'
+              }}
             >
               Физическое лицо
             </button>
             <button
               type="button"
               onClick={() => setForm({ ...form, customerType: 'legal' })}
-              style={{ flex: 1, padding: '12px', borderRadius: '12px', fontWeight: '500', background: form.customerType === 'legal' ? '#2563eb' : '#f3f4f6', color: form.customerType === 'legal' ? 'white' : '#374151' }}
+              style={{ 
+                flex: 1,                    // ← меняй это значение
+                minWidth: '150px',          // - минимальная ширина
+                maxWidth: '170px',          // - максимальная ширина
+                padding: '10px', 
+                borderRadius: '12px', 
+                fontWeight: '600', 
+                fontSize: '16px',
+                background: form.customerType === 'legal' ? '#2563eb' : '#f3f4f6', 
+                color: form.customerType === 'legal' ? 'white' : '#374151',
+                border: 'none'
+              }}
             >
               Юридическое лицо
             </button>
@@ -591,42 +735,72 @@ export default function ConcreteOrderPage() {
               type="text"
               value={form.fullName}
               onChange={(e) => setForm({ ...form, fullName: e.target.value })}
-              style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '12px' }}
+              style={{ 
+                width: '90%', 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px' 
+              }}
               placeholder="Иванов Иван Иванович"
             />
           </div>
         ) : (
-          <div>
+           <div>
             <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Название организации</label>
             <input
               type="text"
               value={form.organizationName}
               onChange={(e) => setForm({ ...form, organizationName: e.target.value })}
-              style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '12px' }}
+              style={{ 
+                width: '90%', 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px' 
+              }}
               placeholder='ООО "Ваша организация"'
             />
           </div>
         )}
 
-        <div>
+        {/* Поле Телефон для связи — возвращаем */}
+         <div>
           <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Телефон для связи</label>
           <input
             type="tel"
             value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}
-            style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '12px' }}
-            placeholder="+7 (___) ___-__-__"
-          />
-        </div>
+            onChange={(e) => {
+              let digits = e.target.value.replace(/\D/g, ''); // только цифры
 
-        <div>
-          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Комментарий</label>
-          <textarea
-            value={form.comment}
-            onChange={(e) => setForm({ ...form, comment: e.target.value })}
-            rows={3}
-            style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '16px', resize: 'vertical' }}
-            placeholder="Дополнительная информация (необязательно)"
+              // Автоматически добавляем +7
+              if (digits.length > 0 && !digits.startsWith('7')) {
+                digits = '7' + digits;
+              }
+
+              // Ограничиваем до 11 цифр
+              if (digits.length > 11) {
+                digits = digits.substring(0, 11);
+              }
+
+              // Красивое форматирование: +7 (910) 735-89-71
+              let formatted = '+7';
+              if (digits.length > 1) formatted += ' (' + digits.substring(1, 4);
+              if (digits.length > 4) formatted += ') ' + digits.substring(4, 7);
+              if (digits.length > 7) formatted += '-' + digits.substring(7, 9);
+              if (digits.length > 9) formatted += '-' + digits.substring(9, 11);
+
+              setForm({ ...form, phone: formatted });
+            }}
+            style={{ 
+              width: '90%', 
+              padding: '14px', 
+              border: '1px solid #d1d5db', 
+              borderRadius: '12px', 
+              fontSize: '17px' 
+            }}
+            placeholder="+7 (___) ___-__-__"
+            maxLength={18}
           />
         </div>
 
@@ -634,7 +808,7 @@ export default function ConcreteOrderPage() {
           type="submit"
           disabled={isSubmitting}
           style={{ 
-            width: '100%', 
+            width: '97%', 
             background: isSubmitting ? '#9ca3af' : '#2563eb', 
             color: 'white', 
             padding: '16px', 

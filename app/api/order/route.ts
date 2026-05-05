@@ -1,12 +1,13 @@
+// app/api/order/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 'https://nhudnzdgtidocwwzpqge.supabase.co';
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
+const supabaseUrl = process.env.SUPABASE_URL!;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const BOT_TOKEN = process.env.MAX_BOT_TOKEN;
 const CHAT_ID = process.env.MANAGER_CHAT_ID;
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,38 +23,45 @@ export async function POST(request: NextRequest) {
     const referredBy = payload.referred_by || null;
 
     if (!userId) {
-      return NextResponse.json({ success: false, message: 'userId is required' }, { status: 400 });
+      return NextResponse.json({ 
+        success: false, 
+        message: 'userId is required' 
+      }, { status: 400 });
     }
 
-    // ←←← Важно для RLS
-    await supabase.rpc('set_current_user_id', { p_user_id: userId });
+    const {
+      grade,
+      volume,
+      deliveryDate,
+      deliveryTime,
+      address,
+      customerType,
+      organizationName,
+      fullName,
+      phone,
+      comment,
+      concreteCost,
+      deliveryCost,
+      totalPrice
+    } = payload;
 
-    // === 1. Расчёт интервала новой заявки ===
-    const deliveryDate = payload.deliveryDate;   // например "2026-05-02"
-    const deliveryTime = payload.deliveryTime;   // например "10:00"
-    const volume = parseFloat(payload.volume);
-
-    if (!deliveryDate || !deliveryTime || isNaN(volume) || volume <= 0) {
-      return NextResponse.json({ success: false, message: 'Некорректные данные даты, времени или объёма' }, { status: 400 });
+    // Валидация
+    if (!grade || !volume || !deliveryDate || !deliveryTime || !address || !phone) {
+      return NextResponse.json({ 
+        success: false, 
+        message: 'Не все обязательные поля заполнены' 
+      }, { status: 400 });
     }
 
-    // Создаём точное время начала
+    // === 1. Проверка конфликта по времени ===
     const startTime = new Date(`${deliveryDate}T${deliveryTime}:00`);
-    const durationMinutes = Math.ceil(volume * 2); // 2 минуты на 1 м³
+    const durationMinutes = Math.ceil(parseFloat(volume) * 2); // ~2 минуты на 1 м³
     const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
 
-    console.log(`🔍 Новая заявка: ${deliveryDate} ${deliveryTime} на ${volume} м³`);
-    console.log(`   Занимает: ${startTime.toISOString()} — ${endTime.toISOString()}`);
-
-    // === 2. Проверка пересечения с существующими заявками ===
-    const { data: existingOrders, error: checkError } = await supabase
+    const { data: existingOrders } = await supabase
       .from('orders')
       .select('id, delivery_date, delivery_time, volume, status')
-      .in('status', ['new', 'processing']);
-
-    if (checkError) {
-      console.error('Ошибка проверки конфликтов:', checkError);
-    }
+      .in('status', ['new', 'in_progress', 'processing']);
 
     let hasConflict = false;
     let conflictingOrderId = null;
@@ -64,13 +72,9 @@ export async function POST(request: NextRequest) {
         const orderDuration = Math.ceil(order.volume * 2);
         const orderEnd = new Date(orderStart.getTime() + orderDuration * 60000);
 
-        console.log(`   Проверяем заявку #${order.id}: ${order.delivery_date} ${order.delivery_time} (${order.volume} м³)`);
-
-        // Пересечение интервалов
         if (startTime < orderEnd && endTime > orderStart) {
           hasConflict = true;
           conflictingOrderId = order.id;
-          console.log(`   ⚠️ КОНФЛИКТ с заявкой #${order.id}`);
           break;
         }
       }
@@ -83,41 +87,41 @@ export async function POST(request: NextRequest) {
       }, { status: 409 });
     }
 
-    console.log('✅ Конфликтов не найдено. Создаём заявку.');
-
-    // === 3. Сохраняем заявку в базу ===
+    // === 2. Создание заявки ===
     const { data: order, error: insertError } = await supabase
       .from('orders')
       .insert([{
         user_id: userId,
-        grade: payload.grade,
-        volume: payload.volume,
-        delivery_date: payload.deliveryDate,
-        delivery_time: payload.deliveryTime,
-        address: payload.address,
-        customer_type: payload.customerType,
-        full_name: payload.fullName,
-        organization_name: payload.organizationName,
-        phone: payload.phone,
-        comment: payload.comment || null,
-        concrete_cost: payload.concreteCost,
-        delivery_cost: payload.deliveryCost,
-        total_price: payload.totalPrice,
-        referred_by: referredBy,
+        grade: grade,
+        volume: parseFloat(volume),
+        delivery_date: deliveryDate,
+        delivery_time: deliveryTime,
+        address: address,
+        customer_type: customerType,
+        full_name: fullName || null,
+        organization_name: organizationName || null,
+        phone: phone,
+        comment: comment || null,
+        concrete_cost: concreteCost || 0,
+        delivery_cost: deliveryCost || 0,
+        total_price: totalPrice || 0,
         status: 'new',
+        referred_by: referredBy,
       }])
       .select()
       .single();
 
     if (insertError) {
       console.error('Insert error:', insertError);
-      return NextResponse.json({ success: false, message: 'Ошибка создания заказа в базе' }, { status: 500 });
+      return NextResponse.json({ 
+        success: false, 
+        message: 'Ошибка создания заказа в базе' 
+      }, { status: 500 });
     }
 
-    // === 4. Начисление баллов рефереру ===
-    if (referredBy && payload.volume && payload.volume > 0) {
-      const bonusPoints = Math.round(payload.volume * 100);
-
+    // === 3. Начисление реферальных баллов ===
+    if (referredBy && parseFloat(volume) > 0) {
+      const bonusPoints = Math.round(parseFloat(volume) * 100);
       const { error: rpcError } = await supabase.rpc('increment_balance', {
         user_id: referredBy,
         points: bonusPoints
@@ -126,30 +130,30 @@ export async function POST(request: NextRequest) {
       if (rpcError) {
         console.error('Ошибка начисления баллов:', rpcError);
       } else {
-        console.log(`✅ Начислено ${bonusPoints} баллов пользователю ${referredBy} (реферер)`);
+        console.log(`✅ Начислено ${bonusPoints} баллов рефереру ${referredBy}`);
       }
     }
 
-    // === 5. Уведомление в группу MAX ===
+    // === 4. Уведомление в Max Bot ===
     const messageText = `
 ✅ *Новая заявка на отгрузку бетона*
 
-📌 Марка: ${payload.grade}
-📦 Объём: ${payload.volume} м³
-📅 Дата: ${payload.deliveryDate} ${payload.deliveryTime}
-📍 Адрес: ${payload.address}
+📌 Марка: ${grade}
+📦 Объём: ${volume} м³
+📅 Дата: ${deliveryDate} ${deliveryTime}
+📍 Адрес: ${address}
 
-👤 Тип: ${payload.customerType}
-${payload.customerType?.includes('Юридическое') ? `🏢 ${payload.organizationName || '—'}` : `🙍 ${payload.fullName || '—'}`}
+👤 Тип: ${customerType}
+${customerType?.includes('Юридическое') ? `🏢 ${organizationName || '—'}` : `🙍 ${fullName || '—'}`}
 
-📞 Телефон: ${payload.phone}
-💰 Бетон: ${payload.concreteCost?.toLocaleString('ru-RU')} ₽
-🚚 Доставка: ${payload.deliveryCost?.toLocaleString('ru-RU')} ₽
-💵 *Итого: ${payload.totalPrice?.toLocaleString('ru-RU')} ₽*
+📞 Телефон: ${phone}
+💰 Бетон: ${concreteCost?.toLocaleString('ru-RU')} ₽
+🚚 Доставка: ${deliveryCost?.toLocaleString('ru-RU')} ₽
+💵 *Итого: ${totalPrice?.toLocaleString('ru-RU')} ₽*
 
-💬 Комментарий: ${payload.comment || '—'}
+💬 Комментарий: ${comment || '—'}
 🕒 ${new Date().toLocaleString('ru-RU')}
-👤 MAX ID: ${userId || '—'}
+👤 MAX ID: ${userId}
     `.trim();
 
     if (BOT_TOKEN && CHAT_ID) {
@@ -169,8 +173,11 @@ ${payload.customerType?.includes('Юридическое') ? `🏢 ${payload.org
       message: 'Заявка успешно создана' 
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('API Error in /api/order:', error);
-    return NextResponse.json({ success: false, message: 'Внутренняя ошибка сервера' }, { status: 500 });
+    return NextResponse.json({ 
+      success: false, 
+      message: 'Внутренняя ошибка сервера' 
+    }, { status: 500 });
   }
 }
