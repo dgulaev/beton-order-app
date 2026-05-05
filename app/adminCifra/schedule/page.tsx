@@ -41,8 +41,8 @@ export default function CifraSchedulePage() {
   const [currentHourPercent, setCurrentHourPercent] = useState(50);
   const [zoomLevel, setZoomLevel] = useState(1.0);
 
-  // Создаём Supabase клиент ВНУТРИ компонента — это решает проблему билда
-  const supabase = createClient();
+  // Создаём клиент ТОЛЬКО после монтирования компонента
+  const [supabase] = useState(() => createClient());
 
   // Загрузка заказов
   useEffect(() => {
