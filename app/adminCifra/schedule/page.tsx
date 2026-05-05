@@ -1,6 +1,7 @@
 'use client';
 
 export const dynamic = 'force-dynamic';
+
 import { useState, useEffect } from 'react';
 import { createClient } from '../../utils/supabase/client';
 
@@ -32,12 +33,6 @@ interface Shipment extends Order {
   loadingMinutes: number;
 }
 
-// Ленивая инициализация клиента (чтобы не падал билд)
-function getSupabaseClient() {
-  // Если у тебя уже есть утилита — используем её
-  return createClient();
-}
-
 export default function CifraSchedulePage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [shipments, setShipments] = useState<Shipment[]>([]);
@@ -46,7 +41,8 @@ export default function CifraSchedulePage() {
   const [currentHourPercent, setCurrentHourPercent] = useState(50);
   const [zoomLevel, setZoomLevel] = useState(1.0);
 
-  const supabase = getSupabaseClient();   // ←←← Изменено здесь
+  // Ленивая инициализация клиента внутри компонента
+  const supabase = createClient();
 
   // Загрузка заказов
   useEffect(() => {
@@ -69,7 +65,7 @@ export default function CifraSchedulePage() {
     fetchTodayOrders();
   }, [supabase]);
 
-  // Разбиение заказов на рейсы (по 10 м³)
+  // Разбиение заказов на рейсы
   useEffect(() => {
     const TRIP_VOLUME = 10;
     const allShipments: Shipment[] = [];
@@ -128,7 +124,6 @@ export default function CifraSchedulePage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Изменение объёма в рейсе
   const updateTripVolume = (tripId: string, newVolume: number) => {
     if (newVolume <= 0) return;
 
@@ -148,7 +143,7 @@ export default function CifraSchedulePage() {
   };
 
   if (loading) {
-    return <div style={{ padding: '80px', textAlign: 'center', fontSize: '24px' }}>Загрузка расписания...</div>;
+    return <div style={{ padding: '80px', textAlign: 'center', fontSize: '24px', color: '#fff' }}>Загрузка расписания...</div>;
   }
 
   return (
