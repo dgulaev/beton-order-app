@@ -466,7 +466,12 @@ const registerByPhone = async (phoneNumber: string) => {
       display: 'flex',
       alignItems: 'flex-start',
       justifyContent: 'center',
-      padding: '16px'
+      // ====================== РЕГУЛИРОВКА ОТСТУПОВ ======================
+      paddingTop: '16px',      // отступ сверху
+      paddingRight: '12px',    // отступ справа
+      paddingBottom: '20px',   // отступ снизу
+      paddingLeft: '12px',     // отступ слева
+      // ================================================================
     }}>
       <div style={{
         width: '100%',
@@ -801,6 +806,25 @@ const registerByPhone = async (phoneNumber: string) => {
             }}
             placeholder="+7 (___) ___-__-__"
             maxLength={18}
+          />
+        </div>
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Комментарий</label>
+          <textarea
+            value={form.comment}
+            onChange={(e) => setForm({ ...form, comment: e.target.value })}
+            rows={3}
+            style={{ 
+              width: '90%', 
+              padding: '14px', 
+              border: '1px solid #d1d5db', 
+              borderRadius: '16px', 
+              resize: 'vertical', 
+              minHeight: '90px',
+              fontSize: '16px'
+            }}
+            placeholder="Дополнительная информация. Например труба, насос (необязательно)"
           />
         </div>
 
