@@ -3,7 +3,7 @@
 export const dynamic = 'force-dynamic';
 
 import { useState, useEffect } from 'react';
-import { createClient } from '../../utils/supabase/client';
+import { createBrowserClient } from '@supabase/ssr';
 
 interface Order {
   id: string;
@@ -41,8 +41,13 @@ export default function CifraSchedulePage() {
   const [currentHourPercent, setCurrentHourPercent] = useState(50);
   const [zoomLevel, setZoomLevel] = useState(1.0);
 
-  // Создаём клиент ТОЛЬКО после монтирования компонента
-  const [supabase] = useState(() => createClient());
+  // Создаём клиент только на клиенте
+  const [supabase] = useState(() => 
+    createBrowserClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    )
+  );
 
   // Загрузка заказов
   useEffect(() => {
