@@ -2,18 +2,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const BOT_TOKEN = process.env.MAX_BOT_TOKEN;
 const CHAT_ID = process.env.MANAGER_CHAT_ID;
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+function getSupabaseClient() {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !supabaseServiceKey) {
+    throw new Error('❌ SUPABASE_URL или SUPABASE_SERVICE_ROLE_KEY не настроены');
+  }
+
+  return createClient(supabaseUrl, supabaseServiceKey);
+}
 
 export async function POST(request: NextRequest) {
   try {
     const payload = await request.json();
 
-    // Надёжное извлечение userId
     const userId = payload.userId 
       || payload.user_id 
       || payload.initDataUnsafe?.user?.id 
@@ -23,39 +29,24 @@ export async function POST(request: NextRequest) {
     const referredBy = payload.referred_by || null;
 
     if (!userId) {
-      return NextResponse.json({ 
-        success: false, 
-        message: 'userId is required' 
-      }, { status: 400 });
+      return NextResponse.json({ success: false, message: 'userId is required' }, { status: 400 });
     }
 
     const {
-      grade,
-      volume,
-      deliveryDate,
-      deliveryTime,
-      address,
-      customerType,
-      organizationName,
-      fullName,
-      phone,
-      comment,
-      concreteCost,
-      deliveryCost,
-      totalPrice
+      grade, volume, deliveryDate, deliveryTime, address,
+      customerType, organizationName, fullName, phone, comment,
+      concreteCost, deliveryCost, totalPrice
     } = payload;
 
-    // Валидация
     if (!grade || !volume || !deliveryDate || !deliveryTime || !address || !phone) {
-      return NextResponse.json({ 
-        success: false, 
-        message: 'Не все обязательные поля заполнены' 
-      }, { status: 400 });
+      return NextResponse.json({ success: false, message: 'Не все обязательные поля заполнены' }, { status: 400 });
     }
 
-    // === 1. Проверка конфликта по времени ===
+    const supabase = getSupabaseClient();
+
+    // Проверка конфликта по времени
     const startTime = new Date(`${deliveryDate}T${deliveryTime}:00`);
-    const durationMinutes = Math.ceil(parseFloat(volume) * 2); // ~2 минуты на 1 м³
+    const durationMinutes = Math.ceil(parseFloat(volume) * 2);
     const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
 
     const { data: existingOrders } = await supabase
@@ -87,20 +78,20 @@ export async function POST(request: NextRequest) {
       }, { status: 409 });
     }
 
-    // === 2. Создание заявки ===
-    const { data: order, error: insertError } = await supabase
+    // Создание заявки
+    const { data: orderData, error: insertError } = await supabase
       .from('orders')
       .insert([{
         user_id: userId,
-        grade: grade,
+        grade,
         volume: parseFloat(volume),
         delivery_date: deliveryDate,
         delivery_time: deliveryTime,
-        address: address,
+        address,
         customer_type: customerType,
         full_name: fullName || null,
         organization_name: organizationName || null,
-        phone: phone,
+        phone,
         comment: comment || null,
         concrete_cost: concreteCost || 0,
         delivery_cost: deliveryCost || 0,
@@ -113,28 +104,29 @@ export async function POST(request: NextRequest) {
 
     if (insertError) {
       console.error('Insert error:', insertError);
-      return NextResponse.json({ 
-        success: false, 
-        message: 'Ошибка создания заказа в базе' 
-      }, { status: 500 });
+      return NextResponse.json({ success: false, message: 'Ошибка создания заказа в базе' }, { status: 500 });
     }
 
-    // === 3. Начисление реферальных баллов ===
+    if (!orderData) {
+      return NextResponse.json({ success: false, message: 'Не удалось создать заказ' }, { status: 500 });
+    }
+
+    const orderId = orderData.id;
+
+    // === Реферальные баллы ===
     if (referredBy && parseFloat(volume) > 0) {
       const bonusPoints = Math.round(parseFloat(volume) * 100);
-      const { error: rpcError } = await supabase.rpc('increment_balance', {
-        user_id: referredBy,
-        points: bonusPoints
-      });
-
-      if (rpcError) {
-        console.error('Ошибка начисления баллов:', rpcError);
-      } else {
-        console.log(`✅ Начислено ${bonusPoints} баллов рефереру ${referredBy}`);
+      try {
+        await supabase.rpc('increment_balance', { 
+          user_id: referredBy, 
+          points: bonusPoints 
+        });
+      } catch (e) {
+        console.error('Bonus error:', e);
       }
     }
 
-    // === 4. Уведомление в Max Bot ===
+    // Уведомление в Max
     const messageText = `
 ✅ *Новая заявка на отгрузку бетона*
 
@@ -159,17 +151,14 @@ ${customerType?.includes('Юридическое') ? `🏢 ${organizationName ||
     if (BOT_TOKEN && CHAT_ID) {
       await fetch(`https://platform-api.max.ru/messages?chat_id=${CHAT_ID}`, {
         method: 'POST',
-        headers: {
-          'Authorization': BOT_TOKEN,
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Authorization': BOT_TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: messageText }),
-      }).catch(err => console.error('MAX notification error:', err));
+      }).catch(() => {});
     }
 
     return NextResponse.json({ 
       success: true, 
-      orderId: order.id,
+      orderId: orderId,
       message: 'Заявка успешно создана' 
     });
 
@@ -177,7 +166,7 @@ ${customerType?.includes('Юридическое') ? `🏢 ${organizationName ||
     console.error('API Error in /api/order:', error);
     return NextResponse.json({ 
       success: false, 
-      message: 'Внутренняя ошибка сервера' 
+      message: error.message || 'Внутренняя ошибка сервера' 
     }, { status: 500 });
   }
 }

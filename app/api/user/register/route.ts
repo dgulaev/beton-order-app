@@ -1,11 +1,17 @@
 // app/api/user/register/route.ts
-import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+function getSupabaseClient() {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  if (!supabaseUrl || !supabaseServiceKey) {
+    throw new Error('❌ SUPABASE_URL или SUPABASE_SERVICE_ROLE_KEY не настроены');
+  }
+
+  return createClient(supabaseUrl, supabaseServiceKey);
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,7 +26,9 @@ export async function POST(request: NextRequest) {
 
     const normalizedPhone = phone.replace(/\D/g, '');
 
-    // Проверка существующего пользователя
+    const supabase = getSupabaseClient();
+
+    // Проверяем, существует ли пользователь
     const { data: existing } = await supabase
       .from('users')
       .select('id, role')
@@ -31,27 +39,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ 
         success: true, 
         userId: existing.id,
-        role: existing.role,
-        message: 'Пользователь уже существует' 
+        role: existing.role 
       });
     }
 
-    // Создание нового пользователя — роль client по умолчанию
+    // Создаём нового пользователя
     const { data, error } = await supabase
       .from('users')
       .insert({
         phone: normalizedPhone,
-        role: 'client',                    // ← Обычный пользователь
+        role: 'client',
         referral_code: 'R' + Math.random().toString(36).substring(2, 9).toUpperCase(),
         balance: 0,
-        referred_by: null,
       })
       .select()
       .single();
 
     if (error) throw error;
-
-    console.log(`✅ Новый client зарегистрирован: ${normalizedPhone}`);
 
     return NextResponse.json({
       success: true,
@@ -63,7 +67,7 @@ export async function POST(request: NextRequest) {
     console.error('Register error:', error);
     return NextResponse.json({ 
       success: false, 
-      message: error.message || 'Ошибка регистрации' 
+      message: 'Ошибка регистрации' 
     }, { status: 500 });
   }
 }

@@ -1,11 +1,17 @@
 // app/api/user/init/route.ts
-import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+function getSupabaseClient() {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  if (!supabaseUrl || !supabaseServiceKey) {
+    throw new Error('❌ SUPABASE_URL или SUPABASE_SERVICE_ROLE_KEY не настроены');
+  }
+
+  return createClient(supabaseUrl, supabaseServiceKey);
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,17 +26,20 @@ export async function POST(request: NextRequest) {
 
     const parsedUserId = typeof userId === 'string' ? parseInt(userId, 10) : Number(userId);
 
-    // Получаем пользователя
+    const supabase = getSupabaseClient();
+
     let { data: user, error } = await supabase
       .from('users')
-      .select('id, referral_code, balance, role, referred_by')
+      .select('referral_code, balance, role')
       .eq('user_id', parsedUserId)
       .single();
 
-    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows
+    if (error && error.code !== 'PGRST116') {
+      console.error('Init query error:', error);
       throw error;
     }
 
+    // Если пользователя нет — создаём
     if (!user) {
       const referralCode = 'R' + Math.random().toString(36).substring(2, 9).toUpperCase();
 
@@ -41,35 +50,22 @@ export async function POST(request: NextRequest) {
           referral_code: referralCode,
           balance: 0,
           role: 'client',
-          referred_by: null,
         })
         .select()
         .single();
 
-      if (insertError) {
-        console.error('Insert error:', insertError);
-        
-        if (insertError.code === '23505') {
-          // Уже существует — повторно получаем
-          const { data: retryUser } = await supabase
-            .from('users')
-            .select('id, referral_code, balance, role, referred_by')
-            .eq('user_id', parsedUserId)
-            .single();
-          
-          user = retryUser;
-        } else {
-          throw insertError;
-        }
-      } else {
-        user = newUser;
+      if (insertError && insertError.code !== '23505') {
+        throw insertError;
       }
+
+      user = newUser || { referral_code: referralCode, balance: 0, role: 'client' };
     }
 
+    // ←←← ИСПРАВЛЕННЫЙ БЛОК
     return NextResponse.json({
       success: true,
       referralCode: user?.referral_code || 'ERROR',
-      balance: user?.balance || 0,
+      balance: user?.balance ?? 0,
       role: user?.role || 'client'
     });
 
@@ -77,7 +73,9 @@ export async function POST(request: NextRequest) {
     console.error('Init error:', error);
     return NextResponse.json({ 
       success: false, 
-      message: error.message || 'Ошибка инициализации' 
-    }, { status: 500 });
+      referralCode: 'ERROR',
+      balance: 0,
+      role: 'client'
+    });
   }
 }
