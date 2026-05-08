@@ -1,0 +1,1088 @@
+'use client';
+
+import { useEffect, useState, useMemo } from 'react';
+import Image from 'next/image';
+import { useSearchParams } from 'next/navigation';
+
+declare const WebApp: any;
+
+export default function ConcreteOrderPage() {
+  const [isVerified, setIsVerified] = useState(false);
+  const [phone, setPhone] = useState('');
+
+  const [activeTab, setActiveTab] = useState<'new' | 'history' | 'referral'>('new');
+  const [currentScreen, setCurrentScreen] = useState<'form' | 'success'>('form');
+  const [orderId, setOrderId] = useState<number | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const [form, setForm] = useState({
+    grade: 'М300',
+    volume: '',
+    deliveryDate: new Date().toISOString().split('T')[0],
+    deliveryTime: '10:00',
+    address: '',
+    customerType: 'physical' as 'physical' | 'legal',
+    organizationName: '',
+    fullName: '',
+    phone: '',
+    comment: '',
+  });
+
+  const [userId, setUserId] = useState<number | null>(null);
+  const [referralCode, setReferralCode] = useState<string>('Загрузка...');
+  const [balance, setBalance] = useState(0);
+  const [referredBy, setReferredBy] = useState<number | null>(null);
+
+  const [orders, setOrders] = useState<any[]>([]);
+  const [referrals, setReferrals] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [loadingReferrals, setLoadingReferrals] = useState(false);
+
+  // ==================== useSearchParams ====================
+  const urlSearchParams = useSearchParams();
+
+  // ==================== ЗАХВАТ РЕФЕРАЛЬНОЙ ССЫЛКИ ====================
+  useEffect(() => {
+    const refCode = urlSearchParams.get('ref');
+    console.log('🔍 Проверка ref из URL:', refCode);
+
+    if (refCode) {
+      console.log('🔥 Найден реферальный код:', refCode);
+      // Временно сохраняем как строку, но не ломаем тип
+      setReferredBy(null); // оставляем null, чтобы не было конфликта
+      // Будем передавать код напрямую в registerByPhone
+    }
+  }, [urlSearchParams]);
+
+  // ==================== ЗАПУСК ИНИЦИАЛИЗАЦИИ ПОСЛЕ РЕГИСТРАЦИИ ====================
+  useEffect(() => {
+    if (userId && isVerified) {
+      console.log('🔄 Запускаем initializeUser после верификации | referredBy =', referredBy);
+      initializeUser(userId);
+    }
+  }, [userId, isVerified, referredBy]);
+
+  // ==================== ИНИЦИАЛИЗАЦИЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ====================
+  const initializeUser = async (uid: number) => {
+    // Берём refCode напрямую из URL, если состояние не успело обновиться
+    const refCode = urlSearchParams.get('ref') || referredBy;
+
+    console.log(`📡 [Init API] Запуск для uid=${uid}, refCode:`, refCode);
+
+    try {
+      const payload = { 
+        userId: uid,
+        phone: phone || null,
+        referredBy: refCode   // ← Теперь всегда берём из URL
+      };
+
+      console.log('📤 Отправляем payload:', payload);
+
+      const res = await fetch('/api/user/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      console.log('📦 Ответ от /api/user/init:', data);
+
+      if (data.success) {
+        console.log('✅ Инициализация прошла успешно');
+        
+        if (data.referralCode) {
+          setReferralCode(data.referralCode);
+          console.log('🔑 Код успешно установлен из базы:', data.referralCode);
+        }
+
+        if (data.balance !== undefined) {
+          setBalance(data.balance);
+        }
+      }
+    } catch (e) {
+      console.error('💥 Ошибка при вызове initializeUser:', e);
+    }
+  };
+
+  // ==================== РАСЧЁТ СТОИМОСТИ В РЕАЛЬНОМ ВРЕМЕНИ ====================
+  const volume = parseFloat(form.volume) || 0;
+
+  const pricePerCubic: Record<string, number> = {
+    'М100': 6380, 'М150': 6500, 'М200': 6600, 'М250': 6950,
+    'М300': 7230, 'М350': 7400, 'М400': 8050, 'М450': 8350, 'М500': 8700,
+  };
+
+  const concreteCost = useMemo(() => {
+    return volume > 0 ? Math.round(volume * (pricePerCubic[form.grade] || 7230)) : 0;
+  }, [volume, form.grade]);
+
+  let deliveryCost = 0;
+  let deliveryNote = '';
+
+  if (volume > 0) {
+    if (volume <= 10) { 
+      deliveryCost = 6000; 
+      deliveryNote = '6000 ₽ за рейс (до 10 м³)'; 
+    }
+    else if (volume <= 12) { 
+      deliveryCost = 7500; 
+      deliveryNote = '7500 ₽ за рейс (12 м³)'; 
+    }
+    else if (volume <= 50) { 
+      deliveryCost = Math.ceil(volume / 10) * 6000; 
+      deliveryNote = `${Math.ceil(volume / 10)} рейса × 6000 ₽`; 
+    }
+    else { 
+      deliveryCost = Math.round(volume * 600); 
+      deliveryNote = '600 ₽ за 1 м³'; 
+    }
+  }
+
+  const totalPrice = concreteCost + deliveryCost;
+
+  const handleChange = (e: React.ChangeEvent<any>) => {
+    setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
+  };
+
+  const handleCustomerTypeChange = (type: 'physical' | 'legal') => {
+    setForm(prev => ({ ...prev, customerType: type }));
+  };
+
+  const requestPhone = async () => {
+    try {
+      const result = await (window as any).WebApp.requestContact();
+      if (result && result.phone) {
+        await registerByPhone(result.phone);
+      } else {
+        alert('Вы не поделились номером телефона');
+      }
+    } catch (e) {
+      alert('Не удалось запросить контакт');
+    }
+  };
+
+const registerByPhone = async (phoneNumber: string) => {
+  if (!phoneNumber) return;
+
+  setIsSubmitting(true);
+
+  try {
+    // Берём реферальный код напрямую из URL — самый надёжный способ
+    const refCode = urlSearchParams.get('ref');
+    
+    console.log('🚀 registerByPhone вызван с номером:', phoneNumber, 'и refCode:', refCode);
+
+    const res = await fetch('/api/user/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        phone: phoneNumber,
+        referredBy: refCode          // ← передаём код напрямую
+      }),
+    });
+
+    const data = await res.json();
+    console.log('📦 Ответ от /api/user/register:', data);
+
+    if (data.success && data.userId) {
+      setUserId(data.userId);
+      setPhone(phoneNumber);
+      setIsVerified(true);
+
+      localStorage.setItem('userPhone', phoneNumber);
+      localStorage.setItem('userId', data.userId.toString());
+
+      console.log('✅ Регистрация успешна, userId:', data.userId, 'refCode:', refCode);
+
+      // Запускаем инициализацию
+      initializeUser(data.userId);
+    } else {
+      alert('Ошибка регистрации: ' + (data.message || 'Неизвестная ошибка'));
+    }
+  } catch (e: any) {
+    console.error('💥 Ошибка регистрации:', e);
+    alert('Ошибка соединения с сервером');
+  } finally {
+    setIsSubmitting(false);
+  }
+};
+
+  // Проверка при загрузке (localStorage)
+  useEffect(() => {
+    const savedPhone = localStorage.getItem('userPhone');
+    const savedUserId = localStorage.getItem('userId');
+
+    if (savedPhone && savedUserId) {
+      setPhone(savedPhone);
+      setUserId(parseInt(savedUserId));
+      setIsVerified(true);
+      console.log('✅ Загружено из localStorage, userId =', savedUserId);
+    }
+  }, []);
+
+  // Основной useEffect — Telegram WebApp
+  useEffect(() => {
+    const wa = (window as any).WebApp;
+    if (!wa) return;
+
+    wa.ready();
+    wa.expand();
+    wa.enableClosingConfirmation();
+
+    const uid = wa.initDataUnsafe?.user?.id || wa.initData?.user?.id;
+    if (uid) {
+      setUserId(uid);
+      console.log('✅ Telegram userId:', uid);
+    }
+
+    wa.MainButton.setText('Отправить заявку');
+    wa.MainButton.show();
+    wa.MainButton.onClick(handleSubmit);
+  }, []);
+
+  // Ловим ref из URL
+useEffect(() => {
+  const ref = urlSearchParams.get('ref');
+  if (ref) {
+    const refId = parseInt(ref, 10);
+    if (!isNaN(refId)) {
+      setReferredBy(refId);
+      console.log('🔗 🔥 РЕФЕРАЛЬНАЯ ССЫЛКА ПОЙМАНА!', refId);
+    }
+  }
+}, [urlSearchParams]);
+
+// Запускаем initializeUser когда есть userId
+useEffect(() => {
+  if (userId) {
+    console.log(`🔄 Запускаем initializeUser | userId=${userId}, referredBy=${referredBy || 'null'}`);
+    initializeUser(userId);
+  }
+}, [userId, referredBy]);
+
+  const loadOrders = async () => {
+    if (!userId) {
+      console.log('❌ loadOrders: userId отсутствует');
+      setLoadingHistory(false);
+      return;
+    }
+
+    setLoadingHistory(true);
+    try {
+      console.log('📡 Загрузка истории для userId:', userId);
+      const res = await fetch(`/api/orders?userId=${userId}`);
+      console.log('📨 Статус ответа /api/orders:', res.status);
+      const data = await res.json();
+      console.log('📦 Получено заявок из базы:', data.orders?.length || 0);
+      console.log('📋 Данные заявок:', data.orders);
+      setOrders(data.orders || []);
+    } catch (e) {
+      console.error('loadOrders error:', e);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const loadReferrals = async () => {
+    if (!userId) return;
+    setLoadingReferrals(true);
+    try {
+      const res = await fetch(`/api/referrals?userId=${userId}`);
+      const data = await res.json();
+      setReferrals(data.referrals || []);
+    } catch (e) { console.error(e); } finally { setLoadingReferrals(false); }
+  };
+
+const handleSubmit = async () => {
+  const wa = (window as any).WebApp;
+  const showAlert = wa?.showAlert || alert;
+
+  if (!form.volume || parseFloat(form.volume) <= 0) {
+    showAlert('Укажите объём бетона больше 0 м³');
+    return;
+  }
+
+  if (!form.address || form.address.trim().length < 5) {
+    showAlert('Укажите полный адрес доставки');
+    return;
+  }
+
+  const currentPhone = form.phone || phone || '';
+  if (!currentPhone || currentPhone.replace(/\D/g, '').length < 10) {
+    showAlert('Укажите корректный номер телефона');
+    return;
+  }
+
+  if (form.customerType === 'legal' && (!form.organizationName || form.organizationName.trim().length < 3)) {
+    showAlert('Укажите название организации');
+    return;
+  }
+
+  if (form.customerType === 'physical' && (!form.fullName || form.fullName.trim().length < 5)) {
+    showAlert('Укажите ФИО полностью');
+    return;
+  }
+
+  setIsSubmitting(true);
+  if (wa?.MainButton) wa.MainButton.showProgress();
+
+  // === НАДЁЖНЫЙ ЗАХВАТ РЕФЕРАЛЬНОГО КОДА ===
+  const refCodeFromUrl = urlSearchParams.get('ref');
+  const finalReferredBy = referredBy || refCodeFromUrl;
+
+  console.log('📤 handleSubmit → finalReferredBy:', finalReferredBy, '(из состояния:', referredBy, ', из URL:', refCodeFromUrl, ')');
+
+  const payload = {
+    ...form,
+    phone: currentPhone,
+    volume: volume,
+    concreteCost,
+    deliveryCost,
+    totalPrice,
+    customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
+    userId: userId,
+    referredBy: finalReferredBy,
+  };
+
+  try {
+    const response = await fetch('/api/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    console.log('📦 Ответ от /api/order:', data);
+
+    if (data.success) {
+      setOrderId(data.orderId || Date.now());
+      setCurrentScreen('success');
+      if (wa?.MainButton) wa.MainButton.hide();
+
+      console.log('✅ Заказ успешно создан! referredBy был:', finalReferredBy);
+
+      setForm({
+        grade: 'М300',
+        volume: '',
+        deliveryDate: new Date().toISOString().split('T')[0],
+        deliveryTime: '10:00',
+        address: '',
+        customerType: 'physical',
+        organizationName: '',
+        fullName: '',
+        phone: '',
+        comment: '',
+      });
+    } else if (response.status === 409) {
+      showAlert('⏰ Время занято\n\n' + (data.message || 'На выбранное время уже запланирована отгрузка.'));
+    } else {
+      showAlert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
+    }
+  } catch (error) {
+    console.error('Submit error:', error);
+    showAlert('Ошибка соединения с сервером. Попробуйте ещё раз.');
+  } finally {
+    setIsSubmitting(false);
+    if (wa?.MainButton) wa.MainButton.hideProgress();
+  }
+};
+
+  // ====================== ЭКРАН ВЕРИФИКАЦИИ ======================
+  if (!isVerified) {
+    return (
+      <div style={{
+        padding: '40px 20px',
+        textAlign: 'center',
+        minHeight: '100vh',
+        backgroundColor: '#f8fafc',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center'
+      }}>
+        <div style={{ marginBottom: '40px' }}>
+          <Image src="/logo.jpg" alt="Логотип" width={180} height={70} style={{ objectFit: 'contain' }} />
+        </div>
+
+        <h1 style={{ fontSize: '26px', fontWeight: '700', marginBottom: '12px' }}>
+          Добро пожаловать!
+        </h1>
+        <p style={{ color: '#666', marginBottom: '30px', fontSize: '17px' }}>
+          Для продолжения работы<br />подтвердите ваш номер телефона
+        </p>
+
+                {/* ==================== РЕФЕРАЛЬНЫЙ БЛОК ==================== */}
+        {urlSearchParams.get('ref') && (
+          <div style={{
+            background: '#fefce8',
+            border: '2px solid #eab308',
+            borderRadius: '16px',
+            padding: '20px 20px',        // уменьшил вертикальные отступы
+            marginBottom: '28px',
+            maxWidth: '360px',
+            marginLeft: 'auto',
+            marginRight: 'auto'
+          }}>
+            <div style={{ fontSize: '36px', marginBottom: '8px' }}>🎁</div>
+            
+            <div style={{ 
+              fontWeight: '700', 
+              color: '#ca8a04', 
+              fontSize: '17px', 
+              marginBottom: '12px' 
+            }}>
+              Вы пришли по рекомендации друга!
+            </div>
+
+            <div style={{
+              background: 'white',
+              padding: '12px 20px',
+              borderRadius: '10px',
+              fontSize: '24px',
+              fontWeight: '700',
+              letterSpacing: '2px',
+              color: '#1e2937',
+              display: 'inline-block'
+            }}>
+              {urlSearchParams.get('ref')}
+            </div>
+          </div>
+        )}
+
+        {/* Кнопка Telegram / Share Phone */}
+        <button 
+          onClick={requestPhone}
+          style={{
+            width: '100%',
+            maxWidth: '420px',
+            margin: '0 auto 16px',
+            padding: '18px',
+            backgroundColor: '#2563eb',
+            color: 'white',
+            border: 'none',
+            borderRadius: '14px',
+            fontSize: '18px',
+            fontWeight: '600'
+          }}
+        >
+          Поделиться моим номером
+        </button>
+
+        <p style={{ color: '#999', margin: '20px 0' }}>или введите вручную</p>
+
+        {/* Ручной ввод телефона */}
+        <input
+          type="tel"
+          placeholder="+7 (___) ___-__-__"
+          value={phone}
+          onChange={(e) => {
+            let value = e.target.value.replace(/\D/g, '');
+            if (value.length > 0 && !value.startsWith('7')) value = '7' + value;
+            if (value.length > 11) value = value.substring(0, 11);
+            
+            let formatted = '+7';
+            if (value.length > 1) formatted += ' (' + value.substring(1, 4);
+            if (value.length > 4) formatted += ') ' + value.substring(4, 7);
+            if (value.length > 7) formatted += '-' + value.substring(7, 9);
+            if (value.length > 9) formatted += '-' + value.substring(9, 11);
+
+            setPhone(formatted);
+          }}
+          style={{
+            width: '100%',
+            maxWidth: '420px',
+            margin: '0 auto 16px',
+            padding: '16px',
+            borderRadius: '12px',
+            border: '1px solid #ddd',
+            fontSize: '17px',
+            textAlign: 'center'
+          }}
+          maxLength={18}
+        />
+
+        <button 
+          onClick={() => phone && registerByPhone(phone)}
+          disabled={!phone || phone.length < 12}
+          style={{
+            width: '100%',
+            maxWidth: '420px',
+            margin: '0 auto',
+            padding: '16px',
+            backgroundColor: (phone && phone.length >= 12) ? '#2563eb' : '#9ca3af',
+            color: 'white',
+            border: 'none',
+            borderRadius: '12px',
+            fontSize: '17px',
+            fontWeight: '600'
+          }}
+        >
+          Продолжить
+        </button>
+      </div>
+    );
+  }
+
+  // Экран успешной отправки заявки
+  if (currentScreen === 'success') {
+    return (
+      <div style={{ 
+        padding: '40px 20px', 
+        textAlign: 'center', 
+        minHeight: '100vh', 
+        backgroundColor: '#f8fafc' 
+      }}>
+        <div style={{ fontSize: '80px', marginBottom: '24px' }}>✅</div>
+        <h2 style={{ fontSize: '28px', marginBottom: '16px' }}>Заявка отправлена!</h2>
+        <p style={{ fontSize: '18px', color: '#444', marginBottom: '40px' }}>
+          Номер заявки: <strong>#{orderId}</strong><br />
+          Менеджер свяжется с вами в ближайшее время.
+        </p>
+        
+        <button
+          onClick={() => {
+            setCurrentScreen('form');
+            setActiveTab('new');
+          }}
+          style={{
+            display: 'inline-block',
+            minWidth: '260px',
+            padding: '16px 32px',
+            backgroundColor: '#2563eb',
+            color: 'white',
+            border: 'none',
+            borderRadius: '12px',
+            fontSize: '17px',
+            fontWeight: '600',
+            boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)'
+          }}
+        >
+          Создать новую заявку
+        </button>
+      </div>
+    );
+  }
+
+  // Основной интерфейс приложения
+  return (
+    <div style={{
+      minHeight: '100vh',
+      backgroundColor: '#f8fafc',
+      display: 'flex',
+      alignItems: 'flex-start',
+      justifyContent: 'center',
+      paddingTop: '16px',
+      paddingRight: '12px',
+      paddingBottom: '20px',
+      paddingLeft: '12px',
+    }}>
+      <div style={{
+        width: '100%',
+        maxWidth: '560px',
+        backgroundColor: 'white',
+        borderRadius: '24px',
+        boxShadow: '0 10px 30px rgba(0, 0, 0, 0.1)',
+        overflow: 'hidden'
+      }}>
+
+       {/* ОСНОВНОЕ СОДЕРЖИМОЕ */}
+        <div style={{ padding: '1px' }}>
+        {activeTab === 'new' && (
+  <div style={{ 
+    width: '100%', 
+    maxWidth: '100%', 
+    margin: '0 auto', 
+    background: 'white', 
+    borderRadius: '24px', 
+    overflow: 'hidden',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.06)' 
+  }}>
+
+    {/* ====================== ХЕДЕР С ЗАГОЛОВКОМ И МЕНЮ ====================== */}
+    <div style={{ 
+      display: 'flex', 
+      justifyContent: 'space-between', 
+      alignItems: 'center', 
+      padding: '20px 24px',
+      borderBottom: '1px solid #f1f5f9'
+    }}>
+      
+      <h1 style={{ 
+        fontSize: '26px', 
+        fontWeight: '700', 
+        margin: 0, 
+        color: '#1f2937' 
+      }}>
+        Заказать бетон
+      </h1>
+
+      <div style={{ position: 'relative' }}>
+        <div 
+          onClick={() => setMenuOpen(!menuOpen)} 
+          style={{ 
+            padding: '10px', 
+            cursor: 'pointer' 
+          }}
+        >
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+        </div>
+
+        {menuOpen && (
+          <div style={{
+            position: 'absolute',
+            top: '52px',
+            right: '0',
+            background: 'white',
+            borderRadius: '12px',
+            boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
+            padding: '8px 0',
+            zIndex: 100,
+            width: '220px'
+          }}>
+            <div onClick={() => { setActiveTab('new'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Новая заявка</div>
+            <div onClick={() => { setActiveTab('history'); setMenuOpen(false); loadOrders(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои заявки</div>
+            <div onClick={() => { setActiveTab('referral'); setMenuOpen(false); loadReferrals(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои баллы</div>
+          </div>
+        )}
+      </div>
+    </div>
+
+    {/* ====================== САМА ФОРМА ====================== */}
+ <div style={{ 
+      paddingTop: '28px', 
+      paddingBottom: '28px', 
+      paddingLeft: '10px', 
+      paddingRight: '10px' 
+    }}>
+      <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Марка бетона</label>
+            <select
+              value={form.grade}
+              onChange={(e) => setForm({ ...form, grade: e.target.value })}
+              style={{ 
+                width: '100%', 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px' 
+              }}
+            >
+              <option value="М100">М100</option>
+              <option value="М150">М150</option>
+              <option value="М200">М200</option>
+              <option value="М250">М250</option>
+              <option value="М300">М300</option>
+              <option value="М350">М350</option>
+              <option value="М400">М400</option>
+              <option value="М450">М450</option>
+              <option value="М500">М500</option>         
+            </select>
+          </div>
+
+           <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Объём (м³)</label>
+            <input
+              type="number"
+              value={form.volume}
+              onChange={(e) => setForm({ ...form, volume: e.target.value })}
+              style={{ 
+                width: '80%', 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px' 
+              }}
+              placeholder="20"
+              min="1"
+              step="0.5"
+            />
+          </div>
+        </div>
+
+      {volume > 0 && (
+        <div style={{ 
+          backgroundColor: '#f8fafc', 
+          padding: '16px', 
+          borderRadius: '16px', 
+          border: '1px solid #e2e8f0',
+          marginTop: '8px'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+            <span style={{ color: '#475569' }}>Бетон:</span>
+            <span style={{ fontWeight: '600' }}>{concreteCost.toLocaleString('ru-RU')} ₽</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+            <span style={{ color: '#475569' }}>Доставка:</span>
+            <span style={{ fontWeight: '600' }}>{deliveryCost.toLocaleString('ru-RU')} ₽</span>
+          </div>
+
+          {deliveryNote && (
+            <div style={{ 
+              marginTop: '10px', 
+              padding: '10px', 
+              backgroundColor: '#e0f2fe', 
+              borderRadius: '10px', 
+              fontSize: '14.5px', 
+              color: '#0369a1',
+              textAlign: 'center'
+            }}>
+              🚚 {deliveryNote}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: '700', color: '#1e40af', borderTop: '1px solid #cbd5e1', paddingTop: '10px', marginTop: '12px' }}>
+            <span>Итого:</span>
+            <span>{totalPrice.toLocaleString('ru-RU')} ₽</span>
+          </div>
+        </div>
+      )}
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Дата и время доставки</label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            <input
+              type="date"
+              value={form.deliveryDate}
+              onChange={(e) => setForm({ ...form, deliveryDate: e.target.value })}
+              style={{ 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px',
+                width: '80%'
+              }}
+            />
+            <input
+              type="time"
+              value={form.deliveryTime}
+              onChange={(e) => setForm({ ...form, deliveryTime: e.target.value })}
+              style={{ 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px',
+                width: '80%'
+              }}
+            />
+          </div>
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Адрес доставки</label>
+          <textarea
+            value={form.address}
+            onChange={(e) => setForm({ ...form, address: e.target.value })}
+            rows={3}
+            style={{ 
+              width: '90%', 
+              padding: '14px', 
+              border: '1px solid #d1d5db', 
+              borderRadius: '16px', 
+              resize: 'vertical', 
+              minHeight: '80px',
+              fontSize: '16px'
+            }}
+            placeholder="Укажите полный адрес"
+          />
+        </div>
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Тип заказчика</label>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, customerType: 'physical' })}
+              style={{ 
+                flex: 1,
+                minWidth: '150px',
+                maxWidth: '170px',
+                padding: '10px', 
+                borderRadius: '12px', 
+                fontWeight: '600', 
+                fontSize: '16px',
+                background: form.customerType === 'physical' ? '#2563eb' : '#f3f4f6', 
+                color: form.customerType === 'physical' ? 'white' : '#374151',
+                border: 'none'
+              }}
+            >
+              Физическое лицо
+            </button>
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, customerType: 'legal' })}
+              style={{ 
+                flex: 1,
+                minWidth: '150px',
+                maxWidth: '170px',
+                padding: '10px', 
+                borderRadius: '12px', 
+                fontWeight: '600', 
+                fontSize: '16px',
+                background: form.customerType === 'legal' ? '#2563eb' : '#f3f4f6', 
+                color: form.customerType === 'legal' ? 'white' : '#374151',
+                border: 'none'
+              }}
+            >
+              Юридическое лицо
+            </button>
+          </div>
+        </div>
+
+        {form.customerType === 'physical' ? (
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>ФИО</label>
+            <input
+              type="text"
+              value={form.fullName}
+              onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+              style={{ 
+                width: '90%', 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px' 
+              }}
+              placeholder="Иванов Иван Иванович"
+            />
+          </div>
+        ) : (
+           <div>
+            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Название организации</label>
+            <input
+              type="text"
+              value={form.organizationName}
+              onChange={(e) => setForm({ ...form, organizationName: e.target.value })}
+              style={{ 
+                width: '90%', 
+                padding: '14px', 
+                border: '1px solid #d1d5db', 
+                borderRadius: '12px', 
+                fontSize: '16px' 
+              }}
+              placeholder='ООО "Ваша организация"'
+            />
+          </div>
+        )}
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Телефон для связи</label>
+          <input
+            type="tel"
+            value={form.phone}
+            onChange={(e) => {
+              let digits = e.target.value.replace(/\D/g, '');
+              if (digits.length > 0 && !digits.startsWith('7')) {
+                digits = '7' + digits;
+              }
+              if (digits.length > 11) {
+                digits = digits.substring(0, 11);
+              }
+              let formatted = '+7';
+              if (digits.length > 1) formatted += ' (' + digits.substring(1, 4);
+              if (digits.length > 4) formatted += ') ' + digits.substring(4, 7);
+              if (digits.length > 7) formatted += '-' + digits.substring(7, 9);
+              if (digits.length > 9) formatted += '-' + digits.substring(9, 11);
+
+              setForm({ ...form, phone: formatted });
+            }}
+            style={{ 
+              width: '90%', 
+              padding: '14px', 
+              border: '1px solid #d1d5db', 
+              borderRadius: '12px', 
+              fontSize: '17px' 
+            }}
+            placeholder="+7 (___) ___-__-__"
+            maxLength={18}
+          />
+        </div>
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Комментарий</label>
+          <textarea
+            value={form.comment}
+            onChange={(e) => setForm({ ...form, comment: e.target.value })}
+            rows={3}
+            style={{ 
+              width: '90%', 
+              padding: '14px', 
+              border: '1px solid #d1d5db', 
+              borderRadius: '16px', 
+              resize: 'vertical', 
+              minHeight: '90px',
+              fontSize: '16px'
+            }}
+            placeholder="Дополнительная информация. Например труба, насос (необязательно)"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          style={{ 
+            width: '97%', 
+            background: isSubmitting ? '#9ca3af' : '#2563eb', 
+            color: 'white', 
+            padding: '16px', 
+            border: 'none', 
+            borderRadius: '16px', 
+            fontSize: '18px', 
+            fontWeight: '600',
+            marginTop: '12px'
+          }}
+        >
+          {isSubmitting ? 'Отправляем...' : 'Отправить заявку'}
+        </button>
+      </form>
+    </div>
+
+    <div style={{ display: 'flex', justifyContent: 'center', marginTop: '20px', paddingBottom: '28px', opacity: 0.75 }}>
+      <Image 
+        src="/logo.jpg" 
+        alt="Логотип" 
+        width={160} 
+        height={65} 
+        style={{ objectFit: 'contain' }} 
+        loading="eager"
+      />
+    </div>
+  </div>
+)}
+
+          {activeTab === 'history' && (
+  <div>
+    <div style={{ 
+      display: 'flex', 
+      justifyContent: 'flex-end', 
+      padding: '20px 24px',
+      borderBottom: '1px solid #f1f5f9',
+      backgroundColor: 'white'
+    }}>
+      <div style={{ position: 'relative' }}>
+        <div 
+          onClick={() => setMenuOpen(!menuOpen)} 
+          style={{ padding: '10px', cursor: 'pointer' }}
+        >
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+        </div>
+
+        {menuOpen && (
+          <div style={{
+            position: 'absolute',
+            top: '52px',
+            right: '0',
+            background: 'white',
+            borderRadius: '12px',
+            boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
+            padding: '8px 0',
+            zIndex: 100,
+            width: '220px'
+          }}>
+            <div onClick={() => { setActiveTab('new'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Новая заявка</div>
+            <div onClick={() => { setActiveTab('history'); setMenuOpen(false); loadOrders(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои заявки</div>
+            <div onClick={() => { setActiveTab('referral'); setMenuOpen(false); loadReferrals(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои баллы</div>
+          </div>
+        )}
+      </div>
+    </div>
+
+    <div style={{ padding: '24px' }}>
+      <h2 style={{ marginBottom: '20px' }}>Мои заявки</h2>
+      {loadingHistory ? (
+        <p style={{ textAlign: 'center', padding: '60px 0' }}>Загрузка...</p>
+      ) : orders.length === 0 ? (
+        <p style={{ textAlign: 'center', padding: '80px 20px', color: '#888' }}>Пока нет заявок</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {orders.map((order) => (
+            <div key={order.id} style={{ background: 'white', padding: '20px', borderRadius: '16px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
+              <strong>{order.grade} — {order.volume} м³</strong>
+              <div style={{ color: '#555', margin: '8px 0' }}>{order.delivery_date} в {order.delivery_time}</div>
+              <div style={{ color: '#666' }}>{order.address}</div>
+              <div style={{ marginTop: '12px', fontSize: '19px', fontWeight: '700', color: '#2563eb' }}>
+                {order.total_price?.toLocaleString('ru-RU')} ₽
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  </div>
+)}
+
+          {activeTab === 'referral' && (
+  <div>
+    <div style={{ 
+      display: 'flex', 
+      justifyContent: 'flex-end', 
+      padding: '20px 24px',
+      borderBottom: '1px solid #f1f5f9',
+      backgroundColor: 'white'
+    }}>
+      <div style={{ position: 'relative' }}>
+        <div 
+          onClick={() => setMenuOpen(!menuOpen)} 
+          style={{ padding: '10px', cursor: 'pointer' }}
+        >
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+        </div>
+
+        {menuOpen && (
+          <div style={{
+            position: 'absolute',
+            top: '52px',
+            right: '0',
+            background: 'white',
+            borderRadius: '12px',
+            boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
+            padding: '8px 0',
+            zIndex: 100,
+            width: '220px'
+          }}>
+            <div onClick={() => { setActiveTab('new'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Новая заявка</div>
+            <div onClick={() => { setActiveTab('history'); setMenuOpen(false); loadOrders(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои заявки</div>
+            <div onClick={() => { setActiveTab('referral'); setMenuOpen(false); loadReferrals(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои баллы</div>
+          </div>
+        )}
+      </div>
+    </div>
+
+    <div style={{ padding: '24px', textAlign: 'center' }}>
+      <h2 style={{ marginBottom: '8px' }}>Мои баллы</h2>
+      <div style={{ fontSize: '64px', fontWeight: '700', color: '#2563eb', marginBottom: '8px' }}>
+        {balance} ₽
+      </div>
+      <p style={{ color: '#666' }}>Баллы можно использовать как скидку</p>
+
+      <div style={{ marginTop: '50px' }}>
+        <h3 style={{ marginBottom: '12px' }}>Твой реферальный код</h3>
+        <div style={{ backgroundColor: '#f1f5f9', padding: '20px', borderRadius: '12px', fontSize: '26px', fontWeight: '700', letterSpacing: '3px', marginBottom: '20px' }}>
+          {referralCode}
+        </div>
+        <button 
+          onClick={() => {
+            const link = `https://beton-order-app-nlnv.vercel.app/?ref=${referralCode}`;
+            navigator.clipboard.writeText(link);
+            alert('Реферальная ссылка скопирована!');
+          }} 
+          style={{ padding: '14px 32px', backgroundColor: '#2563eb', color: 'white', border: 'none', borderRadius: '12px', fontSize: '16px' }}
+        >
+          Скопировать ссылку
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+        </div>
+      </div>
+    </div>
+  );
+}
