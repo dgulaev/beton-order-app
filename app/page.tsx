@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import Image from 'next/image';
+import { useSearchParams } from 'next/navigation';
 
 declare const WebApp: any;
 
@@ -38,30 +39,69 @@ export default function ConcreteOrderPage() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [loadingReferrals, setLoadingReferrals] = useState(false);
 
+  // ==================== useSearchParams ====================
+  const urlSearchParams = useSearchParams();
+
+  // ==================== ЗАХВАТ РЕФЕРАЛЬНОЙ ССЫЛКИ ====================
+  useEffect(() => {
+    const refCode = urlSearchParams.get('ref');
+    console.log('🔍 Проверка ref из URL:', refCode);
+
+    if (refCode) {
+      console.log('🔥 Найден реферальный код:', refCode);
+      // Временно сохраняем как строку, но не ломаем тип
+      setReferredBy(null); // оставляем null, чтобы не было конфликта
+      // Будем передавать код напрямую в registerByPhone
+    }
+  }, [urlSearchParams]);
+
+  // ==================== ЗАПУСК ИНИЦИАЛИЗАЦИИ ПОСЛЕ РЕГИСТРАЦИИ ====================
+  useEffect(() => {
+    if (userId && isVerified) {
+      console.log('🔄 Запускаем initializeUser после верификации | referredBy =', referredBy);
+      initializeUser(userId);
+    }
+  }, [userId, isVerified, referredBy]);
+
   // ==================== ИНИЦИАЛИЗАЦИЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ====================
   const initializeUser = async (uid: number) => {
-    console.log(`📡 Запрос к /api/user/init с uid=${uid}`);
+    // Берём refCode напрямую из URL, если состояние не успело обновиться
+    const refCode = urlSearchParams.get('ref') || referredBy;
+
+    console.log(`📡 [Init API] Запуск для uid=${uid}, refCode:`, refCode);
+
     try {
+      const payload = { 
+        userId: uid,
+        phone: phone || null,
+        referredBy: refCode   // ← Теперь всегда берём из URL
+      };
+
+      console.log('📤 Отправляем payload:', payload);
+
       const res = await fetch('/api/user/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: uid }),
+        body: JSON.stringify(payload),
       });
 
-      console.log(`📨 Ответ сервера: ${res.status}`);
       const data = await res.json();
-      console.log('📦 Данные от сервера:', data);
+      console.log('📦 Ответ от /api/user/init:', data);
 
-      if (data.referralCode) {
-        setReferralCode(data.referralCode);
-        setBalance(data.balance || 0);
-        console.log('✅ Код установлен:', data.referralCode);
-      } else {
-        setReferralCode('Нет кода в ответе');
+      if (data.success) {
+        console.log('✅ Инициализация прошла успешно');
+        
+        if (data.referralCode) {
+          setReferralCode(data.referralCode);
+          console.log('🔑 Код успешно установлен из базы:', data.referralCode);
+        }
+
+        if (data.balance !== undefined) {
+          setBalance(data.balance);
+        }
       }
     } catch (e) {
-      console.error('💥 Ошибка инициализации:', e);
-      setReferralCode('Ошибка соединения');
+      console.error('💥 Ошибка при вызове initializeUser:', e);
     }
   };
 
@@ -100,7 +140,6 @@ export default function ConcreteOrderPage() {
   }
 
   const totalPrice = concreteCost + deliveryCost;
-  // ============================================================================
 
   const handleChange = (e: React.ChangeEvent<any>) => {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -124,34 +163,50 @@ export default function ConcreteOrderPage() {
   };
 
 const registerByPhone = async (phoneNumber: string) => {
-    try {
-      const res = await fetch('/api/user/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: phoneNumber }),
-      });
+  if (!phoneNumber) return;
 
-      const data = await res.json();
+  setIsSubmitting(true);
 
-      if (data.success) {
-        setUserId(data.userId);
-        setPhone(phoneNumber);
-        setIsVerified(true);
+  try {
+    // Берём реферальный код напрямую из URL — самый надёжный способ
+    const refCode = urlSearchParams.get('ref');
+    
+    console.log('🚀 registerByPhone вызван с номером:', phoneNumber, 'и refCode:', refCode);
 
-        // ←←← Важно: заполняем также form.phone
-        setForm(prev => ({ ...prev, phone: phoneNumber }));
+    const res = await fetch('/api/user/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        phone: phoneNumber,
+        referredBy: refCode          // ← передаём код напрямую
+      }),
+    });
 
-        localStorage.setItem('userPhone', phoneNumber);
-        localStorage.setItem('userId', data.userId.toString());
+    const data = await res.json();
+    console.log('📦 Ответ от /api/user/register:', data);
 
-        console.log('✅ Пользователь верифицирован по телефону:', phoneNumber);
-      } else {
-        alert('Ошибка регистрации: ' + (data.message || 'Неизвестная ошибка'));
-      }
-    } catch (e) {
-      alert('Ошибка соединения с сервером');
+    if (data.success && data.userId) {
+      setUserId(data.userId);
+      setPhone(phoneNumber);
+      setIsVerified(true);
+
+      localStorage.setItem('userPhone', phoneNumber);
+      localStorage.setItem('userId', data.userId.toString());
+
+      console.log('✅ Регистрация успешна, userId:', data.userId, 'refCode:', refCode);
+
+      // Запускаем инициализацию
+      initializeUser(data.userId);
+    } else {
+      alert('Ошибка регистрации: ' + (data.message || 'Неизвестная ошибка'));
     }
-  };
+  } catch (e: any) {
+    console.error('💥 Ошибка регистрации:', e);
+    alert('Ошибка соединения с сервером');
+  } finally {
+    setIsSubmitting(false);
+  }
+};
 
   // Проверка при загрузке (localStorage)
   useEffect(() => {
@@ -166,37 +221,45 @@ const registerByPhone = async (phoneNumber: string) => {
     }
   }, []);
 
-  // Основной useEffect для Telegram WebApp
+  // Основной useEffect — Telegram WebApp
   useEffect(() => {
-    if (!isVerified) return;
-
     const wa = (window as any).WebApp;
-    if (wa) {
-      wa.ready();
-      wa.expand();
-      wa.enableClosingConfirmation();
+    if (!wa) return;
 
-      const uid = wa.initDataUnsafe?.user?.id || wa.initData?.user?.id;
-      if (uid) {
-        setUserId(uid);
-      }
+    wa.ready();
+    wa.expand();
+    wa.enableClosingConfirmation();
 
-      const urlParams = new URLSearchParams(window.location.search);
-      const ref = urlParams.get('ref');
-      if (ref) setReferredBy(parseInt(ref));
-
-      wa.MainButton.setText('Отправить заявку');
-      wa.MainButton.show();
-      wa.MainButton.onClick(handleSubmit);
+    const uid = wa.initDataUnsafe?.user?.id || wa.initData?.user?.id;
+    if (uid) {
+      setUserId(uid);
+      console.log('✅ Telegram userId:', uid);
     }
-  }, [isVerified]);
 
-  // Инициализация реферальной системы
-  useEffect(() => {
-    if (userId) {
-      initializeUser(userId);
+    wa.MainButton.setText('Отправить заявку');
+    wa.MainButton.show();
+    wa.MainButton.onClick(handleSubmit);
+  }, []);
+
+  // Ловим ref из URL
+useEffect(() => {
+  const ref = urlSearchParams.get('ref');
+  if (ref) {
+    const refId = parseInt(ref, 10);
+    if (!isNaN(refId)) {
+      setReferredBy(refId);
+      console.log('🔗 🔥 РЕФЕРАЛЬНАЯ ССЫЛКА ПОЙМАНА!', refId);
     }
-  }, [userId]);
+  }
+}, [urlSearchParams]);
+
+// Запускаем initializeUser когда есть userId
+useEffect(() => {
+  if (userId) {
+    console.log(`🔄 Запускаем initializeUser | userId=${userId}, referredBy=${referredBy || 'null'}`);
+    initializeUser(userId);
+  }
+}, [userId, referredBy]);
 
   const loadOrders = async () => {
     if (!userId) {
@@ -231,97 +294,101 @@ const registerByPhone = async (phoneNumber: string) => {
     } catch (e) { console.error(e); } finally { setLoadingReferrals(false); }
   };
 
-   const handleSubmit = async () => {
-    const wa = (window as any).WebApp;
-    const showAlert = wa?.showAlert || alert;
+const handleSubmit = async () => {
+  const wa = (window as any).WebApp;
+  const showAlert = wa?.showAlert || alert;
 
-    // === Улучшенная валидация ===
-    if (!form.volume || parseFloat(form.volume) <= 0) {
-      showAlert('Укажите объём бетона больше 0 м³');
-      return;
-    }
+  if (!form.volume || parseFloat(form.volume) <= 0) {
+    showAlert('Укажите объём бетона больше 0 м³');
+    return;
+  }
 
-    if (!form.address || form.address.trim().length < 5) {
-      showAlert('Укажите полный адрес доставки');
-      return;
-    }
+  if (!form.address || form.address.trim().length < 5) {
+    showAlert('Укажите полный адрес доставки');
+    return;
+  }
 
-    // ←←← Улучшенная проверка телефона (учитываем и form.phone, и phone)
-    const currentPhone = form.phone || phone || '';
-    if (!currentPhone || currentPhone.replace(/\D/g, '').length < 10) {
-      showAlert('Укажите корректный номер телефона');
-      return;
-    }
+  const currentPhone = form.phone || phone || '';
+  if (!currentPhone || currentPhone.replace(/\D/g, '').length < 10) {
+    showAlert('Укажите корректный номер телефона');
+    return;
+  }
 
-    if (form.customerType === 'legal' && (!form.organizationName || form.organizationName.trim().length < 3)) {
-      showAlert('Укажите название организации');
-      return;
-    }
+  if (form.customerType === 'legal' && (!form.organizationName || form.organizationName.trim().length < 3)) {
+    showAlert('Укажите название организации');
+    return;
+  }
 
-    if (form.customerType === 'physical' && (!form.fullName || form.fullName.trim().length < 5)) {
-      showAlert('Укажите ФИО полностью');
-      return;
-    }
+  if (form.customerType === 'physical' && (!form.fullName || form.fullName.trim().length < 5)) {
+    showAlert('Укажите ФИО полностью');
+    return;
+  }
 
-    // === Если всё заполнено — отправляем ===
-    setIsSubmitting(true);
-    if (wa?.MainButton) wa.MainButton.showProgress();
+  setIsSubmitting(true);
+  if (wa?.MainButton) wa.MainButton.showProgress();
 
-    const payload = {
-      ...form,
-      phone: currentPhone,           // ← используем актуальный номер
-      volume: volume,
-      concreteCost,
-      deliveryCost,
-      totalPrice,
-      customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
-      userId: userId,
-      referred_by: referredBy,
-    };
+  // === НАДЁЖНЫЙ ЗАХВАТ РЕФЕРАЛЬНОГО КОДА ===
+  const refCodeFromUrl = urlSearchParams.get('ref');
+  const finalReferredBy = referredBy || refCodeFromUrl;
 
-    try {
-      const response = await fetch('/api/order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+  console.log('📤 handleSubmit → finalReferredBy:', finalReferredBy, '(из состояния:', referredBy, ', из URL:', refCodeFromUrl, ')');
 
-      const data = await response.json();
-
-      if (data.success) {
-        setOrderId(data.orderId || Date.now());
-        setCurrentScreen('success');
-        if (wa?.MainButton) wa.MainButton.hide();
-
-        // Сброс формы
-        setForm({
-          grade: 'М300',
-          volume: '',
-          deliveryDate: new Date().toISOString().split('T')[0],
-          deliveryTime: '10:00',
-          address: '',
-          customerType: 'physical',
-          organizationName: '',
-          fullName: '',
-          phone: '',
-          comment: '',
-        });
-      } else if (response.status === 409) {
-        const errorMessage = data.message || 'На выбранное время уже запланирована отгрузка.';
-        showAlert('⏰ Время занято\n\n' + errorMessage);
-      } else {
-        showAlert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
-      }
-    } catch (error) {
-      console.error('Submit error:', error);
-      showAlert('Ошибка соединения с сервером. Попробуйте ещё раз.');
-    } finally {
-      setIsSubmitting(false);
-      if (wa?.MainButton) wa.MainButton.hideProgress();
-    }
+  const payload = {
+    ...form,
+    phone: currentPhone,
+    volume: volume,
+    concreteCost,
+    deliveryCost,
+    totalPrice,
+    customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
+    userId: userId,
+    referredBy: finalReferredBy,
   };
 
-  // Экран верификации телефона
+  try {
+    const response = await fetch('/api/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+    console.log('📦 Ответ от /api/order:', data);
+
+    if (data.success) {
+      setOrderId(data.orderId || Date.now());
+      setCurrentScreen('success');
+      if (wa?.MainButton) wa.MainButton.hide();
+
+      console.log('✅ Заказ успешно создан! referredBy был:', finalReferredBy);
+
+      setForm({
+        grade: 'М300',
+        volume: '',
+        deliveryDate: new Date().toISOString().split('T')[0],
+        deliveryTime: '10:00',
+        address: '',
+        customerType: 'physical',
+        organizationName: '',
+        fullName: '',
+        phone: '',
+        comment: '',
+      });
+    } else if (response.status === 409) {
+      showAlert('⏰ Время занято\n\n' + (data.message || 'На выбранное время уже запланирована отгрузка.'));
+    } else {
+      showAlert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
+    }
+  } catch (error) {
+    console.error('Submit error:', error);
+    showAlert('Ошибка соединения с сервером. Попробуйте ещё раз.');
+  } finally {
+    setIsSubmitting(false);
+    if (wa?.MainButton) wa.MainButton.hideProgress();
+  }
+};
+
+  // ====================== ЭКРАН ВЕРИФИКАЦИИ ======================
   if (!isVerified) {
     return (
       <div style={{
@@ -340,10 +407,49 @@ const registerByPhone = async (phoneNumber: string) => {
         <h1 style={{ fontSize: '26px', fontWeight: '700', marginBottom: '12px' }}>
           Добро пожаловать!
         </h1>
-        <p style={{ color: '#666', marginBottom: '40px', fontSize: '17px' }}>
+        <p style={{ color: '#666', marginBottom: '30px', fontSize: '17px' }}>
           Для продолжения работы<br />подтвердите ваш номер телефона
         </p>
 
+                {/* ==================== РЕФЕРАЛЬНЫЙ БЛОК ==================== */}
+        {urlSearchParams.get('ref') && (
+          <div style={{
+            background: '#fefce8',
+            border: '2px solid #eab308',
+            borderRadius: '16px',
+            padding: '20px 20px',        // уменьшил вертикальные отступы
+            marginBottom: '28px',
+            maxWidth: '360px',
+            marginLeft: 'auto',
+            marginRight: 'auto'
+          }}>
+            <div style={{ fontSize: '36px', marginBottom: '8px' }}>🎁</div>
+            
+            <div style={{ 
+              fontWeight: '700', 
+              color: '#ca8a04', 
+              fontSize: '17px', 
+              marginBottom: '12px' 
+            }}>
+              Вы пришли по рекомендации друга!
+            </div>
+
+            <div style={{
+              background: 'white',
+              padding: '12px 20px',
+              borderRadius: '10px',
+              fontSize: '24px',
+              fontWeight: '700',
+              letterSpacing: '2px',
+              color: '#1e2937',
+              display: 'inline-block'
+            }}>
+              {urlSearchParams.get('ref')}
+            </div>
+          </div>
+        )}
+
+        {/* Кнопка Telegram / Share Phone */}
         <button 
           onClick={requestPhone}
           style={{
@@ -364,15 +470,14 @@ const registerByPhone = async (phoneNumber: string) => {
 
         <p style={{ color: '#999', margin: '20px 0' }}>или введите вручную</p>
 
+        {/* Ручной ввод телефона */}
         <input
           type="tel"
           placeholder="+7 (___) ___-__-__"
           value={phone}
           onChange={(e) => {
             let value = e.target.value.replace(/\D/g, '');
-            if (value.length > 0 && !value.startsWith('7')) {
-              value = '7' + value;
-            }
+            if (value.length > 0 && !value.startsWith('7')) value = '7' + value;
             if (value.length > 11) value = value.substring(0, 11);
             
             let formatted = '+7';
@@ -466,12 +571,10 @@ const registerByPhone = async (phoneNumber: string) => {
       display: 'flex',
       alignItems: 'flex-start',
       justifyContent: 'center',
-      // ====================== РЕГУЛИРОВКА ОТСТУПОВ ======================
-      paddingTop: '16px',      // отступ сверху
-      paddingRight: '12px',    // отступ справа
-      paddingBottom: '20px',   // отступ снизу
-      paddingLeft: '12px',     // отступ слева
-      // ================================================================
+      paddingTop: '16px',
+      paddingRight: '12px',
+      paddingBottom: '20px',
+      paddingLeft: '12px',
     }}>
       <div style={{
         width: '100%',
@@ -483,7 +586,7 @@ const registerByPhone = async (phoneNumber: string) => {
       }}>
 
        {/* ОСНОВНОЕ СОДЕРЖИМОЕ */}
-        <div  style={{ padding: '1px' }}>
+        <div style={{ padding: '1px' }}>
         {activeTab === 'new' && (
   <div style={{ 
     width: '100%', 
@@ -504,17 +607,15 @@ const registerByPhone = async (phoneNumber: string) => {
       borderBottom: '1px solid #f1f5f9'
     }}>
       
-      {/* Главный заголовок */}
       <h1 style={{ 
         fontSize: '26px', 
         fontWeight: '700', 
         margin: 0, 
         color: '#1f2937' 
       }}>
-        Заявка на отгрузку бетона
+        Заказать бетон
       </h1>
 
-      {/* Меню (три полоски) */}
       <div style={{ position: 'relative' }}>
         <div 
           onClick={() => setMenuOpen(!menuOpen)} 
@@ -528,7 +629,6 @@ const registerByPhone = async (phoneNumber: string) => {
           <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
         </div>
 
-        {/* Выпадающее меню */}
         {menuOpen && (
           <div style={{
             position: 'absolute',
@@ -603,7 +703,7 @@ const registerByPhone = async (phoneNumber: string) => {
             />
           </div>
         </div>
-      {/* Блок расчёта цены + информация о доставке */}
+
       {volume > 0 && (
         <div style={{ 
           backgroundColor: '#f8fafc', 
@@ -621,7 +721,6 @@ const registerByPhone = async (phoneNumber: string) => {
             <span style={{ fontWeight: '600' }}>{deliveryCost.toLocaleString('ru-RU')} ₽</span>
           </div>
 
-          {/* Информация о миксере / рейсах */}
           {deliveryNote && (
             <div style={{ 
               marginTop: '10px', 
@@ -698,9 +797,9 @@ const registerByPhone = async (phoneNumber: string) => {
               type="button"
               onClick={() => setForm({ ...form, customerType: 'physical' })}
               style={{ 
-                flex: 1,                    // ← меняй это значение
-                minWidth: '150px',          // - минимальная ширина
-                maxWidth: '170px',          // - максимальная ширина
+                flex: 1,
+                minWidth: '150px',
+                maxWidth: '170px',
                 padding: '10px', 
                 borderRadius: '12px', 
                 fontWeight: '600', 
@@ -716,9 +815,9 @@ const registerByPhone = async (phoneNumber: string) => {
               type="button"
               onClick={() => setForm({ ...form, customerType: 'legal' })}
               style={{ 
-                flex: 1,                    // ← меняй это значение
-                minWidth: '150px',          // - минимальная ширина
-                maxWidth: '170px',          // - максимальная ширина
+                flex: 1,
+                minWidth: '150px',
+                maxWidth: '170px',
                 padding: '10px', 
                 borderRadius: '12px', 
                 fontWeight: '600', 
@@ -769,26 +868,19 @@ const registerByPhone = async (phoneNumber: string) => {
           </div>
         )}
 
-        {/* Поле Телефон для связи — возвращаем */}
-         <div>
+        <div>
           <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Телефон для связи</label>
           <input
             type="tel"
             value={form.phone}
             onChange={(e) => {
-              let digits = e.target.value.replace(/\D/g, ''); // только цифры
-
-              // Автоматически добавляем +7
+              let digits = e.target.value.replace(/\D/g, '');
               if (digits.length > 0 && !digits.startsWith('7')) {
                 digits = '7' + digits;
               }
-
-              // Ограничиваем до 11 цифр
               if (digits.length > 11) {
                 digits = digits.substring(0, 11);
               }
-
-              // Красивое форматирование: +7 (910) 735-89-71
               let formatted = '+7';
               if (digits.length > 1) formatted += ' (' + digits.substring(1, 4);
               if (digits.length > 4) formatted += ') ' + digits.substring(4, 7);
@@ -848,7 +940,6 @@ const registerByPhone = async (phoneNumber: string) => {
       </form>
     </div>
 
-    {/* ====================== ЛОГОТИП ВНИЗУ ====================== */}
     <div style={{ display: 'flex', justifyContent: 'center', marginTop: '20px', paddingBottom: '28px', opacity: 0.75 }}>
       <Image 
         src="/logo.jpg" 
@@ -864,7 +955,6 @@ const registerByPhone = async (phoneNumber: string) => {
 
           {activeTab === 'history' && (
   <div>
-    {/* Хедер с меню (только меню) */}
     <div style={{ 
       display: 'flex', 
       justifyContent: 'flex-end', 
@@ -902,7 +992,6 @@ const registerByPhone = async (phoneNumber: string) => {
       </div>
     </div>
 
-    {/* Содержимое вкладки "Мои заявки" */}
     <div style={{ padding: '24px' }}>
       <h2 style={{ marginBottom: '20px' }}>Мои заявки</h2>
       {loadingHistory ? (
@@ -929,7 +1018,6 @@ const registerByPhone = async (phoneNumber: string) => {
 
           {activeTab === 'referral' && (
   <div>
-    {/* Хедер с меню (только меню) */}
     <div style={{ 
       display: 'flex', 
       justifyContent: 'flex-end', 
@@ -967,7 +1055,6 @@ const registerByPhone = async (phoneNumber: string) => {
       </div>
     </div>
 
-    {/* Содержимое вкладки "Мои баллы" */}
     <div style={{ padding: '24px', textAlign: 'center' }}>
       <h2 style={{ marginBottom: '8px' }}>Мои баллы</h2>
       <div style={{ fontSize: '64px', fontWeight: '700', color: '#2563eb', marginBottom: '8px' }}>

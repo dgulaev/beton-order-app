@@ -20,16 +20,30 @@ export async function POST(request: NextRequest) {
   try {
     const payload = await request.json();
 
-    const userId = payload.userId 
-      || payload.user_id 
-      || payload.initDataUnsafe?.user?.id 
-      || payload.initData?.user?.id 
-      || null;
+    const userId = payload.userId || payload.user_id || null;
+    let referredBy = payload.referredBy || payload.referred_by || null;
 
-    const referredBy = payload.referred_by || null;
+    console.log('📥 [Order API] Получен referredBy:', referredBy);
 
     if (!userId) {
       return NextResponse.json({ success: false, message: 'userId is required' }, { status: 400 });
+    }
+
+    // === РАЗРЕШАЕМ РЕФЕРАЛЬНЫЙ КОД В user_id ===
+    if (referredBy && typeof referredBy === 'string' && referredBy.startsWith('R')) {
+      const { data: referrer } = await getSupabaseClient()
+        .from('users')
+        .select('user_id')
+        .eq('referral_code', referredBy)
+        .maybeSingle();
+
+      if (referrer) {
+        referredBy = referrer.user_id;
+        console.log(`🔍 Реферальный код ${payload.referredBy} → user_id ${referredBy}`);
+      } else {
+        console.log(`⚠️ Реферер с кодом ${referredBy} не найден`);
+        referredBy = null;
+      }
     }
 
     const {
@@ -44,7 +58,7 @@ export async function POST(request: NextRequest) {
 
     const supabase = getSupabaseClient();
 
-    // Проверка конфликта по времени
+    // Проверка конфликта по времени (оставляем как было)
     const startTime = new Date(`${deliveryDate}T${deliveryTime}:00`);
     const durationMinutes = Math.ceil(parseFloat(volume) * 2);
     const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
@@ -97,7 +111,7 @@ export async function POST(request: NextRequest) {
         delivery_cost: deliveryCost || 0,
         total_price: totalPrice || 0,
         status: 'new',
-        referred_by: referredBy,
+        referred_by: referredBy,               // ← теперь число
       }])
       .select()
       .single();
@@ -107,23 +121,33 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'Ошибка создания заказа в базе' }, { status: 500 });
     }
 
-    if (!orderData) {
-      return NextResponse.json({ success: false, message: 'Не удалось создать заказ' }, { status: 500 });
-    }
-
     const orderId = orderData.id;
 
-    // === Реферальные баллы ===
+    // === РЕФЕРАЛЬНАЯ ЛОГИКА — ЗАМОРОЗКА БАЛЛОВ ===
     if (referredBy && parseFloat(volume) > 0) {
-      const bonusPoints = Math.round(parseFloat(volume) * 100);
-      try {
-        await supabase.rpc('increment_balance', { 
-          user_id: referredBy, 
-          points: bonusPoints 
+      const volumeNum = parseFloat(volume);
+      const bonusPoints = Math.round(volumeNum * 100);
+
+      console.log(`🎁 Попытка заморозки: referredBy=${referredBy}, volume=${volumeNum}, bonus=${bonusPoints}, orderId=${orderId}`);
+
+      const { error: refError } = await supabase
+        .from('referral_transactions')
+        .insert({
+          referrer_id: referredBy,
+          referred_user_id: userId,
+          order_id: orderId,
+          volume: volumeNum,
+          potential_bonus: bonusPoints,
+          status: 'pending'
         });
-      } catch (e) {
-        console.error('Bonus error:', e);
+
+      if (refError) {
+        console.error('❌ Ошибка создания referral_transaction:', refError);
+      } else {
+        console.log(`✅ УСПЕШНО ЗАМОРОЖЕНО ${bonusPoints} баллов для реферера ${referredBy} (заказ #${orderId})`);
       }
+    } else {
+      console.log(`⚠️ Заморозка не выполнена: referredBy=${referredBy}, volume=${volume}`);
     }
 
     // Уведомление в Max

@@ -1,59 +1,91 @@
+// app/api/admin/update-status/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 'https://nhudnzdgtidocwwzpqge.supabase.co';
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
+const supabaseUrl = process.env.SUPABASE_URL!;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 export async function POST(request: NextRequest) {
   try {
-    const { orderId, status, userId } = await request.json(); // userId от админа
+    const { orderId, status, userId: adminUserId } = await request.json();
 
-    if (!orderId || !status || !userId) {
-      return NextResponse.json({ success: false, message: 'Missing parameters' }, { status: 400 });
+    if (!orderId || !status) {
+      return NextResponse.json({ success: false, message: 'orderId and status required' }, { status: 400 });
     }
 
-    // ←←← Важно для RLS (используем userId админа)
-    await supabase.rpc('set_current_user_id', { p_user_id: userId });
+    console.log(`🔄 [Update Status] Заказ #${orderId} → ${status} (админ: ${adminUserId})`);
 
-    // Получаем текущий заказ
-    const { data: currentOrder, error: fetchError } = await supabase
+    // Получаем данные заказа
+    const { data: order, error: fetchError } = await supabase
       .from('orders')
       .select('referred_by, volume, status')
       .eq('id', orderId)
       .single();
 
-    if (fetchError) throw fetchError;
+    if (fetchError || !order) {
+      console.error('Order not found:', fetchError);
+      return NextResponse.json({ success: false, message: 'Order not found' }, { status: 404 });
+    }
 
-    // Обновляем статус
+    // Обновляем статус заказа
     const { error: updateError } = await supabase
       .from('orders')
       .update({ status })
       .eq('id', orderId);
 
-    if (updateError) throw updateError;
-
-    // Логика баллов
-    if (status === 'completed' && currentOrder.referred_by && currentOrder.volume) {
-      const bonusPoints = Math.round(currentOrder.volume * 100);
-      await supabase.rpc('increment_balance', {
-        user_id: currentOrder.referred_by,
-        points: bonusPoints
-      });
-    } 
-    else if (status === 'cancelled' && currentOrder.referred_by && currentOrder.volume) {
-      const pointsToRemove = Math.round(currentOrder.volume * 100);
-      await supabase.rpc('increment_balance', {
-        user_id: currentOrder.referred_by,
-        points: -pointsToRemove
-      });
+    if (updateError) {
+      console.error('Update error:', updateError);
+      throw updateError;
     }
 
-    return NextResponse.json({ success: true });
+    // === РЕФЕРАЛЬНАЯ ЛОГИКА ===
+    if (order.referred_by && order.volume > 0) {
+      const bonusPoints = Math.round(order.volume * 100);
 
-  } catch (error) {
-    console.error('Update status error:', error);
-    return NextResponse.json({ success: false }, { status: 500 });
+      if (status === 'completed') {
+        // Начисляем баллы рефереру
+        const { error: bonusError } = await supabase.rpc('increment_balance', {
+          user_id: order.referred_by,
+          points: bonusPoints
+        });
+
+        if (bonusError) {
+          console.error('Ошибка начисления баллов:', bonusError);
+        } else {
+          console.log(`💰 УСПЕШНО НАЧИСЛЕНО ${bonusPoints} ₽ рефереру ${order.referred_by} (заказ #${orderId})`);
+        }
+
+        // Обновляем статус транзакции
+        await supabase
+          .from('referral_transactions')
+          .update({ 
+            status: 'activated',
+            activated_at: new Date().toISOString()
+          })
+          .eq('order_id', orderId)
+          .eq('referrer_id', order.referred_by);
+
+      } else if (status === 'cancelled') {
+        // Сжигаем баллы
+        await supabase
+          .from('referral_transactions')
+          .update({ status: 'cancelled' })
+          .eq('order_id', orderId)
+          .eq('referrer_id', order.referred_by);
+
+        console.log(`❌ Баллы по заказу #${orderId} сожжены`);
+      }
+    }
+
+    return NextResponse.json({ 
+      success: true, 
+      message: `Статус заказа #${orderId} обновлён на "${status}"` 
+    });
+
+  } catch (error: any) {
+    console.error('❌ Update status error:', error);
+    return NextResponse.json({ success: false, message: error.message }, { status: 500 });
   }
 }
