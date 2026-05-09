@@ -33,14 +33,46 @@ export default function AdminPanel() {
     }
   };
 
-  const updateStatus = async (orderId: number, newStatus: string) => {
-    await fetch('/api/admin/update-status', {
+const updateStatus = async (orderId: number, newStatus: string) => {
+  try {
+    const res = await fetch('/api/admin/update-status', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderId, status: newStatus, userId: userId }),
+      body: JSON.stringify({ orderId, status: newStatus }),
     });
-    loadOrders();
-  };
+
+    const data = await res.json();
+
+    if (data.success) {
+      console.log(`✅ Статус заказа #${orderId} обновлён на ${newStatus}`);
+      await loadOrders();
+      await loadBalance();
+    } else {
+      console.error('Ошибка обновления статуса:', data.message);
+      alert(data.message || 'Не удалось обновить статус');
+    }
+  } catch (e) {
+    console.error('Ошибка при смене статуса:', e);
+    alert('Ошибка соединения с сервером');
+  }
+};
+
+// ==================== ЗАГРУЗКА БАЛАНСА ====================
+const loadBalance = async () => {
+  if (!userId) return;
+
+  try {
+    const res = await fetch(`/api/user/balance?userId=${userId}`);
+    const data = await res.json();
+
+    if (data.success && data.balance !== undefined) {
+      console.log(`💰 Баланс реферера обновлён: ${data.balance} ₽`);
+      // Здесь можно добавить setBalance если сделаешь состояние в админке
+    }
+  } catch (e) {
+    console.error('Ошибка загрузки баланса:', e);
+  }
+};
 
   // Получаем userId из localStorage
   useEffect(() => {

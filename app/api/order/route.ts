@@ -5,6 +5,11 @@ import { createClient } from '@supabase/supabase-js';
 const BOT_TOKEN = process.env.MAX_BOT_TOKEN;
 const CHAT_ID = process.env.MANAGER_CHAT_ID;
 
+// ================================================
+// КОНФИГУРАЦИЯ ДЛИТЕЛЬНОСТИ ОТГРУЗКИ (легко менять)
+// ================================================
+const MINUTES_PER_CUBIC_METER = 2;        // ←←← ИЗМЕНИТЬ ЗДЕСЬ при необходимости
+
 function getSupabaseClient() {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -29,9 +34,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'userId is required' }, { status: 400 });
     }
 
-    // === РАЗРЕШАЕМ РЕФЕРАЛЬНЫЙ КОД В user_id ===
+    // === ПРЕОБРАЗОВАНИЕ РЕФЕРАЛЬНОГО КОДА В user_id ===
     if (referredBy && typeof referredBy === 'string' && referredBy.startsWith('R')) {
-      const { data: referrer } = await getSupabaseClient()
+      const supabase = getSupabaseClient();
+      const { data: referrer } = await supabase
         .from('users')
         .select('user_id')
         .eq('referral_code', referredBy)
@@ -39,7 +45,7 @@ export async function POST(request: NextRequest) {
 
       if (referrer) {
         referredBy = referrer.user_id;
-        console.log(`🔍 Реферальный код ${payload.referredBy} → user_id ${referredBy}`);
+        console.log(`🔍 Реферальный код ${payload.referredBy} преобразован в user_id ${referredBy}`);
       } else {
         console.log(`⚠️ Реферер с кодом ${referredBy} не найден`);
         referredBy = null;
@@ -58,39 +64,48 @@ export async function POST(request: NextRequest) {
 
     const supabase = getSupabaseClient();
 
-    // Проверка конфликта по времени (оставляем как было)
-    const startTime = new Date(`${deliveryDate}T${deliveryTime}:00`);
-    const durationMinutes = Math.ceil(parseFloat(volume) * 2);
-    const endTime = new Date(startTime.getTime() + durationMinutes * 60000);
+    // ================================================
+    // === УМНАЯ ПРОВЕРКА КОНФЛИКТОВ ПО ВРЕМЕНИ ===
+    // ================================================
+    const requestedStart = new Date(`${deliveryDate}T${deliveryTime}:00`);
+    const newDurationMin = Math.ceil(parseFloat(volume) * MINUTES_PER_CUBIC_METER);
+    const requestedEnd = new Date(requestedStart.getTime() + newDurationMin * 60000);
 
-    const { data: existingOrders } = await supabase
+    const { data: activeOrders } = await supabase
       .from('orders')
       .select('id, delivery_date, delivery_time, volume, status')
-      .in('status', ['new', 'in_progress', 'processing']);
+      .eq('delivery_date', deliveryDate)
+      .in('status', ['new', 'processing', 'in_progress']);
 
     let hasConflict = false;
     let conflictingOrderId = null;
 
-    if (existingOrders && existingOrders.length > 0) {
-      for (const order of existingOrders) {
-        const orderStart = new Date(`${order.delivery_date}T${order.delivery_time}`);
-        const orderDuration = Math.ceil(order.volume * 2);
-        const orderEnd = new Date(orderStart.getTime() + orderDuration * 60000);
+    if (activeOrders && activeOrders.length > 0) {
+      for (const ord of activeOrders) {
+        const ordStart = new Date(`${ord.delivery_date}T${ord.delivery_time}`);
+        const ordDuration = Math.ceil(ord.volume * MINUTES_PER_CUBIC_METER);
+        const ordEnd = new Date(ordStart.getTime() + ordDuration * 60000);
 
-        if (startTime < orderEnd && endTime > orderStart) {
+        if (requestedStart < ordEnd && requestedEnd > ordStart) {
           hasConflict = true;
-          conflictingOrderId = order.id;
+          conflictingOrderId = ord.id;
           break;
         }
       }
     }
 
     if (hasConflict) {
+      const suggestions = await getFreeTimeSuggestions(supabase, deliveryDate, requestedStart, newDurationMin);
+
       return NextResponse.json({
         success: false,
-        message: `На выбранное время уже запланирована отгрузка (заявка #${conflictingOrderId}). Пожалуйста, выберите другое время.`
+        message: `Время ${deliveryTime} занято (заявка #${conflictingOrderId}).`,
+        suggestions: suggestions,
+        conflict: true
       }, { status: 409 });
     }
+
+    console.log(`✅ Проверка времени прошла успешно. Нет конфликтов.`);
 
     // Создание заявки
     const { data: orderData, error: insertError } = await supabase
@@ -111,24 +126,23 @@ export async function POST(request: NextRequest) {
         delivery_cost: deliveryCost || 0,
         total_price: totalPrice || 0,
         status: 'new',
-        referred_by: referredBy,               // ← теперь число
+        referred_by: referredBy,
       }])
       .select()
       .single();
 
     if (insertError) {
-      console.error('Insert error:', insertError);
+      console.error('Insert order error:', insertError);
       return NextResponse.json({ success: false, message: 'Ошибка создания заказа в базе' }, { status: 500 });
     }
 
     const orderId = orderData.id;
 
-    // === РЕФЕРАЛЬНАЯ ЛОГИКА — ЗАМОРОЗКА БАЛЛОВ ===
-    if (referredBy && parseFloat(volume) > 0) {
-      const volumeNum = parseFloat(volume);
-      const bonusPoints = Math.round(volumeNum * 100);
+    console.log(`✅ Заказ #${orderId} успешно создан. referred_by = ${referredBy || 'null'}`);
 
-      console.log(`🎁 Попытка заморозки: referredBy=${referredBy}, volume=${volumeNum}, bonus=${bonusPoints}, orderId=${orderId}`);
+    // === ЗАМОРОЗКА БАЛЛОВ ===
+    if (referredBy && parseFloat(volume) > 0) {
+      const bonusPoints = Math.round(parseFloat(volume) * 100);
 
       const { error: refError } = await supabase
         .from('referral_transactions')
@@ -136,7 +150,7 @@ export async function POST(request: NextRequest) {
           referrer_id: referredBy,
           referred_user_id: userId,
           order_id: orderId,
-          volume: volumeNum,
+          volume: parseFloat(volume),
           potential_bonus: bonusPoints,
           status: 'pending'
         });
@@ -146,11 +160,9 @@ export async function POST(request: NextRequest) {
       } else {
         console.log(`✅ УСПЕШНО ЗАМОРОЖЕНО ${bonusPoints} баллов для реферера ${referredBy} (заказ #${orderId})`);
       }
-    } else {
-      console.log(`⚠️ Заморозка не выполнена: referredBy=${referredBy}, volume=${volume}`);
     }
 
-    // Уведомление в Max
+    // Уведомление в Max (оставлено без изменений)
     const messageText = `
 ✅ *Новая заявка на отгрузку бетона*
 
@@ -193,4 +205,60 @@ ${customerType?.includes('Юридическое') ? `🏢 ${organizationName ||
       message: error.message || 'Внутренняя ошибка сервера' 
     }, { status: 500 });
   }
+}
+
+// ================================================
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ПРЕДЛОЖЕНИЯ ВРЕМЕНИ
+// ================================================
+async function getFreeTimeSuggestions(supabase: any, date: string, requestedTime: Date, newDurationMin: number) {
+  const suggestions: Array<{ time: string; reason: string }> = [];
+  const baseHour = requestedTime.getHours();
+
+  for (let h = Math.max(6, baseHour - 3); h <= Math.min(22, baseHour + 3); h++) {
+    for (let m = 0; m < 60; m += 15) {
+      const testTimeStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+      const testStart = new Date(`${date}T${testTimeStr}:00`);
+      const testEnd = new Date(testStart.getTime() + newDurationMin * 60000);
+
+      const isFree = await isTimeSlotFree(supabase, date, testTimeStr, testStart, testEnd);
+
+      if (isFree) {
+        suggestions.push({
+          time: testTimeStr,
+          reason: testStart < requestedTime ? 'Раньше' : 'После'
+        });
+      }
+    }
+  }
+
+  // Сортировка по близости
+  suggestions.sort((a, b) => {
+    const ta = parseInt(a.time.replace(':', ''));
+    const tb = parseInt(b.time.replace(':', ''));
+    const req = parseInt(`${requestedTime.getHours()}${requestedTime.getMinutes().toString().padStart(2, '0')}`);
+    return Math.abs(ta - req) - Math.abs(tb - req);
+  });
+
+  return suggestions.slice(0, 6);
+}
+
+async function isTimeSlotFree(supabase: any, date: string, time: string, testStart: Date, testEnd: Date) {
+  const { data } = await supabase
+    .from('orders')
+    .select('id, delivery_date, delivery_time, volume')
+    .eq('delivery_date', date)
+    .in('status', ['new', 'processing', 'in_progress']);
+
+  if (!data) return true;
+
+  for (const ord of data) {
+    const ordStart = new Date(`${ord.delivery_date}T${ord.delivery_time}`);
+    const ordDuration = Math.ceil(ord.volume * MINUTES_PER_CUBIC_METER);
+    const ordEnd = new Date(ordStart.getTime() + ordDuration * 60000);
+
+    if (testStart < ordEnd && testEnd > ordStart) {
+      return false;
+    }
+  }
+  return true;
 }

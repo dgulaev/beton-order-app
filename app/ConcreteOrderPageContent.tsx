@@ -63,49 +63,82 @@ export default function ConcreteOrderPage() {
     }
   }, [userId, isVerified, referredBy]);
 
-  // ==================== ИНИЦИАЛИЗАЦИЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ====================
-  const initializeUser = async (uid: number) => {
-    // Берём refCode напрямую из URL, если состояние не успело обновиться
-    const refCode = urlSearchParams.get('ref') || referredBy;
+// ==================== ИНИЦИАЛИЗАЦИЯ РЕФЕРАЛЬНОЙ СИСТЕМЫ ====================
+const initializeUser = async (uid: number) => {
+  const refCode = urlSearchParams.get('ref') || referredBy;
 
-    console.log(`📡 [Init API] Запуск для uid=${uid}, refCode:`, refCode);
+  console.log(`📡 [Init API] Запуск для uid=${uid}, refCode:`, refCode);
 
-    try {
-      const payload = { 
-        userId: uid,
-        phone: phone || null,
-        referredBy: refCode   // ← Теперь всегда берём из URL
-      };
+  try {
+    const payload = { 
+      userId: uid,
+      phone: phone || null,
+      referredBy: refCode
+    };
 
-      console.log('📤 Отправляем payload:', payload);
+    const res = await fetch('/api/user/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
 
-      const res = await fetch('/api/user/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+    const data = await res.json();
+    console.log('📦 Ответ от /api/user/init:', data);
 
-      const data = await res.json();
-      console.log('📦 Ответ от /api/user/init:', data);
-
-      if (data.success) {
-        console.log('✅ Инициализация прошла успешно');
-        
-        if (data.referralCode) {
-          setReferralCode(data.referralCode);
-          console.log('🔑 Код успешно установлен из базы:', data.referralCode);
-        }
-
-        if (data.balance !== undefined) {
-          setBalance(data.balance);
-        }
+    if (data.success) {
+      if (data.referralCode) {
+        setReferralCode(data.referralCode);
+        console.log('🔑 Код успешно установлен:', data.referralCode);
       }
-    } catch (e) {
-      console.error('💥 Ошибка при вызове initializeUser:', e);
+      if (data.balance !== undefined) {
+        setBalance(data.balance);
+        console.log('💰 Баланс обновлён из init:', data.balance);
+      }
     }
-  };
+  } catch (e) {
+    console.error('💥 Ошибка initializeUser:', e);
+  }
+};
 
-  // ==================== РАСЧЁТ СТОИМОСТИ В РЕАЛЬНОМ ВРЕМЕНИ ====================
+/// ==================== ЗАГРУЗКА АКТУАЛЬНОГО БАЛАНСА ====================
+const loadBalance = async () => {
+  if (!userId) {
+    console.log('⚠️ loadBalance: userId отсутствует');
+    return;
+  }
+
+  try {
+    console.log(`📡 Запрашиваем баланс для userId: ${userId}`);
+    
+    const res = await fetch(`/api/user/balance?userId=${userId}`, {
+      method: 'GET',
+      cache: 'no-store',        // важно — не кэшировать
+      headers: { 'Cache-Control': 'no-cache' }
+    });
+
+    if (!res.ok) {
+      console.warn(`⚠️ Ответ от /api/user/balance: ${res.status}`);
+      setBalance(0);
+      return;
+    }
+
+    const data = await res.json();
+    console.log('📦 Ответ баланса:', data);
+
+    if (data.success && typeof data.balance === 'number') {
+      setBalance(data.balance);
+      console.log(`✅ Баланс успешно обновлён → ${data.balance} ₽`);
+    } else {
+      console.warn('⚠️ Некорректный ответ от баланса, ставим 0');
+      setBalance(0);
+    }
+  } catch (e) {
+    console.error('❌ Ошибка загрузки баланса:', e);
+    setBalance(0);
+  }
+};
+
+// ==================== РАСЧЁТ СТОИМОСТИ В РЕАЛЬНОМ ВРЕМЕНИ ====================
   const volume = parseFloat(form.volume) || 0;
 
   const pricePerCubic: Record<string, number> = {
@@ -168,17 +201,17 @@ const registerByPhone = async (phoneNumber: string) => {
   setIsSubmitting(true);
 
   try {
-    // Берём реферальный код напрямую из URL — самый надёжный способ
-    const refCode = urlSearchParams.get('ref');
-    
-    console.log('🚀 registerByPhone вызван с номером:', phoneNumber, 'и refCode:', refCode);
+    const refCode = urlSearchParams.get('ref') || referredBy;
+    const normalizedPhone = phoneNumber.replace(/\D/g, '');
+
+    console.log('🚀 registerByPhone → phone:', normalizedPhone, 'refCode:', refCode);
 
     const res = await fetch('/api/user/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
-        phone: phoneNumber,
-        referredBy: refCode          // ← передаём код напрямую
+        phone: normalizedPhone,     // ← только цифры
+        referredBy: refCode
       }),
     });
 
@@ -187,18 +220,32 @@ const registerByPhone = async (phoneNumber: string) => {
 
     if (data.success && data.userId) {
       setUserId(data.userId);
-      setPhone(phoneNumber);
+      setPhone(phoneNumber);           // красивый формат для отображения
       setIsVerified(true);
 
       localStorage.setItem('userPhone', phoneNumber);
       localStorage.setItem('userId', data.userId.toString());
 
-      console.log('✅ Регистрация успешна, userId:', data.userId, 'refCode:', refCode);
+      console.log('✅ Регистрация/логин успешна, userId:', data.userId);
 
-      // Запускаем инициализацию
       initializeUser(data.userId);
-    } else {
-      alert('Ошибка регистрации: ' + (data.message || 'Неизвестная ошибка'));
+    } 
+    else if (data.message?.includes('duplicate') || data.message?.includes('phone')) {
+      // Пользователь уже существует — логиним
+      console.log('👤 Пользователь уже существует, выполняем вход');
+
+      const savedUserId = localStorage.getItem('userId');
+      if (savedUserId) {
+        setUserId(parseInt(savedUserId));
+        setPhone(phoneNumber);
+        setIsVerified(true);
+        initializeUser(parseInt(savedUserId));
+      } else {
+        alert('Этот номер уже зарегистрирован.');
+      }
+    } 
+    else {
+      alert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
     }
   } catch (e: any) {
     console.error('💥 Ошибка регистрации:', e);
@@ -287,6 +334,7 @@ useEffect(() => {
   const loadReferrals = async () => {
     if (!userId) return;
     setLoadingReferrals(true);
+    await loadBalance();
     try {
       const res = await fetch(`/api/referrals?userId=${userId}`);
       const data = await res.json();
@@ -298,6 +346,9 @@ const handleSubmit = async () => {
   const wa = (window as any).WebApp;
   const showAlert = wa?.showAlert || alert;
 
+  // ================================================
+  // 1. ВАЛИДАЦИЯ ВВОДА
+  // ================================================
   if (!form.volume || parseFloat(form.volume) <= 0) {
     showAlert('Укажите объём бетона больше 0 м³');
     return;
@@ -324,28 +375,42 @@ const handleSubmit = async () => {
     return;
   }
 
+  // ================================================
+  // 2. ПОДГОТОВКА К ОТПРАВКЕ
+  // ================================================
   setIsSubmitting(true);
   if (wa?.MainButton) wa.MainButton.showProgress();
 
-  // === НАДЁЖНЫЙ ЗАХВАТ РЕФЕРАЛЬНОГО КОДА ===
+  // Надёжный захват реферального кода (из URL или состояния)
   const refCodeFromUrl = urlSearchParams.get('ref');
   const finalReferredBy = referredBy || refCodeFromUrl;
 
-  console.log('📤 handleSubmit → finalReferredBy:', finalReferredBy, '(из состояния:', referredBy, ', из URL:', refCodeFromUrl, ')');
+  console.log('📤 handleSubmit → finalReferredBy:', finalReferredBy, 
+    '(из состояния:', referredBy, ', из URL:', refCodeFromUrl, ')');
 
+  // Формируем payload для отправки на сервер
   const payload = {
     ...form,
+    volume: parseFloat(form.volume || '0'),
     phone: currentPhone,
-    volume: volume,
-    concreteCost,
-    deliveryCost,
-    totalPrice,
-    customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
+
+    // Безопасное преобразование числовых полей
+    concreteCost: Number(concreteCost) || 0,
+    deliveryCost: Number(deliveryCost) || 0,
+    totalPrice: Number(totalPrice) || 0,
+
+    customerType: form.customerType === 'legal' 
+      ? 'Юридическое лицо' 
+      : 'Физическое лицо',
+
     userId: userId,
     referredBy: finalReferredBy,
   };
 
   try {
+    // ================================================
+    // 3. ОТПРАВКА ЗАКАЗА НА СЕРВЕР
+    // ================================================
     const response = await fetch('/api/order', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -356,12 +421,16 @@ const handleSubmit = async () => {
     console.log('📦 Ответ от /api/order:', data);
 
     if (data.success) {
-      setOrderId(data.orderId || Date.now());
+      // ================================================
+      // 4. УСПЕШНОЕ СОЗДАНИЕ ЗАКАЗА
+      // ================================================
+      setOrderId(data.orderId);
       setCurrentScreen('success');
       if (wa?.MainButton) wa.MainButton.hide();
 
       console.log('✅ Заказ успешно создан! referredBy был:', finalReferredBy);
 
+      // Очистка формы после успеха
       setForm({
         grade: 'М300',
         volume: '',
@@ -371,14 +440,32 @@ const handleSubmit = async () => {
         customerType: 'physical',
         organizationName: '',
         fullName: '',
-        phone: '',
+        phone: currentPhone,
         comment: '',
       });
-    } else if (response.status === 409) {
-      showAlert('⏰ Время занято\n\n' + (data.message || 'На выбранное время уже запланирована отгрузка.'));
-    } else {
-      showAlert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
+
+    } 
+    else if (response.status === 409 && data.suggestions) {
+      // ================================================
+      // 5. КОНФЛИКТ ВРЕМЕНИ — ПРЕДЛАГАЕМ АЛЬТЕРНАТИВЫ
+      // ================================================
+      let message = `${data.message}\n\nБлижайшие свободные времена:\n\n`;
+
+      data.suggestions.forEach((slot: any, index: number) => {
+        message += `${index + 1}. ${slot.time} — ${slot.reason}\n`;
+      });
+
+      message += `\nВыберите одно из предложенных времён или измените дату.`;
+
+      showAlert(message);
+      console.log('🕒 Предложенные сервером времена:', data.suggestions);
+
+    } 
+    else {
+      // Другие ошибки
+      showAlert('Ошибка создания заявки:\n' + (data.message || 'Неизвестная ошибка'));
     }
+
   } catch (error) {
     console.error('Submit error:', error);
     showAlert('Ошибка соединения с сервером. Попробуйте ещё раз.');

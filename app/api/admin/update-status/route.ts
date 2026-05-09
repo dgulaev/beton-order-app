@@ -2,87 +2,90 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
 export async function POST(request: NextRequest) {
   try {
-    const { orderId, status, userId: adminUserId } = await request.json();
+    const body = await request.json();
+    const { orderId, status } = body;
 
-    if (!orderId || !status) {
-      return NextResponse.json({ success: false, message: 'orderId and status required' }, { status: 400 });
-    }
+    console.log('🔍 [Update Status] === НАЧАЛО ЗАПРОСА ===');
+    console.log('Полное тело от frontend:', JSON.stringify(body, null, 2));
 
-    console.log(`🔄 [Update Status] Заказ #${orderId} → ${status} (админ: ${adminUserId})`);
+    const numericId = Number(orderId);
 
-    // Получаем данные заказа
-    const { data: order, error: fetchError } = await supabase
+    const { data: orderData } = await supabase
       .from('orders')
       .select('referred_by, volume, status')
-      .eq('id', orderId)
+      .eq('id', numericId)
       .single();
 
-    if (fetchError || !order) {
-      console.error('Order not found:', fetchError);
-      return NextResponse.json({ success: false, message: 'Order not found' }, { status: 404 });
+    const order = orderData as any;
+
+    if (!order) {
+      console.error(`❌ Order #${orderId} not found`);
+      return NextResponse.json({ success: false, message: `Order #${orderId} not found` }, { status: 404 });
     }
 
-    // Обновляем статус заказа
-    const { error: updateError } = await supabase
+    console.log(`✅ Заказ #${orderId} найден`);
+    console.log(`   - status: ${order.status}`);
+    console.log(`   - referred_by: ${order.referred_by || 'NULL'}`);
+    console.log(`   - volume: ${order.volume}`);
+
+    // === ЗАЩИТА ФИНАЛЬНЫХ СТАТУСОВ ===
+    if (order.status === 'completed' || order.status === 'cancelled') {
+      console.log(`⛔ ЗАПРЕЩЕНО: Финальный статус`);
+      return NextResponse.json({ 
+        success: false, 
+        message: `Статус "${order.status}" финальный. Изменение невозможно.` 
+      }, { status: 400 });
+    }
+
+    const bonusPoints = order.volume ? Math.round(Number(order.volume) * 100) : 0;
+
+    // Обновляем статус
+    await supabase
       .from('orders')
       .update({ status })
-      .eq('id', orderId);
+      .eq('id', numericId);
 
-    if (updateError) {
-      console.error('Update error:', updateError);
-      throw updateError;
-    }
+    console.log(`✅ Статус обновлён на ${status}`);
 
     // === РЕФЕРАЛЬНАЯ ЛОГИКА ===
-    if (order.referred_by && order.volume > 0) {
-      const bonusPoints = Math.round(order.volume * 100);
+    if (order.referred_by && bonusPoints > 0) {
+      console.log(`🚀 РЕФЕРАЛЬНАЯ ЛОГИКА ЗАПУЩЕНА для пользователя ${order.referred_by}`);
 
       if (status === 'completed') {
-        // Начисляем баллы рефереру
-        const { error: bonusError } = await supabase.rpc('increment_balance', {
+        const { error } = await supabase.rpc('increment_balance', {
           user_id: order.referred_by,
           points: bonusPoints
         });
-
-        if (bonusError) {
-          console.error('Ошибка начисления баллов:', bonusError);
+        if (!error) {
+          console.log(`✅ УСПЕШНО НАЧИСЛЕНО ${bonusPoints} ₽ (заказ #${orderId})`);
         } else {
-          console.log(`💰 УСПЕШНО НАЧИСЛЕНО ${bonusPoints} ₽ рефереру ${order.referred_by} (заказ #${orderId})`);
+          console.error('❌ Ошибка increment_balance:', error);
         }
-
-        // Обновляем статус транзакции
-        await supabase
-          .from('referral_transactions')
-          .update({ 
-            status: 'activated',
-            activated_at: new Date().toISOString()
-          })
-          .eq('order_id', orderId)
-          .eq('referrer_id', order.referred_by);
-
-      } else if (status === 'cancelled') {
-        // Сжигаем баллы
-        await supabase
-          .from('referral_transactions')
-          .update({ status: 'cancelled' })
-          .eq('order_id', orderId)
-          .eq('referrer_id', order.referred_by);
-
-        console.log(`❌ Баллы по заказу #${orderId} сожжены`);
+      } 
+      else if (status === 'cancelled') {
+        const { error } = await supabase.rpc('decrement_balance', {
+          p_user_id: order.referred_by,
+          p_points: bonusPoints
+        });
+        if (!error) {
+          console.log(`✅ УСПЕШНО СПИСАНО ${bonusPoints} ₽ (заказ #${orderId})`);
+        } else {
+          console.error('❌ Ошибка decrement_balance:', error);
+        }
       }
+    } else {
+      console.log(`⚠️ Реферальная логика ПРОПУЩЕНА (referred_by = ${order.referred_by || 'NULL'}, bonusPoints = ${bonusPoints})`);
     }
 
-    return NextResponse.json({ 
-      success: true, 
-      message: `Статус заказа #${orderId} обновлён на "${status}"` 
-    });
+    console.log('🔍 [Update Status] === ЗАВЕРШЕНО ===');
+    return NextResponse.json({ success: true });
 
   } catch (error: any) {
     console.error('❌ Update status error:', error);
