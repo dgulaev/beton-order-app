@@ -10,11 +10,14 @@ export default function ConcreteOrderPage() {
   const [isVerified, setIsVerified] = useState(false);
   const [phone, setPhone] = useState('');
 
-  const [activeTab, setActiveTab] = useState<'new' | 'history' | 'referral'>('new');
+  const [activeTab, setActiveTab] = useState<'new' | 'history' | 'referral' | 'balance'>('new');
+  const [referralHistory, setReferralHistory] = useState<any[]>([]);
+  const [expandedReferrer, setExpandedReferrer] = useState<number | null>(null);
   const [currentScreen, setCurrentScreen] = useState<'form' | 'success'>('form');
   const [orderId, setOrderId] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [fullName, setFullName] = useState('');
 
   const [form, setForm] = useState({
     grade: 'М300',
@@ -174,6 +177,11 @@ const loadBalance = async () => {
 
   const totalPrice = concreteCost + deliveryCost;
 
+  // === ПОГАШЕНИЕ БАЛЛОВ ===
+  const [redeemAmount, setRedeemAmount] = useState<number>(0);
+
+  const finalPrice = Math.max(0, totalPrice - redeemAmount);
+
   const handleChange = (e: React.ChangeEvent<any>) => {
     setForm(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
@@ -211,6 +219,7 @@ const registerByPhone = async (phoneNumber: string) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         phone: normalizedPhone,     // ← только цифры
+        fullName: fullName || null,
         referredBy: refCode
       }),
     });
@@ -331,16 +340,22 @@ useEffect(() => {
     }
   };
 
-  const loadReferrals = async () => {
-    if (!userId) return;
-    setLoadingReferrals(true);
-    await loadBalance();
-    try {
-      const res = await fetch(`/api/referrals?userId=${userId}`);
-      const data = await res.json();
-      setReferrals(data.referrals || []);
-    } catch (e) { console.error(e); } finally { setLoadingReferrals(false); }
-  };
+const loadReferrals = async () => {
+  if (!userId) return;
+  setLoadingReferrals(true);
+  await loadBalance();
+  try {
+    const res = await fetch(`/api/referrals/history?userId=${userId}`);   // ← исправлено
+    const data = await res.json();
+    if (data.success) {
+      setReferralHistory(data.history || []);
+    }
+  } catch (e) { 
+    console.error('Ошибка загрузки истории рефералов:', e); 
+  } finally { 
+    setLoadingReferrals(false); 
+  }
+};
 
 const handleSubmit = async () => {
   const wa = (window as any).WebApp;
@@ -381,7 +396,7 @@ const handleSubmit = async () => {
   setIsSubmitting(true);
   if (wa?.MainButton) wa.MainButton.showProgress();
 
-  // Надёжный захват реферального кода (из URL или состояния)
+  // Надёжный захват реферального кода
   const refCodeFromUrl = urlSearchParams.get('ref');
   const finalReferredBy = referredBy || refCodeFromUrl;
 
@@ -398,6 +413,9 @@ const handleSubmit = async () => {
     concreteCost: Number(concreteCost) || 0,
     deliveryCost: Number(deliveryCost) || 0,
     totalPrice: Number(totalPrice) || 0,
+
+    // ←←← ПОГАШЕНИЕ БАЛЛОВ
+    redeemAmount: redeemAmount > 0 ? redeemAmount : 0,
 
     customerType: form.customerType === 'legal' 
       ? 'Юридическое лицо' 
@@ -428,9 +446,9 @@ const handleSubmit = async () => {
       setCurrentScreen('success');
       if (wa?.MainButton) wa.MainButton.hide();
 
-      console.log('✅ Заказ успешно создан! referredBy был:', finalReferredBy);
+      console.log(`✅ Заказ #${data.orderId} успешно создан! Погашено баллов: ${redeemAmount}`);
 
-      // Очистка формы после успеха
+      // Очистка формы + сброс суммы погашения
       setForm({
         grade: 'М300',
         volume: '',
@@ -444,25 +462,21 @@ const handleSubmit = async () => {
         comment: '',
       });
 
+      setRedeemAmount(0);        // ← Важно! Сбрасываем сумму погашения
+
+      // Обновляем баланс пользователя
+      if (userId) loadBalance();
+
     } 
     else if (response.status === 409 && data.suggestions) {
-      // ================================================
-      // 5. КОНФЛИКТ ВРЕМЕНИ — ПРЕДЛАГАЕМ АЛЬТЕРНАТИВЫ
-      // ================================================
       let message = `${data.message}\n\nБлижайшие свободные времена:\n\n`;
-
       data.suggestions.forEach((slot: any, index: number) => {
         message += `${index + 1}. ${slot.time} — ${slot.reason}\n`;
       });
-
       message += `\nВыберите одно из предложенных времён или измените дату.`;
-
       showAlert(message);
-      console.log('🕒 Предложенные сервером времена:', data.suggestions);
-
     } 
     else {
-      // Другие ошибки
       showAlert('Ошибка создания заявки:\n' + (data.message || 'Неизвестная ошибка'));
     }
 
@@ -587,6 +601,22 @@ const handleSubmit = async () => {
           }}
           maxLength={18}
         />
+        {/* Поле ФИО */}
+          <input
+            type="text"
+            placeholder="Ваше ФИО"
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+           style={{
+             width: '100%',
+             maxWidth: '420px',
+             margin: '0 auto 12px',
+             padding: '16px',
+             borderRadius: '12px',
+             border: '1px solid #ddd',
+             fontSize: '17px'
+         }}
+         />
 
         <button 
           onClick={() => phone && registerByPhone(phone)}
@@ -731,6 +761,7 @@ const handleSubmit = async () => {
             <div onClick={() => { setActiveTab('new'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Новая заявка</div>
             <div onClick={() => { setActiveTab('history'); setMenuOpen(false); loadOrders(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои заявки</div>
             <div onClick={() => { setActiveTab('referral'); setMenuOpen(false); loadReferrals(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои баллы</div>
+            <div onClick={() => { setActiveTab('balance'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Баланс и вывод</div>
           </div>
         )}
       </div>
@@ -791,43 +822,97 @@ const handleSubmit = async () => {
           </div>
         </div>
 
-      {volume > 0 && (
-        <div style={{ 
-          backgroundColor: '#f8fafc', 
-          padding: '16px', 
-          borderRadius: '16px', 
-          border: '1px solid #e2e8f0',
-          marginTop: '8px'
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-            <span style={{ color: '#475569' }}>Бетон:</span>
-            <span style={{ fontWeight: '600' }}>{concreteCost.toLocaleString('ru-RU')} ₽</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-            <span style={{ color: '#475569' }}>Доставка:</span>
-            <span style={{ fontWeight: '600' }}>{deliveryCost.toLocaleString('ru-RU')} ₽</span>
-          </div>
+{volume > 0 && (
+  <div style={{ 
+    width: '90%',
+    backgroundColor: '#f8fafc', 
+    padding: '16px', 
+    borderRadius: '16px', 
+    border: '1px solid #e2e8f0',
+    marginTop: '8px'
+  }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+      <span style={{ color: '#475569' }}>Бетон:</span>
+      <span style={{ fontWeight: '600' }}>{concreteCost.toLocaleString('ru-RU')} ₽</span>
+    </div>
+    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+      <span style={{ color: '#475569' }}>Доставка:</span>
+      <span style={{ fontWeight: '600' }}>{deliveryCost.toLocaleString('ru-RU')} ₽</span>
+    </div>
 
-          {deliveryNote && (
-            <div style={{ 
-              marginTop: '10px', 
-              padding: '10px', 
-              backgroundColor: '#e0f2fe', 
-              borderRadius: '10px', 
-              fontSize: '14.5px', 
-              color: '#0369a1',
-              textAlign: 'center'
-            }}>
-              🚚 {deliveryNote}
-            </div>
-          )}
+    {deliveryNote && (
+      <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#e0f2fe', borderRadius: '10px', fontSize: '14.5px', color: '#0369a1', textAlign: 'center' }}>
+        🚚 {deliveryNote}
+      </div>
+    )}
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: '700', color: '#1e40af', borderTop: '1px solid #cbd5e1', paddingTop: '10px', marginTop: '12px' }}>
-            <span>Итого:</span>
-            <span>{totalPrice.toLocaleString('ru-RU')} ₽</span>
-          </div>
+    {/* === НОВЫЙ БЛОК ПОГАШЕНИЯ БАЛЛОВ === */}
+    {balance > 0 && (
+      <div style={{ 
+        marginTop: '16px', 
+        padding: '14px', 
+        backgroundColor: '#f0fdf4', 
+        borderRadius: '12px', 
+        border: '1px solid #86efac' 
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+          <span style={{ fontWeight: '600', color: '#166534' }}>Погасить баллами</span>
+          <span style={{ color: '#166534' }}>Доступно: <strong>{balance} ₽</strong></span>
         </div>
-      )}
+        
+        <input
+      type="number"
+      value={redeemAmount || ''}           // ← важно для исчезновения нуля
+      min="0"
+      max={Math.min(balance, totalPrice)}
+      onChange={(e) => {
+        const inputValue = e.target.value;
+        
+        if (inputValue === '') {
+          setRedeemAmount(0);
+          return;
+        }
+
+        let val = Number(inputValue);
+        if (isNaN(val) || val < 0) val = 0;
+        
+        // Ограничиваем максимумом
+        val = Math.min(val, balance, totalPrice);
+        
+        setRedeemAmount(val);
+      }}
+          style={{ 
+            width: '90%', 
+            padding: '12px', 
+            borderRadius: '10px', 
+            border: '1px solid #86efac', 
+            fontSize: '16px',
+            textAlign: 'center'
+          }}
+          placeholder="0"
+        />
+        
+        <div style={{ 
+          marginTop: '10px', 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          fontSize: '18px', 
+          fontWeight: '700', 
+          color: '#166534' 
+        }}>
+          <span>Итого к оплате:</span>
+          <span>{finalPrice.toLocaleString('ru-RU')} ₽</span>
+        </div>
+      </div>
+    )}
+
+    {/* Старый итого (оставляем для совместимости) */}
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: '700', color: '#1e40af', borderTop: '1px solid #cbd5e1', paddingTop: '10px', marginTop: '12px' }}>
+      <span>Итого без скидки:</span>
+      <span>{totalPrice.toLocaleString('ru-RU')} ₽</span>
+    </div>
+  </div>
+)}
 
         <div>
           <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Дата и время доставки</label>
@@ -1074,6 +1159,7 @@ const handleSubmit = async () => {
             <div onClick={() => { setActiveTab('new'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Новая заявка</div>
             <div onClick={() => { setActiveTab('history'); setMenuOpen(false); loadOrders(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои заявки</div>
             <div onClick={() => { setActiveTab('referral'); setMenuOpen(false); loadReferrals(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои баллы</div>
+            <div onClick={() => { setActiveTab('balance'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Баланс и вывод</div>
           </div>
         )}
       </div>
@@ -1103,7 +1189,178 @@ const handleSubmit = async () => {
   </div>
 )}
 
-          {activeTab === 'referral' && (
+{activeTab === 'referral' && (
+  <div>
+    {/* Хедер */}
+    <div style={{ 
+      display: 'flex', 
+      justifyContent: 'flex-end', 
+      padding: '20px 24px',
+      borderBottom: '1px solid #f1f5f9',
+      backgroundColor: 'white'
+    }}>
+      <div style={{ position: 'relative' }}>
+        <div onClick={() => setMenuOpen(!menuOpen)} style={{ padding: '10px', cursor: 'pointer' }}>
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
+        </div>
+
+        {menuOpen && (
+          <div style={{
+            position: 'absolute', top: '52px', right: '0', background: 'white',
+            borderRadius: '12px', boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
+            padding: '8px 0', zIndex: 100, width: '220px'
+          }}>
+            <div onClick={() => { setActiveTab('new'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Новая заявка</div>
+            <div onClick={() => { setActiveTab('history'); setMenuOpen(false); loadOrders(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои заявки</div>
+            <div onClick={() => { setActiveTab('referral'); setMenuOpen(false); loadReferrals(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои баллы</div>
+            <div onClick={() => { setActiveTab('balance'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Баланс и вывод</div>
+          </div>
+        )}
+      </div>
+    </div>
+
+    <div style={{ padding: '24px' }}>
+      <h2 style={{ marginBottom: '8px' }}>Мои баллы</h2>
+      <div style={{ fontSize: '64px', fontWeight: '700', color: '#2563eb', marginBottom: '8px' }}>
+        {balance} ₽
+      </div>
+      <p style={{ color: '#666', marginBottom: '30px' }}>Баллы можно использовать как скидку</p>
+
+      {/* Реферальный код */}
+      <div style={{ marginBottom: '40px' }}>
+        <h3 style={{ marginBottom: '12px', textAlign: 'center' }}>Твой реферальный код</h3>
+        <div style={{ 
+          backgroundColor: '#f1f5f9', padding: '20px', borderRadius: '12px', 
+          fontSize: '26px', fontWeight: '700', letterSpacing: '3px', 
+          marginBottom: '16px', textAlign: 'center'
+        }}>
+          {referralCode}
+        </div>
+        <button 
+          onClick={() => {
+            const link = `https://beton-order-app-nlnv.vercel.app/?ref=${referralCode}`;
+            navigator.clipboard.writeText(link);
+            alert('Реферальная ссылка скопирована!');
+          }} 
+          style={{ 
+            display: 'block', width: '80%', maxWidth: '420px', margin: '0 auto',
+            padding: '16px 24px', backgroundColor: '#2563eb', color: 'white',
+            border: 'none', borderRadius: '12px', fontSize: '16px', fontWeight: '600'
+          }}
+        >
+          Скопировать реферальную ссылку
+        </button>
+      </div>
+
+      <h3 style={{ marginBottom: '16px' }}>История начислений</h3>
+
+      {loadingReferrals ? (
+        <p style={{ textAlign: 'center', padding: '60px 0', color: '#888' }}>Загрузка...</p>
+      ) : referralHistory.length === 0 ? (
+        <p style={{ textAlign: 'center', padding: '80px 20px', color: '#888' }}>Пока нет начислений</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {referralHistory.map((item: any, index: number) => {
+            const isExpanded = expandedReferrer === index;
+
+            const earnedBonus = item.orders
+              .filter((o: any) => o.status === 'completed')
+              .reduce((sum: number, o: any) => sum + Number(o.bonus_amount || 0), 0);
+
+            const hasPending = item.orders.some((o: any) => o.status !== 'completed' && o.status !== 'cancelled');
+
+            return (
+              <div key={index} style={{
+                background: 'white',
+                borderRadius: '16px',
+                overflow: 'hidden',
+                boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+                border: isExpanded ? '2px solid #2563eb' : '1px solid #e2e8f0'
+              }}>
+                {/* Закрытая карточка */}
+                <div 
+                  onClick={() => setExpandedReferrer(isExpanded ? null : index)}
+                  style={{
+                    padding: '18px 20px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: '15px', color: '#64748b' }}>
+                      {new Date(item.lastDate).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' })}
+                    </div>
+                    <div style={{ fontWeight: '600', marginTop: '4px' }}>
+                      От: {item.referrerName}
+                    </div>
+                    <div style={{ fontSize: '14px', color: '#64748b' }}>
+                      {item.referrerPhone}
+                    </div>
+                  </div>
+
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ 
+                      fontSize: '18px', 
+                      fontWeight: '700', 
+                      color: earnedBonus > 0 ? '#166534' : '#94a3b8' 
+                    }}>
+                      {earnedBonus > 0 ? `+${earnedBonus.toLocaleString('ru-RU')} ₽` : 'В процессе начисления'}
+                    </div>
+                    {hasPending && earnedBonus > 0 && (
+                      <div style={{ fontSize: '13px', color: '#94a3b8' }}>(есть в процессе)</div>
+                    )}
+                    <div style={{ fontSize: '14px', color: '#64748b' }}>
+                      {item.totalVolume} м³ • {item.count} заказ{item.count > 1 ? 'а' : ''}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Раскрытый список */}
+                {isExpanded && item.orders.length > 0 && (
+                  <div style={{ padding: '0 20px 18px', borderTop: '1px solid #f1f5f9' }}>
+                    {item.orders.map((order: any, i: number) => {
+                      let statusText = 'В процессе начисления';
+                      let statusColor = '#94a3b8';
+
+                      if (order.status === 'completed') {
+                        statusText = `+${order.bonus_amount} ₽`;
+                        statusColor = '#166534';
+                      } else if (order.status === 'cancelled') {
+                        statusText = 'Отмена';
+                        statusColor = '#ef4444';
+                      }
+
+                      return (
+                        <div key={i} style={{
+                          padding: '12px 0',
+                          borderBottom: i < item.orders.length - 1 ? '1px solid #f1f5f9' : 'none',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: '15px'
+                        }}>
+                          <div>Заказ №{order.id || '—'} — {order.volume} м³</div>
+                          <div style={{ color: statusColor, fontWeight: '600' }}>
+                            {statusText}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  </div>
+)}
+{/* ====================== ВКЛАДКА «БАЛАНС» ====================== */}
+{activeTab === 'balance' && (
   <div>
     <div style={{ 
       display: 'flex', 
@@ -1137,34 +1394,93 @@ const handleSubmit = async () => {
             <div onClick={() => { setActiveTab('new'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Новая заявка</div>
             <div onClick={() => { setActiveTab('history'); setMenuOpen(false); loadOrders(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои заявки</div>
             <div onClick={() => { setActiveTab('referral'); setMenuOpen(false); loadReferrals(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои баллы</div>
+            <div onClick={() => { setActiveTab('balance'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Баланс и вывод</div>
           </div>
         )}
       </div>
     </div>
 
     <div style={{ padding: '24px', textAlign: 'center' }}>
-      <h2 style={{ marginBottom: '8px' }}>Мои баллы</h2>
-      <div style={{ fontSize: '64px', fontWeight: '700', color: '#2563eb', marginBottom: '8px' }}>
+      <h2 style={{ marginBottom: '20px' }}>Баланс и погашение</h2>
+      
+      <div style={{ 
+        fontSize: '72px', 
+        fontWeight: '700', 
+        color: '#2563eb', 
+        marginBottom: '8px' 
+      }}>
         {balance} ₽
       </div>
-      <p style={{ color: '#666' }}>Баллы можно использовать как скидку</p>
+      <p style={{ color: '#666', marginBottom: '40px' }}>
+        Баллы можно использовать как скидку на заказ или вывести наличными
+      </p>
 
-      <div style={{ marginTop: '50px' }}>
-        <h3 style={{ marginBottom: '12px' }}>Твой реферальный код</h3>
-        <div style={{ backgroundColor: '#f1f5f9', padding: '20px', borderRadius: '12px', fontSize: '26px', fontWeight: '700', letterSpacing: '3px', marginBottom: '20px' }}>
-          {referralCode}
-        </div>
-        <button 
-          onClick={() => {
-            const link = `https://beton-order-app-nlnv.vercel.app/?ref=${referralCode}`;
-            navigator.clipboard.writeText(link);
-            alert('Реферальная ссылка скопирована!');
-          }} 
-          style={{ padding: '14px 32px', backgroundColor: '#2563eb', color: 'white', border: 'none', borderRadius: '12px', fontSize: '16px' }}
-        >
-          Скопировать ссылку
-        </button>
-      </div>
+      <button 
+        onClick={() => setActiveTab('new')}
+        style={{
+          width: '60%',
+          maxWidth: '420px',
+          margin: '0 auto 16px',
+          padding: '18px',
+          backgroundColor: '#2563eb',
+          color: 'white',
+          border: 'none',
+          borderRadius: '14px',
+          fontSize: '15px',
+          fontWeight: '600'
+        }}
+      >
+        Использовать на следующий заказ
+      </button>
+
+      <button 
+        onClick={async () => {
+          const amountStr = prompt(`Сколько баллов вывести? (максимум ${balance} ₽)`);
+          if (!amountStr) return;
+          
+          const amount = parseInt(amountStr);
+          if (isNaN(amount) || amount <= 0 || amount > balance) {
+            alert('Неверная сумма!');
+            return;
+          }
+
+          try {
+            const res = await fetch('/api/balance/redeem', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                userId: userId,
+                amount: amount,
+                type: 'cash',
+                payoutDetails: { 
+                  method: 'card', 
+                  comment: 'Вывод реферальных баллов' 
+                }
+              })
+            });
+
+            const data = await res.json();
+            alert(data.message || 'Заявка на вывод успешно создана. Ожидайте подтверждения администратора.');
+            loadBalance();
+          } catch (e) {
+            alert('Ошибка при создании заявки на вывод');
+          }
+        }}
+        style={{
+          width: '60%',
+          maxWidth: '420px',
+          margin: '0 auto',
+          padding: '18px',
+          backgroundColor: '#ea580c',
+          color: 'white',
+          border: 'none',
+          borderRadius: '14px',
+          fontSize: '15px',
+          fontWeight: '600'
+        }}
+      >
+        Вывести наличными / на карту
+      </button>
     </div>
   </div>
 )}

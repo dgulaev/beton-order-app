@@ -137,10 +137,31 @@ export async function POST(request: NextRequest) {
     }
 
     const orderId = orderData.id;
-
     console.log(`✅ Заказ #${orderId} успешно создан. referred_by = ${referredBy || 'null'}`);
 
-    // === ЗАМОРОЗКА БАЛЛОВ ===
+    // === ПОГАШЕНИЕ БАЛЛОВ (СКИДКА) ===
+    const redeemAmount = Number(payload.redeemAmount) || 0;
+
+    if (redeemAmount > 0) {
+      const { error: redeemError } = await supabase
+        .from('balance_redemptions')
+        .insert({
+          user_id: userId,
+          order_id: orderId,
+          amount: redeemAmount,
+          type: 'discount',
+          status: 'completed',
+          processed_at: new Date().toISOString()
+        });
+
+      if (redeemError) {
+        console.error('Ошибка записи погашения баллов:', redeemError);
+      } else {
+        console.log(`✅ Погашено ${redeemAmount} баллов при создании заказа #${orderId}`);
+      }
+    }
+
+    // === ЗАМОРОЗКА РЕФЕРАЛЬНЫХ БАЛЛОВ ===
     if (referredBy && parseFloat(volume) > 0) {
       const bonusPoints = Math.round(parseFloat(volume) * 100);
 
@@ -161,7 +182,6 @@ export async function POST(request: NextRequest) {
         console.log(`✅ УСПЕШНО ЗАМОРОЖЕНО ${bonusPoints} баллов для реферера ${referredBy} (заказ #${orderId})`);
       }
     }
-
     // Уведомление в Max (оставлено без изменений)
     const messageText = `
 ✅ *Новая заявка на отгрузку бетона*

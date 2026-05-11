@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 
 export default function AdminPanel() {
+  // ==================== ОСНОВНЫЕ СОСТОЯНИЯ ====================
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -13,17 +14,19 @@ export default function AdminPanel() {
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
   const [userId, setUserId] = useState<number | null>(null);
 
-  const loadOrders = async () => {
-    if (!userId) {
-      console.log('❌ loadOrders: userId отсутствует');
-      setLoading(false);
-      return;
-    }
+  // ==================== СОСТОЯНИЯ ЛОГИНА ====================
+  const [isLoginMode, setIsLoginMode] = useState(false);
+  const [loginUsername, setLoginUsername] = useState('');   // ← Изменено с email на username
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
 
+  // ==================== ЗАГРУЗКА ЗАКАЗОВ ====================
+  const loadOrders = async () => {
+    if (!userId) return;
     setLoading(true);
     try {
       const res = await fetch(`/api/admin/orders?userId=${userId}`, { cache: 'no-store' });
-      console.log('📡 /api/admin/orders запрос для userId:', userId);
       const data = await res.json();
       setOrders(data.orders || []);
     } catch (e) {
@@ -33,96 +36,199 @@ export default function AdminPanel() {
     }
   };
 
-const updateStatus = async (orderId: number, newStatus: string) => {
-  try {
-    const res = await fetch('/api/admin/update-status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderId, status: newStatus }),
-    });
+  // ==================== ОБНОВЛЕНИЕ СТАТУСА ====================
+  const updateStatus = async (orderId: number, newStatus: string) => {
+    try {
+      const res = await fetch('/api/admin/update-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId, status: newStatus, userId }),
+      });
 
-    const data = await res.json();
-
-    if (data.success) {
-      console.log(`✅ Статус заказа #${orderId} обновлён на ${newStatus}`);
-      await loadOrders();
-      await loadBalance();
-    } else {
-      console.error('Ошибка обновления статуса:', data.message);
-      alert(data.message || 'Не удалось обновить статус');
+      const data = await res.json();
+      if (data.success) {
+        await loadOrders();
+        await loadBalance();
+      } else {
+        alert(data.message || 'Не удалось обновить статус');
+      }
+    } catch (e) {
+      alert('Ошибка соединения с сервером');
     }
-  } catch (e) {
-    console.error('Ошибка при смене статуса:', e);
-    alert('Ошибка соединения с сервером');
-  }
-};
+  };
 
-// ==================== ЗАГРУЗКА БАЛАНСА ====================
-const loadBalance = async () => {
-  if (!userId) return;
-
-  try {
-    const res = await fetch(`/api/user/balance?userId=${userId}`);
-    const data = await res.json();
-
-    if (data.success && data.balance !== undefined) {
-      console.log(`💰 Баланс реферера обновлён: ${data.balance} ₽`);
-      // Здесь можно добавить setBalance если сделаешь состояние в админке
+  const loadBalance = async () => {
+    if (!userId) return;
+    try {
+      const res = await fetch(`/api/user/balance?userId=${userId}`);
+      const data = await res.json();
+      if (data.success) console.log(`💰 Баланс: ${data.balance} ₽`);
+    } catch (e) {
+      console.error(e);
     }
-  } catch (e) {
-    console.error('Ошибка загрузки баланса:', e);
-  }
-};
+  };
 
-  // Получаем userId из localStorage
+  // ==================== ВХОД ПО ЛОГИНУ + ПАРОЛЮ ====================
+  const handleAdminLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    
+    setLoginLoading(true);
+    setLoginError('');
+
+    try {
+      const res = await fetch('/api/auth/admin-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          username: loginUsername.trim(),   // ← Теперь username
+          password: loginPassword 
+        }),
+      });
+
+      const data = await res.json();
+
+      if (data.success && data.userId) {
+        localStorage.setItem('userId', data.userId.toString());
+        setUserId(data.userId);
+        setUserRole(data.role);
+        setIsLoginMode(false);
+        setLoginUsername('');
+        setLoginPassword('');
+        console.log(`✅ Успешный вход: ${data.name} (${data.role})`);
+      } else {
+        setLoginError(data.message || 'Неверный логин или пароль');
+      }
+    } catch (err) {
+      setLoginError('Ошибка соединения с сервером');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  // ==================== ВЫХОД ====================
+  const handleLogout = () => {
+    localStorage.removeItem('userId');
+    setUserId(null);
+    setUserRole(null);
+    setOrders([]);
+    setIsLoginMode(true);
+  };
+
+  // ==================== ИНИЦИАЛИЗАЦИЯ ====================
   useEffect(() => {
     const savedUserId = localStorage.getItem('userId');
-    console.log('Admin page - savedUserId from localStorage:', savedUserId);
-
     if (savedUserId) {
       const id = parseInt(savedUserId, 10);
       if (!isNaN(id)) {
         setUserId(id);
+        setIsLoginMode(false);
       }
+    } else {
+      setIsLoginMode(true);
     }
   }, []);
 
   useEffect(() => {
     if (!userId) return;
 
-    // Получаем реальную роль пользователя
     fetch('/api/user/role', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: userId }),
+      body: JSON.stringify({ userId }),
     })
-      .then(res => {
-        console.log('Role response status:', res.status);
-        return res.json();
-      })
-      .then(data => {
-        console.log('Role data received:', data);
-        console.log('Role value specifically:', data.role);
-        setUserRole(data.role || 'client');
-      })
-      .catch((e) => {
-        console.error('Role fetch error:', e);
-        setUserRole('client');
-      });
+      .then(res => res.json())
+      .then(data => setUserRole(data.role || 'client'))
+      .catch(() => setUserRole('client'));
 
     loadOrders();
   }, [userId]);
 
-  // Проверка доступа
-  if (!userRole || (userRole !== 'admin' && userRole !== 'manager' && userRole !== 'dispatcher')) {
+  // ==================== ФОРМА ЛОГИНА (обновлённая) ====================
+  if (isLoginMode || !userId || !userRole || 
+      !['admin', 'manager', 'dispatcher'].includes(userRole)) {
+    
     return (
-      <div style={{ padding: '100px 20px', textAlign: 'center', fontSize: '18px', color: '#666' }}>
-        У вас нет прав доступа к админ-панели.<br />
-        Текущая роль: <strong>{userRole || 'не определена'}</strong>
+      <div style={{
+        padding: '40px 20px',
+        minHeight: '100vh',
+        backgroundColor: '#f8fafc',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}>
+        <div style={{
+          maxWidth: '420px',
+          width: '100%',
+          background: 'white',
+          padding: '40px 30px',
+          borderRadius: '20px',
+          boxShadow: '0 10px 30px rgba(0,0,0,0.1)'
+        }}>
+          <h1 style={{ textAlign: 'center', marginBottom: '8px' }}>Админ-панель</h1>
+          <p style={{ textAlign: 'center', color: '#666', marginBottom: '30px' }}>
+            Войдите с помощью логина и пароля
+          </p>
+
+          <form onSubmit={handleAdminLogin}>
+            <input
+              type="text"
+              placeholder="Логин (например: admin)"
+              value={loginUsername}
+              onChange={(e) => setLoginUsername(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '14px',
+                marginBottom: '12px',
+                borderRadius: '12px',
+                border: '1px solid #ddd',
+                fontSize: '16px'
+              }}
+              required
+            />
+
+            <input
+              type="password"
+              placeholder="Пароль"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '14px',
+                marginBottom: '20px',
+                borderRadius: '12px',
+                border: '1px solid #ddd',
+                fontSize: '16px'
+              }}
+              required
+            />
+
+            {loginError && (
+              <p style={{ color: '#ef4444', textAlign: 'center', marginBottom: '15px' }}>{loginError}</p>
+            )}
+
+            <button
+              type="submit"
+              disabled={loginLoading}
+              style={{
+                width: '100%',
+                padding: '16px',
+                background: loginLoading ? '#9ca3af' : '#2563eb',
+                color: 'white',
+                border: 'none',
+                borderRadius: '12px',
+                fontSize: '17px',
+                fontWeight: '600'
+              }}
+            >
+              {loginLoading ? 'Вход...' : 'Войти'}
+            </button>
+          </form>
+        </div>
       </div>
     );
   }
 
+  // ==================== ОСНОВНОЙ ИНТЕРФЕЙС АДМИНКИ ====================
   const groupedByDate = orders.reduce((acc: any, order: any) => {
     const date = order.delivery_date || order.created_at?.split('T')[0];
     if (!acc[date]) acc[date] = [];
@@ -167,10 +273,29 @@ const loadBalance = async () => {
 
   return (
     <div style={{ padding: '20px', maxWidth: '1400px', margin: '0 auto' }}>
-      <h1 style={{ marginBottom: '10px' }}>Админ-панель — Управление заказами</h1>
-      <p style={{ marginBottom: '30px', color: '#2563eb', fontWeight: '600' }}>
-        Ваша роль: <strong>{userRole}</strong> | ID: <strong>{userId}</strong>
-      </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <div>
+          <h1 style={{ marginBottom: '10px' }}>Админ-панель — Управление заказами</h1>
+          <p style={{ color: '#2563eb', fontWeight: '600' }}>
+            Ваша роль: <strong>{userRole}</strong> | ID: <strong>{userId}</strong>
+          </p>
+        </div>
+        
+        <button 
+          onClick={handleLogout}
+          style={{
+            padding: '10px 20px',
+            background: '#ef4444',
+            color: 'white',
+            border: 'none',
+            borderRadius: '10px',
+            cursor: 'pointer',
+            fontWeight: '500'
+          }}
+        >
+          Выйти
+        </button>
+      </div>
 
       <div style={{ display: 'flex', gap: '10px', marginBottom: '25px', flexWrap: 'wrap' }}>
         <button onClick={() => setViewMode('table')} style={{ padding: '12px 24px', background: viewMode === 'table' ? '#2563eb' : '#f1f5f9', color: viewMode === 'table' ? 'white' : '#333', border: 'none', borderRadius: '12px', fontWeight: '600' }}>Таблица</button>
