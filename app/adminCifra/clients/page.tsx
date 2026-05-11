@@ -2,71 +2,67 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import NewOrderModal from './NewOrderModal';   // ← Новый импорт
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
-const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-
-if (!supabaseUrl) {
-  console.error("SUPABASE_URL is missing");
-  // можно вернуть fallback или пустую страницу
-}
-
-interface Profile {
-  user_id?: any;
-  id?: any;
-  username?: string;
-  role?: string;
-  name?: string;
-  full_name?: string;
-  organization_name?: string;
-  phone?: string;
-  balance?: number;
-  created_at?: string;
-}
-
-interface Order {
-  id: number | string;
-  user_id?: any;
-  delivery_date: string;
-  delivery_time?: string;
-  volume: number;
-  grade?: string;
-  status: string;
-  address?: string;
-  total_price?: number;
-}
+import NewOrderModal from './NewOrderModal';
 
 export default function ClientsPage() {
-  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [supabaseClient, setSupabaseClient] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<'clients' | 'staff'>('clients');
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
-  const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
-  const [userOrders, setUserOrders] = useState<Order[]>([]);
+  const [selectedProfile, setSelectedProfile] = useState<any>(null);
+  const [userOrders, setUserOrders] = useState<any[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
-  const [isNewOrderModalOpen, setIsNewOrderModalOpen] = useState(false);   // ← Новое состояние модалки
+  const [isNewOrderModalOpen, setIsNewOrderModalOpen] = useState(false);
+
+  // Инициализация Supabase клиента
+  useEffect(() => {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!url || !key) {
+      console.error("❌ SUPABASE_URL или ANON_KEY отсутствуют");
+      setError("Не настроены переменные Supabase");
+      setLoading(false);
+      return;
+    }
+
+    const client = createClient(url, key);
+    setSupabaseClient(client);
+    setLoading(false);
+  }, []);
 
   // Загрузка пользователей
   useEffect(() => {
+    if (!supabaseClient) return;
+
     const fetchUsers = async () => {
       setLoading(true);
-      const { data } = await supabase.from('users').select('*').order('created_at', { ascending: false });
-      setProfiles(data || []);
+      const { data, error } = await supabaseClient
+        .from('users')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error(error);
+        setError('Ошибка загрузки пользователей');
+      } else {
+        setProfiles(data || []);
+      }
       setLoading(false);
     };
-    fetchUsers();
-  }, []);
 
-  // Загрузка заказов
+    fetchUsers();
+  }, [supabaseClient]);
+
+  const [profiles, setProfiles] = useState<any[]>([]);
+
+  // Загрузка заказов выбранного пользователя
   const loadUserOrders = async (userId: any) => {
+    if (!supabaseClient || !userId) return;
     setOrdersLoading(true);
-    const { data } = await supabase
+    const { data } = await supabaseClient
       .from('orders')
       .select('*')
       .eq('user_id', userId)
@@ -107,16 +103,34 @@ export default function ClientsPage() {
       <h1 style={{ fontSize: '34px', fontWeight: '700', marginBottom: '32px' }}>👥 CRM</h1>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
-        {/* Клиенты / Стафф */}
         <div style={{ display: 'flex', gap: '8px', background: '#1E2937', padding: '6px', borderRadius: '9999px' }}>
-          <button onClick={() => setActiveTab('clients')} style={{ padding: '10px 28px', borderRadius: '9999px', background: activeTab === 'clients' ? '#3B82F6' : 'transparent', color: 'white', fontWeight: '600' }}>Клиенты</button>
-          <button onClick={() => setActiveTab('staff')} style={{ padding: '10px 28px', borderRadius: '9999px', background: activeTab === 'staff' ? '#3B82F6' : 'transparent', color: 'white', fontWeight: '600' }}>Стафф</button>
+          <button 
+            onClick={() => setActiveTab('clients')} 
+            style={{ padding: '10px 28px', borderRadius: '9999px', background: activeTab === 'clients' ? '#3B82F6' : 'transparent', color: 'white', fontWeight: '600' }}
+          >
+            Клиенты
+          </button>
+          <button 
+            onClick={() => setActiveTab('staff')} 
+            style={{ padding: '10px 28px', borderRadius: '9999px', background: activeTab === 'staff' ? '#3B82F6' : 'transparent', color: 'white', fontWeight: '600' }}
+          >
+            Стафф
+          </button>
         </div>
 
-        {/* Карточки / Список */}
         <div style={{ display: 'flex', gap: '8px', background: '#1E2937', padding: '6px', borderRadius: '9999px' }}>
-          <button onClick={() => setViewMode('cards')} style={{ padding: '10px 24px', borderRadius: '9999px', background: viewMode === 'cards' ? '#3B82F6' : 'transparent', color: 'white', fontWeight: '600' }}>🃏 Карточки</button>
-          <button onClick={() => setViewMode('table')} style={{ padding: '10px 24px', borderRadius: '9999px', background: viewMode === 'table' ? '#3B82F6' : 'transparent', color: 'white', fontWeight: '600' }}>📋 Список</button>
+          <button 
+            onClick={() => setViewMode('cards')} 
+            style={{ padding: '10px 24px', borderRadius: '9999px', background: viewMode === 'cards' ? '#3B82F6' : 'transparent', color: 'white', fontWeight: '600' }}
+          >
+            🃏 Карточки
+          </button>
+          <button 
+            onClick={() => setViewMode('table')} 
+            style={{ padding: '10px 24px', borderRadius: '9999px', background: viewMode === 'table' ? '#3B82F6' : 'transparent', color: 'white', fontWeight: '600' }}
+          >
+            📋 Список
+          </button>
         </div>
       </div>
 
@@ -132,15 +146,21 @@ export default function ClientsPage() {
       {viewMode === 'cards' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '24px' }}>
           {filteredList.map((p) => (
-            <div key={`item-${p.user_id || p.id || Math.random()}`} onClick={() => setSelectedProfile(p)} style={{ background: '#1E2937', borderRadius: '20px', padding: '24px', cursor: 'pointer' }}>
-              <div style={{ fontSize: '20px', fontWeight: '700' }}>{p.name || p.full_name || p.organization_name || p.username || 'Без Имени'}</div>
+            <div 
+              key={`item-${p.user_id || p.id}`} 
+              onClick={() => setSelectedProfile(p)} 
+              style={{ background: '#1E2937', borderRadius: '20px', padding: '24px', cursor: 'pointer' }}
+            >
+              <div style={{ fontSize: '20px', fontWeight: '700' }}>
+                {p.name || p.full_name || p.organization_name || p.username || 'Без Имени'}
+              </div>
               <div style={{ color: '#94A3B8' }}>{p.phone || '—'}</div>
             </div>
           ))}
         </div>
       )}
 
-      {/* Список */}
+      {/* Таблица */}
       {viewMode === 'table' && (
         <div style={{ background: '#1E2937', borderRadius: '20px', overflow: 'hidden' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 140px 140px', padding: '18px 28px', background: '#25334A', fontWeight: '600', color: '#94A3B8' }}>
@@ -150,11 +170,19 @@ export default function ClientsPage() {
             <div>Дата регистрации</div>
           </div>
           {filteredList.map((p) => (
-            <div key={`row-${p.user_id || p.id || Math.random()}`} onClick={() => setSelectedProfile(p)} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 140px 140px', padding: '20px 28px', borderTop: '1px solid #334155', cursor: 'pointer' }}>
+            <div 
+              key={`row-${p.user_id || p.id}`} 
+              onClick={() => setSelectedProfile(p)} 
+              style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 140px 140px', padding: '20px 28px', borderTop: '1px solid #334155', cursor: 'pointer' }}
+            >
               <div><strong>{p.name || p.full_name || p.organization_name || p.username || 'Без Имени'}</strong></div>
               <div>{p.phone || '—'}</div>
-              <div style={{ color: (p.balance || 0) >= 0 ? '#10B981' : '#EF4444', fontWeight: '600' }}>{(p.balance || 0).toLocaleString()} ₽</div>
-              <div style={{ color: '#94A3B8' }}>{p.created_at ? new Date(p.created_at).toLocaleDateString('ru-RU') : '—'}</div>
+              <div style={{ color: (p.balance || 0) >= 0 ? '#10B981' : '#EF4444', fontWeight: '600' }}>
+                {(p.balance || 0).toLocaleString()} ₽
+              </div>
+              <div style={{ color: '#94A3B8' }}>
+                {p.created_at ? new Date(p.created_at).toLocaleDateString('ru-RU') : '—'}
+              </div>
             </div>
           ))}
         </div>
@@ -164,18 +192,32 @@ export default function ClientsPage() {
       {selectedProfile && (
         <div style={{ position: 'fixed', top: 0, right: 0, width: '620px', height: '100vh', background: '#1E2937', borderLeft: '1px solid #334155', zIndex: 1000, overflow: 'auto' }}>
           <div style={{ padding: '32px' }}>
-            <button onClick={() => setSelectedProfile(null)} style={{ float: 'right', fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8' }}>×</button>
+            <button 
+              onClick={() => setSelectedProfile(null)} 
+              style={{ float: 'right', fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8' }}
+            >
+              ×
+            </button>
 
             <h2>{selectedProfile.name || selectedProfile.full_name || selectedProfile.organization_name || selectedProfile.username || 'Без Имени'}</h2>
             <p style={{ color: '#94A3B8', fontSize: '18px' }}>{selectedProfile.phone}</p>
 
-            {/* Быстрые действия */}
             <div style={{ display: 'flex', gap: '12px', margin: '28px 0' }}>
-              <button onClick={() => window.open(`tel:${selectedProfile.phone}`, '_self')} style={{ flex: 1, padding: '14px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>📞 Позвонить</button>
-              <button onClick={() => alert('Открывается чат с Max')} style={{ flex: 1, padding: '14px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>💬 Написать в Max</button>
+              <button 
+                onClick={() => window.open(`tel:${selectedProfile.phone}`, '_self')} 
+                style={{ flex: 1, padding: '14px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
+              >
+                📞 Позвонить
+              </button>
+              <button 
+                onClick={() => alert('Открывается чат с Max')} 
+                style={{ flex: 1, padding: '14px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
+              >
+                💬 Написать в Max
+              </button>
               <button 
                 onClick={() => setIsNewOrderModalOpen(true)}
-                style={{ flex: 1, padding: '14px', background: '#F59E0B', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                style={{ flex: 1, padding: '14px', background: '#F59E0B', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
               >
                 ➕ Новый заказ
               </button>
@@ -206,7 +248,7 @@ export default function ClientsPage() {
             {ordersLoading ? (
               <div>Загрузка заказов...</div>
             ) : userOrders.length > 0 ? (
-              userOrders.map((o) => (
+              userOrders.map((o: any) => (
                 <div key={o.id} style={{ background: '#25334A', padding: '18px', borderRadius: '16px', marginBottom: '16px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <strong>Заказ #{o.id}</strong>
@@ -228,15 +270,15 @@ export default function ClientsPage() {
 
       {/* Модальное окно Новый заказ */}
       <NewOrderModal
-  isOpen={isNewOrderModalOpen}
-  onClose={() => setIsNewOrderModalOpen(false)}
-  userId={selectedProfile?.user_id || selectedProfile?.id}
-  userName={selectedProfile?.full_name || selectedProfile?.name || selectedProfile?.username || 'Клиент'}
-  userPhone={selectedProfile?.phone || ''}
-  onOrderCreated={() => {
-    if (selectedProfile) loadUserOrders(selectedProfile.user_id || selectedProfile.id);
-  }}
-/>
+        isOpen={isNewOrderModalOpen}
+        onClose={() => setIsNewOrderModalOpen(false)}
+        userId={selectedProfile?.user_id || selectedProfile?.id}
+        userName={selectedProfile?.full_name || selectedProfile?.name || selectedProfile?.username || 'Клиент'}
+        userPhone={selectedProfile?.phone || ''}
+        onOrderCreated={() => {
+          if (selectedProfile) loadUserOrders(selectedProfile.user_id || selectedProfile.id);
+        }}
+      />
     </div>
   );
 }
