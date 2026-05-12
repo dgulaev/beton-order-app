@@ -18,6 +18,10 @@ export default function ConcreteOrderPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [fullName, setFullName] = useState('');
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [selectedReferrerForWithdraw, setSelectedReferrerForWithdraw] = useState<any>(null);
+  const [showReferrerList, setShowReferrerList] = useState(false);
 
   const [form, setForm] = useState({
     grade: 'М300',
@@ -41,6 +45,13 @@ export default function ConcreteOrderPage() {
   const [referrals, setReferrals] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [loadingReferrals, setLoadingReferrals] = useState(false);
+
+    // Автозагрузка истории при переключении на вкладку "Баланс"
+  useEffect(() => {
+    if (activeTab === 'balance' && userId) {
+      loadReferrals();
+    }
+  }, [activeTab, userId]);
 
   // ==================== useSearchParams ====================
   const urlSearchParams = useSearchParams();
@@ -103,7 +114,7 @@ const initializeUser = async (uid: number) => {
   }
 };
 
-/// ==================== ЗАГРУЗКА АКТУАЛЬНОГО БАЛАНСА ====================
+// ==================== ЗАГРУЗКА АКТУАЛЬНОГО БАЛАНСА ====================
 const loadBalance = async () => {
   if (!userId) {
     console.log('⚠️ loadBalance: userId отсутствует');
@@ -111,17 +122,19 @@ const loadBalance = async () => {
   }
 
   try {
-    console.log(`📡 Запрашиваем баланс для userId: ${userId}`);
+    console.log(`📡 Запрашиваем баланс для userId: ${userId} (с кэш-байпасом)`);
     
-    const res = await fetch(`/api/user/balance?userId=${userId}`, {
+    const res = await fetch(`/api/user/balance?userId=${userId}&t=${Date.now()}`, {
       method: 'GET',
-      cache: 'no-store',        // важно — не кэшировать
-      headers: { 'Cache-Control': 'no-cache' }
+      cache: 'no-store',
+      headers: { 
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
+      }
     });
 
     if (!res.ok) {
       console.warn(`⚠️ Ответ от /api/user/balance: ${res.status}`);
-      setBalance(0);
       return;
     }
 
@@ -130,14 +143,12 @@ const loadBalance = async () => {
 
     if (data.success && typeof data.balance === 'number') {
       setBalance(data.balance);
-      console.log(`✅ Баланс успешно обновлён → ${data.balance} ₽`);
+      console.log(`✅ Баланс обновлён → ${data.balance} ₽`);
     } else {
-      console.warn('⚠️ Некорректный ответ от баланса, ставим 0');
-      setBalance(0);
+      console.warn('⚠️ Некорректный ответ от баланса');
     }
   } catch (e) {
     console.error('❌ Ошибка загрузки баланса:', e);
-    setBalance(0);
   }
 };
 
@@ -340,24 +351,92 @@ useEffect(() => {
     }
   };
 
+// Загрузка истории операций (начисления + погашения + выводы)
 const loadReferrals = async () => {
-  if (!userId) return;
+  if (!userId) {
+    console.warn('loadReferrals: userId отсутствует');
+    return;
+  }
+
   setLoadingReferrals(true);
-  await loadBalance();
+
   try {
-    const res = await fetch(`/api/referrals/history?userId=${userId}`);   // ← исправлено
-    const data = await res.json();
-    if (data.success) {
-      setReferralHistory(data.history || []);
+    const res = await fetch(`/api/referrals/history?userId=${userId}`);
+
+    if (!res.ok) {
+      throw new Error(`HTTP error! status: ${res.status}`);
     }
-  } catch (e) { 
-    console.error('Ошибка загрузки истории рефералов:', e); 
-  } finally { 
-    setLoadingReferrals(false); 
+
+    const result = await res.json();
+
+    if (result.success) {
+      setReferralHistory(result.history || []);
+      console.log(`✅ Загружено ${result.history?.length || 0} операций`);
+    } else {
+      console.error('❌ Ошибка от API:', result.message);
+      setReferralHistory([]);
+    }
+  } catch (err) {
+    console.error('❌ Ошибка при загрузке истории операций:', err);
+    setReferralHistory([]);
+  } finally {
+    setLoadingReferrals(false);
   }
 };
 
-const handleSubmit = async () => {
+   // Функция вывода баллов
+  const handleWithdraw = async () => {
+  const amount = parseInt(withdrawAmount);
+  
+  if (!amount || amount <= 0 || amount > balance) {
+    alert('Неверная сумма!');
+    return;
+  }
+
+  const selected = selectedReferrerForWithdraw;
+
+  try {
+    const res = await fetch('/api/balance/redeem', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: userId,
+        amount: amount,
+        type: 'cash',
+        payoutDetails: { 
+          method: 'card', 
+          comment: 'Вывод реферальных баллов',
+          source_referrer_id: selected ? (selected.referrerPhone || null) : null,
+          source_referrer_name: selected ? selected.referrerName : null
+        }
+      })
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      alert(data.message || 'Заявка на вывод успешно создана. Ожидайте подтверждения администратора.');
+    } else {
+      alert(data.message || 'Ошибка при создании заявки');
+    }
+
+    // Закрываем модальное окно и сбрасываем все состояния
+    setShowWithdrawModal(false);
+    setWithdrawAmount('');
+    setSelectedReferrerForWithdraw(null);
+    setShowReferrerList(false);        // ← Добавлено
+
+    // Обновляем данные
+    loadBalance();
+    loadReferrals();
+
+  } catch (e) {
+    console.error(e);
+    alert('Ошибка соединения с сервером');
+  }
+};
+
+  const handleSubmit = async () => {
   const wa = (window as any).WebApp;
   const showAlert = wa?.showAlert || alert;
 
@@ -396,12 +475,13 @@ const handleSubmit = async () => {
   setIsSubmitting(true);
   if (wa?.MainButton) wa.MainButton.showProgress();
 
-  // Надёжный захват реферального кода
+  // ====================== НАДЁЖНЫЙ ЗАХВАТ РЕФЕРАЛА ======================
   const refCodeFromUrl = urlSearchParams.get('ref');
-  const finalReferredBy = referredBy || refCodeFromUrl;
+  const finalReferredBy = referredBy || refCodeFromUrl || null;
 
-  console.log('📤 handleSubmit → finalReferredBy:', finalReferredBy, 
-    '(из состояния:', referredBy, ', из URL:', refCodeFromUrl, ')');
+  console.log('📤 handleSubmit → finalReferredBy:', finalReferredBy);
+  console.log('   → из состояния referredBy:', referredBy);
+  console.log('   → из URL ref:', refCodeFromUrl);
 
   // Формируем payload для отправки на сервер
   const payload = {
@@ -414,7 +494,7 @@ const handleSubmit = async () => {
     deliveryCost: Number(deliveryCost) || 0,
     totalPrice: Number(totalPrice) || 0,
 
-    // ←←← ПОГАШЕНИЕ БАЛЛОВ
+    // Погашение баллов
     redeemAmount: redeemAmount > 0 ? redeemAmount : 0,
 
     customerType: form.customerType === 'legal' 
@@ -422,8 +502,15 @@ const handleSubmit = async () => {
       : 'Физическое лицо',
 
     userId: userId,
-    referredBy: finalReferredBy,
+    referredBy: finalReferredBy,           // ← КРИТИЧЕСКИ ВАЖНО
   };
+
+  console.log('📦 Полный payload перед отправкой:', {
+    userId: payload.userId,
+    referredBy: payload.referredBy,
+    volume: payload.volume,
+    redeemAmount: payload.redeemAmount
+  });
 
   try {
     // ================================================
@@ -1221,14 +1308,28 @@ const handleSubmit = async () => {
       </div>
     </div>
 
-    <div style={{ padding: '24px' }}>
-      <h2 style={{ marginBottom: '8px' }}>Мои баллы</h2>
-      <div style={{ fontSize: '64px', fontWeight: '700', color: '#2563eb', marginBottom: '8px' }}>
-        {balance} ₽
-      </div>
-      <p style={{ color: '#666', marginBottom: '30px' }}>Баллы можно использовать как скидку</p>
+          <div style={{ padding: '24px', textAlign: 'center' }}>
+           <h2 style={{ marginBottom: '8px' }}>Мои баллы</h2>
+  
+           <div style={{ 
+           fontSize: '64px', 
+           fontWeight: '700', 
+           color: '#2563eb', 
+           marginBottom: '8px',
+           textAlign: 'center'        // ← Центрирование большой суммы
+        }}>
+         {balance} ₽
+     </div>
+  
+        <p style={{ 
+          color: '#666', 
+          marginBottom: '30px',
+          textAlign: 'center'        // ← Центрирование подписи
+       }}>
+             Баллы можно использовать как скидку
+     </p>
 
-      {/* Реферальный код */}
+       {/* Реферальный код */}
       <div style={{ marginBottom: '40px' }}>
         <h3 style={{ marginBottom: '12px', textAlign: 'center' }}>Твой реферальный код</h3>
         <div style={{ 
@@ -1254,22 +1355,100 @@ const handleSubmit = async () => {
         </button>
       </div>
 
-      <h3 style={{ marginBottom: '16px' }}>История начислений</h3>
+      <h3 style={{ marginBottom: '16px' }}>История операций</h3>
 
       {loadingReferrals ? (
-        <p style={{ textAlign: 'center', padding: '60px 0', color: '#888' }}>Загрузка...</p>
+        <p style={{ textAlign: 'center', padding: '60px 0', color: '#888' }}>Загрузка операций...</p>
       ) : referralHistory.length === 0 ? (
-        <p style={{ textAlign: 'center', padding: '80px 20px', color: '#888' }}>Пока нет начислений</p>
+        <p style={{ textAlign: 'center', padding: '80px 20px', color: '#888' }}>Пока нет операций</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {referralHistory.map((item: any, index: number) => {
+          {referralHistory.map((op: any, index: number) => {
             const isExpanded = expandedReferrer === index;
 
-            const earnedBonus = item.orders
-              .filter((o: any) => o.status === 'completed')
-              .reduce((sum: number, o: any) => sum + Number(o.bonus_amount || 0), 0);
+            // === ГРУППА НАЧИСЛЕНИЙ ОТ РЕФЕРАЛА ===
+            if (op.type === 'referral_group') {
+              const earned = op.earnedBonus || 0;
+              return (
+                <div key={index} style={{
+                  background: 'white',
+                  borderRadius: '16px',
+                  overflow: 'hidden',
+                  boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
+                  border: isExpanded ? '2px solid #2563eb' : '1px solid #e2e8f0'
+                }}>
+                  {/* Закрытая карточка */}
+                  <div 
+                    onClick={() => setExpandedReferrer(isExpanded ? null : index)}
+                    style={{
+                      padding: '18px 20px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '15px', color: '#64748b' }}>
+                        {new Date(op.lastDate).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' })}
+                      </div>
+                      <div style={{ fontWeight: '600', marginTop: '4px' }}>
+                        От: {op.referrerName}
+                      </div>
+                      <div style={{ fontSize: '14px', color: '#64748b' }}>
+                        {op.referrerPhone}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '18px', fontWeight: '700', color: '#166534' }}>
+                        +{earned.toLocaleString('ru-RU')} ₽
+                      </div>
+                      <div style={{ fontSize: '14px', color: '#64748b' }}>
+                        {op.totalVolume} м³ • {op.count} заказ{op.count > 1 ? 'а' : ''}
+                      </div>
+                    </div>
+                  </div>
 
-            const hasPending = item.orders.some((o: any) => o.status !== 'completed' && o.status !== 'cancelled');
+                  {/* Раскрытый список заказов */}
+                  {isExpanded && op.orders && op.orders.length > 0 && (
+                    <div style={{ padding: '0 20px 18px', borderTop: '1px solid #f1f5f9' }}>
+                      {op.orders.map((order: any, i: number) => {
+                        let statusText = 'В процессе начисления';
+                        let statusColor = '#94a3b8';
+
+                        if (order.status === 'completed') {
+                          statusText = `+${order.bonus_amount} ₽`;
+                          statusColor = '#166534';
+                        } else if (order.status === 'cancelled') {
+                          statusText = 'Отмена';
+                          statusColor = '#ef4444';
+                        }
+
+                        return (
+                          <div key={i} style={{
+                            padding: '12px 0',
+                            borderBottom: i < op.orders.length - 1 ? '1px solid #f1f5f9' : 'none',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            fontSize: '15px'
+                          }}>
+                            <div>Заказ №{order.id || '—'} — {order.volume} м³</div>
+                            <div style={{ color: statusColor, fontWeight: '600' }}>
+                              {statusText}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            // === ОДИНОЧНЫЕ ОПЕРАЦИИ (погашение, вывод) ===
+            const isNegative = op.type === 'discount' || op.type === 'cash_withdrawal';
+            const amountColor = isNegative ? '#ef4444' : '#166534';
+            const amountText = isNegative ? `-${op.amount} ₽` : `+${op.amount} ₽`;
 
             return (
               <div key={index} style={{
@@ -1277,80 +1456,27 @@ const handleSubmit = async () => {
                 borderRadius: '16px',
                 overflow: 'hidden',
                 boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
-                border: isExpanded ? '2px solid #2563eb' : '1px solid #e2e8f0'
+                border: '1px solid #e2e8f0'
               }}>
-                {/* Закрытая карточка */}
-                <div 
-                  onClick={() => setExpandedReferrer(isExpanded ? null : index)}
-                  style={{
-                    padding: '18px 20px',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    cursor: 'pointer'
-                  }}
-                >
+                <div style={{
+                  padding: '18px 20px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}>
                   <div>
                     <div style={{ fontSize: '15px', color: '#64748b' }}>
-                      {new Date(item.lastDate).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' })}
+                      {op.date ? new Date(op.date).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' }) : '—'}
                     </div>
                     <div style={{ fontWeight: '600', marginTop: '4px' }}>
-                      От: {item.referrerName}
+                      {op.title}
                     </div>
-                    <div style={{ fontSize: '14px', color: '#64748b' }}>
-                      {item.referrerPhone}
-                    </div>
+                    {op.subtitle && <div style={{ fontSize: '14px', color: '#64748b' }}>{op.subtitle}</div>}
                   </div>
-
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ 
-                      fontSize: '18px', 
-                      fontWeight: '700', 
-                      color: earnedBonus > 0 ? '#166534' : '#94a3b8' 
-                    }}>
-                      {earnedBonus > 0 ? `+${earnedBonus.toLocaleString('ru-RU')} ₽` : 'В процессе начисления'}
-                    </div>
-                    {hasPending && earnedBonus > 0 && (
-                      <div style={{ fontSize: '13px', color: '#94a3b8' }}>(есть в процессе)</div>
-                    )}
-                    <div style={{ fontSize: '14px', color: '#64748b' }}>
-                      {item.totalVolume} м³ • {item.count} заказ{item.count > 1 ? 'а' : ''}
-                    </div>
+                  <div style={{ fontSize: '18px', fontWeight: '700', color: amountColor }}>
+                    {amountText}
                   </div>
                 </div>
-
-                {/* Раскрытый список */}
-                {isExpanded && item.orders.length > 0 && (
-                  <div style={{ padding: '0 20px 18px', borderTop: '1px solid #f1f5f9' }}>
-                    {item.orders.map((order: any, i: number) => {
-                      let statusText = 'В процессе начисления';
-                      let statusColor = '#94a3b8';
-
-                      if (order.status === 'completed') {
-                        statusText = `+${order.bonus_amount} ₽`;
-                        statusColor = '#166534';
-                      } else if (order.status === 'cancelled') {
-                        statusText = 'Отмена';
-                        statusColor = '#ef4444';
-                      }
-
-                      return (
-                        <div key={i} style={{
-                          padding: '12px 0',
-                          borderBottom: i < item.orders.length - 1 ? '1px solid #f1f5f9' : 'none',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          fontSize: '15px'
-                        }}>
-                          <div>Заказ №{order.id || '—'} — {order.volume} м³</div>
-                          <div style={{ color: statusColor, fontWeight: '600' }}>
-                            {statusText}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
               </div>
             );
           })}
@@ -1403,13 +1529,16 @@ const handleSubmit = async () => {
     <div style={{ padding: '24px', textAlign: 'center' }}>
       <h2 style={{ marginBottom: '20px' }}>Баланс и погашение</h2>
       
-      <div style={{ 
-        fontSize: '72px', 
-        fontWeight: '700', 
-        color: '#2563eb', 
-        marginBottom: '8px' 
-      }}>
-        {balance} ₽
+      {/* Сумма баллов */}
+        <div style={{ 
+           fontSize: '72px', 
+           fontWeight: '700', 
+           color: '#2563eb', 
+           marginBottom: '8px',
+           textAlign: 'center',
+           width: '100%'
+       }}>
+          {balance} ₽
       </div>
       <p style={{ color: '#666', marginBottom: '40px' }}>
         Баллы можно использовать как скидку на заказ или вывести наличными
@@ -1433,39 +1562,9 @@ const handleSubmit = async () => {
         Использовать на следующий заказ
       </button>
 
+      {/* Кнопка вызова модального окна */}
       <button 
-        onClick={async () => {
-          const amountStr = prompt(`Сколько баллов вывести? (максимум ${balance} ₽)`);
-          if (!amountStr) return;
-          
-          const amount = parseInt(amountStr);
-          if (isNaN(amount) || amount <= 0 || amount > balance) {
-            alert('Неверная сумма!');
-            return;
-          }
-
-          try {
-            const res = await fetch('/api/balance/redeem', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                userId: userId,
-                amount: amount,
-                type: 'cash',
-                payoutDetails: { 
-                  method: 'card', 
-                  comment: 'Вывод реферальных баллов' 
-                }
-              })
-            });
-
-            const data = await res.json();
-            alert(data.message || 'Заявка на вывод успешно создана. Ожидайте подтверждения администратора.');
-            loadBalance();
-          } catch (e) {
-            alert('Ошибка при создании заявки на вывод');
-          }
-        }}
+        onClick={() => setShowWithdrawModal(true)}
         style={{
           width: '60%',
           maxWidth: '420px',
@@ -1482,6 +1581,149 @@ const handleSubmit = async () => {
         Вывести наличными / на карту
       </button>
     </div>
+
+{/* ==================== МОДАЛЬНОЕ ОКНО ВЫВОДА ==================== */}
+{showWithdrawModal && (
+  <div style={{
+    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.75)', zIndex: 3000,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
+  }}>
+    <div style={{
+      background: 'white', borderRadius: '20px', width: '100%', maxWidth: '420px',
+      maxHeight: '90vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.4)'
+    }}>
+      <div style={{ padding: '28px 24px' }}>
+        <h3 style={{ textAlign: 'center', marginBottom: '8px', fontSize: '22px' }}>Вывод баллов</h3>
+        <p style={{ textAlign: 'center', color: '#666', marginBottom: '24px' }}>
+          Максимум: <strong>{balance} ₽</strong>
+        </p>
+
+        <input
+          type="number"
+          placeholder="Сумма вывода"
+          value={withdrawAmount}
+          onChange={(e) => setWithdrawAmount(e.target.value)}
+          style={{ 
+            width: '100%', 
+            padding: '18px', 
+            fontSize: '20px', 
+            textAlign: 'center', 
+            border: '2px solid #e2e8f0', 
+            borderRadius: '16px', 
+            marginBottom: '24px' 
+          }}
+        />
+
+        <div style={{ marginBottom: '28px' }}>
+          <p style={{ fontWeight: '600', marginBottom: '12px', color: '#1f2937' }}>
+            От какого реферала списать?
+          </p>
+
+          <div style={{ border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden' }}>
+            
+            {/* Общий баланс */}
+            <div 
+              onClick={() => setSelectedReferrerForWithdraw(null)}
+              style={{ 
+                padding: '16px', 
+                background: selectedReferrerForWithdraw === null ? '#f0f9ff' : 'white', 
+                borderBottom: '1px solid #f1f5f9', 
+                cursor: 'pointer',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
+              <div>0 — Общий баланс (без привязки)</div>
+              {selectedReferrerForWithdraw === null && <span style={{ color: '#2563eb', fontSize: '18px' }}>✓</span>}
+            </div>
+
+            {/* Список рефералов — исправленный фильтр */}
+            {referralHistory && referralHistory.filter(op => 
+              op.type === 'referral_group' && 
+              (op.referrerName || op.referrerPhone)
+            ).length > 0 ? (
+              referralHistory
+                .filter(op => op.type === 'referral_group' && (op.referrerName || op.referrerPhone))
+                .map((op, i) => {
+                  const isSelected = selectedReferrerForWithdraw?.referrerPhone === op.referrerPhone;
+                  return (
+                    <div 
+                      key={i}
+                      onClick={() => setSelectedReferrerForWithdraw(op)}
+                      style={{
+                        padding: '16px',
+                        borderBottom: i < referralHistory.length - 1 ? '1px solid #f1f5f9' : 'none',
+                        background: isSelected ? '#f0f9ff' : 'white',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: '600' }}>{op.referrerName}</div>
+                        <div style={{ fontSize: '13px', color: '#64748b' }}>{op.referrerPhone}</div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontWeight: '700', color: '#166534' }}>
+                          {op.earnedBonus || 0} ₽
+                        </div>
+                        {isSelected && <span style={{ color: '#2563eb', fontSize: '18px' }}>✓</span>}
+                      </div>
+                    </div>
+                  );
+                })
+            ) : (
+              <div style={{ padding: '30px 20px', textAlign: 'center', color: '#94a3b8' }}>
+                Пока нет рефералов
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <button 
+            onClick={() => { 
+              setShowWithdrawModal(false); 
+              setWithdrawAmount(''); 
+              setSelectedReferrerForWithdraw(null); 
+            }} 
+            style={{ 
+              flex: 1, 
+              padding: '16px', 
+              background: '#e2e8f0', 
+              color: '#1f2937', 
+              border: 'none', 
+              borderRadius: '12px', 
+              fontWeight: '600' 
+            }}
+          >
+            Отмена
+          </button>
+
+          <button 
+            onClick={handleWithdraw} 
+            disabled={!withdrawAmount || parseInt(withdrawAmount) <= 0} 
+            style={{ 
+              flex: 1, 
+              padding: '16px', 
+              background: '#ea580c', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: '12px', 
+              fontWeight: '600',
+              opacity: (!withdrawAmount || parseInt(withdrawAmount) <= 0) ? 0.6 : 1 
+            }}
+          >
+            Вывести
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
   </div>
 )}
         </div>

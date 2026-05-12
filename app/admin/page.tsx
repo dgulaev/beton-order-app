@@ -374,59 +374,70 @@ export default function AdminPanel() {
         </table>
       )}
 
-      {/* ПО ДНЯМ */}
-      {viewMode === 'days' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {Object.keys(groupedByDate).sort().reverse().map(date => {
-            const dayOrders = groupedByDate[date];
-            const daySum = dayOrders.reduce((sum: number, o: any) => sum + (o.total_price || 0), 0);
+{/* ПО ДНЯМ */}
+{viewMode === 'days' && (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    {Object.keys(groupedByDate).sort().reverse().map(date => {
+      const dayOrders = groupedByDate[date];
+      const daySum = dayOrders.reduce((sum: number, o: any) => sum + (o.total_price || 0), 0);
 
-            return (
-              <div key={date} style={{ background: 'white', padding: '20px', borderRadius: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                  <strong style={{ fontSize: '18px' }}>
-                    {new Date(date).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
-                  </strong>
-                  <div style={{ fontSize: '24px', fontWeight: '700', color: '#2563eb' }}>
-                    {daySum.toLocaleString('ru-RU')} ₽
+      return (
+        <div key={date} style={{ background: 'white', padding: '20px', borderRadius: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <strong style={{ fontSize: '18px' }}>
+              {new Date(date).toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
+            </strong>
+            <div style={{ fontSize: '24px', fontWeight: '700', color: '#2563eb' }}>
+              {daySum.toLocaleString('ru-RU')} ₽
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            {dayOrders.map((order: any) => (
+              <div key={order.id} style={{ padding: '18px', background: '#f8fafc', borderRadius: '14px', display: 'flex', alignItems: 'center', gap: '20px' }}>
+                <div style={{ flex: 1 }}>
+                  <strong>#{order.id} — {order.grade} — {order.volume} м³</strong>
+                  
+                  {/* Клиент + Телефон */}
+                  <div style={{ marginTop: '6px', color: '#444', fontSize: '15px' }}>
+                    {order.full_name || order.organization_name || '—'}
+                    {order.phone && (
+                      <span style={{ marginLeft: '12px', color: '#2563eb', fontWeight: '500' }}>
+                        📞 {order.phone}
+                      </span>
+                    )}
                   </div>
+
+                  <div style={{ color: '#555', fontSize: '15px' }}>{order.address}</div>
+                  <div style={{ color: '#555', fontSize: '15px', marginTop: '4px' }}>
+                    {order.delivery_date} в {order.delivery_time}
+                  </div>
+
+                  {order.comment && (
+                    <div style={{ marginTop: '12px', padding: '10px', background: 'white', borderRadius: '8px', fontSize: '14px', color: '#444', borderLeft: '4px solid #eab308' }}>
+                      💬 {order.comment}
+                    </div>
+                  )}
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                  {dayOrders.map((order: any) => (
-                    <div key={order.id} style={{ padding: '18px', background: '#f8fafc', borderRadius: '14px', display: 'flex', alignItems: 'center', gap: '20px' }}>
-                      <div style={{ flex: 1 }}>
-                        <strong>#{order.id} — {order.grade} — {order.volume} м³</strong>
-                        <div style={{ marginTop: '6px', color: '#444' }}>{order.full_name || order.organization_name}</div>
-                        <div style={{ color: '#555', fontSize: '15px' }}>{order.address}</div>
-                        <div style={{ color: '#555', fontSize: '15px', marginTop: '4px' }}>
-                          {order.delivery_date} в {order.delivery_time}
-                        </div>
-                        {order.comment && (
-                          <div style={{ marginTop: '12px', padding: '10px', background: 'white', borderRadius: '8px', fontSize: '14px', color: '#444', borderLeft: '4px solid #eab308' }}>
-                            💬 {order.comment}
-                          </div>
-                        )}
-                      </div>
+                <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                  <button onClick={(e) => { e.stopPropagation(); updateStatus(order.id, 'new'); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: order.status === 'new' ? '#fef9c3' : '#f1f5f9', color: order.status === 'new' ? '#854d0e' : '#666', fontSize: '13px', fontWeight: '600' }}>Новая</button>
+                  <button onClick={(e) => { e.stopPropagation(); updateStatus(order.id, 'processing'); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: order.status === 'processing' ? '#dbeafe' : '#f1f5f9', color: order.status === 'processing' ? '#1e40af' : '#666', fontSize: '13px', fontWeight: '600' }}>В работе</button>
+                  <button onClick={(e) => { e.stopPropagation(); updateStatus(order.id, 'completed'); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: order.status === 'completed' ? '#dcfce7' : '#f1f5f9', color: order.status === 'completed' ? '#166534' : '#666', fontSize: '13px', fontWeight: '600' }}>Выполнена</button>
+                  <button onClick={(e) => { e.stopPropagation(); updateStatus(order.id, 'cancelled'); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: order.status === 'cancelled' ? '#fee2e2' : '#f1f5f9', color: order.status === 'cancelled' ? '#b91c1c' : '#666', fontSize: '13px', fontWeight: '600' }}>Отменена</button>
+                </div>
 
-                      <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                        <button onClick={(e) => { e.stopPropagation(); updateStatus(order.id, 'new'); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: order.status === 'new' ? '#fef9c3' : '#f1f5f9', color: order.status === 'new' ? '#854d0e' : '#666', fontSize: '13px', fontWeight: '600' }}>Новая</button>
-                        <button onClick={(e) => { e.stopPropagation(); updateStatus(order.id, 'processing'); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: order.status === 'processing' ? '#dbeafe' : '#f1f5f9', color: order.status === 'processing' ? '#1e40af' : '#666', fontSize: '13px', fontWeight: '600' }}>В работе</button>
-                        <button onClick={(e) => { e.stopPropagation(); updateStatus(order.id, 'completed'); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: order.status === 'completed' ? '#dcfce7' : '#f1f5f9', color: order.status === 'completed' ? '#166534' : '#666', fontSize: '13px', fontWeight: '600' }}>Выполнена</button>
-                        <button onClick={(e) => { e.stopPropagation(); updateStatus(order.id, 'cancelled'); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: order.status === 'cancelled' ? '#fee2e2' : '#f1f5f9', color: order.status === 'cancelled' ? '#b91c1c' : '#666', fontSize: '13px', fontWeight: '600' }}>Отменена</button>
-                      </div>
-
-                      <div style={{ fontWeight: '700', color: '#2563eb', minWidth: '110px', textAlign: 'right' }}>
-                        {order.total_price?.toLocaleString('ru-RU')} ₽
-                      </div>
-                    </div>
-                  ))}
+                <div style={{ fontWeight: '700', color: '#2563eb', minWidth: '110px', textAlign: 'right' }}>
+                  {order.total_price?.toLocaleString('ru-RU')} ₽
                 </div>
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
-      )}
+      );
+    })}
+  </div>
+)}
 
       {/* ==================== КАЛЕНДАРЬ ==================== */}
       {viewMode === 'calendar' && (

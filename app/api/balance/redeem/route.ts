@@ -11,14 +11,14 @@ export async function POST(request: NextRequest) {
   try {
     const { userId, amount, type, payoutDetails } = await request.json();
 
-    if (!userId || !amount || amount <= 0 || !['discount', 'cash'].includes(type)) {
-      return NextResponse.json({ success: false, message: 'Неверные данные' }, { status: 400 });
-    }
-
     const numericUserId = Number(userId);
     const numericAmount = Number(amount);
 
-    // Проверяем баланс
+    if (!numericUserId || !numericAmount || numericAmount <= 0 || !['discount', 'cash'].includes(type)) {
+      return NextResponse.json({ success: false, message: 'Неверные данные' }, { status: 400 });
+    }
+
+    // Проверка баланса пользователя (вашего)
     const { data: user } = await supabase
       .from('users')
       .select('balance')
@@ -29,26 +29,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'Недостаточно баллов' }, { status: 400 });
     }
 
-    const redemptionData = {
-      user_id: numericUserId,
-      amount: numericAmount,
-      type,
-      status: type === 'discount' ? 'completed' : 'pending',
-      payout_details: payoutDetails || null,
-      processed_at: type === 'discount' ? new Date().toISOString() : null,
-    };
-
-    const { data, error } = await supabase
+    // Создаём запись о выводе / погашении
+    const { error: redeemError } = await supabase
       .from('balance_redemptions')
-      .insert(redemptionData)
-      .select()
-      .single();
+      .insert({
+        user_id: numericUserId,
+        amount: numericAmount,
+        type,
+        status: type === 'discount' ? 'completed' : 'pending',
+        payout_details: payoutDetails || null,
+        created_at: new Date().toISOString()
+      });
 
-    if (error) throw error;
+    if (redeemError) throw redeemError;
 
-    // Списываем баллы
+    // Списываем баллы с вашего общего баланса
     const { error: decrementError } = await supabase.rpc('decrement_balance', {
-      p_user_id: numericUserId,
+      p_user_id: numericUserId,     // используем правильный параметр
       p_points: numericAmount
     });
 
@@ -56,18 +53,38 @@ export async function POST(request: NextRequest) {
       console.error('Ошибка списания баллов:', decrementError);
     }
 
-    console.log(`✅ Погашение ${numericAmount} баллов (${type}) для пользователя ${userId}`);
+    // === Если выбран конкретный реферал — создаём отрицательную запись ===
+    if (payoutDetails?.source_referrer_id) {
+      const referrerId = Number(payoutDetails.source_referrer_id);
+
+      const { error: refError } = await supabase
+        .from('referral_transactions')
+        .insert({
+          referrer_id: referrerId,
+          referred_user_id: numericUserId,
+          order_id: null,
+          volume: 0,
+          potential_bonus: -numericAmount,
+          status: 'completed',
+          comment: `Вывод наличными пользователем ${userId}`
+        });
+
+      if (refError) {
+        console.error('Ошибка создания отрицательной записи у реферера:', refError);
+      } else {
+        console.log(`✅ Создано списание -${numericAmount} ₽ у реферера ${referrerId}`);
+      }
+    }
 
     return NextResponse.json({ 
       success: true, 
-      redemption: data,
       message: type === 'discount' 
-        ? `Баллы успешно применены как скидка (${numericAmount} ₽)` 
-        : `Заявка на вывод ${numericAmount} ₽ создана. Ожидайте подтверждения администратора.` 
+        ? 'Баллы успешно применены как скидка' 
+        : 'Заявка на вывод успешно создана' 
     });
 
   } catch (error: any) {
     console.error('Redeem error:', error);
-    return NextResponse.json({ success: false, message: error.message || 'Внутренняя ошибка сервера' }, { status: 500 });
+    return NextResponse.json({ success: false, message: error.message }, { status: 500 });
   }
 }

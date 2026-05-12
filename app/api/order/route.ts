@@ -107,6 +107,30 @@ export async function POST(request: NextRequest) {
 
     console.log(`✅ Проверка времени прошла успешно. Нет конфликтов.`);
 
+    // ================================================
+    // === НАДЁЖНАЯ ОБРАБОТКА РЕФЕРАЛА ===
+    // ================================================
+    let finalReferredBy = referredBy || payload.referredBy || payload.referred_by || null;
+
+    console.log('📥 [Order API] Получен referredBy:', finalReferredBy);
+
+    // Преобразование реферального кода в user_id
+    if (finalReferredBy && typeof finalReferredBy === 'string' && finalReferredBy.startsWith('R')) {
+      const { data: referrer } = await supabase
+        .from('users')
+        .select('user_id')
+        .eq('referral_code', finalReferredBy)
+        .maybeSingle();
+
+      if (referrer && referrer.user_id) {
+        finalReferredBy = referrer.user_id;
+        console.log(`🔍 Реферальный код ${finalReferredBy} преобразован в user_id ${finalReferredBy}`);
+      } else {
+        console.log(`⚠️ Реферер с кодом ${finalReferredBy} не найден`);
+        finalReferredBy = null;
+      }
+    }
+
     // Создание заявки
     const { data: orderData, error: insertError } = await supabase
       .from('orders')
@@ -126,7 +150,7 @@ export async function POST(request: NextRequest) {
         delivery_cost: deliveryCost || 0,
         total_price: totalPrice || 0,
         status: 'new',
-        referred_by: referredBy,
+        referred_by: finalReferredBy,   // ← ИСПРАВЛЕНО
       }])
       .select()
       .single();
