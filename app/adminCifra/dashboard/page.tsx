@@ -24,6 +24,22 @@ export default function AdminCifraDashboard() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const MINUTES_PER_CUBIC_METER = 1;
 
+  // ==================== СТАТУСЫ ЗАКАЗОВ (глобальная функция) ====================
+  const getStatusConfig = (status: string) => {
+    switch (status) {
+      case 'new':
+        return { label: 'Новая', color: '#FACC15', bg: '#FACC1520', final: false };
+      case 'processing':
+        return { label: 'В работе', color: '#3B82F6', bg: '#3B82F620', final: false };
+      case 'completed':
+        return { label: 'Выполнена', color: '#10B981', bg: '#10B98120', final: true };
+      case 'cancelled':
+        return { label: 'Отменена', color: '#EF4444', bg: '#EF444420', final: true };
+      default:
+        return { label: 'Неизвестно', color: '#64748B', bg: '#334155', final: false };
+    }
+  };
+
  const [notifications, setNotifications] = useState<any[]>([]);
  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
  const [mixerAssignments, setMixerAssignments] = useState<any[]>([]); // для текущего заказа
@@ -79,6 +95,30 @@ export default function AdminCifraDashboard() {
     };
 
     fetchAssignedMixers();
+  }, []);
+
+ // ==================== НОВЫЙ РЕАКТИВНЫЙ МАСШТАБ ====================
+  const [scale, setScale] = useState(1);
+
+  useEffect(() => {
+    const updateScale = () => {
+      const width = window.innerWidth;
+      let newScale = 1;
+
+      if (width >= 2560) newScale = 1.00;
+      else if (width >= 1920) newScale = 0.92;   // ← меняй здесь
+      else if (width >= 1680) newScale = 0.88;
+      else if (width >= 1440) newScale = 0.84;
+      else if (width >= 1366) newScale = 0.79;
+      else newScale = 0.74;
+
+      setScale(newScale);
+    };
+
+    updateScale();
+    window.addEventListener('resize', updateScale);
+
+    return () => window.removeEventListener('resize', updateScale);
   }, []);
 
   // ==================== УВЕДОМЛЕНИЯ О ВЫВОДЕ НАЛИЧНЫХ ====================
@@ -643,47 +683,79 @@ const completionPercent = planToday > 0
     role: userRole || 'admin'
   };
 
+
   return (
-    <div style={{ 
-      flex: 1, 
-      display: 'grid', 
-      gridTemplateColumns: '1fr 420px', 
-      gap: '28px', 
-      backgroundColor: '#0F172A', 
-      padding: '32px', 
-      height: '90vh',
-      maxHeight: '90vh',
-      overflow: 'hidden' 
+  <div style={{ 
+      transform: `scale(${scale})`, 
+      transformOrigin: 'top left',
+      width: `${100 / scale}%`,        // ← возвращаем этот вариант
+      height: `${100 / scale}%`,
+      overflow: 'hidden',
+      minHeight: '100vh'
     }}>
 
-      {/* ==================== ЛЕВАЯ КОЛОНКА ==================== */}
       <div style={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        gap: '24px',
-        minWidth: 0 
+        background: '#0F172A', 
+        minHeight: '100vh', 
+        color: '#fff',
+        padding: '16px'
       }}>
+
+        {/* ==================== ОСНОВНОЙ GRID ==================== */}
+        <div style={{ 
+          display: 'grid',
+          gridTemplateColumns: 'minmax(820px, 1fr) minmax(430px, 510px)', 
+          gap: '32px',
+          maxWidth: '100%', 
+          width: '100%', 
+          margin: '0 auto',
+          minHeight: 'calc(100vh - 80px)'
+        }}>
+
+      {/* ==================== ЛЕВАЯ КОЛОНКА ( KPI) ==================== */}
+      <div style={{ 
+          flex: 1, 
+          minWidth: '950px',
+          display: 'flex', 
+          flexDirection: 'column', 
+          gap: '20px',
+          minHeight: '100%'
+        }}>
         
-        {/* Topbar */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '28px' }}>
-            <h1 style={{ fontSize: '38px', fontWeight: '700', margin: 0 }}>РБУ ТрейдКом</h1>
-            <div 
-              onClick={() => setShowCalendar(true)}
-              style={{ 
-                background: '#1E2937', 
-                padding: '10px 24px', 
-                borderRadius: '9999px', 
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                fontSize: '15px'
-              }}
-            >
-              📅 {new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
-            </div>
-          </div>
+        {/* Topbar — адаптив */}
+<div style={{ 
+  display: 'flex', 
+  justifyContent: 'space-between', 
+  alignItems: 'center',
+  flexWrap: 'wrap',           // ← разрешает перенос на новую строку
+  gap: '16px' 
+}}>
+  <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
+    <h1 style={{ 
+      fontSize: '32px',           // ← уменьшил с 38px
+      fontWeight: '700', 
+      margin: 0 
+    }}>
+      РБУ ТрейдКом
+    </h1>
+    
+    <div 
+      onClick={() => setShowCalendar(true)}
+      style={{ 
+        background: '#1E2937', 
+        padding: '10px 20px', 
+        borderRadius: '9999px', 
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        fontSize: '14.5px',
+        whiteSpace: 'nowrap'
+      }}
+    >
+      📅 {new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
+    </div>
+  </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
             {(userRole === 'admin' || userRole === 'manager') && notifications.length > 0 && (
@@ -710,7 +782,14 @@ const completionPercent = planToday > 0
         </div>
 
        {/* ==================== KPI — РЕАЛЬНЫЕ ДАННЫЕ ==================== */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px' }}>
+        <div style={{ 
+               display: 'grid', 
+               gridTemplateColumns: 'repeat(4, 1fr)', 
+               gap: '20px',
+               minWidth: '1100px',           // ← Важно! Не даёт сжиматься меньше 4 колонок
+               overflowX: 'auto',            // ← Добавляет горизонтальный скролл при необходимости
+               paddingBottom: '8px'
+         }}>
           
        {/* ==================== ЗАЯВКИ СЕГОДНЯ (точно как Миксеры) ==================== */}
 <div style={{ 
@@ -813,7 +892,10 @@ const completionPercent = planToday > 0
   background: '#25334A', 
   borderRadius: '20px', 
   padding: '24px', 
-  flex: 1 
+  minHeight: '180px',           // ← фиксированная минимальная высота
+  height: 'fit-content',        // ← не растягивается выше нужного
+  display: 'flex',
+  flexDirection: 'column'
 }}>
   <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '12px' }}>
     Задержки отгрузок
@@ -834,8 +916,15 @@ const completionPercent = planToday > 0
         отгрузка(и) задерживается
       </div>
 
-      <div style={{ maxHeight: '160px', overflowY: 'auto' }}>
-        {delayedOrders.slice(0, 4).map((order, index) => (
+      {/* Скроллируемая область списка */}
+      <div style={{ 
+        flex: 1, 
+        overflowY: 'auto', 
+        maxHeight: '52px',           // ← ограничение высоты списка
+        marginTop: '8px',
+        paddingRight: '8px'
+      }}>
+        {delayedOrders.slice(0, 6).map((order, index) => (
           <div key={index} style={{ 
             display: 'flex', 
             justifyContent: 'space-between', 
@@ -851,7 +940,7 @@ const completionPercent = planToday > 0
               fontWeight: '600',
               fontSize: '15px'
             }}>
-              {order.delayText}
+              +{order.delayMinutes} мин
             </div>
           </div>
         ))}
@@ -859,9 +948,13 @@ const completionPercent = planToday > 0
     </>
   ) : (
     <div style={{ 
-      textAlign: 'center', 
-      padding: '50px 20px', 
-      color: '#10B981' 
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      color: '#10B981',
+      textAlign: 'center'
     }}>
       <div style={{ fontSize: '48px', marginBottom: '12px' }}>✓</div>
       <div style={{ fontSize: '17px' }}>Все отгрузки по графику</div>
@@ -935,17 +1028,18 @@ const completionPercent = planToday > 0
 </div>
       </div>
       {/* ==================== ТАЙМЛАЙН (УЛУЧШЕННЫЙ — В СТИЛЕ ЦИФРА.AI) ==================== */}
-<div style={{ 
-  flex: 1, 
-  background: '#1E2937', 
-  borderRadius: '24px', 
-  padding: '24px 28px', 
-  border: '1px solid #334155', 
-  display: 'flex',
-  flexDirection: 'column',
-  overflow: 'hidden',
-  position: 'relative'
-}}>
+       <div style={{ 
+            flex: 1, 
+            minWidth: '680px',
+            background: '#1E2937', 
+            borderRadius: '24px', 
+            padding: '24px 28px', 
+            border: '1px solid #334155', 
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            position: 'relative'
+          }}>
   
   {/* Заголовок + Кнопки */}
   <div style={{ 
@@ -1317,14 +1411,19 @@ const isReadyInDB = (order as any).logistics_ready === true;
   </div>
             {/* ==================== МИКСЕРЫ В РАБОТЕ (только по выбранной дате) ==================== */}
       <div style={{ 
-        width: '420px', 
-        background: '#1E2937', 
-        borderRadius: '24px', 
-        padding: '28px', 
-        display: 'flex', 
-        flexDirection: 'column',
-        height: '100%'
-      }}>
+            width: '100%', 
+            maxWidth: '480px', 
+            background: '#1E2937', 
+            borderRadius: '24px', 
+            padding: '24px', 
+            display: 'flex', 
+            flexDirection: 'column',
+            height: '92vh',                    // ← Основная настройка высоты (в процентах от высоты экрана)
+            minHeight: '1000px',                // минимальная высота на маленьких экранах
+            alignSelf: 'stretch',
+            position: 'sticky',
+            top: '20px'
+       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
           <h3 style={{ fontSize: '24px', margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
             <img src="/icons/mixer-truck.png" alt="Миксер" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
@@ -1421,23 +1520,28 @@ const isReadyInDB = (order as any).logistics_ready === true;
           📍 Показать все миксеры на карте
         </button>
       </div>
+   </div>
 
      {/* ==================== МОДАЛЬНОЕ ОКНО ЗАКАЗА ==================== */}
-      <OrderDetailModal
-        order={selectedOrder}
-        onClose={() => setSelectedOrder(null)}
-        mixerAssignments={mixerAssignments}
-        setMixerAssignments={setMixerAssignments}
-        allOrders={allOrders}
-        setAllOrders={setAllOrders}
-        allMixers={allMixers || []}
-        currentUser={modalCurrentUser}
-        handleStatusChange={handleStatusChange}
-        deleteMixer={deleteMixer}
-        completeLogistics={completeLogistics}
-        history={history}
-        addToHistory={addToHistory}
-      />
+{selectedOrder && (
+  <OrderDetailModal
+    key={selectedOrder.id}                    // ← важно для React
+    order={selectedOrder}
+    onClose={() => setSelectedOrder(null)}
+    mixerAssignments={mixerAssignments}
+    setMixerAssignments={setMixerAssignments}
+    allOrders={allOrders}
+    setAllOrders={setAllOrders}
+    allMixers={allMixers || []}
+    currentUser={modalCurrentUser}
+    handleStatusChange={handleStatusChange}
+    deleteMixer={deleteMixer}
+    completeLogistics={completeLogistics}
+    history={history}
+    addToHistory={addToHistory}
+    getStatusConfig={getStatusConfig}
+  />
+)}
 
       {/* Модалка календаря */}
       {showCalendar && (
@@ -1448,5 +1552,7 @@ const isReadyInDB = (order as any).logistics_ready === true;
         </div>
       )}
     </div>
+    </div>
+    
   );
 }

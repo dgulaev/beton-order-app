@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
 
 interface OrderDetailModalProps {
@@ -17,6 +17,7 @@ interface OrderDetailModalProps {
   completeLogistics: (order: Order) => void;
   history: any[];
   addToHistory: (action: string) => Promise<void>;
+  getStatusConfig: (status: string) => any;
 }
 
 export default function OrderDetailModal({
@@ -31,11 +32,20 @@ export default function OrderDetailModal({
   handleStatusChange,
   deleteMixer,
   completeLogistics,
-  history,           // ← добавь
-  addToHistory,      // ← добавь
+  history,           
+  addToHistory,
+  getStatusConfig,      
 }: OrderDetailModalProps) {
 
   if (!order) return null;
+
+  // ==================== ЛОКАЛЬНОЕ СОСТОЯНИЕ ЗАКАЗА ====================
+  const [localOrder, setLocalOrder] = useState(order);
+
+  // Синхронизация при смене заказа
+  useEffect(() => {
+    setLocalOrder(order);
+  }, [order]);
 
   // ==================== ФУНКЦИИ СМЕНЫ ОЧЕРЕДИ С ЗАПИСЬЮ В ИСТОРИЮ ====================
   const moveMixerUp = async (mixerId: number) => {
@@ -203,33 +213,92 @@ export default function OrderDetailModal({
 
        {/* ==================== СТАТУС ЗАКАЗА ==================== */}
 <div style={{ marginBottom: '28px' }}>
-  {(() => {
-    const status = order.status || 'new';
-    
-    const statusConfig = {
-      new:        { bg: '#FACC1520', color: '#FACC15', text: '🟡 Новая' },
-      processing: { bg: '#3B82F620', color: '#3B82F6',  text: '→ В работе' },
-      completed:  { bg: '#10B98120', color: '#10B981', text: '✓ Выполнена' },
-      cancelled:  { bg: '#EF444420', color: '#EF4444', text: '❌ Отменена' }
-    };
+  <label style={{ display: 'block', color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
+    Статус заказа
+  </label>
 
-    const config = statusConfig[status as keyof typeof statusConfig] || 
-                  { bg: '#334155', color: '#CBD5E1', text: 'Неизвестно' };
+  {getStatusConfig(localOrder.status).final ? (
+    <div style={{ 
+      backgroundColor: getStatusConfig(localOrder.status).bg,
+      color: getStatusConfig(localOrder.status).color,
+      padding: '12px 26px',
+      borderRadius: '9999px',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '8px',
+      fontWeight: '600',
+      fontSize: '16px'
+    }}>
+      {getStatusConfig(localOrder.status).label} — конечный статус
+    </div>
+  ) : (
+    <select 
+      value={localOrder.status || 'new'}
+      onChange={async (e) => {
+        const newStatus = e.target.value;
+        if (newStatus === localOrder.status) return;
 
-    return (
-      <div style={{ 
-        backgroundColor: config.bg, 
-        color: config.color,
-        padding: '8px 26px',
-        borderRadius: '9999px',
-        display: 'inline-block',
-        fontWeight: '600'
-      }}>
-        {config.text}
-      </div>
-    );
-  })()}
+        const oldStatus = localOrder.status;
+
+        // Локальное обновление в модалке
+        setLocalOrder(prev => ({ ...prev, status: newStatus }));
+
+        // Optimistic в главном дашборде
+        setAllOrders(prev => prev.map(o => 
+          o.id === order.id ? { ...o, status: newStatus } : o
+        ));
+
+        try {
+          const res = await fetch('/api/adminCifra/order-logistics', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              orderId: order.id,
+              status: newStatus
+            })
+          });
+
+          const data = await res.json();
+
+          if (!data.success) {
+            // Откат
+            setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+            setAllOrders(prev => prev.map(o => 
+              o.id === order.id ? { ...o, status: oldStatus } : o
+            ));
+            alert('Ошибка сохранения: ' + (data.message || ''));
+          } else {
+            if (typeof addToHistory === 'function') {
+              await addToHistory(`изменил статус на "${getStatusConfig(newStatus).label}"`);
+            }
+          }
+        } catch (err) {
+          console.error(err);
+          setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+          setAllOrders(prev => prev.map(o => 
+            o.id === order.id ? { ...o, status: oldStatus } : o
+          ));
+          alert('Не удалось связаться с сервером');
+        }
+      }}
+      style={{
+        background: '#1E2937',
+        color: 'white',
+        border: '2px solid #475569',
+        borderRadius: '12px',
+        padding: '12px 16px',
+        fontSize: '16px',
+        width: '100%'
+      }}
+    >
+      <option value="new">Новая</option>
+      <option value="processing">В работе</option>
+      <option value="completed">Выполнена</option>
+      <option value="cancelled">Отменена</option>
+    </select>
+  )}
 </div>
+
 
         {/* ==================== GRID 1fr 1fr ==================== */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
+import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
 
 export default function ZayavkiPage() {
   const [allOrders, setAllOrders] = useState<Order[]>([]);
@@ -11,6 +12,7 @@ export default function ZayavkiPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'processing' | 'completed' | 'cancelled'>('all');
+  const [showNewOrderModal, setShowNewOrderModal] = useState(false);
 
   // ==================== REALTIME ====================
   useRealtimeOrders(setAllOrders);
@@ -47,7 +49,7 @@ export default function ZayavkiPage() {
     })
     .sort((a, b) => (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00'));
 
-    // KPI
+  // KPI
   const totalVolume = dayOrders.reduce((sum: number, o: Order) => sum + (Number(o.volume) || 0), 0);
   const completedVolume = dayOrders
     .filter((o: Order) => o.status === 'completed')
@@ -89,7 +91,7 @@ export default function ZayavkiPage() {
     }
   };
 
-    const filteredOrders = dayOrders
+  const filteredOrders = dayOrders
     .filter(order => {
       const matchesSearch = 
         (order.organization_name || order.full_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -196,14 +198,36 @@ export default function ZayavkiPage() {
           </div>
         </div>
 
-                {/* ==================== ПРАВАЯ КОЛОНКА — ОСНОВНОЙ СПИСОК ==================== */}
+        {/* ==================== ПРАВАЯ КОЛОНКА — ОСНОВНОЙ СПИСОК ==================== */}
         <div style={{ flex: 1 }}>
-          <div style={{ marginBottom: '24px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <h2 style={{ margin: 0, flex: 1 }}>
+          <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
+            <h2 style={{ margin: 0 }}>
               Заявки на {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
             </h2>
 
-            {/* Поиск */}
+            {/* Кнопка создания новой заявки */}
+            <button 
+              onClick={() => setShowNewOrderModal(true)}
+              style={{
+                padding: '14px 32px',
+                background: '#10B981',
+                color: 'white',
+                border: 'none',
+                borderRadius: '9999px',
+                fontSize: '16px',
+                fontWeight: '600',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                cursor: 'pointer'
+              }}
+            >
+              + Новая заявка
+            </button>
+          </div>
+
+          {/* Поиск и фильтры */}
+          <div style={{ display: 'flex', gap: '16px', marginBottom: '24px' }}>
             <input
               type="text"
               placeholder="Поиск по клиенту или № заявки..."
@@ -220,7 +244,6 @@ export default function ZayavkiPage() {
               }}
             />
 
-            {/* Фильтр по статусу */}
             <select 
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as 'all' | 'new' | 'processing' | 'completed' | 'cancelled')}
@@ -293,9 +316,9 @@ export default function ZayavkiPage() {
             )}
           </div>
         </div>
-     </div>
+      </div>
 
-    {/* МОДАЛЬНОЕ ОКНО ЗАКАЗА — БЕЗ IFRAME */}
+      {/* МОДАЛЬНОЕ ОКНО ЗАКАЗА — БЕЗ IFRAME */}
       {selectedOrder && (
         <div 
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.94)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} 
@@ -486,6 +509,17 @@ export default function ZayavkiPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ==================== МОДАЛКА СОЗДАНИЯ НОВОЙ ЗАЯВКИ ==================== */}
+      {showNewOrderModal && (
+        <NewOrderModal 
+          onClose={() => setShowNewOrderModal(false)} 
+          onSuccess={() => {
+            // Обновляем список после создания
+            window.location.reload(); 
+          }} 
+        />
       )}
     </div>
   );
