@@ -1,76 +1,57 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { createClient } from '@supabase/supabase-js';
 import NewOrderModal from './NewOrderModal';
 
 export default function ClientsPage() {
-  const [supabaseClient, setSupabaseClient] = useState<any>(null);
+  const [profiles, setProfiles] = useState<any[]>([]);
+  const [userOrders, setUserOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>('');
+  const [ordersLoading, setOrdersLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<'clients' | 'staff'>('clients');
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
   const [selectedProfile, setSelectedProfile] = useState<any>(null);
-  const [userOrders, setUserOrders] = useState<any[]>([]);
-  const [ordersLoading, setOrdersLoading] = useState(false);
   const [isNewOrderModalOpen, setIsNewOrderModalOpen] = useState(false);
 
-  // Инициализация Supabase клиента
+  // Загрузка всех пользователей (через Service Role)
   useEffect(() => {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!url || !key) {
-      console.error("❌ SUPABASE_URL или ANON_KEY отсутствуют");
-      setError("Не настроены переменные Supabase");
-      setLoading(false);
-      return;
-    }
-
-    const client = createClient(url, key);
-    setSupabaseClient(client);
-    setLoading(false);
-  }, []);
-
-  // Загрузка пользователей
-  useEffect(() => {
-    if (!supabaseClient) return;
-
     const fetchUsers = async () => {
       setLoading(true);
-      const { data, error } = await supabaseClient
-        .from('users')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error(error);
-        setError('Ошибка загрузки пользователей');
-      } else {
-        setProfiles(data || []);
+      try {
+        const res = await fetch('/api/adminCifra/clients');
+        if (res.ok) {
+          const data = await res.json();
+          setProfiles(data);
+        }
+      } catch (err) {
+        console.error('Ошибка загрузки пользователей:', err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     fetchUsers();
-  }, [supabaseClient]);
-
-  const [profiles, setProfiles] = useState<any[]>([]);
+  }, []);
 
   // Загрузка заказов выбранного пользователя
-  const loadUserOrders = async (userId: any) => {
-    if (!supabaseClient || !userId) return;
+  const loadUserOrders = async (userId: number | string) => {
+    if (!userId) return;
     setOrdersLoading(true);
-    const { data } = await supabaseClient
-      .from('orders')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-    setUserOrders(data || []);
-    setOrdersLoading(false);
+    try {
+      const res = await fetch(`/api/adminCifra/client-orders?userId=${userId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setUserOrders(data);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setOrdersLoading(false);
+    }
   };
 
+  // Фильтрация
   const clients = profiles.filter(p => p.role === 'client');
   const staff = profiles.filter(p => ['admin', 'manager', 'dispatcher', 'operator'].includes(p.role || ''));
 
@@ -96,7 +77,6 @@ export default function ClientsPage() {
   const lastOrderDate = userOrders[0] ? new Date(userOrders[0].delivery_date).toLocaleDateString('ru-RU') : '—';
 
   if (loading) return <div style={{ padding: '120px', textAlign: 'center', color: '#94A3B8' }}>Загрузка CRM...</div>;
-  if (error) return <div style={{ padding: '80px', textAlign: 'center', color: '#EF4444' }}>{error}</div>;
 
   return (
     <div style={{ background: '#0F172A', minHeight: '100vh', color: '#fff', padding: '32px 40px' }}>
@@ -188,7 +168,7 @@ export default function ClientsPage() {
         </div>
       )}
 
-      {/* Боковая панель */}
+      {/* Боковая панель профиля */}
       {selectedProfile && (
         <div style={{ position: 'fixed', top: 0, right: 0, width: '620px', height: '100vh', background: '#1E2937', borderLeft: '1px solid #334155', zIndex: 1000, overflow: 'auto' }}>
           <div style={{ padding: '32px' }}>
@@ -203,22 +183,13 @@ export default function ClientsPage() {
             <p style={{ color: '#94A3B8', fontSize: '18px' }}>{selectedProfile.phone}</p>
 
             <div style={{ display: 'flex', gap: '12px', margin: '28px 0' }}>
-              <button 
-                onClick={() => window.open(`tel:${selectedProfile.phone}`, '_self')} 
-                style={{ flex: 1, padding: '14px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
-              >
+              <button onClick={() => window.open(`tel:${selectedProfile.phone}`, '_self')} style={{ flex: 1, padding: '14px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}>
                 📞 Позвонить
               </button>
-              <button 
-                onClick={() => alert('Открывается чат с Max')} 
-                style={{ flex: 1, padding: '14px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
-              >
+              <button onClick={() => alert('Открывается чат с Max')} style={{ flex: 1, padding: '14px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}>
                 💬 Написать в Max
               </button>
-              <button 
-                onClick={() => setIsNewOrderModalOpen(true)}
-                style={{ flex: 1, padding: '14px', background: '#F59E0B', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
-              >
+              <button onClick={() => setIsNewOrderModalOpen(true)} style={{ flex: 1, padding: '14px', background: '#F59E0B', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}>
                 ➕ Новый заказ
               </button>
             </div>
@@ -268,7 +239,6 @@ export default function ClientsPage() {
         </div>
       )}
 
-      {/* Модальное окно Новый заказ */}
       <NewOrderModal
         isOpen={isNewOrderModalOpen}
         onClose={() => setIsNewOrderModalOpen(false)}

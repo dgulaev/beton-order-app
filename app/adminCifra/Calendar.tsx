@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useCalendarOrders, Order } from './hooks/useCalendarOrders';
+import { useState, useEffect } from 'react';
+import { Order } from './hooks/useCalendarOrders';
 
 interface CalendarProps {
   onClose: () => void;
@@ -11,20 +11,42 @@ export default function Calendar({ onClose }: CalendarProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
-  const { orders, loading } = useCalendarOrders(year, month);
+  // Загружаем ВСЕ заказы (как в других страницах)
+  useEffect(() => {
+    const fetchAllOrders = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch('/api/adminCifra/all-orders');
+        if (res.ok) {
+          const data = await res.json();
+          setAllOrders(data);
+        }
+      } catch (err) {
+        console.error('Ошибка загрузки заказов для календаря:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
 
+    fetchAllOrders();
+  }, []);
+
+  // Группировка по датам
   const groupedByDate: { [key: string]: Order[] } = {};
   const dailyVolumes: { [key: string]: number } = {};
 
-  orders.forEach((order) => {
-    const date = order.delivery_date;
-    if (!groupedByDate[date]) groupedByDate[date] = [];
-    groupedByDate[date].push(order);
-    dailyVolumes[date] = (dailyVolumes[date] || 0) + (order.volume || 0);
+  allOrders.forEach((order) => {
+    if (!order.delivery_date) return;
+    const dateKey = order.delivery_date.split('T')[0].split(' ')[0]; // нормализация даты
+    if (!groupedByDate[dateKey]) groupedByDate[dateKey] = [];
+    groupedByDate[dateKey].push(order);
+    dailyVolumes[dateKey] = (dailyVolumes[dateKey] || 0) + (order.volume || 0);
   });
 
   const handlePrevMonth = () => {
@@ -66,17 +88,7 @@ export default function Calendar({ onClose }: CalendarProps) {
     }}>
       {/* Шапка календаря */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
-        <button 
-          onClick={handlePrevMonth} 
-          style={{ 
-            padding: '12px 24px', 
-            backgroundColor: '#334155', 
-            color: '#fff', 
-            borderRadius: '9999px', 
-            fontSize: '16px',
-            cursor: 'pointer'
-          }}
-        >
+        <button onClick={handlePrevMonth} style={{ padding: '12px 24px', backgroundColor: '#334155', color: '#fff', borderRadius: '9999px', fontSize: '16px', cursor: 'pointer' }}>
           ‹ Предыдущий
         </button>
         
@@ -84,31 +96,11 @@ export default function Calendar({ onClose }: CalendarProps) {
           {currentDate.toLocaleString('ru-RU', { month: 'long', year: 'numeric' })}
         </h2>
 
-        <button 
-          onClick={handleNextMonth} 
-          style={{ 
-            padding: '12px 24px', 
-            backgroundColor: '#334155', 
-            color: '#fff', 
-            borderRadius: '9999px', 
-            fontSize: '16px',
-            cursor: 'pointer'
-          }}
-        >
+        <button onClick={handleNextMonth} style={{ padding: '12px 24px', backgroundColor: '#334155', color: '#fff', borderRadius: '9999px', fontSize: '16px', cursor: 'pointer' }}>
           Следующий ›
         </button>
         
-        <button 
-          onClick={onClose} 
-          style={{ 
-            padding: '12px 28px', 
-            backgroundColor: '#EF4444', 
-            color: '#fff', 
-            borderRadius: '9999px', 
-            fontSize: '16px',
-            cursor: 'pointer'
-          }}
-        >
+        <button onClick={onClose} style={{ padding: '12px 28px', backgroundColor: '#EF4444', color: '#fff', borderRadius: '9999px', fontSize: '16px', cursor: 'pointer' }}>
           Закрыть
         </button>
       </div>
@@ -117,23 +109,11 @@ export default function Calendar({ onClose }: CalendarProps) {
         
         {/* Календарь */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ 
-            display: 'grid', 
-            gridTemplateColumns: 'repeat(7, 1fr)', 
-            textAlign: 'center', 
-            fontSize: '15px', 
-            color: '#94A3B8', 
-            marginBottom: '16px' 
-          }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', textAlign: 'center', fontSize: '15px', color: '#94A3B8', marginBottom: '16px' }}>
             {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => <div key={day}>{day}</div>)}
           </div>
 
-          <div style={{ 
-            display: 'grid', 
-            gridTemplateColumns: 'repeat(7, 1fr)', 
-            rowGap: '4px',
-            columnGap: '8px',
-          }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', rowGap: '4px', columnGap: '8px' }}>
             {Array.from({ length: new Date(year, month, 1).getDay() === 0 ? 6 : new Date(year, month, 1).getDay() - 1 }).map((_, i) => (
               <div key={`empty-${i}`} style={{ height: '78px' }} />
             ))}
@@ -201,11 +181,8 @@ export default function Calendar({ onClose }: CalendarProps) {
                     position: 'relative'
                   }}
                 >
-                  {/* Номер заказа — белый */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontWeight: '600', color: '#fff', fontSize: '18px' }}>#{order.id}</span>
-                    
-                    {/* Текущий статус с цветом */}
                     <span style={{
                       padding: '4px 14px',
                       borderRadius: '9999px',
@@ -219,7 +196,7 @@ export default function Calendar({ onClose }: CalendarProps) {
                              (order as any).status === 'completed' ? '#166534' : '#b91c1c'
                     }}>
                       {(order as any).status === 'new' && 'Новый'}
-                      {(order as any).status === 'processing' && 'Вработе'}
+                      {(order as any).status === 'processing' && 'В работе'}
                       {(order as any).status === 'completed' && 'Выполнена'}
                       {(order as any).status === 'cancelled' && 'Отменена'}
                     </span>
@@ -274,7 +251,6 @@ export default function Calendar({ onClose }: CalendarProps) {
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
               <h2 style={{ fontSize: '26px', margin: 0 }}>Заказ #{selectedOrder.id}</h2>
-              
               <span style={{
                 padding: '8px 20px',
                 borderRadius: '9999px',
@@ -288,7 +264,7 @@ export default function Calendar({ onClose }: CalendarProps) {
                        (selectedOrder as any).status === 'completed' ? '#166534' : '#b91c1c'
               }}>
                 {(selectedOrder as any).status === 'new' && 'Новый'}
-                {(selectedOrder as any).status === 'processing' && 'Вработе'}
+                {(selectedOrder as any).status === 'processing' && 'В работе'}
                 {(selectedOrder as any).status === 'completed' && 'Выполнена'}
                 {(selectedOrder as any).status === 'cancelled' && 'Отменена'}
               </span>

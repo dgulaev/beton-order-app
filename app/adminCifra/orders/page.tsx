@@ -1,26 +1,43 @@
 'use client';
 
 import { useState, useEffect, Fragment } from 'react';
-import { useCalendarOrders, Order } from '../hooks/useCalendarOrders';
+import { Order } from '../hooks/useCalendarOrders';
+import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 
 export default function OrdersPage() {
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [filteredOrders, setFilteredOrders] = useState<Order[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [loading, setLoading] = useState(true);
 
-  const { orders: allOrders = [] } = useCalendarOrders(
-    new Date().getFullYear(),
-    new Date().getMonth()
-  );
+  // ==================== REALTIME — НОВЫЕ ЗАКАЗЫ ====================
+  useRealtimeOrders(setAllOrders);
 
+  // Загружаем ВСЕ заказы (без ограничения по месяцу)
   useEffect(() => {
-    setOrders(allOrders);
-    setFilteredOrders(allOrders);
-  }, [allOrders]);
+    const fetchAllOrders = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch('/api/adminCifra/all-orders');
+        if (res.ok) {
+          const data = await res.json();
+          setAllOrders(data);
+          setFilteredOrders(data);
+        }
+      } catch (err) {
+        console.error('Ошибка загрузки всех заказов:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
 
+    fetchAllOrders();
+  }, []);
+
+  // Фильтрация
   useEffect(() => {
-    let result = [...orders];
+    let result = [...allOrders];
 
     if (search) {
       result = result.filter(order => {
@@ -31,7 +48,7 @@ export default function OrdersPage() {
         ).trim().toLowerCase();
         
         return client.includes(search.toLowerCase()) || 
-               order.id.toString().includes(search);
+               String(order.id).includes(search);
       });
     }
 
@@ -39,20 +56,22 @@ export default function OrdersPage() {
       result = result.filter(order => order.status === statusFilter);
     }
 
+    // Сортировка по дате (новые сверху)
     result.sort((a, b) => new Date(b.delivery_date).getTime() - new Date(a.delivery_date).getTime());
 
     setFilteredOrders(result);
-  }, [orders, search, statusFilter]);
+  }, [allOrders, search, statusFilter]);
 
   const updateStatus = async (orderId: string, newStatus: string) => {
-    setOrders(prev =>
+    // Оптимистическое обновление
+    setAllOrders(prev =>
       prev.map(order =>
         order.id === orderId ? { ...order, status: newStatus } : order
       )
     );
 
     try {
-      const res = await fetch('/api/adminCifra/update-status', {
+      const res = await fetch('/api/admin/update-status', {  // или /api/adminCifra/update-status
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orderId, status: newStatus }),
@@ -66,12 +85,16 @@ export default function OrdersPage() {
 
   const groupedByDate: { [date: string]: Order[] } = {};
   filteredOrders.forEach(order => {
-    const date = order.delivery_date;
+    const date = order.delivery_date.split('T')[0]; // нормализуем дату
     if (!groupedByDate[date]) groupedByDate[date] = [];
     groupedByDate[date].push(order);
   });
 
   const sortedDates = Object.keys(groupedByDate).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+
+  if (loading) {
+    return <div style={{ padding: '100px', textAlign: 'center' }}>Загрузка всех заказов...</div>;
+  }
 
   return (
     <div style={{ padding: '32px 40px', maxWidth: '1600px', margin: '0 auto', color: '#fff' }}>
@@ -137,20 +160,17 @@ export default function OrdersPage() {
               <Fragment key={date}>
                 <tr style={{ backgroundColor: '#25334A' }}>
                   <td colSpan={7} style={{ padding: '14px 20px', fontSize: '15px', fontWeight: '600', color: '#10B981' }}>
-                    {new Date(date).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })}
+                    {new Date(date).toLocaleDateString('ru-RU', { 
+                      weekday: 'short', 
+                      day: 'numeric', 
+                      month: 'long', 
+                      year: 'numeric' 
+                    })}
                   </td>
                 </tr>
 
                 {groupedByDate[date].map((order) => (
-                  <tr
-                    key={order.id}
-                    style={{
-                      borderBottom: '1px solid #334155',
-                      transition: 'background 0.2s'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#25334A')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                  >
+                  <tr key={order.id} style={{ borderBottom: '1px solid #334155' }}>
                     <td style={{ padding: '18px 20px', fontWeight: '600' }}>#{order.id}</td>
                     <td style={{ padding: '18px 20px' }}>{order.delivery_date}</td>
                     <td style={{ padding: '18px 20px' }}>
@@ -164,7 +184,7 @@ export default function OrdersPage() {
                         borderRadius: '9999px',
                         fontSize: '13px',
                         fontWeight: '600',
-                        backgroundColor: order.status === 'new' ? '#fef9c3' :
+                        backgroundColor: order.status === 'new' ? '#fef9c3' : 
                                         order.status === 'processing' ? '#dbeafe' :
                                         order.status === 'completed' ? '#dcfce7' : '#fee2e2',
                         color: order.status === 'new' ? '#854d0e' :
@@ -172,7 +192,7 @@ export default function OrdersPage() {
                                order.status === 'completed' ? '#166534' : '#b91c1c'
                       }}>
                         {order.status === 'new' && 'Новый'}
-                        {order.status === 'processing' && 'Вработе'}
+                        {order.status === 'processing' && 'В работе'}
                         {order.status === 'completed' && 'Выполнена'}
                         {order.status === 'cancelled' && 'Отменена'}
                       </span>
@@ -180,7 +200,7 @@ export default function OrdersPage() {
                     <td style={{ padding: '18px 20px' }}>
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                         <button onClick={() => updateStatus(order.id, 'new')} style={{ padding: '5px 12px', fontSize: '12.5px', borderRadius: '9999px', background: '#fef9c3', color: '#854d0e', border: 'none' }}>Новый</button>
-                        <button onClick={() => updateStatus(order.id, 'processing')} style={{ padding: '5px 12px', fontSize: '12.5px', borderRadius: '9999px', background: '#dbeafe', color: '#1e40af', border: 'none' }}>Вработе</button>
+                        <button onClick={() => updateStatus(order.id, 'processing')} style={{ padding: '5px 12px', fontSize: '12.5px', borderRadius: '9999px', background: '#dbeafe', color: '#1e40af', border: 'none' }}>В работе</button>
                         <button onClick={() => updateStatus(order.id, 'completed')} style={{ padding: '5px 12px', fontSize: '12.5px', borderRadius: '9999px', background: '#dcfce7', color: '#166534', border: 'none' }}>Выполнена</button>
                         <button onClick={() => updateStatus(order.id, 'cancelled')} style={{ padding: '5px 12px', fontSize: '12.5px', borderRadius: '9999px', background: '#fee2e2', color: '#b91c1c', border: 'none' }}>Отменена</button>
                       </div>

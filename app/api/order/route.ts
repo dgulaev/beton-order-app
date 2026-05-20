@@ -8,7 +8,7 @@ const CHAT_ID = process.env.MANAGER_CHAT_ID;
 // ================================================
 // КОНФИГУРАЦИЯ ДЛИТЕЛЬНОСТИ ОТГРУЗКИ (легко менять)
 // ================================================
-const MINUTES_PER_CUBIC_METER = 2;        // ←←← ИЗМЕНИТЬ ЗДЕСЬ при необходимости
+const MINUTES_PER_CUBIC_METER = 1;        // ←←← ИЗМЕНИТЬ ЗДЕСЬ при необходимости
 
 function getSupabaseClient() {
   const supabaseUrl = process.env.SUPABASE_URL;
