@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 
 export interface Order {
-  id: string;
+  id: string | number;
   user_id?: number | null;
   grade?: string;
   volume: number;

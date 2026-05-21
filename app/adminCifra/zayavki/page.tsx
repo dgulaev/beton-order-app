@@ -14,6 +14,65 @@ export default function ZayavkiPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'processing' | 'completed' | 'cancelled'>('all');
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
 
+  // ==================== УДАЛЕНИЕ ЗАЯВКИ ====================
+  const handleDeleteOrder = async (orderId: number) => {
+  if (!confirm('Вы уверены, что хотите удалить эту заявку? Действие необратимо.')) return;
+
+  try {
+    const res = await fetch(`/api/adminCifra/orders/${orderId}`, {
+      method: 'DELETE',
+    });
+
+    if (res.ok) {
+      alert('✅ Заявка успешно удалена');
+      setSelectedOrder(null);
+      
+      // Оптимистическое обновление списка
+      setAllOrders(prev => prev.filter(o => String(o.id) !== String(orderId)));
+    } else {
+      alert('Ошибка при удалении заявки');
+    }
+   } catch (err) {
+    console.error(err);
+    alert('Ошибка соединения с сервером');
+   }
+  };
+
+  // ==================== РЕДАКТИРОВАНИЕ ЗАЯВКИ ====================
+  const handleEditOrder = (order: any) => {
+  // Пока открываем алерт, позже заменим на полноценное модальное окно
+  const newAddress = prompt('Новый адрес:', order.address);
+  if (newAddress === null) return; // пользователь нажал Отмена
+
+  const newVolume = prompt('Новый объём (м³):', order.volume);
+  if (newVolume === null) return;
+
+  const updatedOrder = {
+    ...order,
+    address: newAddress,
+    volume: parseFloat(newVolume),
+  };
+
+  // Отправляем на сервер
+  fetch('/api/adminCifra/orders/update', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updatedOrder),
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.success) {
+      alert('✅ Заявка обновлена!');
+      setSelectedOrder(updatedOrder); // обновляем в модалке
+      // Обновляем в общем списке
+      setAllOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
+    } else {
+      alert('Ошибка обновления');
+    }
+  })
+  .catch(() => alert('Ошибка соединения'));
+};
+
   // ==================== REALTIME ====================
   useRealtimeOrders(setAllOrders);
 
@@ -442,90 +501,139 @@ export default function ZayavkiPage() {
 </div>
 
       {/* МОДАЛЬНОЕ ОКНО ЗАКАЗА — БЕЗ IFRAME */}
-      {selectedOrder && (
-        <div 
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.94)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} 
-          onClick={() => setSelectedOrder(null)}
+{selectedOrder && (
+  <div 
+    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.94)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} 
+    onClick={() => setSelectedOrder(null)}
+  >
+    <div 
+      style={{ 
+        background: '#1E2937', 
+        width: '1080px', 
+        borderRadius: '24px', 
+        padding: '32px', 
+        maxHeight: '94vh', 
+        overflow: 'auto',
+        boxShadow: '0 30px 80px rgba(0,0,0,0.7)'
+      }} 
+      onClick={e => e.stopPropagation()}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <h2 style={{ margin: 0, fontSize: '28px' }}>
+          Редактирование заявки #{selectedOrder.id}
+        </h2>
+        <button 
+          onClick={() => setSelectedOrder(null)} 
+          style={{ fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}
         >
-          <div 
-            style={{ 
-              background: '#1E2937', 
-              width: '1080px', 
-              borderRadius: '24px', 
-              padding: '32px', 
-              maxHeight: '94vh', 
-              overflow: 'auto',
-              boxShadow: '0 30px 80px rgba(0,0,0,0.7)'
-            }} 
-            onClick={e => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-              <h2 style={{ margin: 0, fontSize: '28px' }}>
-                Заявка #{selectedOrder.id}
-              </h2>
-              <button 
-                onClick={() => setSelectedOrder(null)} 
-                style={{ fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}
-              >
-                ×
-              </button>
-            </div>
-
-            {/* Статус */}
-            <div style={{ 
-              display: 'inline-block', 
-              padding: '8px 26px', 
-              borderRadius: '9999px', 
-              fontWeight: '600',
-              backgroundColor: getStatusColor(selectedOrder.status) + '20',
-              color: getStatusColor(selectedOrder.status),
-              marginBottom: '28px'
-            }}>
-              {selectedOrder.status === 'new' && '🟡 Новый заказ'}
-              {selectedOrder.status === 'processing' && '🔵 В работе'}
-              {selectedOrder.status === 'completed' && '🟢 Выполнен'}
-              {selectedOrder.status === 'cancelled' && '🔴 Отменён'}
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
-              
-              {/* Левая колонка — Информация */}
-<div>
-  <h3 style={{ marginBottom: '18px', color: '#94A3B8' }}>Информация о заказе</h3>
-  
-  <div style={{ background: '#25334A', borderRadius: '16px', padding: '24px', lineHeight: '2' }}>
-    <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '12px' }}>
-      <div style={{ color: '#94A3B8' }}>Клиент</div>
-      <div style={{ fontWeight: '600' }}>
-        {selectedOrder.organization_name || selectedOrder.full_name || '—'}
+          ×
+        </button>
       </div>
 
-      {selectedOrder.inn && (
-        <>
-          <div style={{ color: '#94A3B8' }}>ИНН</div>
-          <div style={{ fontWeight: '600', color: '#60A5FA' }}>
-            {selectedOrder.inn}
+      {/* Статус */}
+      <div style={{ 
+        display: 'inline-block', 
+        padding: '8px 26px', 
+        borderRadius: '9999px', 
+        fontWeight: '600',
+        backgroundColor: getStatusColor(selectedOrder.status) + '20',
+        color: getStatusColor(selectedOrder.status),
+        marginBottom: '28px'
+      }}>
+        {selectedOrder.status === 'new' && '🟡 Новый заказ'}
+        {selectedOrder.status === 'processing' && '🔵 В работе'}
+        {selectedOrder.status === 'completed' && '🟢 Выполнен'}
+        {selectedOrder.status === 'cancelled' && '🔴 Отменён'}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
+        
+        {/* Левая колонка — Информация (с возможностью редактирования) */}
+        <div>
+          <h3 style={{ marginBottom: '18px', color: '#94A3B8' }}>Информация о заказе</h3>
+          
+          <div style={{ background: '#25334A', borderRadius: '16px', padding: '24px', lineHeight: '2' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '12px' }}>
+
+              <div style={{ color: '#94A3B8' }}>Клиент</div>
+              <input 
+                value={selectedOrder.organization_name || selectedOrder.full_name || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, organization_name: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+              {selectedOrder.inn !== undefined && (
+                <>
+                  <div style={{ color: '#94A3B8' }}>ИНН</div>
+                  <input 
+                    value={selectedOrder.inn || ''} 
+                    onChange={(e) => setSelectedOrder({ ...selectedOrder, inn: e.target.value })}
+                    style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+                  />
+                </>
+              )}
+
+              <div style={{ color: '#94A3B8' }}>Телефон</div>
+              <input 
+                value={selectedOrder.phone || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, phone: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+              <div style={{ color: '#94A3B8' }}>Марка бетона</div>
+              <input 
+                value={selectedOrder.grade || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, grade: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+              <div style={{ color: '#94A3B8' }}>Объём</div>
+              <input 
+                type="number" 
+                step="0.5"
+                value={selectedOrder.volume || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, volume: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+              <div style={{ color: '#94A3B8' }}>Дата доставки</div>
+              <input 
+                type="date" 
+                value={selectedOrder.delivery_date ? selectedOrder.delivery_date.split('T')[0] : ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, delivery_date: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+              <div style={{ color: '#94A3B8' }}>Время доставки</div>
+              <input 
+                type="time" 
+                value={selectedOrder.delivery_time || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, delivery_time: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+              <div style={{ color: '#94A3B8' }}>Адрес доставки</div>
+              <textarea 
+                value={selectedOrder.address || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, address: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff', minHeight: '70px', gridColumn: '2' }}
+              />
+
+            </div>
           </div>
-        </>
-      )}
 
-      <div style={{ color: '#94A3B8' }}>Телефон</div>
-      <div>{selectedOrder.phone || '—'}</div>
-
-      <div style={{ color: '#94A3B8' }}>Марка бетона</div>
-      <div style={{ fontWeight: '600', color: '#60A5FA' }}>{selectedOrder.grade}</div>
-
-      <div style={{ color: '#94A3B8' }}>Объём</div>
-      <div style={{ fontSize: '24px', fontWeight: '700', color: '#10B981' }}>{selectedOrder.volume} м³</div>
-
-      <div style={{ color: '#94A3B8' }}>Дата и время</div>
-      <div>{selectedOrder.delivery_date} • {selectedOrder.delivery_time}</div>
-
-      <div style={{ color: '#94A3B8' }}>Адрес доставки</div>
-      <div style={{ fontWeight: '600', fontSize: '17px' }}>{selectedOrder.address}</div>
-    </div>
-  </div>
-      </div>          
+          {/* Комментарий */}
+          {selectedOrder.comment && (
+            <div style={{ marginTop: '24px' }}>
+              <h4 style={{ color: '#94A3B8', marginBottom: '8px' }}>Комментарий клиента</h4>
+              <textarea 
+                value={selectedOrder.comment} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, comment: e.target.value })}
+                style={{ width: '100%', background: '#25334A', border: 'none', borderRadius: '16px', padding: '16px', color: '#fff', minHeight: '80px' }}
+              />
+            </div>
+          )}
+        </div>          
               
               {/* Правая колонка — Маршрут */}
               <div>
@@ -616,25 +724,63 @@ export default function ZayavkiPage() {
               </div>
             </div>
 
-            <div style={{ marginTop: '40px', textAlign: 'center' }}>
-              <button 
-                onClick={() => setSelectedOrder(null)}
-                style={{ 
-                  padding: '16px 52px', 
-                  background: '#334155', 
-                  color: 'white', 
-                  border: 'none', 
-                  borderRadius: '9999px', 
-                  fontSize: '17px',
-                  fontWeight: '600'
-                }}
-              >
-                Закрыть карточку
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            
+
+            {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
+      <div style={{ marginTop: '40px', display: 'flex', gap: '16px', justifyContent: 'center' }}>
+        <button 
+  onClick={async () => {
+    const updatedOrder = { ...selectedOrder }; // копия для оптимистического апдейта
+
+    try {
+      const res = await fetch('/api/adminCifra/orders/update', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selectedOrder)
+      });
+
+      if (res.ok) {
+        alert('✅ Изменения успешно сохранены!');
+
+        // Оптимистический апдейт в общем списке
+        setAllOrders(prev => 
+          prev.map(order => 
+            order.id === selectedOrder.id ? updatedOrder : order
+          )
+        );
+
+        setSelectedOrder(null); // закрываем модалку
+      } else {
+        alert('Ошибка сохранения');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка соединения с сервером');
+    }
+  }}
+  style={{ padding: '14px 32px', background: '#10B981', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
+     >
+        💾 Сохранить изменения
+        </button>
+
+        <button 
+          onClick={() => handleDeleteOrder(selectedOrder.id)}
+          style={{ padding: '14px 32px', background: '#EF4444', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
+        >
+          🗑️ Удалить заявку
+        </button>
+
+        <button 
+          onClick={() => setSelectedOrder(null)}
+          style={{ padding: '14px 32px', background: '#334155', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
+        >
+          Отмена
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
 
       {showNewOrderModal && (
     <NewOrderModal 

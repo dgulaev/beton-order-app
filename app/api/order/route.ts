@@ -8,7 +8,7 @@ const CHAT_ID = process.env.MANAGER_CHAT_ID;
 // ================================================
 // КОНФИГУРАЦИЯ ДЛИТЕЛЬНОСТИ ОТГРУЗКИ (легко менять)
 // ================================================
-const MINUTES_PER_CUBIC_METER = 1;        // ←←← ИЗМЕНИТЬ ЗДЕСЬ при необходимости
+const MINUTES_PER_CUBIC_METER = 0.1;        // ←←← ИЗМЕНИТЬ ЗДЕСЬ при необходимости
 
 function getSupabaseClient() {
   const supabaseUrl = process.env.SUPABASE_URL;
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'userId is required' }, { status: 400 });
     }
 
-    // === ПРЕОБРАЗОВАНИЕ РЕФЕРАЛЬНОГО КОДА ===
+// === ПРЕОБРАЗОВАНИЕ РЕФЕРАЛЬНОГО КОДА ===
     if (referredBy && typeof referredBy === 'string' && referredBy.startsWith('R')) {
       const supabase = getSupabaseClient();
       const { data: referrer } = await supabase
@@ -47,14 +47,68 @@ export async function POST(request: NextRequest) {
       else referredBy = null;
     }
 
-    // ==================== ДЕСТРУКТУРИЗАЦИЯ С ПОДДЕРЖКОЙ ОБОИХ ФОРМАТОВ ====================
+        // ==================== СОЗДАНИЕ КЛИЕНТА ИЗ АДМИНКИ ====================
+    let finalUserId = userId;
+
+    const isFromAdmin = payload.isFromAdmin === true || payload.source === 'admin';
+
+    const clientName = payload.organization_name || payload.full_name;
+    const clientPhone = payload.phone?.trim();
+    const clientInn = payload.inn || null;
+    const isLegal = payload.customerType?.includes('Юридическое') || !!payload.organization_name;
+
+    if (isFromAdmin && clientName && clientPhone) {
+      console.log(`👤 Проверка/создание клиента: ${clientName}`);
+
+      const supabase = getSupabaseClient();
+
+      // Ищем существующего клиента
+      const { data: existing } = await supabase
+        .from('users')
+        .select('user_id')
+        .or(`phone.eq.${clientPhone},full_name.eq.${clientName},organization_name.eq.${clientName}`)
+        .limit(1)
+        .single();
+
+      if (!existing) {
+        // Создаём нового клиента
+        const { data: newClient, error: clientError } = await supabase
+          .from('users')
+          .insert({
+            user_id: Date.now(),                    // ← Генерируем user_id (временное решение)
+            role: 'client',
+            full_name: isLegal ? null : clientName,
+            organization_name: isLegal ? clientName : null,
+            inn: clientInn,
+            phone: clientPhone,
+            created_by: userId,
+            balance: 0,
+            referral_code: 'R' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+          })
+          .select('user_id')
+          .single();
+
+        if (clientError) {
+          console.warn('⚠️ Не удалось создать клиента:', clientError.message);
+        } else if (newClient) {
+          finalUserId = newClient.user_id;
+          console.log(`✅ Создан новый клиент #${finalUserId} — ${clientName}`);
+        }
+      } else {
+        finalUserId = existing.user_id;
+        console.log(`👤 Найден существующий клиент #${finalUserId}`);
+      }
+    }
+    // =====================================================================
+
+    // ==================== ДЕСТРУКТУРИЗАЦИЯ ====================
     const {
       grade,
       volume,
-      delivery_date,      // от админки
-      delivery_time,      // от админки
-      deliveryDate,       // от мини-приложения
-      deliveryTime,       // от мини-приложения
+      delivery_date,
+      delivery_time,
+      deliveryDate,
+      deliveryTime,
       address,
       phone,
       customerType,
@@ -69,7 +123,7 @@ export async function POST(request: NextRequest) {
       totalPrice
     } = payload;
 
-    // Нормализация имён полей
+    // Нормализация
     const finalDeliveryDate = delivery_date || deliveryDate;
     const finalDeliveryTime = delivery_time || deliveryTime;
     const finalOrganizationName = organization_name || organizationName;
@@ -77,9 +131,6 @@ export async function POST(request: NextRequest) {
 
     // ==================== ВАЛИДАЦИЯ ====================
     if (!grade || !volume || !finalDeliveryDate || !finalDeliveryTime || !address || !phone) {
-      console.log('❌ Не все обязательные поля пришли:', { 
-        grade, volume, finalDeliveryDate, finalDeliveryTime, address, phone 
-      });
       return NextResponse.json({ 
         success: false, 
         message: 'Не все обязательные поля заполнены' 
@@ -89,51 +140,59 @@ export async function POST(request: NextRequest) {
     const supabase = getSupabaseClient();
 
     // ================================================
-    // === ПРОВЕРКА КОНФЛИКТОВ ПО ВРЕМЕНИ (исправлено) ===
+    // === ПРОВЕРКА КОНФЛИКТОВ ПО ВРЕМЕНИ ===
     // ================================================
-    const requestedStart = new Date(`${finalDeliveryDate}T${finalDeliveryTime}:00`);
-    const newDurationMin = Math.ceil(parseFloat(volume) * MINUTES_PER_CUBIC_METER);
-    const requestedEnd = new Date(requestedStart.getTime() + newDurationMin * 60000);
-
-    const { data: activeOrders } = await supabase
-      .from('orders')
-      .select('id, delivery_date, delivery_time, volume, status')
-      .eq('delivery_date', finalDeliveryDate)
-      .in('status', ['new', 'processing', 'in_progress']);
 
     let hasConflict = false;
     let conflictingOrderId = null;
+    let suggestions: any[] = [];
 
-    if (activeOrders && activeOrders.length > 0) {
-      for (const ord of activeOrders) {
-        const ordStart = new Date(`${ord.delivery_date}T${ord.delivery_time}`);
-        const ordDuration = Math.ceil(ord.volume * MINUTES_PER_CUBIC_METER);
-        const ordEnd = new Date(ordStart.getTime() + ordDuration * 60000);
+    if (!isFromAdmin) {
+      const requestedStart = new Date(`${finalDeliveryDate}T${finalDeliveryTime}:00`);
+      const newDurationMin = Math.ceil(parseFloat(volume) * MINUTES_PER_CUBIC_METER);
+      const requestedEnd = new Date(requestedStart.getTime() + newDurationMin * 60000);
 
-        if (requestedStart < ordEnd && requestedEnd > ordStart) {
-          hasConflict = true;
-          conflictingOrderId = ord.id;
-          break;
+      const { data: activeOrders } = await supabase
+        .from('orders')
+        .select('id, delivery_date, delivery_time, volume, status')
+        .eq('delivery_date', finalDeliveryDate)
+        .in('status', ['new', 'processing', 'in_progress']);
+
+      if (activeOrders && activeOrders.length > 0) {
+        for (const ord of activeOrders) {
+          const ordStart = new Date(`${ord.delivery_date}T${ord.delivery_time}`);
+          const ordDuration = Math.ceil(ord.volume * MINUTES_PER_CUBIC_METER);
+          const ordEnd = new Date(ordStart.getTime() + ordDuration * 60000);
+
+          if (requestedStart < ordEnd && requestedEnd > ordStart) {
+            hasConflict = true;
+            conflictingOrderId = ord.id;
+            break;
+          }
         }
       }
+
+      if (hasConflict) {
+        suggestions = await getFreeTimeSuggestions(supabase, finalDeliveryDate, requestedStart, newDurationMin);
+
+        return NextResponse.json({
+          success: false,
+          message: `Время ${finalDeliveryTime} занято (заявка #${conflictingOrderId}).`,
+          suggestions,
+          conflict: true
+        }, { status: 409 });
+      }
+
+      console.log(`✅ Проверка времени прошла успешно (клиент)`);
+    } else {
+      console.log(`👮 Админ создаёт заявку — проверка времени ОТКЛЮЧЕНА`);
     }
 
-    if (hasConflict) {
-      const suggestions = await getFreeTimeSuggestions(supabase, finalDeliveryDate, requestedStart, newDurationMin);
+console.log(`✅ Время успешно принято.`);
 
-      return NextResponse.json({
-        success: false,
-        message: `Время ${finalDeliveryTime} занято (заявка #${conflictingOrderId}).`,
-        suggestions: suggestions,
-        conflict: true
-      }, { status: 409 });
-    }
-
-    console.log(`✅ Проверка времени прошла успешно.`);
-
-    // ================================================
-    // === НАДЁЖНАЯ ОБРАБОТКА РЕФЕРАЛА ===
-    // ================================================
+// ================================================
+// === НАДЁЖНАЯ ОБРАБОТКА РЕФЕРАЛА ===
+// ================================================
     let finalReferredBy = referredBy || payload.referredBy || payload.referred_by || null;
 
     console.log('📥 [Order API] Получен referredBy:', finalReferredBy);

@@ -38,14 +38,27 @@ export default function NewOrderModal({ onClose, onSuccess }: NewOrderModalProps
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingInn, setLoadingInn] = useState(false);
+  
 
   // ==================== РАСЧЁТ СТОИМОСТИ ====================
-  const volume = parseFloat(form.volume) || 0;
+const volume = parseFloat(form.volume) || 0;
 
-  const pricePerCubic: Record<string, number> = {
-    'М100': 6380, 'М150': 6500, 'М200': 6600, 'М250': 6950,
-    'М300': 7230, 'М350': 7400, 'М400': 8050, 'М450': 8350, 'М500': 8700,
-  };
+const pricePerCubic: Record<string, number> = {
+  'М100': 6380,
+  'М100и': 5050,     // на доломите
+  'М150': 6500,
+  'М150и': 5450,     // на доломите
+  'М200': 6600,
+  'М200и': 5600,     // на доломите
+  'М250': 6950,
+  'М250и': 5950,     // на доломите
+  'М300': 7230,
+  'М350': 7400,
+  'М400': 8050,
+  'М450': 8350,
+  'М500': 8700,
+  
+};
 
   const concreteCost = useMemo(() => {
     return volume > 0 ? Math.round(volume * (pricePerCubic[form.grade] || 7230)) : 0;
@@ -137,30 +150,33 @@ export default function NewOrderModal({ onClose, onSuccess }: NewOrderModalProps
   // 2. ПОДГОТОВКА PAYLOAD (аналогично мини-приложению)
   // ================================================
   const payload = {
-    userId: adminUserId,                    // Реальный ID админа
+  userId: adminUserId,
 
-    grade: form.grade,
-    volume: parseFloat(form.volume),
-    delivery_date: form.deliveryDate,
-    delivery_time: form.deliveryTime,
-    address: form.address.trim(),
-    phone: currentPhone,
+  grade: form.grade,
+  volume: parseFloat(form.volume),
+  delivery_date: form.deliveryDate,
+  delivery_time: form.deliveryTime,
+  address: form.address.trim(),
+  phone: currentPhone,
 
-    customerType: form.customerType === 'legal' 
-      ? 'Юридическое лицо' 
-      : 'Физическое лицо',
+  customerType: form.customerType === 'legal' 
+    ? 'Юридическое лицо' 
+    : 'Физическое лицо',
 
-    organization_name: form.organizationName?.trim() || null,
-    full_name: form.fullName?.trim() || null,
-    inn: form.inn?.trim() || null,           // ← сохраняем ИНН
+  organization_name: form.organizationName?.trim() || null,
+  full_name: form.fullName?.trim() || null,
+  inn: form.inn?.trim() || null,
 
-    concreteCost: concreteCost || 0,
-    deliveryCost: deliveryCost || 0,
-    totalPrice: totalPrice || 0,
+  concreteCost: concreteCost || 0,
+  deliveryCost: deliveryCost || 0,
+  totalPrice: totalPrice || 0,
 
-    comment: form.comment?.trim() || null,
-  };
+  comment: form.comment?.trim() || null,
 
+  // ==================== ФЛАГ ДЛЯ АДМИНКИ ====================
+  isFromAdmin: true,     // ← Это отключает проверку времени
+  source: 'admin'
+};
   console.log('🚀 ФИНАЛЬНЫЙ PAYLOAD из админки:', JSON.stringify(payload, null, 2));
 
   try {
