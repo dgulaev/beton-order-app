@@ -187,14 +187,13 @@ export default function ZayavkiPage() {
 
   return (
     <div style={{ 
-    background: '#0F172A', 
-    minHeight: '100vh',
-    height: '100vh',
-    display: 'flex',
-    flexDirection: 'column',
-    color: '#fff',
-    overflow: 'hidden'
-  }}>
+      padding: '32px 40px', 
+      width: '100%',                    // занимает всю ширину
+      maxWidth: '96%',                  // ← Здесь регулируй ширину (в процентах)
+      margin: '0 auto', 
+      color: '#fff',
+      minHeight: 'calc(100vh - 80px)'
+    }}>
     
     {/* Header */}
     <div style={{ 
@@ -380,7 +379,7 @@ export default function ZayavkiPage() {
 </div>
 
         {/* ==================== ПРАВАЯ КОЛОНКА — ОСНОВНОЙ СПИСОК ==================== */}
-<div style={{ flex: 1 }}>
+<div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
 
   <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
     <h2 style={{ margin: 0 }}>
@@ -446,59 +445,77 @@ export default function ZayavkiPage() {
     </select>
   </div>
 
-  {/* Простой список без дополнительного окна */}
-  {loading ? (
-    <div style={{ textAlign: 'center', padding: '100px', color: '#64748B' }}>Загрузка заявок...</div>
-  ) : filteredOrders.length > 0 ? (
-    filteredOrders.map((order: Order) => (
-      <div
-        key={order.id}
-        onClick={() => setSelectedOrder(order)}
-        style={{
-          background: '#1E2937',           // каждая карточка с фоном
-          borderRadius: '16px',
-          padding: '20px',
-          marginBottom: '12px',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '24px',
-          transition: 'all 0.2s'
-        }}
-      >
-        <div style={{ width: '90px', fontWeight: '700', fontSize: '17px' }}>
-          {order.delivery_time}
-        </div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: '600', fontSize: '17px' }}>
-            #{order.id} — {order.organization_name || order.full_name || '—'}
+  {/* ==================== СПИСОК ЗАЯВОК СО СКРОЛЛОМ ==================== */}
+  <div style={{ 
+    flex: 1,
+    background: '#1E2937', 
+    borderRadius: '24px', 
+    padding: '24px 32px',
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: '620px',           // минимальная высота
+    overflow: 'hidden'
+  }}>
+    
+    <div style={{ 
+      flex: 1, 
+      overflowY: 'auto', 
+      display: 'flex', 
+      flexDirection: 'column', 
+      gap: '12px',
+      paddingRight: '8px'
+    }}>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '100px', color: '#64748B' }}>Загрузка заявок...</div>
+      ) : filteredOrders.length > 0 ? filteredOrders.map((order: Order) => (
+        <div
+          key={order.id}
+          onClick={() => setSelectedOrder(order)}
+          style={{
+            background: '#25334A',
+            borderRadius: '16px',
+            padding: '20px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '24px',
+            transition: 'all 0.2s'
+          }}
+        >
+          <div style={{ width: '90px', fontWeight: '700', fontSize: '17px' }}>
+            {order.delivery_time}
           </div>
-          <div style={{ color: '#94A3B8' }}>
-            {order.grade} • {order.volume} м³
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: '600', fontSize: '17px' }}>
+              #{order.id} — {order.organization_name || order.full_name || '—'}
+            </div>
+            <div style={{ color: '#94A3B8' }}>
+              {order.grade} • {order.volume} м³
+            </div>
+          </div>
+          <div style={{ 
+            padding: '8px 20px', 
+            borderRadius: '9999px', 
+            background: getStatusColor(order.status) + '20', 
+            color: getStatusColor(order.status),
+            fontWeight: '600',
+            fontSize: '15px'
+          }}>
+            {order.status === 'new' && 'Новый'}
+            {order.status === 'processing' && 'В работе'}
+            {order.status === 'completed' && 'Выполнен'}
+            {order.status === 'cancelled' && 'Отменён'}
           </div>
         </div>
-        <div style={{ 
-          padding: '8px 20px', 
-          borderRadius: '9999px', 
-          background: getStatusColor(order.status) + '20', 
-          color: getStatusColor(order.status),
-          fontWeight: '600',
-          fontSize: '15px'
-        }}>
-          {order.status === 'new' && 'Новый'}
-          {order.status === 'processing' && 'В работе'}
-          {order.status === 'completed' && 'Выполнен'}
-          {order.status === 'cancelled' && 'Отменён'}
+      )) : (
+        <div style={{ textAlign: 'center', padding: '140px 0', color: '#64748B', fontSize: '18px' }}>
+          По выбранным фильтрам ничего не найдено
         </div>
-      </div>
-    ))
-  ) : (
-    <div style={{ textAlign: 'center', padding: '120px 0', color: '#64748B', fontSize: '18px' }}>
-      По выбранным фильтрам ничего не найдено
+      )}
     </div>
-  )}
   </div>
 </div>
+
 
       {/* МОДАЛЬНОЕ ОКНО ЗАКАЗА — БЕЗ IFRAME */}
 {selectedOrder && (
@@ -794,6 +811,7 @@ export default function ZayavkiPage() {
      }} 
    />
  )}
+    </div>
     </div>
   );
 }
