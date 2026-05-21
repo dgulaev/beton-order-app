@@ -23,18 +23,18 @@ function getSupabaseClient() {
 
 export async function POST(request: NextRequest) {
   try {
-    const payload = await request.json();
+    const payload: any = await request.json();   // ← any чтобы не было ошибок TS
 
     const userId = payload.userId || payload.user_id || null;
     let referredBy = payload.referredBy || payload.referred_by || null;
 
-    console.log('📥 [Order API] Получен referredBy:', referredBy);
+    console.log('📥 [Order API] Получен payload:', payload);
 
     if (!userId) {
       return NextResponse.json({ success: false, message: 'userId is required' }, { status: 400 });
     }
 
-    // === ПРЕОБРАЗОВАНИЕ РЕФЕРАЛЬНОГО КОДА В user_id ===
+    // === ПРЕОБРАЗОВАНИЕ РЕФЕРАЛЬНОГО КОДА ===
     if (referredBy && typeof referredBy === 'string' && referredBy.startsWith('R')) {
       const supabase = getSupabaseClient();
       const { data: referrer } = await supabase
@@ -43,38 +43,62 @@ export async function POST(request: NextRequest) {
         .eq('referral_code', referredBy)
         .maybeSingle();
 
-      if (referrer) {
-        referredBy = referrer.user_id;
-        console.log(`🔍 Реферальный код ${payload.referredBy} преобразован в user_id ${referredBy}`);
-      } else {
-        console.log(`⚠️ Реферер с кодом ${referredBy} не найден`);
-        referredBy = null;
-      }
+      if (referrer) referredBy = referrer.user_id;
+      else referredBy = null;
     }
 
+    // ==================== ДЕСТРУКТУРИЗАЦИЯ С ПОДДЕРЖКОЙ ОБОИХ ФОРМАТОВ ====================
     const {
-      grade, volume, deliveryDate, deliveryTime, address,
-      customerType, organizationName, fullName, phone, comment,
-      concreteCost, deliveryCost, totalPrice
+      grade,
+      volume,
+      delivery_date,      // от админки
+      delivery_time,      // от админки
+      deliveryDate,       // от мини-приложения
+      deliveryTime,       // от мини-приложения
+      address,
+      phone,
+      customerType,
+      organization_name,
+      organizationName,
+      full_name,
+      fullName,
+      inn,
+      comment,
+      concreteCost,
+      deliveryCost,
+      totalPrice
     } = payload;
 
-    if (!grade || !volume || !deliveryDate || !deliveryTime || !address || !phone) {
-      return NextResponse.json({ success: false, message: 'Не все обязательные поля заполнены' }, { status: 400 });
+    // Нормализация имён полей
+    const finalDeliveryDate = delivery_date || deliveryDate;
+    const finalDeliveryTime = delivery_time || deliveryTime;
+    const finalOrganizationName = organization_name || organizationName;
+    const finalFullName = full_name || fullName;
+
+    // ==================== ВАЛИДАЦИЯ ====================
+    if (!grade || !volume || !finalDeliveryDate || !finalDeliveryTime || !address || !phone) {
+      console.log('❌ Не все обязательные поля пришли:', { 
+        grade, volume, finalDeliveryDate, finalDeliveryTime, address, phone 
+      });
+      return NextResponse.json({ 
+        success: false, 
+        message: 'Не все обязательные поля заполнены' 
+      }, { status: 400 });
     }
 
     const supabase = getSupabaseClient();
 
     // ================================================
-    // === УМНАЯ ПРОВЕРКА КОНФЛИКТОВ ПО ВРЕМЕНИ ===
+    // === ПРОВЕРКА КОНФЛИКТОВ ПО ВРЕМЕНИ (исправлено) ===
     // ================================================
-    const requestedStart = new Date(`${deliveryDate}T${deliveryTime}:00`);
+    const requestedStart = new Date(`${finalDeliveryDate}T${finalDeliveryTime}:00`);
     const newDurationMin = Math.ceil(parseFloat(volume) * MINUTES_PER_CUBIC_METER);
     const requestedEnd = new Date(requestedStart.getTime() + newDurationMin * 60000);
 
     const { data: activeOrders } = await supabase
       .from('orders')
       .select('id, delivery_date, delivery_time, volume, status')
-      .eq('delivery_date', deliveryDate)
+      .eq('delivery_date', finalDeliveryDate)
       .in('status', ['new', 'processing', 'in_progress']);
 
     let hasConflict = false;
@@ -95,17 +119,17 @@ export async function POST(request: NextRequest) {
     }
 
     if (hasConflict) {
-      const suggestions = await getFreeTimeSuggestions(supabase, deliveryDate, requestedStart, newDurationMin);
+      const suggestions = await getFreeTimeSuggestions(supabase, finalDeliveryDate, requestedStart, newDurationMin);
 
       return NextResponse.json({
         success: false,
-        message: `Время ${deliveryTime} занято (заявка #${conflictingOrderId}).`,
+        message: `Время ${finalDeliveryTime} занято (заявка #${conflictingOrderId}).`,
         suggestions: suggestions,
         conflict: true
       }, { status: 409 });
     }
 
-    console.log(`✅ Проверка времени прошла успешно. Нет конфликтов.`);
+    console.log(`✅ Проверка времени прошла успешно.`);
 
     // ================================================
     // === НАДЁЖНАЯ ОБРАБОТКА РЕФЕРАЛА ===
@@ -138,19 +162,20 @@ export async function POST(request: NextRequest) {
         user_id: userId,
         grade,
         volume: parseFloat(volume),
-        delivery_date: deliveryDate,
-        delivery_time: deliveryTime,
+        delivery_date: finalDeliveryDate,
+        delivery_time: finalDeliveryTime,
         address,
         customer_type: customerType,
-        full_name: fullName || null,
-        organization_name: organizationName || null,
+        full_name: finalFullName || null,
+        organization_name: finalOrganizationName || null,
+        inn: inn || null,                    // ← Теперь точно сохранится
         phone,
         comment: comment || null,
         concrete_cost: concreteCost || 0,
         delivery_cost: deliveryCost || 0,
         total_price: totalPrice || 0,
         status: 'new',
-        referred_by: finalReferredBy,   // ← ИСПРАВЛЕНО
+        referred_by: referredBy,
       }])
       .select()
       .single();
@@ -161,7 +186,7 @@ export async function POST(request: NextRequest) {
     }
 
     const orderId = orderData.id;
-    console.log(`✅ Заказ #${orderId} успешно создан. referred_by = ${referredBy || 'null'}`);
+    console.log(`✅ Заказ #${orderId} успешно создан.`);
 
     // === ПОГАШЕНИЕ БАЛЛОВ (СКИДКА) ===
     const redeemAmount = Number(payload.redeemAmount) || 0;
@@ -212,7 +237,7 @@ export async function POST(request: NextRequest) {
 
 📌 Марка: ${grade}
 📦 Объём: ${volume} м³
-📅 Дата: ${deliveryDate} ${deliveryTime}
+📅 Дата: ${finalDeliveryDate || deliveryDate} ${finalDeliveryTime || deliveryTime}
 📍 Адрес: ${address}
 
 👤 Тип: ${customerType}

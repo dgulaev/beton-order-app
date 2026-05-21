@@ -14,6 +14,14 @@ export interface Order {
   full_name?: string;
   phone?: string;
   comment?: string;
+  
+  // Новые поля
+  inn?: string | null;           // ← Добавлено
+  customer_type?: string;
+  concrete_cost?: number;
+  delivery_cost?: number;
+  created_at?: string;
+  referred_by?: number;
 }
 
 export function useCalendarOrders(year: number, month: number) {

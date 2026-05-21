@@ -145,10 +145,22 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
           </nav>
         </div>
 
-        {/* Основной контент */}
-        <div style={{ flex: 1, overflow: 'auto', padding: '20px' }}>
-          {children}
-        </div>
+        {/* ==================== ОСНОВНОЙ КОНТЕНТ ==================== */}
+<div style={{ 
+  flex: 1, 
+  overflow: 'auto', 
+  padding: '20px 32px', 
+  minHeight: '80vh',
+  backgroundColor: '#0F172A',
+  // Специальные настройки для страницы Заявки
+  ...(pathname === '/adminCifra/zayavki' && {
+    padding: '20px 40px',
+    minHeight: '920px',
+    overflow: 'visible'   // чтобы не было лишнего скролла
+  })
+}}>
+  {children}
+</div>
       </div>
     </div>
   );
