@@ -5,15 +5,15 @@ import { Order } from '@/app/adminCifra/hooks/useCalendarOrders';
 
 interface StatusButtonsProps {
   order: Order;
-  onStatusChange: (orderId: string, newStatus: string) => void;
+  onStatusChange: (orderId: string | number, newStatus: string) => void;   // ← Исправлено
 }
 
 export default function StatusButtons({ order, onStatusChange }: StatusButtonsProps) {
   const statuses = [
-    { value: 'new', label: 'Новый', bg: '#fef9c3', color: '#854d0e' },
-    { value: 'processing', label: 'В работе', bg: '#dbeafe', color: '#1e40af' },
-    { value: 'completed', label: 'Выполнена', bg: '#dcfce7', color: '#166534' },
-    { value: 'cancelled', label: 'Отменена', bg: '#fee2e2', color: '#b91c1c' },
+    { value: 'new',        label: 'Новый',      bg: '#fef9c3', color: '#854d0e' },
+    { value: 'processing', label: 'В работе',   bg: '#dbeafe', color: '#1e40af' },
+    { value: 'completed',  label: 'Выполнена',  bg: '#dcfce7', color: '#166534' },
+    { value: 'cancelled',  label: 'Отменена',   bg: '#fee2e2', color: '#b91c1c' },
   ];
 
   const buttons = (
@@ -24,7 +24,7 @@ export default function StatusButtons({ order, onStatusChange }: StatusButtonsPr
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
-            onStatusChange(order.id, value);
+            onStatusChange(order.id, value);        // ← Исправлено: order.id
           }}
           style={{
             padding: '6px 14px',

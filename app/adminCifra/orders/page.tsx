@@ -62,21 +62,31 @@ export default function OrdersPage() {
     setFilteredOrders(result);
   }, [allOrders, search, statusFilter]);
 
-  const updateStatus = async (orderId: string, newStatus: string) => {
+  const updateStatus = async (orderId: string | number, newStatus: string) => {
+    const stringId = String(orderId);   // ← безопасное приведение
+
     // Оптимистическое обновление
     setAllOrders(prev =>
       prev.map(order =>
-        order.id === orderId ? { ...order, status: newStatus } : order
+        String(order.id) === stringId 
+          ? { ...order, status: newStatus } 
+          : order
       )
     );
 
     try {
-      const res = await fetch('/api/admin/update-status', {  // или /api/adminCifra/update-status
+      const res = await fetch('/api/adminCifra/orders/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId, status: newStatus }),
+        body: JSON.stringify({ 
+          orderId: stringId, 
+          status: newStatus 
+        }),
       });
-      if (!res.ok) alert('Не удалось изменить статус');
+
+      if (!res.ok) {
+        alert('Не удалось изменить статус');
+      }
     } catch (err) {
       console.error(err);
       alert('Ошибка соединения');
