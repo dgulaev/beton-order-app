@@ -13,43 +13,56 @@ export default function ZayavkiPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'processing' | 'completed' | 'cancelled'>('all');
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
-  const [currentRole, setCurrentRole] = useState<string>('');
+  
   const [notificationSent, setNotificationSent] = useState(false);
   const [isSendingNotification, setIsSendingNotification] = useState(false);
 
-     // ==================== ЗАГРУЗКА РОЛИ ====================
-useEffect(() => {
-  const loadRole = async () => {
-    // 1. Проверяем localStorage
-    let savedRole = localStorage.getItem('userRole');
+       // ==================== ЗАГРУЗКА РОЛИ (ИСПРАВЛЕННЫЙ ВАРИАНТ) ====================
+  const [currentRole, setCurrentRole] = useState<string>('');
 
-    if (savedRole) {
-      setCurrentRole(savedRole);
-      console.log('🔑 Роль загружена из localStorage:', savedRole);
-      return;
-    }
+  useEffect(() => {
+    const loadRole = async () => {
+      console.log('🔄 Запуск загрузки роли...');
 
-    // 2. Если нет — запрашиваем с сервера
-    try {
-      const res = await fetch('/api/user/role', { method: 'POST' });
-      
-      if (res.ok) {
-        const data = await res.json();
-        const role = (data.role || 'client').toLowerCase();
-        
+      // 1. Проверяем localStorage
+      const savedRole = localStorage.getItem('userRole');
+      if (savedRole) {
+        const role = savedRole.toLowerCase();
         setCurrentRole(role);
-        localStorage.setItem('userRole', role);
-        console.log('🔑 Роль загружена с сервера:', role);
+        console.log('✅ Роль взята из localStorage:', role);
+        return;
       }
-    } catch (err) {
-      console.error('❌ Не удалось загрузить роль с сервера', err);
-      // На случай ошибки — ставим admin для админ-панели
-      setCurrentRole('admin');
-    }
-  };
 
-  loadRole();
-}, []);
+      // 2. Запрашиваем роль с сервера
+      try {
+        const res = await fetch('/api/user/role', { 
+          method: 'GET',
+          cache: 'no-store',
+          credentials: 'include'
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const role = (data.role || 'client').toLowerCase();
+          
+          setCurrentRole(role);
+          localStorage.setItem('userRole', role);
+          console.log('✅ Роль получена с сервера:', role);
+        } else {
+          console.warn('⚠️ API /api/user/role вернул ошибку, ставим admin');
+          setCurrentRole('admin');
+          localStorage.setItem('userRole', 'admin');
+        }
+      } catch (err) {
+        console.error('❌ Ошибка запроса роли:', err);
+        // Fallback для админки
+        setCurrentRole('admin');
+        localStorage.setItem('userRole', 'admin');
+      }
+    };
+
+    loadRole();
+  }, []);
 
   // ==================== УДАЛЕНИЕ ЗАЯВКИ ====================
   const handleDeleteOrder = async (orderId: number) => {
