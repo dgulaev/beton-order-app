@@ -34,7 +34,7 @@ export default function MixersPage() {
     status: 'Доступен'
   });
 
-  // Загрузка миксеров
+  // ==================== ЗАГРУЗКА МИКСЕРОВ ====================
   useEffect(() => {
     fetchMixers();
   }, []);
@@ -58,6 +58,7 @@ export default function MixersPage() {
     filter === 'all' || m.type === filter
   );
 
+  // ==================== ФУНКЦИИ МОДАЛЬНОГО ОКНА ====================
   const openAddModal = () => {
     setEditingMixer(null);
     setFormData({ number: '', model: '', driver: '', phone: '', volume: 10, type: 'own', status: 'Доступен' });
@@ -109,105 +110,296 @@ export default function MixersPage() {
 
   return (
     <div style={{ background: '#0F172A', minHeight: '100vh', color: '#fff', padding: '32px 40px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
-        <h1 style={{ fontSize: '34px', fontWeight: '700' }}>🚛 Миксеры</h1>
-        
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <div style={{ background: '#1E2937', borderRadius: '9999px', padding: '6px', display: 'flex' }}>
-            <button 
-              onClick={() => setViewMode('grid')} 
-              style={{ padding: '8px 20px', borderRadius: '9999px', background: viewMode === 'grid' ? '#3B82F6' : 'transparent', color: 'white', fontWeight: '600' }}
-            >
-              Плитка
-            </button>
-            <button 
-              onClick={() => setViewMode('list')} 
-              style={{ padding: '8px 20px', borderRadius: '9999px', background: viewMode === 'list' ? '#3B82F6' : 'transparent', color: 'white', fontWeight: '600' }}
-            >
-              Список
-            </button>
-          </div>
-
-          <button 
-            onClick={openAddModal} 
+      
+      {/* ==================== ЗАГОЛОВОК + КНОПКА ДОБАВИТЬ ==================== */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
+        <h1 style={{
+          fontSize: '34px',
+          fontWeight: '700',
+          display: 'flex',
+          alignItems: 'flex-end',
+          gap: '12px'
+        }}>
+          <img 
+            src="/icons/mixer-truck.png" 
+            alt="Миксер" 
             style={{ 
-              padding: '14px 28px', 
-              background: '#10B981', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '9999px', 
+              width: '52px', 
+              height: '52px', 
+              objectFit: 'contain',
+              marginBottom: '-4px'
+            }} 
+          />
+          Миксеры
+        </h1>
+
+        <button 
+          onClick={openAddModal} 
+          style={{ 
+            padding: '14px 28px', 
+            background: '#10B981', 
+            color: 'white', 
+            border: 'none', 
+            borderRadius: '9999px', 
+            fontWeight: '600',
+            fontSize: '16px'
+          }}
+        >
+          + Добавить миксер
+        </button>
+      </div>
+
+      {/* ==================== ПАНЕЛЬ УПРАВЛЕНИЯ (ФИЛЬТРЫ + ВИД) ==================== */}
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '16px',
+        marginBottom: '32px'
+      }}>
+        
+        {/* Левая группа — фильтры */}
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button 
+            onClick={() => setFilter('all')} 
+            style={{
+              padding: '12px 28px',
+              background: 'transparent',
+              border: 'none',
+              color: filter === 'all' ? '#10B981' : '#64748B',
+              fontSize: '17px',
               fontWeight: '600',
-              fontSize: '16px'
+              transition: 'color 0.25s ease',
+              cursor: 'pointer',
             }}
           >
-            + Добавить миксер
+            Все
+          </button>
+          <button 
+            onClick={() => setFilter('own')} 
+            style={{
+              padding: '12px 28px',
+              background: 'transparent',
+              border: 'none',
+              color: filter === 'own' ? '#10B981' : '#64748B',
+              fontSize: '17px',
+              fontWeight: '600',
+              transition: 'color 0.25s ease',
+              cursor: 'pointer',
+            }}
+          >
+            Свои
+          </button>
+          <button 
+            onClick={() => setFilter('rented')} 
+            style={{
+              padding: '12px 28px',
+              background: 'transparent',
+              border: 'none',
+              color: filter === 'rented' ? '#10B981' : '#64748B',
+              fontSize: '17px',
+              fontWeight: '600',
+              transition: 'color 0.25s ease',
+              cursor: 'pointer',
+            }}
+          >
+            Наемные
+          </button>
+        </div>
+
+        {/* Правая группа — Плитка / Список */}
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button 
+            onClick={() => setViewMode('grid')} 
+            style={{
+              padding: '12px 24px',
+              background: 'transparent',
+              border: 'none',
+              color: viewMode === 'grid' ? '#10B981' : '#64748B',
+              fontSize: '17px',
+              fontWeight: '600',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              position: 'relative',
+              transition: 'color 0.25s ease',
+              cursor: 'pointer',
+            }}
+          >
+            <span style={{ fontSize: '22px', opacity: viewMode === 'grid' ? 0.9 : 0.45 }}>▦</span>
+            Плитка
+            {viewMode === 'grid' && (
+              <div style={{
+                position: 'absolute',
+                bottom: '3px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: '5px',
+                height: '5px',
+                backgroundColor: '#10B981',
+                borderRadius: '50%',
+                boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
+              }} />
+            )}
+          </button>
+
+          <button 
+            onClick={() => setViewMode('list')} 
+            style={{
+              padding: '12px 24px',
+              background: 'transparent',
+              border: 'none',
+              color: viewMode === 'list' ? '#10B981' : '#64748B',
+              fontSize: '17px',
+              fontWeight: '600',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              position: 'relative',
+              transition: 'color 0.25s ease',
+              cursor: 'pointer',
+            }}
+          >
+            <span style={{ fontSize: '24px', opacity: viewMode === 'list' ? 0.9 : 0.45, lineHeight: 1 }}>≡</span>
+            Список
+            {viewMode === 'list' && (
+              <div style={{
+                position: 'absolute',
+                bottom: '3px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                width: '5px',
+                height: '5px',
+                backgroundColor: '#10B981',
+                borderRadius: '50%',
+                boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
+              }} />
+            )}
           </button>
         </div>
       </div>
 
-      {/* Фильтры */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '32px' }}>
-        <button onClick={() => setFilter('all')} style={{ padding: '10px 24px', background: filter === 'all' ? '#3B82F6' : '#1E2937', borderRadius: '9999px', color: 'white', fontWeight: '600' }}>Все</button>
-        <button onClick={() => setFilter('own')} style={{ padding: '10px 24px', background: filter === 'own' ? '#3B82F6' : '#1E2937', borderRadius: '9999px', color: 'white', fontWeight: '600' }}>Свои</button>
-        <button onClick={() => setFilter('rented')} style={{ padding: '10px 24px', background: filter === 'rented' ? '#3B82F6' : '#1E2937', borderRadius: '9999px', color: 'white', fontWeight: '600' }}>Наемные</button>
-      </div>
-
+      {/* ==================== ОСНОВНОЙ КОНТЕНТ (СПИСОК / ПЛИТКА) ==================== */}
       {loading ? (
         <div style={{ textAlign: 'center', padding: '100px', color: '#94A3B8' }}>Загрузка миксеров...</div>
       ) : (
         <>
-          {/* Плитка */}
+                              {/* ==================== РЕЖИМ ПЛИТКИ (компактный и гармоничный) ==================== */}
           {viewMode === 'grid' && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '24px' }}>
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', 
+              gap: '20px' 
+            }}>
               {filteredMixers.map((mixer) => {
                 const statusStyle = getStatusStyle(mixer.status);
                 return (
-                  <div key={mixer.id} style={{ 
-                    background: '#1E2937', 
-                    borderRadius: '20px', 
-                    padding: '28px',
-                    transition: 'all 0.2s ease'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                      <div style={{ fontSize: '22px', fontWeight: '700' }}>{mixer.number}</div>
+                  <div 
+                    key={mixer.id} 
+                    style={{ 
+                      background: '#1E2937', 
+                      borderRadius: '18px', 
+                      padding: '20px',
+                      transition: 'all 0.25s ease',
+                      border: '1px solid #334155',
+                      height: 'fit-content'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'translateY(-3px)';
+                      e.currentTarget.style.boxShadow = '0 15px 35px rgba(0,0,0,0.35)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  >
+                    {/* Номер + Тип */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                      <div style={{ fontSize: '22px', fontWeight: '700' }}>
+                        {mixer.number}
+                      </div>
                       <div style={{ 
-                        padding: '6px 18px', 
+                        padding: '5px 14px', 
                         borderRadius: '9999px', 
+                        fontSize: '13.5px',
+                        fontWeight: '600',
                         background: mixer.type === 'own' ? '#10B98120' : '#FACC1520', 
-                        color: mixer.type === 'own' ? '#10B981' : '#FACC15',
-                        fontSize: '14px',
-                        fontWeight: '600'
+                        color: mixer.type === 'own' ? '#10B981' : '#FACC15'
                       }}>
                         {mixer.type === 'own' ? 'Свой' : 'Наемный'}
                       </div>
                     </div>
 
-                    <div style={{ marginBottom: '24px' }}>
-                      <div style={{ color: '#CBD5E1', fontSize: '17px' }}>{mixer.model}</div>
-                      <div style={{ marginTop: '8px', fontSize: '16px' }}>
-                        <strong>{mixer.driver}</strong><br />
-                        <span style={{ color: '#94A3B8' }}>{mixer.phone}</span>
-                      </div>
+                    {/* Модель */}
+                    <div style={{ color: '#CBD5E1', fontSize: '16.5px', marginBottom: '12px' }}>
+                      {mixer.model}
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                    {/* Водитель + Телефон */}
+                    <div style={{ marginBottom: '20px' }}>
+                      <div style={{ fontWeight: '600', fontSize: '16px' }}>{mixer.driver}</div>
+                      <div style={{ color: '#94A3B8', fontSize: '14.5px' }}>{mixer.phone}</div>
+                    </div>
+
+                    {/* Объём + Статус */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                       <div>
-                        <div style={{ fontSize: '32px', fontWeight: '700' }}>{mixer.volume} м³</div>
-                        <div style={{ color: '#94A3B8', fontSize: '14px' }}>Объём</div>
+                        <div style={{ fontSize: '32px', fontWeight: '700', lineHeight: 1 }}>
+                          {mixer.volume} <span style={{ fontSize: '18px', color: '#94A3B8' }}>м³</span>
+                        </div>
                       </div>
-                      <div style={{ padding: '8px 20px', borderRadius: '9999px', background: statusStyle.bg, color: statusStyle.color, fontWeight: '600' }}>
+
+                      <div style={{ 
+                        padding: '7px 18px', 
+                        borderRadius: '9999px', 
+                        background: statusStyle.bg, 
+                        color: statusStyle.color, 
+                        fontWeight: '600',
+                        fontSize: '14px'
+                      }}>
                         {mixer.status}
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', gap: '12px' }}>
+                    {/* Тонкие кнопки в стиле списка */}
+                    <div style={{ display: 'flex', gap: '10px' }}>
                       <button 
                         onClick={() => openEditModal(mixer)} 
-                        style={{ flex: 1, padding: '14px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
+                        style={{ 
+                          flex: 1, 
+                          padding: '10px 16px',
+                          background: '#334155',
+                          color: '#E2E8F0',
+                          border: 'none', 
+                          borderRadius: '9999px', 
+                          fontWeight: '500',
+                          fontSize: '14.5px',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = '#3B82F6';
+                          e.currentTarget.style.color = 'white';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = '#334155';
+                          e.currentTarget.style.color = '#E2E8F0';
+                        }}
                       >
                         ✏️ Редактировать
                       </button>
-                      <button style={{ flex: 1, padding: '14px', background: '#334155', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}>
+                      <button 
+                        style={{ 
+                          flex: 1, 
+                          padding: '10px 16px',
+                          background: '#334155',
+                          color: '#E2E8F0',
+                          border: 'none', 
+                          borderRadius: '9999px', 
+                          fontWeight: '500',
+                          fontSize: '14.5px'
+                        }}
+                      >
                         📍 На карте
                       </button>
                     </div>
@@ -217,36 +409,101 @@ export default function MixersPage() {
             </div>
           )}
 
-          {/* Список */}
+          {/* ==================== РЕЖИМ СПИСКА (компактный) ==================== */}
           {viewMode === 'list' && (
-            <div style={{ background: '#1E2937', borderRadius: '20px', overflow: 'hidden' }}>
+            <div style={{ 
+              background: '#1E2937', 
+              borderRadius: '20px', 
+              overflow: 'hidden',
+              boxShadow: '0 10px 30px rgba(0,0,0,0.3)'
+            }}>
               {filteredMixers.map((mixer) => {
                 const statusStyle = getStatusStyle(mixer.status);
                 return (
-                  <div key={mixer.id} style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    padding: '20px 28px', 
-                    borderBottom: '1px solid #334155'
-                  }}>
-                    <div style={{ width: '160px', fontWeight: '700', fontSize: '18px' }}>{mixer.number}</div>
-                    <div style={{ flex: 1, color: '#CBD5E1' }}>{mixer.model}</div>
-                    <div style={{ flex: 1 }}>
-                      <strong>{mixer.driver}</strong><br />
-                      <span style={{ color: '#94A3B8' }}>{mixer.phone}</span>
+                  <div 
+                    key={mixer.id} 
+                    style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      padding: '18px 28px',
+                      borderBottom: '1px solid #334155',
+                      transition: 'background 0.2s ease',
+                      minHeight: '72px'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#25334A'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                  >
+                    {/* Номер миксера */}
+                    <div style={{ width: '140px', fontWeight: '700', fontSize: '18px', color: '#fff' }}>
+                      {mixer.number}
                     </div>
-                    <div style={{ width: '100px', fontSize: '18px', fontWeight: '600' }}>{mixer.volume} м³</div>
+
+                    {/* Модель */}
+                    <div style={{ flex: 1, color: '#CBD5E1', fontSize: '16px' }}>
+                      {mixer.model}
+                    </div>
+
+                    {/* Водитель + телефон */}
+                    <div style={{ flex: 1.4 }}>
+                      <div style={{ fontWeight: '600' }}>{mixer.driver}</div>
+                      <div style={{ color: '#94A3B8', fontSize: '14.5px' }}>{mixer.phone}</div>
+                    </div>
+
+                    {/* Объём */}
+                    <div style={{ width: '110px', fontSize: '18px', fontWeight: '700', textAlign: 'center' }}>
+                      {mixer.volume} м³
+                    </div>
+
+                    {/* Статус */}
                     <div style={{ width: '160px' }}>
-                      <span style={{ padding: '6px 18px', borderRadius: '9999px', background: statusStyle.bg, color: statusStyle.color, fontWeight: '600' }}>
+                      <span style={{ 
+                        padding: '6px 18px', 
+                        borderRadius: '9999px', 
+                        background: statusStyle.bg, 
+                        color: statusStyle.color, 
+                        fontWeight: '600',
+                        fontSize: '14px'
+                      }}>
                         {mixer.status}
                       </span>
                     </div>
-                    <div style={{ padding: '6px 18px', borderRadius: '9999px', background: mixer.type === 'own' ? '#10B98120' : '#FACC1520', color: mixer.type === 'own' ? '#10B981' : '#FACC15' }}>
-                      {mixer.type === 'own' ? 'Свой' : 'Наемный'}
+
+                    {/* Тип */}
+                    <div style={{ width: '130px' }}>
+                      <span style={{ 
+                        padding: '6px 18px', 
+                        borderRadius: '9999px', 
+                        background: mixer.type === 'own' ? '#10B98120' : '#FACC1520', 
+                        color: mixer.type === 'own' ? '#10B981' : '#FACC15',
+                        fontWeight: '600',
+                        fontSize: '14px'
+                      }}>
+                        {mixer.type === 'own' ? 'Свой' : 'Наемный'}
+                      </span>
                     </div>
+
+                    {/* Кнопка Редактировать */}
                     <button 
                       onClick={() => openEditModal(mixer)} 
-                      style={{ marginLeft: 'auto', padding: '10px 20px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
+                      style={{ 
+                        padding: '9px 20px',
+                        background: '#334155',
+                        color: '#E2E8F0',
+                        border: 'none', 
+                        borderRadius: '9999px', 
+                        fontWeight: '500',
+                        fontSize: '14.5px',
+                        marginLeft: 'auto',
+                        transition: 'all 0.2s ease'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = '#3B82F6';
+                        e.currentTarget.style.color = 'white';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = '#334155';
+                        e.currentTarget.style.color = '#E2E8F0';
+                      }}
                     >
                       Редактировать
                     </button>
@@ -258,39 +515,108 @@ export default function MixersPage() {
         </>
       )}
 
-      {/* Модальное окно */}
+      {/* ==================== МОДАЛЬНОЕ ОКНО ==================== */}
       {showModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowModal(false)}>
-          <div style={{ background: '#1E2937', width: '520px', borderRadius: '20px', padding: '32px' }} onClick={e => e.stopPropagation()}>
-            <h2 style={{ marginBottom: '24px' }}>{editingMixer ? 'Редактировать миксер' : 'Добавить миксер'}</h2>
+        <div 
+          style={{ 
+            position: 'fixed', 
+            inset: 0, 
+            background: 'rgba(0,0,0,0.9)', 
+            zIndex: 9999, 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center' 
+          }} 
+          onClick={() => setShowModal(false)}
+        >
+          <div 
+            style={{ 
+              background: '#1E2937', 
+              width: '520px', 
+              borderRadius: '20px', 
+              padding: '32px' 
+            }} 
+            onClick={e => e.stopPropagation()}
+          >
+            <h2 style={{ marginBottom: '24px' }}>
+              {editingMixer ? 'Редактировать миксер' : 'Добавить миксер'}
+            </h2>
             
-            <input type="text" placeholder="Номер миксера *" value={formData.number} onChange={(e) => setFormData({...formData, number: e.target.value})} style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} />
-            <input type="text" placeholder="Модель" value={formData.model} onChange={(e) => setFormData({...formData, model: e.target.value})} style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} />
-            <input type="text" placeholder="ФИО водителя *" value={formData.driver} onChange={(e) => setFormData({...formData, driver: e.target.value})} style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} />
-            <input type="text" placeholder="Телефон" value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} />
+            <input 
+              type="text" 
+              placeholder="Номер миксера *" 
+              value={formData.number} 
+              onChange={(e) => setFormData({...formData, number: e.target.value})} 
+              style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} 
+            />
+            <input 
+              type="text" 
+              placeholder="Модель" 
+              value={formData.model} 
+              onChange={(e) => setFormData({...formData, model: e.target.value})} 
+              style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} 
+            />
+            <input 
+              type="text" 
+              placeholder="ФИО водителя *" 
+              value={formData.driver} 
+              onChange={(e) => setFormData({...formData, driver: e.target.value})} 
+              style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} 
+            />
+            <input 
+              type="text" 
+              placeholder="Телефон" 
+              value={formData.phone} 
+              onChange={(e) => setFormData({...formData, phone: e.target.value})} 
+              style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} 
+            />
 
             <div style={{ marginBottom: '16px' }}>
               <label>Объём (м³)</label>
-              <input type="number" value={formData.volume} onChange={(e) => setFormData({...formData, volume: Number(e.target.value)})} style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff' }} />
+              <input 
+                type="number" 
+                value={formData.volume} 
+                onChange={(e) => setFormData({...formData, volume: Number(e.target.value)})} 
+                style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff' }} 
+              />
             </div>
 
             <div style={{ marginBottom: '24px' }}>
               <label>Тип миксера</label>
               <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
-                <button onClick={() => setFormData({...formData, type: 'own'})} style={{ flex: 1, padding: '12px', background: formData.type === 'own' ? '#10B981' : '#25334A', borderRadius: '12px', color: 'white' }}>Свой</button>
-                <button onClick={() => setFormData({...formData, type: 'rented'})} style={{ flex: 1, padding: '12px', background: formData.type === 'rented' ? '#FACC15' : '#25334A', borderRadius: '12px', color: 'white' }}>Наемный</button>
+                <button 
+                  onClick={() => setFormData({...formData, type: 'own'})} 
+                  style={{ flex: 1, padding: '12px', background: formData.type === 'own' ? '#10B981' : '#25334A', borderRadius: '12px', color: 'white' }}
+                >
+                  Свой
+                </button>
+                <button 
+                  onClick={() => setFormData({...formData, type: 'rented'})} 
+                  style={{ flex: 1, padding: '12px', background: formData.type === 'rented' ? '#FACC15' : '#25334A', borderRadius: '12px', color: 'white' }}
+                >
+                  Наемный
+                </button>
               </div>
             </div>
 
             <div style={{ display: 'flex', gap: '12px' }}>
-              <button onClick={() => setShowModal(false)} style={{ flex: 1, padding: '14px', background: '#334155', borderRadius: '9999px', color: 'white' }}>Отмена</button>
-              <button onClick={saveMixer} style={{ flex: 1, padding: '14px', background: '#10B981', borderRadius: '9999px', fontWeight: '600', color: 'white' }}>
+              <button 
+                onClick={() => setShowModal(false)} 
+                style={{ flex: 1, padding: '14px', background: '#334155', borderRadius: '9999px', color: 'white' }}
+              >
+                Отмена
+              </button>
+              <button 
+                onClick={saveMixer} 
+                style={{ flex: 1, padding: '14px', background: '#10B981', borderRadius: '9999px', fontWeight: '600', color: 'white' }}
+              >
                 {editingMixer ? 'Сохранить изменения' : 'Добавить миксер'}
               </button>
             </div>
           </div>
         </div>
       )}
+
     </div>
   );
 }

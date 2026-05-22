@@ -607,7 +607,8 @@ export default function ZayavkiPage() {
               <div style={{ color: '#94A3B8' }}>Объём</div>
               <input 
                 type="number" 
-                step="0.5"
+                step="0.1"
+                min="0.1"
                 value={selectedOrder.volume || ''} 
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, volume: e.target.value })}
                 style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}

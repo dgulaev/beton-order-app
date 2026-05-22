@@ -5,13 +5,21 @@ import { useState, useMemo, useEffect } from 'react';
 interface NewOrderModalProps {
   isOpen: boolean;
   onClose: () => void;
-  userId: any;
+  userId?: any;
   userName?: string;
   userPhone?: string;
-  onOrderCreated: () => void;
+  onOrderCreated?: () => void;
 }
 
-export default function NewOrderModal({ isOpen, onClose, userId, userName, userPhone, onOrderCreated }: NewOrderModalProps) {
+export default function NewOrderModal({ 
+  isOpen, 
+  onClose, 
+  userId, 
+  userName, 
+  userPhone, 
+  onOrderCreated 
+}: NewOrderModalProps) {
+
   const [form, setForm] = useState({
     grade: 'М300',
     volume: '',
@@ -22,37 +30,50 @@ export default function NewOrderModal({ isOpen, onClose, userId, userName, userP
     organizationName: '',
     fullName: '',
     phone: '',
+    inn: '',
     comment: '',
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);   // ← обязательно
 
-  // ==================== АВТОЗАПОЛНЕНИЕ ДАННЫХ КЛИЕНТА ====================
+  // ==================== АВТОЗАПОЛНЕНИЕ ====================
   useEffect(() => {
     if (isOpen) {
       setForm(prev => ({
         ...prev,
-        fullName: userName || '',
-        phone: userPhone || '',
+        fullName: userName || prev.fullName || '',
+        phone: userPhone || prev.phone || '',
       }));
     }
   }, [isOpen, userName, userPhone]);
 
-  // ==================== РАСЧЁТ СТОИМОСТИ (ТОЧНО КАК В МИНИ-ПРИЛОЖЕНИИ) ====================
+  // ==================== РАСЧЁТ СТОИМОСТИ ====================
   const volume = parseFloat(form.volume) || 0;
+
   const pricePerCubic: Record<string, number> = {
-    'М100': 6380, 'М150': 6500, 'М200': 6600, 'М250': 6950,
-    'М300': 7230, 'М350': 7400, 'М400': 8050, 'М450': 8350, 'М500': 8700,
-  };
-  const concreteCost = useMemo(() => volume > 0 ? Math.round(volume * (pricePerCubic[form.grade] || 7230)) : 0, [volume, form.grade]);
+  'М100': 6380, 'М100и': 5050,
+  'М150': 6500, 'М150и': 5450,
+  'М200': 6600, 'М200и': 5600,
+  'М250': 6950, 'М250и': 5950,
+  'М300': 7230,
+  'М350': 7400,
+  'М400': 8050,
+  'М450': 8350,
+  'М500': 8700,
+};
+
+  const concreteCost = useMemo(() => {
+    return volume > 0 ? Math.round(volume * (pricePerCubic[form.grade] || 7230)) : 0;
+  }, [volume, form.grade]);
 
   let deliveryCost = 0;
+  let deliveryNote = '';
   if (volume > 0) {
-    if (volume <= 10) deliveryCost = 6000;
-    else if (volume <= 12) deliveryCost = 7500;
-    else if (volume <= 50) deliveryCost = Math.ceil(volume / 10) * 6000;
-    else deliveryCost = Math.round(volume * 600);
+    if (volume <= 10) { deliveryCost = 6000; deliveryNote = '6000 ₽ за рейс (до 10 м³)'; }
+    else if (volume <= 12) { deliveryCost = 7500; deliveryNote = '7500 ₽ за рейс (12 м³)'; }
+    else if (volume <= 50) { deliveryCost = Math.ceil(volume / 10) * 6000; deliveryNote = `${Math.ceil(volume / 10)} рейса × 6000 ₽`; }
+    else { deliveryCost = Math.round(volume * 600); deliveryNote = '600 ₽ за 1 м³'; }
   }
   const totalPrice = concreteCost + deliveryCost;
 
@@ -63,24 +84,22 @@ export default function NewOrderModal({ isOpen, onClose, userId, userName, userP
     setIsSubmitting(true);
 
     const payload = {
-      userId: userId,
+      userId,
       grade: form.grade,
       volume: Number(form.volume),
       deliveryDate: form.deliveryDate,
       deliveryTime: form.deliveryTime,
       address: form.address,
-      comment: form.comment,
-      // ТИП КЛИЕНТА (красивый текст для бота)
-      customerType: form.customerType === 'legal' 
-        ? 'Юридическое лицо' 
-        : 'Физическое лицо',
+      customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
       fullName: form.fullName,
       phone: form.phone,
-      totalPrice: totalPrice,
-      concreteCost: concreteCost,
-      deliveryCost: deliveryCost,
-      // ИГНОРИРОВАНИЕ ПЕРЕСЕЧЕНИЯ ВРЕМЕНИ ПРИ СОЗДАНИИ ИЗ АДМИНКИ
-      ignoreTimeConflict: true,
+      organizationName: form.organizationName,
+      inn: form.inn,
+      totalPrice,
+      concreteCost,
+      deliveryCost,
+      comment: form.comment,
+      isFromAdmin: true,
     };
 
     try {
@@ -94,7 +113,7 @@ export default function NewOrderModal({ isOpen, onClose, userId, userName, userP
 
       if (data.success) {
         setShowSuccess(true);
-        onOrderCreated();
+        onOrderCreated?.();
 
         setTimeout(() => {
           setShowSuccess(false);
@@ -121,10 +140,10 @@ export default function NewOrderModal({ isOpen, onClose, userId, userName, userP
     }}>
       {/* ==================== ОСНОВНОЙ КОНТЕЙНЕР МОДАЛКИ ==================== */}
       <div style={{
-        background: '#1E2937',           // ← основной цвет фона модалки
-        width: '560px',                  // ← ширина всей модалки (можно менять)
-        borderRadius: '20px',            // ← скругление углов
-        padding: '32px',                 // ← внешние отступы от краёв модалки
+        background: '#1E2937',
+        width: '560px',
+        borderRadius: '20px',
+        padding: '32px',
         color: '#fff',
         maxHeight: '92vh',
         overflow: 'auto',
@@ -148,31 +167,41 @@ export default function NewOrderModal({ isOpen, onClose, userId, userName, userP
           Для: <strong>{userName || 'Клиент'}</strong><br />{userPhone}
         </p>
 
-        <form onSubmit={handleSubmit} style={{ 
-          display: 'flex', 
-          flexDirection: 'column', 
-          gap: '24px'                    // ← расстояние между всеми блоками формы
-        }}>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           
           {/* ==================== ПОЛЕ МАРКА БЕТОНА ==================== */}
-          <div>
-            <label style={{ display: 'block', marginBottom: '8px', color: '#94A3B8', fontSize: '14px' }}>Марка бетона</label>
-            <select value={form.grade} onChange={e => setForm({...form, grade: e.target.value})} style={{ 
-              width: '100%', 
-              padding: '16px',               // ← вертикальный padding полей
-              background: '#25334A', 
-              border: 'none', 
-              borderRadius: '12px', 
-              color: '#fff', 
-              fontSize: '16px'               // ← размер шрифта в полях
-            }}>
-              <option value="М100">М100</option><option value="М150">М150</option><option value="М200">М200</option>
-              <option value="М300">М300</option><option value="М350">М350</option><option value="М400">М400</option>
-              <option value="М450">М450</option><option value="М500">М500</option>
-            </select>
-          </div>
+<div>
+  <label style={{ display: 'block', marginBottom: '8px', color: '#94A3B8', fontSize: '14px' }}>Марка бетона</label>
+  <select 
+    value={form.grade} 
+    onChange={e => setForm({...form, grade: e.target.value})} 
+    style={{ 
+      width: '100%', 
+      padding: '16px', 
+      background: '#25334A', 
+      border: 'none', 
+      borderRadius: '12px', 
+      color: '#fff', 
+      fontSize: '16px' 
+    }}
+  >
+    <option value="М100">М100</option>
+    <option value="М100и">М100и (на доломите)</option>
+    <option value="М150">М150</option>
+    <option value="М150и">М150и (на доломите)</option>
+    <option value="М200">М200</option>
+    <option value="М200и">М200и (на доломите)</option>
+    <option value="М250">М250</option>
+    <option value="М250и">М250и (на доломите)</option>
+    <option value="М300">М300</option>
+    <option value="М350">М350</option>
+    <option value="М400">М400</option>
+    <option value="М450">М450</option>
+    <option value="М500">М500</option>
+  </select>
+</div>
 
-          {/* ==================== БЛОК ОБЪЁМ + ДАТА (в две колонки) ==================== */}
+          {/* ==================== БЛОК ОБЪЁМ + ДАТА ==================== */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '8px', color: '#94A3B8', fontSize: '14px' }}>Объём (м³)</label>
@@ -271,7 +300,7 @@ export default function NewOrderModal({ isOpen, onClose, userId, userName, userP
             </div>
           )}
 
-          {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
+          {/* ==================== КНОПКИ ==================== */}
           <div style={{ display: 'flex', gap: '16px', marginTop: '12px' }}>
             <button type="button" onClick={onClose} style={{ flex: 1, padding: '18px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '16px', fontWeight: '600' }}>Отмена</button>
             <button type="submit" disabled={isSubmitting} style={{ flex: 1, padding: '18px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '12px', fontSize: '16px', fontWeight: '600' }}>

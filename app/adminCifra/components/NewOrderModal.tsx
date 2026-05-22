@@ -313,7 +313,7 @@ const pricePerCubic: Record<string, number> = {
                   {Object.keys(pricePerCubic).map(g => <option key={g} value={g}>{g}</option>)}
                 </select>
 
-                <input type="number" name="volume" placeholder="Объём, м³" value={form.volume} onChange={handleChange} step="0.5" min="1" style={{ padding: '14px', background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }} required />
+                <input type="number" name="volume" placeholder="Объём, м³" value={form.volume} onChange={handleChange} step="0.1" min="0.1" style={{ padding: '14px', background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }} required />
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <input type="date" name="deliveryDate" value={form.deliveryDate} onChange={handleChange} style={{ padding: '14px', background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }} required />

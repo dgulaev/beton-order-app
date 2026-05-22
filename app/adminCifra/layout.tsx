@@ -123,8 +123,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             <Link href="/adminCifra/orders" style={navLinkStyle(isActive('/adminCifra/orders'), isCollapsed)}>
               <Package size={22} /> {!isCollapsed && <span>Все заказы</span>}
             </Link>
-            <Link href="/adminCifra/schedule" style={navLinkStyle(isActive('/adminCifra/schedule'), isCollapsed)}>
-              <Calendar size={22} /> {!isCollapsed && <span>Календарь / Таймлайн</span>}
+            <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
+              <Calendar size={22} /> {!isCollapsed && <span>Рецепты</span>}
             </Link>
             <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers'), isCollapsed)}>
               <Truck size={22} /> {!isCollapsed && <span>Миксеры</span>}
@@ -132,16 +132,16 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             <Link href="/adminCifra/clients" style={navLinkStyle(isActive('/adminCifra/clients'), isCollapsed)}>
               <Users size={22} /> {!isCollapsed && <span>Клиенты</span>}
             </Link>
+            <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
+              <UserCog size={22} /> {!isCollapsed && <span>Оператор БСУ</span>}
+            </Link>
 
-            {(userRole === 'admin' || userRole === 'manager') && (
+            {(userRole === 'admin') && (
               <Link href="/adminCifra/withdrawals" style={navLinkStyle(isActive('/adminCifra/withdrawals'), isCollapsed)}>
                 <DollarSign size={22} /> {!isCollapsed && <span>Выводы наличных</span>}
               </Link>
             )}
 
-            <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
-              <UserCog size={22} /> {!isCollapsed && <span>Оператор БСУ</span>}
-            </Link>
           </nav>
         </div>
 
