@@ -290,26 +290,30 @@ console.log(`✅ Время успешно принято.`);
         console.log(`✅ УСПЕШНО ЗАМОРОЖЕНО ${bonusPoints} баллов для реферера ${referredBy} (заказ #${orderId})`);
       }
     }
-    // Уведомление в Max (оставлено без изменений)
+    // ==================== ФОРМИРОВАНИЕ И ОТПРАВКА УВЕДОМЛЕНИЯ В MAX ====================
+    // Закомментировано — теперь уведомление отправляется вручную из модалки
+    /*
     const messageText = `
-✅ *Новая заявка на отгрузку бетона*
+      ✅ *Новая заявка на отгрузку бетона*
 
-📌 Марка: ${grade}
-📦 Объём: ${volume} м³
-📅 Дата: ${finalDeliveryDate || deliveryDate} ${finalDeliveryTime || deliveryTime}
-📍 Адрес: ${address}
+      📌 Марка: ${grade}
+      📦 Объём: ${volume} м³
+      📅 Дата: ${finalDeliveryDate} ${finalDeliveryTime}
+      📍 Адрес: ${address}
 
-👤 Тип: ${customerType}
-${customerType?.includes('Юридическое') ? `🏢 ${organizationName || '—'}` : `🙍 ${fullName || '—'}`}
+      👤 Тип: ${customerType}
+      ${customerType?.includes('Юридическое') 
+   ? `🏢 ${finalOrganizationName || '—'}`
+   : `🙍 ${finalFullName || '—'}`}
 
-📞 Телефон: ${phone}
-💰 Бетон: ${concreteCost?.toLocaleString('ru-RU')} ₽
-🚚 Доставка: ${deliveryCost?.toLocaleString('ru-RU')} ₽
-💵 *Итого: ${totalPrice?.toLocaleString('ru-RU')} ₽*
+      📞 Телефон: ${phone}
+      💰 Бетон: ${concreteCost?.toLocaleString('ru-RU')} ₽
+      🚚 Доставка: ${deliveryCost?.toLocaleString('ru-RU')} ₽
+      💵 *Итого: ${totalPrice?.toLocaleString('ru-RU')} ₽*
 
-💬 Комментарий: ${comment || '—'}
-🕒 ${new Date().toLocaleString('ru-RU')}
-👤 MAX ID: ${userId}
+      💬 Комментарий: ${comment || '—'}
+      🕒 ${new Date().toLocaleString('ru-RU')}
+      👤 MAX ID: ${userId}
     `.trim();
 
     if (BOT_TOKEN && CHAT_ID) {
@@ -317,8 +321,12 @@ ${customerType?.includes('Юридическое') ? `🏢 ${organizationName ||
         method: 'POST',
         headers: { 'Authorization': BOT_TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: messageText }),
-      }).catch(() => {});
+      }).catch(err => {
+        console.warn('Не удалось отправить уведомление в Max:', err);
+      });
     }
+    */
+    // =====================================================================
 
     return NextResponse.json({ 
       success: true, 

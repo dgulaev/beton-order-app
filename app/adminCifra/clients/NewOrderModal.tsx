@@ -20,6 +20,8 @@ export default function NewOrderModal({
   onOrderCreated 
 }: NewOrderModalProps) {
 
+  const [recipes, setRecipes] = useState<any[]>([]);   // ← Добавлено
+
   const [form, setForm] = useState({
     grade: 'М300',
     volume: '',
@@ -35,7 +37,28 @@ export default function NewOrderModal({
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);   // ← обязательно
+  const [showSuccess, setShowSuccess] = useState(false);
+
+  // ==================== ЗАГРУЗКА РЕЦЕПТОВ ИЗ БАЗЫ ====================
+  useEffect(() => {
+    const loadRecipes = async () => {
+      try {
+        const res = await fetch('/api/adminCifra/recipes');
+        if (res.ok) {
+          const data = await res.json();
+          setRecipes(data);
+          // Устанавливаем первую активную марку по умолчанию
+          if (data.length > 0) {
+            setForm(prev => ({ ...prev, grade: data[0].code }));
+          }
+        }
+      } catch (e) {
+        console.error('Ошибка загрузки рецептов:', e);
+      }
+    };
+
+    if (isOpen) loadRecipes();
+  }, [isOpen]);
 
   // ==================== АВТОЗАПОЛНЕНИЕ ====================
   useEffect(() => {
@@ -49,23 +72,14 @@ export default function NewOrderModal({
   }, [isOpen, userName, userPhone]);
 
   // ==================== РАСЧЁТ СТОИМОСТИ ====================
+  const selectedRecipe = recipes.find(r => r.code === form.grade);
   const volume = parseFloat(form.volume) || 0;
 
-  const pricePerCubic: Record<string, number> = {
-  'М100': 6380, 'М100и': 5050,
-  'М150': 6500, 'М150и': 5450,
-  'М200': 6600, 'М200и': 5600,
-  'М250': 6950, 'М250и': 5950,
-  'М300': 7230,
-  'М350': 7400,
-  'М400': 8050,
-  'М450': 8350,
-  'М500': 8700,
-};
-
   const concreteCost = useMemo(() => {
-    return volume > 0 ? Math.round(volume * (pricePerCubic[form.grade] || 7230)) : 0;
-  }, [volume, form.grade]);
+    return volume > 0 && selectedRecipe 
+      ? Math.round(volume * selectedRecipe.price) 
+      : 0;
+  }, [volume, selectedRecipe]);
 
   let deliveryCost = 0;
   let deliveryNote = '';
@@ -169,39 +183,31 @@ export default function NewOrderModal({
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           
-          {/* ==================== ПОЛЕ МАРКА БЕТОНА ==================== */}
-<div>
-  <label style={{ display: 'block', marginBottom: '8px', color: '#94A3B8', fontSize: '14px' }}>Марка бетона</label>
-  <select 
-    value={form.grade} 
-    onChange={e => setForm({...form, grade: e.target.value})} 
-    style={{ 
-      width: '100%', 
-      padding: '16px', 
-      background: '#25334A', 
-      border: 'none', 
-      borderRadius: '12px', 
-      color: '#fff', 
-      fontSize: '16px' 
-    }}
-  >
-    <option value="М100">М100</option>
-    <option value="М100и">М100и (на доломите)</option>
-    <option value="М150">М150</option>
-    <option value="М150и">М150и (на доломите)</option>
-    <option value="М200">М200</option>
-    <option value="М200и">М200и (на доломите)</option>
-    <option value="М250">М250</option>
-    <option value="М250и">М250и (на доломите)</option>
-    <option value="М300">М300</option>
-    <option value="М350">М350</option>
-    <option value="М400">М400</option>
-    <option value="М450">М450</option>
-    <option value="М500">М500</option>
-  </select>
-</div>
+          {/* ==================== ПОЛЕ МАРКА БЕТОНА (ДИНАМИЧЕСКАЯ ИЗ БАЗЫ) ==================== */}
+          <div>
+            <label style={{ display: 'block', marginBottom: '8px', color: '#94A3B8', fontSize: '14px' }}>Марка бетона / раствора</label>
+            <select 
+              value={form.grade} 
+              onChange={e => setForm({...form, grade: e.target.value})} 
+              style={{ 
+                width: '100%', 
+                padding: '16px', 
+                background: '#25334A', 
+                border: 'none', 
+                borderRadius: '12px', 
+                color: '#fff', 
+                fontSize: '16px' 
+              }}
+            >
+              {recipes.map(r => (
+                <option key={r.code} value={r.code}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
-          {/* ==================== БЛОК ОБЪЁМ + ДАТА ==================== */}
+          {/* ==================== БЛОК ОБЪЁМ + ДАТА (в две колонки) ==================== */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '8px', color: '#94A3B8', fontSize: '14px' }}>Объём (м³)</label>
@@ -300,7 +306,7 @@ export default function NewOrderModal({
             </div>
           )}
 
-          {/* ==================== КНОПКИ ==================== */}
+          {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
           <div style={{ display: 'flex', gap: '16px', marginTop: '12px' }}>
             <button type="button" onClick={onClose} style={{ flex: 1, padding: '18px', background: '#334155', color: '#fff', border: 'none', borderRadius: '12px', fontSize: '16px', fontWeight: '600' }}>Отмена</button>
             <button type="submit" disabled={isSubmitting} style={{ flex: 1, padding: '18px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '12px', fontSize: '16px', fontWeight: '600' }}>

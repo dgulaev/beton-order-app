@@ -13,6 +13,43 @@ export default function ZayavkiPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'processing' | 'completed' | 'cancelled'>('all');
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
+  const [currentRole, setCurrentRole] = useState<string>('');
+  const [notificationSent, setNotificationSent] = useState(false);
+  const [isSendingNotification, setIsSendingNotification] = useState(false);
+
+     // ==================== ЗАГРУЗКА РОЛИ ====================
+useEffect(() => {
+  const loadRole = async () => {
+    // 1. Проверяем localStorage
+    let savedRole = localStorage.getItem('userRole');
+
+    if (savedRole) {
+      setCurrentRole(savedRole);
+      console.log('🔑 Роль загружена из localStorage:', savedRole);
+      return;
+    }
+
+    // 2. Если нет — запрашиваем с сервера
+    try {
+      const res = await fetch('/api/user/role', { method: 'POST' });
+      
+      if (res.ok) {
+        const data = await res.json();
+        const role = (data.role || 'client').toLowerCase();
+        
+        setCurrentRole(role);
+        localStorage.setItem('userRole', role);
+        console.log('🔑 Роль загружена с сервера:', role);
+      }
+    } catch (err) {
+      console.error('❌ Не удалось загрузить роль с сервера', err);
+      // На случай ошибки — ставим admin для админ-панели
+      setCurrentRole('admin');
+    }
+  };
+
+  loadRole();
+}, []);
 
   // ==================== УДАЛЕНИЕ ЗАЯВКИ ====================
   const handleDeleteOrder = async (orderId: number) => {
@@ -72,6 +109,89 @@ export default function ZayavkiPage() {
   })
   .catch(() => alert('Ошибка соединения'));
 };
+
+  // ==================== РУЧНАЯ ОТПРАВКА УВЕДОМЛЕНИЯ В MAX ====================
+  const sendNotification = async (orderId: number) => {
+    if (!orderId) return alert('ID заявки не найден');
+
+    if (!confirm('Отправить обновлённую заявку в Max?')) return;
+
+    setIsSendingNotification(true);
+
+    try {
+      const res = await fetch('/api/order/send-notification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId }),
+      });
+
+      if (res.ok) {
+        setNotificationSent(true);
+        alert('✅ Уведомление успешно отправлено в Max!');
+      } else {
+        alert('Не удалось отправить уведомление');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Ошибка отправки уведомления');
+    } finally {
+      setIsSendingNotification(false);
+    }
+  };
+
+            // ==================== ПОДЕЛИТЬСЯ ЗАЯВКОЙ (ЧИСТЫЙ ТЕКСТ) ====================
+  const shareOrder = (order: any) => {
+    const shareText = `Заявка №${order.id}
+
+Марка: ${order.grade}
+Объём: ${order.volume} м³
+Дата: ${order.delivery_date}
+Время: ${order.delivery_time}
+
+Адрес: ${order.address}
+
+Тип: ${order.customer_type}
+${order.customer_type?.includes('Юридическое') 
+  ? `Организация: ${order.organization_name || '-'}`
+  : `ФИО: ${order.full_name || '-'}`}
+
+Телефон: ${order.phone}
+
+Комментарий: ${order.comment || '-'}`.trim();
+
+    // Надёжный способ копирования с fallback
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(shareText).then(() => {
+        alert('✅ Информация скопирована!\nМожно отправить клиенту.');
+      }).catch(() => {
+        fallbackCopyText(shareText);
+      });
+    } else {
+      fallbackCopyText(shareText);
+    }
+  };
+
+  // Fallback для случаев, когда clipboard API недоступен
+  const fallbackCopyText = (text: string) => {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+
+    try {
+      document.execCommand('copy');
+      alert('✅ Информация скопирована!\nМожно отправить клиенту.');
+    } catch (err) {
+      alert('Не удалось скопировать текст. Скопируйте вручную.');
+      console.error('Fallback copy failed', err);
+    }
+
+    document.body.removeChild(textArea);
+  };
 
   // ==================== REALTIME ====================
   useRealtimeOrders(setAllOrders);
@@ -761,57 +881,74 @@ export default function ZayavkiPage() {
 
             
 
-            {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
-      <div style={{ marginTop: '40px', display: 'flex', gap: '16px', justifyContent: 'center' }}>
-        <button 
-  onClick={async () => {
-    const updatedOrder = { ...selectedOrder }; // копия для оптимистического апдейта
+                      {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
+<div style={{ marginTop: '40px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
 
-    try {
-      const res = await fetch('/api/adminCifra/orders/update', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(selectedOrder)
-      });
-
-      if (res.ok) {
-        alert('✅ Изменения успешно сохранены!');
-
-        // Оптимистический апдейт в общем списке
-        setAllOrders(prev => 
-          prev.map(order => 
-            order.id === selectedOrder.id ? updatedOrder : order
-          )
-        );
-
-        setSelectedOrder(null); // закрываем модалку
-      } else {
-        alert('Ошибка сохранения');
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Ошибка соединения с сервером');
-    }
-  }}
-  style={{ padding: '14px 32px', background: '#10B981', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
-     >
+  {/* Кнопки редактирования и удаления — только для Админа и Менеджера */}
+  {(currentRole === 'admin' || currentRole === 'manager') && (
+    <>
+      <button 
+        onClick={async () => {
+          // ... твой текущий код сохранения (оставь без изменений)
+        }}
+        style={{ padding: '14px 32px', background: '#10B981', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
+      >
         💾 Сохранить изменения
-        </button>
+      </button>
 
-        <button 
-          onClick={() => handleDeleteOrder(selectedOrder.id)}
-          style={{ padding: '14px 32px', background: '#EF4444', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
-        >
-          🗑️ Удалить заявку
-        </button>
+      <button 
+        onClick={() => handleDeleteOrder(selectedOrder.id)}
+        style={{ padding: '14px 32px', background: '#EF4444', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
+      >
+        🗑️ Удалить заявку
+      </button>
 
-        <button 
-          onClick={() => setSelectedOrder(null)}
-          style={{ padding: '14px 32px', background: '#334155', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
-        >
-          Отмена
-        </button>
-      </div>
+      {/* ==================== КНОПКА ОТПРАВКИ В MAX ==================== */}
+      <button 
+        onClick={() => sendNotification(selectedOrder.id)}
+        disabled={isSendingNotification}
+        style={{ 
+          padding: '14px 32px', 
+          background: isSendingNotification ? '#475569' : '#3B82F6', 
+          color: 'white', 
+          border: 'none', 
+          borderRadius: '9999px', 
+          fontWeight: '600',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}
+      >
+        {isSendingNotification ? '📤 Отправляем...' : '📢 Отправить в Max'}
+      </button>
+    </>
+  )}
+  {/* ==================== НОВАЯ КНОПКА "ПОДЕЛИТЬСЯ" ==================== */}
+  <button 
+    onClick={() => shareOrder(selectedOrder)}
+    style={{ 
+      padding: '14px 32px', 
+      background: '#8B5CF6', 
+      color: 'white', 
+      border: 'none', 
+      borderRadius: '9999px', 
+      fontWeight: '600',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px'
+    }}
+  >
+    🔗 Поделиться
+  </button>
+
+  {/* Кнопка Отмена — доступна всем */}
+  <button 
+    onClick={() => setSelectedOrder(null)}
+    style={{ padding: '14px 32px', background: '#334155', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
+  >
+    Отмена
+     </button>
+    </div>
     </div>
   </div>
 )}

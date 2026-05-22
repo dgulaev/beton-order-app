@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Calendar, Truck, Package, Users, UserCog, DollarSign, Menu, X } from 'lucide-react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 export default function AdminCifraLayout({ children }: { children: React.ReactNode }) {
@@ -120,11 +120,14 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             <Link href="/adminCifra/zayavki" style={navLinkStyle(isActive('/adminCifra/zayavki'), isCollapsed)}>
               <Package size={22} /> {!isCollapsed && <span>Заявки</span>}
             </Link>
+            {/* ЗАКОММЕНТИРОВАНО */}
+              {/* 
             <Link href="/adminCifra/orders" style={navLinkStyle(isActive('/adminCifra/orders'), isCollapsed)}>
-              <Package size={22} /> {!isCollapsed && <span>Все заказы</span>}
+            <Package size={22} /> {!isCollapsed && <span>Все заказы</span>}
             </Link>
+              */}
             <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
-              <Calendar size={22} /> {!isCollapsed && <span>Рецепты</span>}
+              <FlaskConical size={22} /> {!isCollapsed && <span>Рецепты</span>}
             </Link>
             <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers'), isCollapsed)}>
               <Truck size={22} /> {!isCollapsed && <span>Миксеры</span>}
