@@ -3,41 +3,78 @@
 import { useState, useEffect } from 'react';
 
 export default function RecipesPage() {
-  const [recipes, setRecipes] = useState<any[]>([
-    { id: 1, code: 'М100', name: 'Бетон М100 (B7,5)', price: 6380, type: 'granite', cement: 280, sand: 720, gravel: 1150, water: 190, additive: 2.0, is_active: true },
-    { id: 2, code: 'М100и', name: 'Бетон М100 на доломите', price: 5050, type: 'dolomite', cement: 280, sand: 720, gravel: 1150, water: 190, additive: 2.0, is_active: true },
-    { id: 3, code: 'М150', name: 'Бетон М150 (B10)', price: 6500, type: 'granite', cement: 310, sand: 700, gravel: 1120, water: 185, additive: 2.2, is_active: true },
-    { id: 4, code: 'М150и', name: 'Бетон М150 на доломите', price: 5450, type: 'dolomite', cement: 310, sand: 700, gravel: 1120, water: 185, additive: 2.2, is_active: true },
-    { id: 5, code: 'М200', name: 'Бетон М200 (B15)', price: 6600, type: 'granite', cement: 330, sand: 680, gravel: 1100, water: 180, additive: 2.5, is_active: true },
-    { id: 6, code: 'М200и', name: 'Бетон М200 на доломите', price: 5600, type: 'dolomite', cement: 330, sand: 680, gravel: 1100, water: 180, additive: 2.5, is_active: true },
-    { id: 7, code: 'М250', name: 'Бетон М250 (B20)', price: 6950, type: 'granite', cement: 350, sand: 660, gravel: 1080, water: 175, additive: 2.8, is_active: true },
-    { id: 8, code: 'М250и', name: 'Бетон М250 на доломите', price: 5950, type: 'dolomite', cement: 350, sand: 660, gravel: 1080, water: 175, additive: 2.8, is_active: true },
-    { id: 9, code: 'М300', name: 'Бетон М300 (B22,5)', price: 7230, type: 'granite', cement: 370, sand: 640, gravel: 1060, water: 170, additive: 3.0, is_active: true },
-    { id: 10, code: 'М350', name: 'Бетон М350 (B25)', price: 7400, type: 'granite', cement: 390, sand: 620, gravel: 1040, water: 165, additive: 3.2, is_active: true },
-    { id: 11, code: 'М350-27.5', name: 'Бетон М350 (B27,5)', price: 7800, type: 'granite', cement: 410, sand: 600, gravel: 1020, water: 160, additive: 3.5, is_active: true },
-    { id: 12, code: 'М400', name: 'Бетон М400 (B30)', price: 8050, type: 'granite', cement: 430, sand: 580, gravel: 1000, water: 155, additive: 3.8, is_active: true },
-    { id: 13, code: 'М450', name: 'Бетон М450 (B35)', price: 8350, type: 'granite', cement: 450, sand: 560, gravel: 980, water: 150, additive: 4.0, is_active: true },
-    { id: 14, code: 'М500', name: 'Бетон М500 (B40)', price: 8700, type: 'granite', cement: 470, sand: 540, gravel: 960, water: 145, additive: 4.2, is_active: true },
-  ]);
-
+  const [recipes, setRecipes] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [editingRecipe, setEditingRecipe] = useState<any>(null);
 
-  const saveRecipe = (recipe: any) => {
-    if (recipe.id) {
-      setRecipes(prev => prev.map(r => r.id === recipe.id ? recipe : r));
-    } else {
-      const newRecipe = { ...recipe, id: Date.now() };
-      setRecipes(prev => [...prev, newRecipe]);
+  // ==================== ЗАГРУЗКА РЕЦЕПТОВ ИЗ БАЗЫ ====================
+  useEffect(() => {
+    fetchRecipes();
+  }, []);
+
+  const fetchRecipes = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/adminCifra/recipes');
+      if (res.ok) {
+        const data = await res.json();
+        setRecipes(data);
+      } else {
+        console.error('Ошибка загрузки рецептов');
+      }
+    } catch (e) {
+      console.error('Ошибка соединения:', e);
+    } finally {
+      setLoading(false);
     }
-    setEditingRecipe(null);
-    alert('✅ Рецепт успешно сохранён!');
+  };
+
+  // ==================== СОХРАНЕНИЕ РЕЦЕПТА ====================
+  const saveRecipe = async (recipe: any) => {
+    const method = recipe.id ? 'PUT' : 'POST';
+    const url = recipe.id 
+      ? `/api/adminCifra/recipes/${recipe.id}` 
+      : '/api/adminCifra/recipes';
+
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(recipe),
+      });
+
+      if (res.ok) {
+        fetchRecipes();           // обновляем список
+        setEditingRecipe(null);
+        alert('✅ Рецепт успешно сохранён!');
+      } else {
+        alert('Ошибка сохранения');
+      }
+    } catch (e) {
+      alert('Ошибка соединения с сервером');
+    }
+  };
+
+  // ==================== УДАЛЕНИЕ РЕЦЕПТА ====================
+  const deleteRecipe = async (id: number) => {
+    if (!confirm('Удалить этот рецепт?')) return;
+
+    try {
+      const res = await fetch(`/api/adminCifra/recipes?id=${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        fetchRecipes();
+        alert('✅ Рецепт удалён');
+      }
+    } catch (e) {
+      alert('Ошибка удаления');
+    }
   };
 
   return (
     <div style={{ background: '#0F172A', minHeight: '100vh', color: '#fff', padding: '32px 40px' }}>
       
-      {/* ==================== ЗАГОЛОВОК + КНОПКА ДОБАВИТЬ ==================== */}
+      {/* ==================== ЗАГОЛОВОК + КНОПКА ==================== */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
         <h1 style={{ fontSize: '34px', fontWeight: '700' }}>
           📋 Рецепты бетона
@@ -59,45 +96,8 @@ export default function RecipesPage() {
         </button>
       </div>
 
-      {/* ==================== ПАНЕЛЬ УПРАВЛЕНИЯ ==================== */}
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: '16px',
-        marginBottom: '32px'
-      }}>
-        
-        {/* Левая группа — полезные кнопки */}
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button style={{
-            padding: '12px 24px',
-            background: '#1E2937',
-            border: 'none',
-            color: '#94A3B8',
-            fontSize: '16px',
-            fontWeight: '600',
-            borderRadius: '9999px',
-            cursor: 'pointer'
-          }}>
-            📊 Экспорт в Excel
-          </button>
-          <button style={{
-            padding: '12px 24px',
-            background: '#1E2937',
-            border: 'none',
-            color: '#94A3B8',
-            fontSize: '16px',
-            fontWeight: '600',
-            borderRadius: '9999px',
-            cursor: 'pointer'
-          }}>
-            📄 Печать КП
-          </button>
-        </div>
-
-        {/* Правая группа — Переключение вида */}
+      {/* ==================== ПЕРЕКЛЮЧЕНИЕ ВИДА ==================== */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '32px' }}>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button 
             onClick={() => setViewMode('grid')} 
@@ -112,25 +112,11 @@ export default function RecipesPage() {
               alignItems: 'center',
               gap: '10px',
               position: 'relative',
-              transition: 'color 0.25s ease',
               cursor: 'pointer',
             }}
           >
             <span style={{ fontSize: '22px', opacity: viewMode === 'grid' ? 0.9 : 0.45 }}>▦</span>
             Плитка
-            {viewMode === 'grid' && (
-              <div style={{
-                position: 'absolute',
-                bottom: '3px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                width: '5px',
-                height: '5px',
-                backgroundColor: '#10B981',
-                borderRadius: '50%',
-                boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
-              }} />
-            )}
           </button>
 
           <button 
@@ -146,43 +132,57 @@ export default function RecipesPage() {
               alignItems: 'center',
               gap: '10px',
               position: 'relative',
-              transition: 'color 0.25s ease',
               cursor: 'pointer',
             }}
           >
             <span style={{ fontSize: '24px', opacity: viewMode === 'list' ? 0.9 : 0.45, lineHeight: 1 }}>≡</span>
             Список
-            {viewMode === 'list' && (
-              <div style={{
-                position: 'absolute',
-                bottom: '3px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                width: '5px',
-                height: '5px',
-                backgroundColor: '#10B981',
-                borderRadius: '50%',
-                boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
-              }} />
-            )}
           </button>
         </div>
       </div>
 
-      {/* ==================== КАРТОЧКИ (ПЛИТКА) ==================== */}
+      {/* ==================== РЕЖИМ ПЛИТКИ ==================== */}
       {viewMode === 'grid' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '24px' }}>
-          {recipes.map(recipe => (
-            <div key={recipe.id} style={{
-              background: '#1E2937',
-              borderRadius: '20px',
-              padding: '24px',
-              transition: 'all 0.25s ease'
-            }}>
-              <div style={{ fontSize: '24px', fontWeight: '700', marginBottom: '8px' }}>
-                {recipe.code}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '20px' }}>
+          {recipes.map((recipe) => (
+            <div 
+              key={recipe.id} 
+              style={{ 
+                background: '#1E2937', 
+                borderRadius: '18px', 
+                padding: '20px',
+                transition: 'all 0.25s ease',
+                border: '1px solid #334155',
+                height: 'fit-content'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-3px)';
+                e.currentTarget.style.boxShadow = '0 15px 35px rgba(0,0,0,0.35)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+                <div style={{ fontSize: '22px', fontWeight: '700' }}>
+                  {recipe.code}
+                </div>
+                <div style={{ 
+                  padding: '5px 14px', 
+                  borderRadius: '9999px', 
+                  fontSize: '13.5px',
+                  fontWeight: '600',
+                  background: recipe.type === 'dolomite' ? '#FACC1520' : '#10B98120', 
+                  color: recipe.type === 'dolomite' ? '#FACC15' : '#10B981'
+                }}>
+                  {recipe.type === 'dolomite' ? 'Доломит' : 'Гранит'}
+                </div>
               </div>
-              <div style={{ color: '#94A3B8', marginBottom: '20px' }}>{recipe.name}</div>
+
+              <div style={{ color: '#CBD5E1', fontSize: '16.5px', marginBottom: '20px' }}>
+                {recipe.name}
+              </div>
 
               <div style={{ fontSize: '32px', fontWeight: '700', color: '#60A5FA', marginBottom: '20px' }}>
                 {recipe.price.toLocaleString()} ₽
@@ -195,16 +195,37 @@ export default function RecipesPage() {
                 <div>Вода: <strong>{recipe.water} кг</strong></div>
               </div>
 
-              <div style={{ display: 'flex', gap: '12px' }}>
+              <div style={{ display: 'flex', gap: '10px' }}>
                 <button 
-                  onClick={() => setEditingRecipe(recipe)}
-                  style={{ flex: 1, padding: '12px', background: '#3B82F6', border: 'none', borderRadius: '9999px', color: 'white', fontWeight: '600' }}
+                  onClick={() => setEditingRecipe(recipe)} 
+                  style={{ 
+                    flex: 1, 
+                    padding: '10px 16px',
+                    background: '#334155',
+                    color: '#E2E8F0',
+                    border: 'none', 
+                    borderRadius: '9999px', 
+                    fontWeight: '500',
+                    fontSize: '14.5px',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = '#3B82F6'; e.currentTarget.style.color = 'white'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = '#334155'; e.currentTarget.style.color = '#E2E8F0'; }}
                 >
                   ✏️ Редактировать
                 </button>
                 <button 
                   onClick={() => setRecipes(prev => prev.filter(r => r.id !== recipe.id))}
-                  style={{ flex: 1, padding: '12px', background: '#EF4444', border: 'none', borderRadius: '9999px', color: 'white', fontWeight: '600' }}
+                  style={{ 
+                    flex: 1, 
+                    padding: '10px 16px',
+                    background: '#334155',
+                    color: '#E2E8F0',
+                    border: 'none', 
+                    borderRadius: '9999px', 
+                    fontWeight: '500',
+                    fontSize: '14.5px'
+                  }}
                 >
                   🗑️ Удалить
                 </button>
@@ -214,26 +235,67 @@ export default function RecipesPage() {
         </div>
       )}
 
-      {/* ==================== РЕЖИМ СПИСКА ==================== */}
+      {/* ==================== РЕЖИМ СПИСКА (компактный) ==================== */}
       {viewMode === 'list' && (
-        <div style={{ background: '#1E2937', borderRadius: '20px', overflow: 'hidden' }}>
-          {recipes.map(recipe => (
-            <div key={recipe.id} style={{
-              display: 'flex',
-              alignItems: 'center',
-              padding: '20px 28px',
-              borderBottom: '1px solid #334155'
-            }}>
-              <div style={{ width: '140px', fontWeight: '700', fontSize: '20px' }}>{recipe.code}</div>
-              <div style={{ flex: 1, color: '#CBD5E1' }}>{recipe.name}</div>
-              <div style={{ width: '180px', fontSize: '24px', fontWeight: '700', color: '#60A5FA' }}>
+        <div style={{ 
+          background: '#1E2937', 
+          borderRadius: '20px', 
+          overflow: 'hidden',
+          boxShadow: '0 10px 30px rgba(0,0,0,0.3)'
+        }}>
+          {recipes.map((recipe) => (
+            <div 
+              key={recipe.id} 
+              style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                padding: '10px 20px',        // ← уменьшил высоту строки
+                borderBottom: '1px solid #334155',
+                transition: 'background 0.2s ease',
+                minHeight: '20px'             // ← максимально компактно
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#25334A'}
+              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+            >
+              <div style={{ width: '130px', fontWeight: '700', fontSize: '18px' }}>
+                {recipe.code}
+              </div>
+
+              <div style={{ flex: 1, color: '#CBD5E1', fontSize: '16px' }}>
+                {recipe.name}
+              </div>
+
+              <div style={{ width: '160px', fontSize: '15px', fontWeight: '700', color: '#60A5FA', textAlign: 'right' }}>
                 {recipe.price.toLocaleString()} ₽
               </div>
-              <div style={{ display: 'flex', gap: '12px', width: '240px' }}>
-                <button onClick={() => setEditingRecipe(recipe)} style={{ padding: '10px 20px', background: '#3B82F6', border: 'none', borderRadius: '9999px', color: 'white' }}>
+
+              <div style={{ display: 'flex', gap: '8px', marginLeft: '80px' }}>
+                <button 
+                  onClick={() => setEditingRecipe(recipe)}
+                  style={{ 
+                    padding: '8px 18px',
+                    background: '#334155',
+                    color: '#E2E8F0',
+                    border: 'none', 
+                    borderRadius: '9999px', 
+                    fontWeight: '500',
+                    fontSize: '14px'
+                  }}
+                >
                   Редактировать
                 </button>
-                <button onClick={() => setRecipes(prev => prev.filter(r => r.id !== recipe.id))} style={{ padding: '10px 20px', background: '#EF4444', border: 'none', borderRadius: '9999px', color: 'white' }}>
+                <button 
+                  onClick={() => setRecipes(prev => prev.filter(r => r.id !== recipe.id))}
+                  style={{ 
+                    padding: '8px 18px',
+                    background: '#334155',
+                    color: '#E2E8F0',
+                    border: 'none', 
+                    borderRadius: '9999px', 
+                    fontWeight: '500',
+                    fontSize: '14px'
+                  }}
+                >
                   Удалить
                 </button>
               </div>
