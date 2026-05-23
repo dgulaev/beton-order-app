@@ -10,13 +10,79 @@ const supabase = createClient(
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { id, ...updateData } = body;
+    const { id, userRole, ...updateData } = body;
 
     if (!id) {
       return NextResponse.json({ success: false, message: 'ID заявки обязателен' }, { status: 400 });
     }
 
-    const { error } = await supabase
+    // Получаем текущую версию заявки
+    const { data: currentOrder, error: fetchError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !currentOrder) {
+      return NextResponse.json({ success: false, message: 'Заявка не найдена' }, { status: 404 });
+    }
+
+                // ==================== ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
+    const changes: any[] = [];
+    const changedBy = userRole || 'admin';
+
+    const fieldsToTrack = [
+      'grade', 'volume', 'delivery_date', 'delivery_time',
+      'address', 'phone', 'organization_name', 'full_name',
+      'inn', 'comment', 'status'
+    ];
+
+    console.log('🔄 Сравнение полей. Изменения от:', changedBy);
+
+    for (const field of fieldsToTrack) {
+      const oldValue = currentOrder[field];
+      const newValue = updateData[field];
+
+      // Улучшенное сравнение: пропускаем, если новое значение undefined или такое же
+      if (newValue === undefined) continue;
+
+      const oldStr = oldValue !== null && oldValue !== undefined ? String(oldValue).trim() : '';
+      const newStr = newValue !== null && newValue !== undefined ? String(newValue).trim() : '';
+
+      if (oldStr !== newStr) {
+        const actionText = `Изменено поле ${field}`;
+
+        console.log(`📝 ${actionText}: "${oldStr}" → "${newStr}"`);
+
+        changes.push({
+          order_id: id,
+          action: actionText,
+          user_name: changedBy,
+          user_role: changedBy,
+          field_name: field,
+          old_value: oldStr || null,
+          new_value: newStr || null
+        });
+      }
+    }
+
+    // Сохраняем историю изменений
+    if (changes.length > 0) {
+      const { error: historyError } = await supabase
+        .from('order_history')
+        .insert(changes);
+
+      if (historyError) {
+        console.error('❌ Ошибка записи истории:', historyError);
+      } else {
+        console.log(`✅ Успешно записано ${changes.length} изменений в историю`);
+      }
+    } else {
+      console.log('⚠️ Нет реальных изменений для записи');
+    }
+
+    // ==================== ОБНОВЛЕНИЕ ЗАЯВКИ ====================
+    const { error: updateError } = await supabase
       .from('orders')
       .update({
         grade: updateData.grade,
@@ -29,16 +95,20 @@ export async function PUT(request: NextRequest) {
         full_name: updateData.full_name,
         inn: updateData.inn,
         comment: updateData.comment,
-        // Можно добавить обновление других полей при необходимости
+        status: updateData.status,           // ← Добавили!
       })
       .eq('id', id);
 
-    if (error) {
-      console.error('Update error:', error);
-      return NextResponse.json({ success: false, message: error.message }, { status: 500 });
+    if (updateError) {
+      console.error('Update error:', updateError);
+      return NextResponse.json({ success: false, message: updateError.message }, { status: 500 });
     }
 
-    return NextResponse.json({ success: true, message: 'Заявка успешно обновлена' });
+    return NextResponse.json({ 
+      success: true, 
+      message: 'Заявка успешно обновлена',
+      changesCount: changes.length 
+    });
 
   } catch (error: any) {
     console.error('API Error:', error);

@@ -624,57 +624,67 @@ const completionPercent = planToday > 0
   };
 
         // ==================== ЗАВЕРШЕНИЕ ЛОГИСТИКИ + АВТО-СМЕНА СТАТУСА ====================
-  const completeLogistics = async (selectedOrderParam?: Order) => {
-    const targetOrder = selectedOrderParam || selectedOrder;
-    if (!targetOrder) return;
+const completeLogistics = async (selectedOrderParam?: Order) => {
+  const targetOrder = selectedOrderParam || selectedOrder;
+  if (!targetOrder) return;
 
-    const assignedVolume = mixerAssignments
-      .filter(m => String(m.orderId) === String(targetOrder.id))
-      .reduce((sum, m) => sum + Number(m.volume || 0), 0);
+  const assignedVolume = mixerAssignments
+    .filter(m => String(m.orderId) === String(targetOrder.id))
+    .reduce((sum, m) => sum + Number(m.volume || 0), 0);
 
-    const orderVolume = Number(targetOrder.volume || 0);
-    const isFullyReady = assignedVolume >= orderVolume && assignedVolume > 0;
+  const orderVolume = Number(targetOrder.volume || 0);
+  const isFullyReady = assignedVolume >= orderVolume && assignedVolume > 0;
 
-    const newStatus = isFullyReady ? 'processing' : 'new';
+  const newStatus = isFullyReady ? 'processing' : 'new';
 
-    // Optimistic update
-    setAllOrders(prev => prev.map(o => 
-      o.id === targetOrder.id 
-        ? { ...o, logistics_ready: true, status: newStatus } 
-        : o
-    ));
+  // Optimistic update
+  setAllOrders(prev => prev.map(o => 
+    o.id === targetOrder.id 
+      ? { ...o, logistics_ready: true, status: newStatus } 
+      : o
+  ));
 
-    if (selectedOrder && selectedOrder.id === targetOrder.id) {
-      setSelectedOrder(prev => prev ? { ...prev, status: newStatus, logistics_ready: true } : null);
-    }
+  if (selectedOrder && selectedOrder.id === targetOrder.id) {
+    setSelectedOrder(prev => prev ? { ...prev, status: newStatus, logistics_ready: true } : null);
+  }
 
-    try {
-      const res = await fetch('/api/adminCifra/order-logistics', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: targetOrder.id,
-          logisticsReady: true,
-          autoStatus: newStatus
-        })
-      });
+  try {
+    const res = await fetch('/api/adminCifra/order-logistics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        orderId: targetOrder.id,
+        logisticsReady: true,
+        autoStatus: newStatus
+      })
+    });
 
-      const data = await res.json();
+    const data = await res.json();
 
-      if (data.success) {
-        alert(isFullyReady 
-          ? `✅ Полная логистика (${assignedVolume}/${orderVolume} м³). Заказ переведён в "В работе"` 
-          : `⚠️ Сохранена частичная логистика (${assignedVolume}/${orderVolume} м³)`
-        );
-        setSelectedOrder(null);
-      } else {
-        alert('Ошибка: ' + (data.message || 'Не удалось сохранить'));
+    if (data.success) {
+      // ==================== КОРРЕКТНАЯ ЗАПИСЬ В ИСТОРИЮ ====================
+      const actionText = isFullyReady 
+        ? `Завершил логистику: ${assignedVolume}/${orderVolume} м³ (полностью)` 
+        : `Сохранил частичную логистику: ${assignedVolume}/${orderVolume} м³`;
+
+      if (typeof addToHistory === 'function') {
+        await addToHistory(actionText);
       }
-    } catch (err) {
-      console.error('Ошибка завершения логистики:', err);
-      alert('Не удалось связаться с сервером');
+
+      alert(isFullyReady 
+        ? `✅ Полная логистика (${assignedVolume}/${orderVolume} м³). Заказ переведён в "В работе"` 
+        : `⚠️ Сохранена частичная логистика (${assignedVolume}/${orderVolume} м³)`
+      );
+      
+      setSelectedOrder(null);
+    } else {
+      alert('Ошибка: ' + (data.message || 'Не удалось сохранить'));
     }
-  };
+  } catch (err) {
+    console.error('Ошибка завершения логистики:', err);
+    alert('Не удалось связаться с сервером');
+  }
+};
 
      // ==================== ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ ДЛЯ МОДАЛКИ ====================
   const modalCurrentUser = currentUser || {

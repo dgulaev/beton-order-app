@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
@@ -13,18 +13,46 @@ export default function ZayavkiPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'processing' | 'completed' | 'cancelled'>('all');
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
+  const [newOrderInitialData, setNewOrderInitialData] = useState<any>(null);
+  const [orderHistory, setOrderHistory] = useState<any[]>([]);
   
   const [notificationSent, setNotificationSent] = useState(false);
   const [isSendingNotification, setIsSendingNotification] = useState(false);
 
-       // ==================== ЗАГРУЗКА РОЛИ (ИСПРАВЛЕННЫЙ ВАРИАНТ) ====================
+  // ==================== ЗАГРУЗКА ИСТОРИИ ИЗМЕНЕНИЙ ====================
+  const loadOrderHistory = useCallback(async (orderId: number) => {
+    try {
+      const res = await fetch(`/api/adminCifra/orders/${orderId}/history`);
+      if (res.ok) {
+        const data = await res.json();
+        setOrderHistory(data);
+      } else {
+        setOrderHistory([]);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки истории:', err);
+      setOrderHistory([]);
+    }
+  }, []);
+
+  // ==================== ОТКРЫТИЕ ЗАЯВКИ С ИСТОРИЕЙ ====================
+  const handleOpenOrder = useCallback((order: Order) => {
+    setSelectedOrder(order);
+    const orderId = order.id ? Number(order.id) : null;
+    if (orderId) {
+      loadOrderHistory(orderId);
+    } else {
+      console.error('У заявки отсутствует id:', order);
+    }
+  }, [loadOrderHistory]);
+
+  // ==================== ЗАГРУЗКА РОЛИ (ИСПРАВЛЕННЫЙ ВАРИАНТ) ====================
   const [currentRole, setCurrentRole] = useState<string>('');
 
   useEffect(() => {
     const loadRole = async () => {
       console.log('🔄 Запуск загрузки роли...');
 
-      // 1. Проверяем localStorage
       const savedRole = localStorage.getItem('userRole');
       if (savedRole) {
         const role = savedRole.toLowerCase();
@@ -33,7 +61,6 @@ export default function ZayavkiPage() {
         return;
       }
 
-      // 2. Запрашиваем роль с сервера
       try {
         const res = await fetch('/api/user/role', { 
           method: 'GET',
@@ -44,7 +71,6 @@ export default function ZayavkiPage() {
         if (res.ok) {
           const data = await res.json();
           const role = (data.role || 'client').toLowerCase();
-          
           setCurrentRole(role);
           localStorage.setItem('userRole', role);
           console.log('✅ Роль получена с сервера:', role);
@@ -55,7 +81,6 @@ export default function ZayavkiPage() {
         }
       } catch (err) {
         console.error('❌ Ошибка запроса роли:', err);
-        // Fallback для админки
         setCurrentRole('admin');
         localStorage.setItem('userRole', 'admin');
       }
@@ -66,62 +91,55 @@ export default function ZayavkiPage() {
 
   // ==================== УДАЛЕНИЕ ЗАЯВКИ ====================
   const handleDeleteOrder = async (orderId: number) => {
-  if (!confirm('Вы уверены, что хотите удалить эту заявку? Действие необратимо.')) return;
+    if (!confirm('Вы уверены, что хотите удалить эту заявку? Действие необратимо.')) return;
 
-  try {
-    const res = await fetch(`/api/adminCifra/orders/${orderId}`, {
-      method: 'DELETE',
-    });
+    try {
+      const res = await fetch(`/api/adminCifra/orders/${orderId}`, { method: 'DELETE' });
 
-    if (res.ok) {
-      alert('✅ Заявка успешно удалена');
-      setSelectedOrder(null);
-      
-      // Оптимистическое обновление списка
-      setAllOrders(prev => prev.filter(o => String(o.id) !== String(orderId)));
-    } else {
-      alert('Ошибка при удалении заявки');
+      if (res.ok) {
+        alert('✅ Заявка успешно удалена');
+        setSelectedOrder(null);
+        setAllOrders(prev => prev.filter(o => String(o.id) !== String(orderId)));
+      } else {
+        alert('Ошибка при удалении заявки');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка соединения с сервером');
     }
-   } catch (err) {
-    console.error(err);
-    alert('Ошибка соединения с сервером');
-   }
   };
 
   // ==================== РЕДАКТИРОВАНИЕ ЗАЯВКИ ====================
   const handleEditOrder = (order: any) => {
-  // Пока открываем алерт, позже заменим на полноценное модальное окно
-  const newAddress = prompt('Новый адрес:', order.address);
-  if (newAddress === null) return; // пользователь нажал Отмена
+    const newAddress = prompt('Новый адрес:', order.address);
+    if (newAddress === null) return;
 
-  const newVolume = prompt('Новый объём (м³):', order.volume);
-  if (newVolume === null) return;
+    const newVolume = prompt('Новый объём (м³):', order.volume);
+    if (newVolume === null) return;
 
-  const updatedOrder = {
-    ...order,
-    address: newAddress,
-    volume: parseFloat(newVolume),
+    const updatedOrder = {
+      ...order,
+      address: newAddress,
+      volume: parseFloat(newVolume),
+    };
+
+    fetch('/api/adminCifra/orders/update', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updatedOrder),
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (data.success) {
+        alert('✅ Заявка обновлена!');
+        setSelectedOrder(updatedOrder);
+        setAllOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
+      } else {
+        alert('Ошибка обновления');
+      }
+    })
+    .catch(() => alert('Ошибка соединения'));
   };
-
-  // Отправляем на сервер
-  fetch('/api/adminCifra/orders/update', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(updatedOrder),
-  })
-  .then(res => res.json())
-  .then(data => {
-    if (data.success) {
-      alert('✅ Заявка обновлена!');
-      setSelectedOrder(updatedOrder); // обновляем в модалке
-      // Обновляем в общем списке
-      setAllOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
-    } else {
-      alert('Ошибка обновления');
-    }
-  })
-  .catch(() => alert('Ошибка соединения'));
-};
 
   // ==================== РУЧНАЯ ОТПРАВКА УВЕДОМЛЕНИЯ В MAX ====================
   const sendNotification = async (orderId: number) => {
@@ -152,7 +170,7 @@ export default function ZayavkiPage() {
     }
   };
 
-            // ==================== ПОДЕЛИТЬСЯ ЗАЯВКОЙ (ЧИСТЫЙ ТЕКСТ) ====================
+  // ==================== ПОДЕЛИТЬСЯ ЗАЯВКОЙ (ЧИСТЫЙ ТЕКСТ) ====================
   const shareOrder = (order: any) => {
     const shareText = `Заявка №${order.id}
 
@@ -172,7 +190,6 @@ ${order.customer_type?.includes('Юридическое')
 
 Комментарий: ${order.comment || '-'}`.trim();
 
-    // Надёжный способ копирования с fallback
     if (navigator.clipboard && window.isSecureContext) {
       navigator.clipboard.writeText(shareText).then(() => {
         alert('✅ Информация скопирована!\nМожно отправить клиенту.');
@@ -206,6 +223,29 @@ ${order.customer_type?.includes('Юридическое')
     document.body.removeChild(textArea);
   };
 
+  // ==================== КОПИРОВАТЬ ЗАЯВКУ ====================
+  const copyOrder = (order: any) => {
+    const copiedData = {
+      grade: order.grade,
+      volume: order.volume,
+      deliveryDate: order.delivery_date,
+      deliveryTime: order.delivery_time,
+      address: order.address,
+      customerType: order.customer_type?.includes('Юридическое') ? 'legal' : 'physical',
+      organizationName: order.organization_name || '',
+      fullName: order.full_name || '',
+      phone: order.phone,
+      inn: order.inn || '',
+      comment: order.comment || '',
+    };
+
+    setSelectedOrder(null);
+    setNewOrderInitialData(copiedData);
+    setShowNewOrderModal(true);
+
+    console.log('📋 Данные заявки успешно скопированы:', copiedData);
+  };
+
   // ==================== REALTIME ====================
   useRealtimeOrders(setAllOrders);
 
@@ -229,7 +269,7 @@ ${order.customer_type?.includes('Юридическое')
     fetchAllOrders();
   }, []);
 
-    // ==================== АВТООБНОВЛЕНИЕ РАЗ В МИНУТУ ====================
+  // ==================== АВТООБНОВЛЕНИЕ РАЗ В МИНУТУ ====================
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -245,7 +285,7 @@ ${order.customer_type?.includes('Юридическое')
       } catch (err) {
         console.error('Ошибка автообновления заявок:', err);
       }
-    }, 60000); // 60 секунд = 1 минута
+    }, 60000);
 
     return () => clearInterval(interval);
   }, []);
@@ -305,18 +345,19 @@ ${order.customer_type?.includes('Юридическое')
   };
 
   const filteredOrders = dayOrders.filter(order => {
-  const searchLower = searchQuery.toLowerCase();
+    const searchLower = searchQuery.toLowerCase();
 
-  const matchesSearch = 
-    (order.organization_name || '').toLowerCase().includes(searchLower) ||
-    (order.full_name || '').toLowerCase().includes(searchLower) ||
-    String(order.id).includes(searchQuery) ||
-    (order.inn || '').includes(searchQuery);   // ← теперь работает
+    const matchesSearch = 
+      (order.organization_name || '').toLowerCase().includes(searchLower) ||
+      (order.full_name || '').toLowerCase().includes(searchLower) ||
+      String(order.id).includes(searchQuery) ||
+      (order.inn || '').includes(searchQuery);
 
-  const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
+    const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
 
-  return matchesSearch && matchesStatus;
-});
+    return matchesSearch && matchesStatus;
+  });
+
 
   return (
     <div style={{ 
@@ -578,92 +619,92 @@ ${order.customer_type?.includes('Юридическое')
     </select>
   </div>
 
-  {/* ==================== СПИСОК ЗАЯВОК СО СКРОЛЛОМ ==================== */}
-<div style={{ 
-  flex: 1,
-  background: '#1E2937', 
-  borderRadius: '24px', 
-  padding: '24px 32px',
-  display: 'flex',
-  flexDirection: 'column',
-  minHeight: '620px',
-  overflow: 'hidden'
-}}>
-  
+    {/* ==================== СПИСОК ЗАЯВОК СО СКРОЛЛОМ ==================== */}
   <div style={{ 
-    flex: 1, 
-    overflowY: 'auto', 
-    display: 'flex', 
-    flexDirection: 'column', 
-    gap: '12px',
-    paddingRight: '8px'
+    flex: 1,
+    background: '#1E2937', 
+    borderRadius: '24px', 
+    padding: '24px 32px',
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: '620px',
+    overflow: 'hidden'
   }}>
-    {loading ? (
-      <div style={{ textAlign: 'center', padding: '100px', color: '#64748B' }}>Загрузка заявок...</div>
-    ) : filteredOrders.length > 0 ? filteredOrders.map((order: Order, index: number) => (
-      <div
-        key={order.id}
-        onClick={() => setSelectedOrder(order)}
-        style={{
-          background: '#25334A',
-          borderRadius: '16px',
-          padding: '20px',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '24px',
-          transition: 'all 0.2s'
-        }}
-      >
-        {/* Порядковый номер */}
-        <div style={{ 
-          width: '50px', 
-          textAlign: 'center',
-          color: '#64748B',
-          fontWeight: '700',
-          fontSize: '18px',
-          userSelect: 'none'
-        }}>
-          {index + 1}
-        </div>
-
-        {/* Время */}
-        <div style={{ width: '90px', fontWeight: '700', fontSize: '17px' }}>
-          {order.delivery_time}
-        </div>
-
-        {/* Информация о заявке */}
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: '600', fontSize: '17px' }}>
-            #{order.id} — {order.organization_name || order.full_name || '—'}
+    
+    <div style={{ 
+      flex: 1, 
+      overflowY: 'auto', 
+      display: 'flex', 
+      flexDirection: 'column', 
+      gap: '12px',
+      paddingRight: '8px'
+    }}>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '100px', color: '#64748B' }}>Загрузка заявок...</div>
+      ) : filteredOrders.length > 0 ? filteredOrders.map((order: Order, index: number) => (
+        <div
+          key={order.id}
+          onClick={() => handleOpenOrder(order)}   // ← Изменили на отдельную функцию
+          style={{
+            background: '#25334A',
+            borderRadius: '16px',
+            padding: '20px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '24px',
+            transition: 'all 0.2s'
+          }}
+        >
+          {/* Порядковый номер */}
+          <div style={{ 
+            width: '50px', 
+            textAlign: 'center',
+            color: '#64748B',
+            fontWeight: '700',
+            fontSize: '18px',
+            userSelect: 'none'
+          }}>
+            {index + 1}
           </div>
-          <div style={{ color: '#94A3B8' }}>
-            {order.grade} • {order.volume} м³
+
+          {/* Время */}
+          <div style={{ width: '90px', fontWeight: '700', fontSize: '17px' }}>
+            {order.delivery_time}
+          </div>
+
+          {/* Информация о заявке */}
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: '600', fontSize: '17px' }}>
+              #{order.id} — {order.organization_name || order.full_name || '—'}
+            </div>
+            <div style={{ color: '#94A3B8' }}>
+              {order.grade} • {order.volume} м³
+            </div>
+          </div>
+
+          {/* Статус */}
+          <div style={{ 
+            padding: '8px 20px', 
+            borderRadius: '9999px', 
+            background: getStatusColor(order.status) + '20', 
+            color: getStatusColor(order.status),
+            fontWeight: '600',
+            fontSize: '15px'
+          }}>
+            {order.status === 'new' && 'Новый'}
+            {order.status === 'processing' && 'В работе'}
+            {order.status === 'completed' && 'Выполнен'}
+            {order.status === 'cancelled' && 'Отменён'}
           </div>
         </div>
-
-        {/* Статус */}
-        <div style={{ 
-          padding: '8px 20px', 
-          borderRadius: '9999px', 
-          background: getStatusColor(order.status) + '20', 
-          color: getStatusColor(order.status),
-          fontWeight: '600',
-          fontSize: '15px'
-        }}>
-          {order.status === 'new' && 'Новый'}
-          {order.status === 'processing' && 'В работе'}
-          {order.status === 'completed' && 'Выполнен'}
-          {order.status === 'cancelled' && 'Отменён'}
+      )) : (
+        <div style={{ textAlign: 'center', padding: '140px 0', color: '#64748B', fontSize: '18px' }}>
+          По выбранным фильтрам ничего не найдено
         </div>
-      </div>
-    )) : (
-      <div style={{ textAlign: 'center', padding: '140px 0', color: '#64748B', fontSize: '18px' }}>
-        По выбранным фильтрам ничего не найдено
-      </div>
-    )}
+      )}
+    </div>
   </div>
-</div>
 </div>
 
 
@@ -780,6 +821,25 @@ ${order.customer_type?.includes('Юридическое')
                 style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
               />
 
+                <div style={{ color: '#94A3B8' }}>Статус заявки</div>
+                <select 
+                value={selectedOrder.status || 'new'} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, status: e.target.value })}
+                style={{ 
+                  background: '#334155', 
+                  border: 'none', 
+                  borderRadius: '8px', 
+                  padding: '10px 12px', 
+                  color: '#fff',
+                  fontSize: '16px'
+                }}
+              >
+                <option value="new">🟡 Новый</option>
+                <option value="processing">🔵 В работе</option>
+                <option value="completed">🟢 Выполнен</option>
+                <option value="cancelled">🔴 Отменён</option>
+                </select>
+
               <div style={{ color: '#94A3B8' }}>Адрес доставки</div>
               <textarea 
                 value={selectedOrder.address || ''} 
@@ -803,11 +863,11 @@ ${order.customer_type?.includes('Юридическое')
           )}
         </div>          
               
-              {/* Правая колонка — Маршрут */}
+                            {/* Правая колонка — Маршрут + История */}
               <div>
                 <h3 style={{ marginBottom: '20px', color: '#94A3B8' }}>Маршрут доставки</h3>
                 
-                <div style={{ background: '#25334A', borderRadius: '16px', padding: '28px', marginBottom: '24px' }}>
+                <div style={{ background: '#25334A', borderRadius: '16px', padding: '24px', marginBottom: '24px' }}>
                   <div style={{ marginBottom: '20px' }}>
                     <div style={{ color: '#94A3B8', fontSize: '14px' }}>От завода</div>
                     <div style={{ fontWeight: '600' }}>Брянск, Орловский тупик, 6</div>
@@ -818,27 +878,25 @@ ${order.customer_type?.includes('Юридическое')
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {/* Компактные кнопки маршрутов в одну строку */}
+                <div style={{ display: 'flex', gap: '10px', marginBottom: '32px' }}>
                   <a 
                     href={`https://2gis.ru/dir/534687/70000001000000000?from=534687%2C70000001000000000&to=${encodeURIComponent(selectedOrder.address || '')}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{ 
-                      padding: '18px', 
+                      flex: 1,
+                      padding: '12px 16px', 
                       background: '#10B981', 
                       color: 'white', 
                       textAlign: 'center', 
-                      borderRadius: '16px',
+                      borderRadius: '12px',
                       textDecoration: 'none',
-                      fontSize: '17px',
-                      fontWeight: '600',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '10px'
+                      fontSize: '15px',
+                      fontWeight: '600'
                     }}
                   >
-                    🚛 Построить маршрут в 2ГИС
+                    2ГИС
                   </a>
 
                   <a 
@@ -846,21 +904,18 @@ ${order.customer_type?.includes('Юридическое')
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{ 
-                      padding: '18px', 
+                      flex: 1,
+                      padding: '12px 16px', 
                       background: '#3B82F6', 
                       color: 'white', 
                       textAlign: 'center', 
-                      borderRadius: '16px',
+                      borderRadius: '12px',
                       textDecoration: 'none',
-                      fontSize: '17px',
-                      fontWeight: '600',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '10px'
+                      fontSize: '15px',
+                      fontWeight: '600'
                     }}
                   >
-                    🗺️ Построить маршрут в Яндекс.Картах
+                    Яндекс
                   </a>
 
                   <a 
@@ -868,177 +923,229 @@ ${order.customer_type?.includes('Юридическое')
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{ 
-                      padding: '18px', 
+                      flex: 1,
+                      padding: '12px 16px', 
                       background: '#EF4444', 
                       color: 'white', 
                       textAlign: 'center', 
-                      borderRadius: '16px',
+                      borderRadius: '12px',
                       textDecoration: 'none',
-                      fontSize: '17px',
-                      fontWeight: '600',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '10px'
+                      fontSize: '15px',
+                      fontWeight: '600'
                     }}
                   >
-                    🗺️ Построить маршрут в Google Maps
+                    Google
                   </a>
                 </div>
 
-                <div style={{ textAlign: 'center', marginTop: '28px', color: '#64748B', fontSize: '14px' }}>
-                  Нажмите на кнопку — маршрут откроется в новой вкладке
+                                {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ ==================== */}
+                <div>
+                  <h3 style={{ marginBottom: '12px', color: '#94A3B8' }}>История изменений</h3>
+                  <div style={{ 
+                    background: '#25334A', 
+                    borderRadius: '16px', 
+                    padding: '20px', 
+                    height: '340px', 
+                    overflowY: 'auto',
+                    fontSize: '14px',
+                    lineHeight: '1.6'
+                  }}>
+                    {orderHistory.length > 0 ? (
+                      orderHistory.map((entry, index) => (
+                        <div key={index} style={{ marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid #334155' }}>
+                          <div style={{ color: '#64748B', fontSize: '13px' }}>
+                            {new Date(entry.created_at).toLocaleString('ru-RU')}
+                          </div>
+                          <div>
+                            <strong>{entry.changed_by}</strong> изменил 
+                            <strong> {entry.field_name}</strong>
+                          </div>
+                          <div style={{ fontSize: '13px', marginTop: '4px', color: '#CBD5E1' }}>
+                            Было: <span style={{ color: '#94A3B8' }}>{entry.old_value || '—'}</span><br />
+                            Стало: <span style={{ color: '#60A5FA' }}>{entry.new_value || '—'}</span>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div style={{ color: '#64748B', textAlign: 'center', paddingTop: '100px' }}>
+                        История изменений пока пустая
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-
+</div>
             
 
-                                 {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
-<div style={{ marginTop: '40px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+        {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
+    <div style={{ marginTop: '40px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
 
-  {(currentRole === 'admin' || currentRole === 'manager') && (
-    <>
-      {/* Сохранить изменения - ПОЛНАЯ РАБОЧАЯ ЛОГИКА */}
+      {(currentRole === 'admin' || currentRole === 'manager') && (
+        <>
+                    {/* Сохранить изменения */}
+          <button 
+            onClick={async () => {
+              const updatedOrder = { ...selectedOrder };
+
+              try {
+                const res = await fetch('/api/adminCifra/orders/update', {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    ...selectedOrder,
+                    userRole: currentRole
+                  })
+                });
+
+                if (res.ok) {
+                  alert('✅ Изменения успешно сохранены!');
+                  
+                  setAllOrders(prev => 
+                    prev.map(order => 
+                      String(order.id) === String(selectedOrder.id) ? updatedOrder : order
+                    )
+                  );
+
+                  loadOrderHistory(selectedOrder.id);   // ← Перезагрузка истории
+                } else {
+                  alert('Ошибка сохранения изменений');
+                }
+              } catch (err) {
+                console.error(err);
+                alert('Ошибка соединения с сервером');
+              }
+            }}
+            style={{ 
+              padding: '10px 24px', 
+              background: '#10B981', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: '9999px', 
+              fontWeight: '600',
+              fontSize: '15px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            💾 Сохранить
+          </button>
+
+          {/* Удалить заявку */}
+          <button 
+            onClick={() => handleDeleteOrder(selectedOrder.id)}
+            style={{ 
+              padding: '10px 24px', 
+              background: '#EF4444', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: '9999px', 
+              fontWeight: '600',
+              fontSize: '15px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            🗑️ Удалить
+          </button>
+
+          {/* Отправить в Max */}
+          <button 
+            onClick={() => sendNotification(selectedOrder.id)}
+            disabled={isSendingNotification}
+            style={{ 
+              padding: '10px 24px', 
+              background: '#3B82F6', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: '9999px', 
+              fontWeight: '600',
+              fontSize: '15px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            📢 В Max
+          </button>
+
+          {/* Поделиться */}
+          <button 
+            onClick={() => shareOrder(selectedOrder)}
+            style={{ 
+              padding: '10px 24px', 
+              background: '#8B5CF6', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: '9999px', 
+              fontWeight: '600',
+              fontSize: '15px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            🔗 Поделиться
+          </button>
+
+          {/* Копировать заявку */}
+          <button 
+            onClick={() => copyOrder(selectedOrder)}
+            style={{ 
+              padding: '10px 24px', 
+              background: '#6366F1', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: '9999px', 
+              fontWeight: '600',
+              fontSize: '15px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            📋 Копировать заявку
+          </button>
+        </>
+      )}
+
+      {/* Отмена */}
       <button 
-        onClick={async () => {
-          const updatedOrder = { ...selectedOrder };
-
-          try {
-            const res = await fetch('/api/adminCifra/orders/update', {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(selectedOrder)
-            });
-
-            if (res.ok) {
-              alert('✅ Изменения успешно сохранены!');
-
-              // Обновляем в общем списке
-              setAllOrders(prev => 
-                prev.map(order => 
-                  String(order.id) === String(selectedOrder.id) ? updatedOrder : order
-                )
-              );
-
-              setSelectedOrder(null);   // закрываем модалку
-            } else {
-              alert('Ошибка сохранения изменений');
-            }
-          } catch (err) {
-            console.error(err);
-            alert('Ошибка соединения с сервером');
-          }
-        }}
+        onClick={() => setSelectedOrder(null)}
         style={{ 
           padding: '10px 24px', 
-          background: '#10B981', 
+          background: '#475569', 
           color: 'white', 
           border: 'none', 
           borderRadius: '9999px', 
           fontWeight: '600',
-          fontSize: '15px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px'
+          fontSize: '15px'
         }}
       >
-        💾 Сохранить
+        Отмена
       </button>
-
-      {/* Удалить заявку */}
-      <button 
-        onClick={() => handleDeleteOrder(selectedOrder.id)}
-        style={{ 
-          padding: '10px 24px', 
-          background: '#EF4444', 
-          color: 'white', 
-          border: 'none', 
-          borderRadius: '9999px', 
-          fontWeight: '600',
-          fontSize: '15px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px'
-        }}
-      >
-        🗑️ Удалить
-      </button>
-
-      {/* Отправить в Max */}
-      <button 
-        onClick={() => sendNotification(selectedOrder.id)}
-        disabled={isSendingNotification}
-        style={{ 
-          padding: '10px 24px', 
-          background: '#3B82F6', 
-          color: 'white', 
-          border: 'none', 
-          borderRadius: '9999px', 
-          fontWeight: '600',
-          fontSize: '15px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px'
-        }}
-      >
-        📢 В Max
-      </button>
-
-      {/* Поделиться */}
-      <button 
-        onClick={() => shareOrder(selectedOrder)}
-        style={{ 
-          padding: '10px 24px', 
-          background: '#8B5CF6', 
-          color: 'white', 
-          border: 'none', 
-          borderRadius: '9999px', 
-          fontWeight: '600',
-          fontSize: '15px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px'
-        }}
-      >
-        🔗 Поделиться
-      </button>
-    </>
-  )}
-
-  {/* Отмена */}
-  <button 
-    onClick={() => setSelectedOrder(null)}
-    style={{ 
-      padding: '10px 24px', 
-      background: '#475569', 
-      color: 'white', 
-      border: 'none', 
-      borderRadius: '9999px', 
-      fontWeight: '600',
-      fontSize: '15px'
-    }}
-  >
-    Отмена
-  </button>
-</div>
+    </div>
     </div>
   </div>
 )}
 
 
       {showNewOrderModal && (
-    <NewOrderModal 
-       onClose={() => setShowNewOrderModal(false)} 
-       onSuccess={(newOrder) => {
-         if (newOrder) {
-           // Оптимистический апдейт — сразу добавляем в список
-          setAllOrders(prev => [newOrder, ...prev]);
-        }
-       // Можно добавить небольшую задержку или оставить как есть
-     }} 
-   />
- )}
+  <NewOrderModal 
+    onClose={() => {
+      setShowNewOrderModal(false);
+      setNewOrderInitialData(null);
+    }} 
+    onSuccess={(newOrder) => {
+      if (newOrder) {
+        setAllOrders(prev => [newOrder, ...prev]);
+      }
+    }} 
+    initialData={newOrderInitialData}
+    defaultDeliveryDate={selectedDateStr}     // ← Добавили передачу выбранной даты
+  />
+)}
     </div>
     </div>
   );

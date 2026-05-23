@@ -5,9 +5,17 @@ import { useState, useMemo, useEffect } from 'react';
 interface NewOrderModalProps {
   onClose: () => void;
   onSuccess: (newOrder?: any) => void;
+  initialData?: any;
+  defaultDeliveryDate?: string;
 }
 
-export default function NewOrderModal({ onClose, onSuccess }: NewOrderModalProps) {
+export default function NewOrderModal({ 
+  onClose, 
+  onSuccess, 
+  initialData = null,  // ← Добавлено
+  defaultDeliveryDate          // ← Добавлено
+}: NewOrderModalProps) {
+
   const [adminUserId, setAdminUserId] = useState<number>(1);
   const [recipes, setRecipes] = useState<any[]>([]);
   
@@ -15,6 +23,32 @@ export default function NewOrderModal({ onClose, onSuccess }: NewOrderModalProps
   const [orderCreated, setOrderCreated] = useState<any>(null);
   const [notificationSent, setNotificationSent] = useState(false);
   const [isSendingNotification, setIsSendingNotification] = useState(false);
+
+  // ==================== ПРЕДЗАПОЛНЕНИЕ ДАННЫМИ ПРИ КОПИРОВАНИИ ====================
+  useEffect(() => {
+    if (initialData) {
+      // Если пришли данные от копирования заявки
+      setForm({
+        grade: initialData.grade || 'М300',
+        volume: initialData.volume?.toString() || '',
+        deliveryDate: initialData.deliveryDate || new Date().toISOString().split('T')[0],
+        deliveryTime: initialData.deliveryTime || '09:00',
+        address: initialData.address || '',
+        customerType: initialData.customerType || 'physical',
+        organizationName: initialData.organizationName || '',
+        fullName: initialData.fullName || '',
+        phone: initialData.phone || '',
+        inn: initialData.inn || '',
+        comment: initialData.comment || '',
+      });
+    } else if (defaultDeliveryDate) {
+      // Если открываем новую заявку из календаря — ставим выбранную дату
+      setForm(prev => ({
+        ...prev,
+        deliveryDate: defaultDeliveryDate
+      }));
+    }
+  }, [initialData, defaultDeliveryDate]);
 
   // ==================== ЗАГРУЗКА USER_ID АДМИНА ====================
   useEffect(() => {
