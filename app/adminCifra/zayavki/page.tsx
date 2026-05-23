@@ -797,7 +797,7 @@ ${order.customer_type?.includes('Юридическое')
               <textarea 
                 value={selectedOrder.comment} 
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, comment: e.target.value })}
-                style={{ width: '100%', background: '#25334A', border: 'none', borderRadius: '16px', padding: '16px', color: '#fff', minHeight: '80px' }}
+                style={{ width: '95%', background: '#25334A', border: 'none', borderRadius: '16px', padding: '16px', color: '#fff', minHeight: '80px' }}
               />
             </div>
           )}
@@ -894,74 +894,134 @@ ${order.customer_type?.includes('Юридическое')
 
             
 
-                      {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
+                                 {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
 <div style={{ marginTop: '40px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
 
-  {/* Кнопки редактирования и удаления — только для Админа и Менеджера */}
   {(currentRole === 'admin' || currentRole === 'manager') && (
     <>
+      {/* Сохранить изменения - ПОЛНАЯ РАБОЧАЯ ЛОГИКА */}
       <button 
         onClick={async () => {
-          // ... твой текущий код сохранения (оставь без изменений)
+          const updatedOrder = { ...selectedOrder };
+
+          try {
+            const res = await fetch('/api/adminCifra/orders/update', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(selectedOrder)
+            });
+
+            if (res.ok) {
+              alert('✅ Изменения успешно сохранены!');
+
+              // Обновляем в общем списке
+              setAllOrders(prev => 
+                prev.map(order => 
+                  String(order.id) === String(selectedOrder.id) ? updatedOrder : order
+                )
+              );
+
+              setSelectedOrder(null);   // закрываем модалку
+            } else {
+              alert('Ошибка сохранения изменений');
+            }
+          } catch (err) {
+            console.error(err);
+            alert('Ошибка соединения с сервером');
+          }
         }}
-        style={{ padding: '14px 32px', background: '#10B981', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
-      >
-        💾 Сохранить изменения
-      </button>
-
-      <button 
-        onClick={() => handleDeleteOrder(selectedOrder.id)}
-        style={{ padding: '14px 32px', background: '#EF4444', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
-      >
-        🗑️ Удалить заявку
-      </button>
-
-      {/* ==================== КНОПКА ОТПРАВКИ В MAX ==================== */}
-      <button 
-        onClick={() => sendNotification(selectedOrder.id)}
-        disabled={isSendingNotification}
         style={{ 
-          padding: '14px 32px', 
-          background: isSendingNotification ? '#475569' : '#3B82F6', 
+          padding: '10px 24px', 
+          background: '#10B981', 
           color: 'white', 
           border: 'none', 
           borderRadius: '9999px', 
           fontWeight: '600',
+          fontSize: '15px',
           display: 'flex',
           alignItems: 'center',
-          gap: '8px'
+          gap: '6px'
         }}
       >
-        {isSendingNotification ? '📤 Отправляем...' : '📢 Отправить в Max'}
+        💾 Сохранить
+      </button>
+
+      {/* Удалить заявку */}
+      <button 
+        onClick={() => handleDeleteOrder(selectedOrder.id)}
+        style={{ 
+          padding: '10px 24px', 
+          background: '#EF4444', 
+          color: 'white', 
+          border: 'none', 
+          borderRadius: '9999px', 
+          fontWeight: '600',
+          fontSize: '15px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px'
+        }}
+      >
+        🗑️ Удалить
+      </button>
+
+      {/* Отправить в Max */}
+      <button 
+        onClick={() => sendNotification(selectedOrder.id)}
+        disabled={isSendingNotification}
+        style={{ 
+          padding: '10px 24px', 
+          background: '#3B82F6', 
+          color: 'white', 
+          border: 'none', 
+          borderRadius: '9999px', 
+          fontWeight: '600',
+          fontSize: '15px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px'
+        }}
+      >
+        📢 В Max
+      </button>
+
+      {/* Поделиться */}
+      <button 
+        onClick={() => shareOrder(selectedOrder)}
+        style={{ 
+          padding: '10px 24px', 
+          background: '#8B5CF6', 
+          color: 'white', 
+          border: 'none', 
+          borderRadius: '9999px', 
+          fontWeight: '600',
+          fontSize: '15px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px'
+        }}
+      >
+        🔗 Поделиться
       </button>
     </>
   )}
-  {/* ==================== НОВАЯ КНОПКА "ПОДЕЛИТЬСЯ" ==================== */}
+
+  {/* Отмена */}
   <button 
-    onClick={() => shareOrder(selectedOrder)}
+    onClick={() => setSelectedOrder(null)}
     style={{ 
-      padding: '14px 32px', 
-      background: '#8B5CF6', 
+      padding: '10px 24px', 
+      background: '#475569', 
       color: 'white', 
       border: 'none', 
       borderRadius: '9999px', 
       fontWeight: '600',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px'
+      fontSize: '15px'
     }}
   >
-    🔗 Поделиться
-  </button>
-
-  {/* Кнопка Отмена — доступна всем */}
-  <button 
-    onClick={() => setSelectedOrder(null)}
-    style={{ padding: '14px 32px', background: '#334155', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600' }}
-  >
     Отмена
-     </button>
-    </div>
+  </button>
+</div>
     </div>
   </div>
 )}
