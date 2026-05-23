@@ -27,9 +27,12 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'Заявка не найдена' }, { status: 404 });
     }
 
-                // ==================== ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
+                    // ==================== ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
     const changes: any[] = [];
-    const changedBy = userRole || 'admin';
+    
+    // Получаем имя пользователя из запроса (приоритет), потом роль
+    const userName = body.userName || userRole || 'Администратор';
+    const userRoleValue = userRole || 'unknown';
 
     const fieldsToTrack = [
       'grade', 'volume', 'delivery_date', 'delivery_time',
@@ -37,13 +40,12 @@ export async function PUT(request: NextRequest) {
       'inn', 'comment', 'status'
     ];
 
-    console.log('🔄 Сравнение полей. Изменения от:', changedBy);
+    console.log('🔄 Сравнение полей. Пользователь:', userName);
 
     for (const field of fieldsToTrack) {
       const oldValue = currentOrder[field];
       const newValue = updateData[field];
 
-      // Улучшенное сравнение: пропускаем, если новое значение undefined или такое же
       if (newValue === undefined) continue;
 
       const oldStr = oldValue !== null && oldValue !== undefined ? String(oldValue).trim() : '';
@@ -57,8 +59,8 @@ export async function PUT(request: NextRequest) {
         changes.push({
           order_id: id,
           action: actionText,
-          user_name: changedBy,
-          user_role: changedBy,
+          user_name: userName,           // ← Здесь будет имя пользователя
+          user_role: userRoleValue,
           field_name: field,
           old_value: oldStr || null,
           new_value: newStr || null

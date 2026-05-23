@@ -18,6 +18,7 @@ export default function ZayavkiPage() {
   
   const [notificationSent, setNotificationSent] = useState(false);
   const [isSendingNotification, setIsSendingNotification] = useState(false);
+ 
 
   // ==================== ЗАГРУЗКА ИСТОРИИ ИЗМЕНЕНИЙ ====================
   const loadOrderHistory = useCallback(async (orderId: number) => {
@@ -46,7 +47,7 @@ export default function ZayavkiPage() {
     }
   }, [loadOrderHistory]);
 
-  // ==================== ЗАГРУЗКА РОЛИ (ИСПРАВЛЕННЫЙ ВАРИАНТ) ====================
+                // ==================== ЗАГРУЗКА РОЛИ ====================
   const [currentRole, setCurrentRole] = useState<string>('');
 
   useEffect(() => {
@@ -57,13 +58,13 @@ export default function ZayavkiPage() {
       if (savedRole) {
         const role = savedRole.toLowerCase();
         setCurrentRole(role);
-        console.log('✅ Роль взята из localStorage:', role);
+        console.log('✅ Роль из localStorage:', role);
         return;
       }
 
       try {
         const res = await fetch('/api/user/role', { 
-          method: 'GET',
+          method: 'POST',
           cache: 'no-store',
           credentials: 'include'
         });
@@ -938,7 +939,7 @@ ${order.customer_type?.includes('Юридическое')
                   </a>
                 </div>
 
-                                {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ ==================== */}
+                                               {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ ==================== */}
                 <div>
                   <h3 style={{ marginBottom: '12px', color: '#94A3B8' }}>История изменений</h3>
                   <div style={{ 
@@ -956,10 +957,13 @@ ${order.customer_type?.includes('Юридическое')
                           <div style={{ color: '#64748B', fontSize: '13px' }}>
                             {new Date(entry.created_at).toLocaleString('ru-RU')}
                           </div>
+                          
                           <div>
-                            <strong>{entry.changed_by}</strong> изменил 
+                            <strong>{entry.user_role || entry.user_name || 'Администратор'}</strong> 
+                            {' '}изменил 
                             <strong> {entry.field_name}</strong>
                           </div>
+                          
                           <div style={{ fontSize: '13px', marginTop: '4px', color: '#CBD5E1' }}>
                             Было: <span style={{ color: '#94A3B8' }}>{entry.old_value || '—'}</span><br />
                             Стало: <span style={{ color: '#60A5FA' }}>{entry.new_value || '—'}</span>
@@ -974,15 +978,14 @@ ${order.customer_type?.includes('Юридическое')
                   </div>
                 </div>
               </div>
-</div>
+            </div>
             
-
         {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
     <div style={{ marginTop: '40px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
 
       {(currentRole === 'admin' || currentRole === 'manager') && (
         <>
-                    {/* Сохранить изменения */}
+                              {/* Сохранить изменения */}
           <button 
             onClick={async () => {
               const updatedOrder = { ...selectedOrder };
@@ -993,7 +996,8 @@ ${order.customer_type?.includes('Юридическое')
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     ...selectedOrder,
-                    userRole: currentRole
+                    userRole: currentRole,           // для совместимости
+                   
                   })
                 });
 
@@ -1006,7 +1010,7 @@ ${order.customer_type?.includes('Юридическое')
                     )
                   );
 
-                  loadOrderHistory(selectedOrder.id);   // ← Перезагрузка истории
+                  loadOrderHistory(selectedOrder.id);
                 } else {
                   alert('Ошибка сохранения изменений');
                 }
