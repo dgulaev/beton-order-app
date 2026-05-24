@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import NewOrderModal from './NewOrderModal';
 
 export default function ClientsPage() {
+
+  // ==================== 1. ОСНОВНЫЕ СОСТОЯНИЯ ====================
   const [profiles, setProfiles] = useState<any[]>([]);
   const [userOrders, setUserOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -13,7 +15,9 @@ export default function ClientsPage() {
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
   const [selectedProfile, setSelectedProfile] = useState<any>(null);
   const [isNewOrderModalOpen, setIsNewOrderModalOpen] = useState(false);
+  const [clientVolumes, setClientVolumes] = useState<Record<number | string, number>>({});
 
+  // ==================== 2. ЗАГРУЗКА ВСЕХ ПОЛЬЗОВАТЕЛЕЙ ====================
   // Загрузка всех пользователей (через Service Role)
   useEffect(() => {
     const fetchUsers = async () => {
@@ -34,23 +38,52 @@ export default function ClientsPage() {
     fetchUsers();
   }, []);
 
-  // Загрузка заказов выбранного пользователя
-  const loadUserOrders = async (userId: number | string) => {
-    if (!userId) return;
+      // ==================== 3. ЗАГРУЗКА ЗАКАЗОВ ВЫБРАННОГО ПОЛЬЗОВАТЕЛЯ ====================
+  const loadUserOrders = async (userId: number | string | undefined) => {
+    if (!userId) {
+      console.warn('⚠️ loadUserOrders: userId отсутствует');
+      return;
+    }
+
+    console.log(`🔄 [loadUserOrders] Запрос заказов для userId: ${userId} (тип: ${typeof userId})`);
+
     setOrdersLoading(true);
     try {
-      const res = await fetch(`/api/adminCifra/client-orders?userId=${userId}`);
+      const url = `/api/adminCifra/client-orders?userId=${userId}`;
+      console.log(`📡 [loadUserOrders] Запрос по URL: ${url}`);
+
+      const res = await fetch(url);
+      
+      console.log(`📨 [loadUserOrders] Ответ сервера: статус ${res.status} ${res.ok ? 'OK' : 'ERROR'}`);
+
       if (res.ok) {
         const data = await res.json();
-        setUserOrders(data);
+        console.log(`📦 [loadUserOrders] Получено ${data.length} заказов`, data);
+
+        setUserOrders(Array.isArray(data) ? data : []);
+
+        // Обновление кэша для карточек
+        const totalVol = data.reduce((sum: number, o: any) => {
+          return sum + (Number(o?.volume) || 0);
+        }, 0);
+
+        console.log(`💰 [loadUserOrders] Итого объём: ${totalVol} м³ для клиента ${userId}`);
+
+        setClientVolumes(prev => ({ ...prev, [userId]: totalVol }));
+      } else {
+        const errorText = await res.text();
+        console.error('❌ Ошибка загрузки заказов. Статус:', res.status, 'Ответ:', errorText);
+        setUserOrders([]);
       }
     } catch (err) {
-      console.error(err);
+      console.error('💥 Критическая ошибка при загрузке заказов:', err);
+      setUserOrders([]);
     } finally {
       setOrdersLoading(false);
     }
   };
 
+  // ==================== 4. ФИЛЬТРАЦИЯ КЛИЕНТОВ И СОТРУДНИКОВ ====================
   // Фильтрация
   const clients = profiles.filter(p => p.role === 'client');
   const staff = profiles.filter(p => ['admin', 'manager', 'dispatcher', 'operator'].includes(p.role || ''));
@@ -61,20 +94,39 @@ export default function ClientsPage() {
     return name.includes(search.toLowerCase()) || (p.phone && p.phone.includes(search));
   });
 
+    // ==================== 5. АВТОМАТИЧЕСКАЯ ЗАГРУЗКА ЗАКАЗОВ ====================
   useEffect(() => {
     if (selectedProfile) {
-      const uid = selectedProfile.user_id || selectedProfile.id;
-      loadUserOrders(uid);
+      const uid = selectedProfile.user_id || selectedProfile.id || selectedProfile.userId;
+      console.log(`👤 [useEffect] Выбран клиент:`, selectedProfile);
+      console.log(`🔑 [useEffect] Извлечён userId: ${uid} (user_id=${selectedProfile.user_id}, id=${selectedProfile.id})`);
+      
+      if (uid) {
+        loadUserOrders(uid);
+      } else {
+        console.warn('⚠️ Не удалось извлечь userId из selectedProfile');
+      }
     }
   }, [selectedProfile]);
 
+  // ==================== 6. РАСЧЁТ СТАТИСТИКИ (ИСПРАВЛЕНО И УЛУЧШЕНО) ====================
   // Статистика
-  const totalVolume = userOrders.reduce((sum, o) => sum + (Number(o.volume) || 0), 0);
-  const totalAmount = userOrders.reduce((sum, o) => sum + (Number(o.total_price) || 0), 0);
+  const totalVolume = userOrders.reduce((sum: number, o: any) => {
+    return sum + (Number(o?.volume) || 0);   // Основное поле volume из таблицы orders
+  }, 0);
+
+  const totalAmount = userOrders.reduce((sum: number, o: any) => {
+    return sum + (Number(o?.total_price) || 0);
+  }, 0);
+
   const avgCheck = userOrders.length ? Math.round(totalAmount / userOrders.length) : 0;
-  const cancelled = userOrders.filter(o => o.status === 'cancelled').length;
+  const cancelled = userOrders.filter(o => 
+    String(o?.status || '').toLowerCase().includes('cancel')
+  ).length;
   const refusalRate = userOrders.length ? Math.round((cancelled / userOrders.length) * 100) : 0;
-  const lastOrderDate = userOrders[0] ? new Date(userOrders[0].delivery_date).toLocaleDateString('ru-RU') : '—';
+  const lastOrderDate = userOrders.length 
+    ? new Date(userOrders[0].delivery_date || userOrders[0].created_at).toLocaleDateString('ru-RU') 
+    : '—';
 
   if (loading) return <div style={{ padding: '120px', textAlign: 'center', color: '#94A3B8' }}>Загрузка CRM...</div>;
 
@@ -122,21 +174,34 @@ export default function ClientsPage() {
         style={{ width: '100%', padding: '14px 20px', background: '#1E2937', border: 'none', borderRadius: '9999px', color: '#fff', marginBottom: '32px' }}
       />
 
-      {/* Карточки */}
+            {/* ==================== 8. ОТОБРАЖЕНИЕ КЛИЕНТОВ (КАРТОЧКИ) ==================== */}
       {viewMode === 'cards' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '24px' }}>
-          {filteredList.map((p) => (
-            <div 
-              key={`item-${p.user_id || p.id}`} 
-              onClick={() => setSelectedProfile(p)} 
-              style={{ background: '#1E2937', borderRadius: '20px', padding: '24px', cursor: 'pointer' }}
-            >
-              <div style={{ fontSize: '20px', fontWeight: '700' }}>
-                {p.name || p.full_name || p.organization_name || p.username || 'Без Имени'}
+          {filteredList.map((p) => {
+            const clientId = p.user_id || p.id;
+            const totalVol = clientVolumes[clientId] || 0;
+            
+            return (
+              <div 
+                key={`item-${clientId}`} 
+                onClick={() => setSelectedProfile(p)} 
+                style={{ background: '#1E2937', borderRadius: '20px', padding: '24px', cursor: 'pointer' }}
+              >
+                <div style={{ fontSize: '20px', fontWeight: '700' }}>
+                  {p.name || p.full_name || p.organization_name || p.username || 'Без Имени'}
+                </div>
+                <div style={{ color: '#94A3B8' }}>{p.phone || '—'}</div>
+                
+                {/* ←←← НОВЫЙ БЛОК: Объём заказанного бетона */}
+                <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ color: '#60A5FA', fontWeight: '600', fontSize: '18px' }}>
+                    {totalVol} м³
+                  </span>
+                  <span style={{ color: '#94A3B8', fontSize: '14px' }}>заказано всего</span>
+                </div>
               </div>
-              <div style={{ color: '#94A3B8' }}>{p.phone || '—'}</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -239,6 +304,7 @@ export default function ClientsPage() {
         </div>
       )}
 
+      {/* ==================== МОДАЛЬНОЕ ОКНО НОВОГО ЗАКАЗА ==================== */}
       <NewOrderModal
         isOpen={isNewOrderModalOpen}
         onClose={() => setIsNewOrderModalOpen(false)}
@@ -246,7 +312,10 @@ export default function ClientsPage() {
         userName={selectedProfile?.full_name || selectedProfile?.name || selectedProfile?.username || 'Клиент'}
         userPhone={selectedProfile?.phone || ''}
         onOrderCreated={() => {
-          if (selectedProfile) loadUserOrders(selectedProfile.user_id || selectedProfile.id);
+          if (selectedProfile) {
+            const uid = selectedProfile.user_id || selectedProfile.id;
+            loadUserOrders(uid);
+          }
         }}
       />
     </div>

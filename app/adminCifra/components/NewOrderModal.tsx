@@ -121,7 +121,7 @@ export default function NewOrderModal({
     setForm(prev => ({ ...prev, [name]: value }));
   };
 
-  // ==================== АВТОЗАПОЛНЕНИЕ ПО ИНН ====================
+    // ==================== АВТОЗАПОЛНЕНИЕ ПО ИНН ====================
   const fetchByInn = async (inn: string) => {
     if (inn.length < 10) return;
     setLoadingInn(true);
@@ -134,16 +134,24 @@ export default function NewOrderModal({
       });
 
       const data = await res.json();
+
       if (data.suggestions?.[0]) {
         const company = data.suggestions[0].data;
+
         setForm(prev => ({
           ...prev,
-          organizationName: company.name?.short_with_opf || company.name?.short || prev.organizationName,
-          address: company.address?.value || prev.address,
+          organizationName: company.name?.short_with_opf || company.name?.short || prev.organizationName || '',
+          address: company.address?.value || prev.address || '',
+          fullName: prev.fullName, // не трогаем для физлиц
         }));
+
+        console.log('✅ Данные по ИНН загружены:', company.name?.short);
+      } else {
+        console.log('⚠️ По ИНН ничего не найдено');
       }
     } catch (err) {
-      console.error(err);
+      console.error('Ошибка Dadata:', err);
+      alert('Не удалось получить данные по ИНН');
     } finally {
       setLoadingInn(false);
     }

@@ -8,6 +8,15 @@ export default function RecipesPage() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [editingRecipe, setEditingRecipe] = useState<any>(null);
 
+  const inputStyle = {
+  width: '100%', 
+  padding: '12px', 
+  background: '#25334A', 
+  border: 'none', 
+  borderRadius: '8px', 
+  color: '#fff'
+  };
+
   // ==================== ЗАГРУЗКА РЕЦЕПТОВ ИЗ БАЗЫ ====================
   useEffect(() => {
     fetchRecipes();
@@ -304,23 +313,122 @@ export default function RecipesPage() {
         </div>
       )}
 
-      {/* Модалка редактирования */}
-      {editingRecipe && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.95)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ background: '#1E2937', padding: '32px', borderRadius: '20px', width: '520px' }}>
-            <h2 style={{ marginBottom: '24px' }}>Редактирование рецепта</h2>
-            
-            <input value={editingRecipe.code} onChange={e => setEditingRecipe({...editingRecipe, code: e.target.value})} placeholder="Код марки" style={{ width: '100%', padding: '12px', marginBottom: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} />
-            <input value={editingRecipe.name} onChange={e => setEditingRecipe({...editingRecipe, name: e.target.value})} placeholder="Название" style={{ width: '100%', padding: '12px', marginBottom: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} />
-            <input type="number" value={editingRecipe.price} onChange={e => setEditingRecipe({...editingRecipe, price: Number(e.target.value)})} placeholder="Цена за м³" style={{ width: '100%', padding: '12px', marginBottom: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} />
-
-            <div style={{ marginTop: '20px', display: 'flex', gap: '12px' }}>
-              <button onClick={() => saveRecipe(editingRecipe)} style={{ flex: 1, padding: '14px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px' }}>Сохранить</button>
-              <button onClick={() => setEditingRecipe(null)} style={{ flex: 1, padding: '14px', background: '#334155', color: 'white', border: 'none', borderRadius: '12px' }}>Отмена</button>
-            </div>
-          </div>
+      {/* ==================== МОДАЛКА РЕДАКТИРОВАНИЯ ==================== */}
+  {editingRecipe && (
+  <div style={{ 
+    position: 'fixed', 
+    inset: 0, 
+    background: 'rgba(0,0,0,0.95)', 
+    zIndex: 2000, 
+    display: 'flex', 
+    alignItems: 'center', 
+    justifyContent: 'center' 
+  }}>
+    <div style={{ 
+      background: '#1E2937', 
+      padding: '32px', 
+      borderRadius: '20px', 
+      width: '560px',
+      maxHeight: '90vh',
+      overflowY: 'auto'
+    }}>
+      <h2 style={{ marginBottom: '24px', fontSize: '24px' }}>
+        {editingRecipe.id ? 'Редактирование рецепта' : 'Новый рецепт'}
+      </h2>
+      
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Код марки</label>
+          <input 
+            value={editingRecipe.code || ''} 
+            onChange={e => setEditingRecipe({...editingRecipe, code: e.target.value})} 
+            style={{ width: '100%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} 
+          />
         </div>
-      )}
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Тип заполнителя</label>
+          <select 
+            value={editingRecipe.type || 'granite'} 
+            onChange={e => setEditingRecipe({...editingRecipe, type: e.target.value})}
+            style={{ width: '100%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }}
+          >
+            <option value="granite">Гранит</option>
+            <option value="dolomite">Доломит</option>
+          </select>
+        </div>
+      </div>
+
+      <div style={{ marginTop: '16px' }}>
+        <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Название рецепта</label>
+        <input 
+          value={editingRecipe.name || ''} 
+          onChange={e => setEditingRecipe({...editingRecipe, name: e.target.value})} 
+          style={{ width: '100%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} 
+        />
+      </div>
+
+      <div style={{ marginTop: '16px' }}>
+        <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Цена за м³ (₽)</label>
+        <input 
+          type="number" 
+          value={editingRecipe.price || 0} 
+          onChange={e => setEditingRecipe({...editingRecipe, price: Number(e.target.value)})} 
+          style={{ width: '100%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} 
+        />
+      </div>
+
+      <h3 style={{ margin: '24px 0 12px 0', color: '#60A5FA' }}>Состав на 1 м³</h3>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Цемент (кг)</label>
+          <input type="number" value={editingRecipe.cement || 0} onChange={e => setEditingRecipe({...editingRecipe, cement: Number(e.target.value)})} style={inputStyle} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Песок (кг)</label>
+          <input type="number" value={editingRecipe.sand || 0} onChange={e => setEditingRecipe({...editingRecipe, sand: Number(e.target.value)})} style={inputStyle} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Щебень (кг)</label>
+          <input type="number" value={editingRecipe.gravel || 0} onChange={e => setEditingRecipe({...editingRecipe, gravel: Number(e.target.value)})} style={inputStyle} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Вода (кг)</label>
+          <input type="number" value={editingRecipe.water || 0} onChange={e => setEditingRecipe({...editingRecipe, water: Number(e.target.value)})} style={inputStyle} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Добавка (кг)</label>
+          <input type="number" value={editingRecipe.additive || 0} onChange={e => setEditingRecipe({...editingRecipe, additive: Number(e.target.value)})} style={inputStyle} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Активен</label>
+          <input 
+            type="checkbox" 
+            checked={editingRecipe.is_active || false} 
+            onChange={e => setEditingRecipe({...editingRecipe, is_active: e.target.checked})}
+            style={{ width: '20px', height: '20px' }}
+          />
+        </div>
+      </div>
+
+      <div style={{ marginTop: '28px', display: 'flex', gap: '12px' }}>
+        <button 
+          onClick={() => saveRecipe(editingRecipe)} 
+          style={{ flex: 1, padding: '14px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
+        >
+          Сохранить рецепт
+        </button>
+        <button 
+          onClick={() => setEditingRecipe(null)} 
+          style={{ flex: 1, padding: '14px', background: '#334155', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
+        >
+          Отмена
+        </button>
+      </div>
+    </div>
+  </div>
+)}
     </div>
   );
 }

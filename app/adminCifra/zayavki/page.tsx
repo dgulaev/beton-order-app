@@ -18,6 +18,8 @@ export default function ZayavkiPage() {
   
   const [notificationSent, setNotificationSent] = useState(false);
   const [isSendingNotification, setIsSendingNotification] = useState(false);
+
+  const [recipes, setRecipes] = useState<any[]>([]);
  
 
   // ==================== ЗАГРУЗКА ИСТОРИИ ИЗМЕНЕНИЙ ====================
@@ -247,7 +249,7 @@ ${order.customer_type?.includes('Юридическое')
     console.log('📋 Данные заявки успешно скопированы:', copiedData);
   };
 
-  // ==================== REALTIME ====================
+    // ==================== REALTIME ====================
   useRealtimeOrders(setAllOrders);
 
   // Загрузка всех заказов при открытии страницы
@@ -277,7 +279,7 @@ ${order.customer_type?.includes('Юридическое')
         const res = await fetch('/api/adminCifra/all-orders', { 
           cache: 'no-store' 
         });
-        
+       
         if (res.ok) {
           const data = await res.json();
           setAllOrders(data);
@@ -291,14 +293,30 @@ ${order.customer_type?.includes('Юридическое')
     return () => clearInterval(interval);
   }, []);
 
-  const selectedDateStr = selectedDate.toISOString().split('T')[0];
+  // ==================== 1. РАБОТА С ДАТАМИ (ИСПРАВЛЕНО) ====================
+  // Новая функция — надёжно получает дату в локальном часовом поясе
+  const getLocalDateString = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
 
+  const selectedDateStr = getLocalDateString(selectedDate);
+
+  // ==================== 2. ФИЛЬТРАЦИЯ ЗАЯВОК НА ВЫБРАННЫЙ ДЕНЬ ====================
   const dayOrders = allOrders
     .filter((o: Order) => {
       if (!o?.delivery_date) return false;
-      const orderDateStr = typeof o.delivery_date === 'string' 
-        ? o.delivery_date.substring(0, 10) 
-        : new Date(o.delivery_date).toISOString().substring(0, 10);
+      
+      let orderDateStr: string;
+      
+      if (typeof o.delivery_date === 'string') {
+        orderDateStr = o.delivery_date.substring(0, 10); // YYYY-MM-DD
+      } else {
+        orderDateStr = getLocalDateString(new Date(o.delivery_date));
+      }
+      
       return orderDateStr === selectedDateStr;
     })
     .sort((a, b) => (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00'));
@@ -311,13 +329,21 @@ ${order.customer_type?.includes('Юридическое')
   const deliveriesCount = dayOrders.length;
   const pprz = totalVolume > 0 ? Math.round((completedVolume / totalVolume) * 100) : 0;
 
-  // ==================== НЕДЕЛЯ ====================
+              // ==================== НЕДЕЛЯ (ПН - ВС) ====================
   const getWeekDays = () => {
     const days = [];
-    const today = new Date();
-    for (let i = -3; i <= 4; i++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + i);
+    const current = new Date(selectedDate);
+    
+    // Находим понедельник текущей недели
+    const dayOfWeek = current.getDay(); // 0 = воскресенье, 1 = понедельник...
+    const diff = current.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // сдвиг к понедельнику
+    const monday = new Date(current);
+    monday.setDate(diff);
+    monday.setHours(12, 0, 0, 0);
+
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
       days.push(d);
     }
     return days;
@@ -325,13 +351,20 @@ ${order.customer_type?.includes('Юридическое')
 
   const weekDays = getWeekDays();
 
+  // ==================== 4. ПОДСЧЁТ ЗАЯВОК НА ДЕНЬ ====================
   const getOrdersCountForDate = (date: Date) => {
-    const dateStr = date.toISOString().split('T')[0];
+    const dateStr = getLocalDateString(date);
+    
     return allOrders.filter(o => {
-      const d = typeof o.delivery_date === 'string' 
-        ? o.delivery_date.substring(0, 10) 
-        : new Date(o.delivery_date).toISOString().substring(0, 10);
-      return d === dateStr;
+      if (!o?.delivery_date) return false;
+      
+      let orderDateStr: string;
+      if (typeof o.delivery_date === 'string') {
+        orderDateStr = o.delivery_date.substring(0, 10);
+      } else {
+        orderDateStr = getLocalDateString(new Date(o.delivery_date));
+      }
+      return orderDateStr === dateStr;
     }).length;
   };
 
@@ -359,6 +392,85 @@ ${order.customer_type?.includes('Юридическое')
     return matchesSearch && matchesStatus;
   });
 
+       // ==================== ЗАГРУЗКА РЕЦЕПТОВ ====================
+  useEffect(() => {
+    const fetchRecipes = async () => {
+      try {
+        const res = await fetch('/api/adminCifra/recipes');
+        if (res.ok) {
+          const data = await res.json();
+          console.log('✅ Загружено рецептов из adminCifra:', data.length, data);
+          setRecipes(data);
+        } else {
+          console.error('❌ Ошибка загрузки рецептов, статус:', res.status);
+        }
+      } catch (err) {
+        console.error('❌ Ошибка загрузки рецептов:', err);
+      }
+    };
+
+    fetchRecipes();
+  }, []);
+
+        // ==================== РАСЧЁТ ЦЕМЕНТА ====================
+  const calculateCementNeeded = (onlyCompleted: boolean) => {
+    const orders = onlyCompleted 
+      ? dayOrders.filter(o => o.status === 'completed')
+      : dayOrders;
+
+    let totalKg = 0;
+
+    console.log(`📊 Расчёт цемента. Всего заказов на день: ${orders.length}`);
+
+    orders.forEach((order: any, index: number) => {
+      const grade = String(order.grade || '').trim();
+      const volume = Number(order.volume || 0);
+
+      if (volume <= 0) return;
+
+      // Расширенный поиск
+      let recipe = recipes.find(r => r.code === grade);
+      if (!recipe) recipe = recipes.find(r => r.code === grade.replace('и', ''));
+      if (!recipe) recipe = recipes.find(r => r.name?.includes(grade));
+
+      console.log(`   [${index}] Марка: "${grade}" → рецепт найден:`, recipe ? recipe.code : 'НЕ НАЙДЕН');
+
+      if (recipe && recipe.cement) {
+        totalKg += volume * Number(recipe.cement);
+      }
+    });
+
+    const tons = (totalKg / 1000).toFixed(1);
+    console.log(`✅ Итого цемента: ${tons} т`);
+    return tons;
+  };
+
+    // ==================== РАСЧЁТ ДОБАВОК (в кг) ====================
+  const calculateAdditiveNeeded = (onlyCompleted: boolean) => {
+    const orders = onlyCompleted 
+      ? dayOrders.filter(o => o.status === 'completed')
+      : dayOrders;
+
+    let totalKg = 0;
+
+    orders.forEach((order: any) => {
+      const grade = String(order.grade || '').trim();
+      const volume = Number(order.volume || 0);
+
+      if (volume <= 0) return;
+
+      let recipe = recipes.find(r => r.code === grade);
+      if (!recipe) recipe = recipes.find(r => r.code === grade.replace('и', ''));
+      if (!recipe) recipe = recipes.find(r => r.name?.includes(grade));
+
+      if (recipe && recipe.additive) {
+        totalKg += volume * Number(recipe.additive);
+      }
+    });
+
+    return totalKg.toFixed(1);   // ← оставляем в кг, без /1000
+  };
+
 
   return (
     <div style={{ 
@@ -382,30 +494,47 @@ ${order.customer_type?.includes('Юридическое')
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '40px' }}>
         <div style={{ fontSize: '24px', fontWeight: '700' }}>РБУ ТрейдКом</div>
-        <div style={{ display: 'flex', gap: '8px', background: '#0F172A', padding: '6px', borderRadius: '9999px' }}>
-          <div style={{ padding: '10px 24px', borderRadius: '9999px', cursor: 'pointer' }}>Заказы</div>
-          <div style={{ padding: '10px 24px', borderRadius: '9999px', background: '#3B82F6', color: 'white', fontWeight: '600' }}>Заявки</div>
-          <div style={{ padding: '10px 24px', borderRadius: '9999px', cursor: 'pointer' }}>Миксеры</div>
-        </div>
+        
+        
       </div>
     </div>
 
-      {/* ==================== KPI БАР ==================== */}
+                        {/* ==================== KPI БАР ==================== */}
       <div style={{ 
         padding: '24px 40px', 
         background: '#1E2937', 
         display: 'flex', 
-        gap: '80px', 
+        gap: '60px', 
         borderBottom: '1px solid #334155',
-        alignItems: 'center'
+        alignItems: 'center',
+        flexWrap: 'wrap'
       }}>
+        
+        {/* Выполнено сегодня */}
         <div>
           <div style={{ color: '#94A3B8', fontSize: '14px' }}>Выполнено сегодня</div>
           <div style={{ fontSize: '32px', fontWeight: '700' }}>
-            {completedVolume} / {totalVolume} м³
+            {completedVolume} / <span style={{ opacity: 0.6, color: '#94A3B8' }}>{totalVolume}</span> м³
           </div>
         </div>
 
+        {/* Понадобится цемента */}
+        <div>
+          <div style={{ color: '#94A3B8', fontSize: '14px' }}>Понадобится цемента</div>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#60A5FA' }}>
+            {calculateCementNeeded(true)} / <span style={{ opacity: 0.6, color: '#94A3B8' }}>{calculateCementNeeded(false)}</span> т
+          </div>
+        </div>
+
+        {/* Понадобится добавок (в кг) */}
+        <div>
+          <div style={{ color: '#94A3B8', fontSize: '14px' }}>Понадобится добавок</div>
+          <div style={{ fontSize: '28px', fontWeight: '700', color: '#FACC15' }}>
+            {calculateAdditiveNeeded(true)} / <span style={{ opacity: 0.6, color: '#94A3B8' }}>{calculateAdditiveNeeded(false)}</span> кг
+          </div>
+        </div>
+
+        {/* Доставок сегодня */}
         <div>
           <div style={{ color: '#94A3B8', fontSize: '14px' }}>Доставок сегодня</div>
           <div style={{ fontSize: '32px', fontWeight: '700' }}>
@@ -413,145 +542,232 @@ ${order.customer_type?.includes('Юридическое')
           </div>
         </div>
 
-        <div>
-          <div style={{ color: '#94A3B8', fontSize: '14px' }}>ППРЗ</div>
-          <div style={{ 
-            fontSize: '32px', 
-            fontWeight: '700', 
-            color: pprz >= 80 ? '#10B981' : '#FACC15' 
-          }}>
-            {pprz}%
-          </div>
-        </div>
       </div>
 
       <div style={{ padding: '32px 40px', display: 'flex', gap: '28px' }}>
         
-        {/* ==================== ЛЕВАЯ КОЛОНКА — ЗАЯВКИ НА НЕДЕЛЮ ==================== */}
-<div style={{ 
-  width: '340px', 
-  flexShrink: 0 
-}}>
-  <div style={{ 
-    background: '#1E2937', 
-    borderRadius: '20px', 
-    padding: '24px',
-    minHeight: '920px',
-    height: 'calc(100vh - 180px)',   // ← помогает с высотой
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden'
-  }}>
-    
-    <h3 style={{ marginBottom: '20px', color: '#94A3B8', fontSize: '18px' }}>
-      ЗАЯВКИ НА НЕДЕЛЮ
-    </h3>
+                {/* ==================== ЛЕВАЯ КОЛОНКА — ЗАЯВКИ НА НЕДЕЛЮ ==================== */}
+        <div style={{ 
+          width: '340px', 
+          flexShrink: 0 
+        }}>
+          <div style={{ 
+            background: '#1E2937', 
+            borderRadius: '20px', 
+            padding: '24px',
+            height: 'calc(60vh - 1px)',   
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden'
+          }}>
+            
+            <h3 style={{ marginBottom: '20px', color: '#94A3B8', fontSize: '18px' }}>
+              ЗАЯВКИ НА НЕДЕЛЮ
+            </h3>
 
-    {/* Навигация */}
-    <div style={{ 
-      display: 'flex', 
-      justifyContent: 'space-between', 
-      alignItems: 'center', 
-      marginBottom: '16px',
-      color: '#CBD5E1',
-      flexShrink: 0
-    }}>
-      <button 
-        onClick={() => {
-          const newDate = new Date(selectedDate);
-          newDate.setDate(newDate.getDate() - 14);
-          setSelectedDate(newDate);
-        }}
-        style={{ background: 'none', border: 'none', color: '#94A3B8', fontSize: '18px', cursor: 'pointer' }}
-      >
-        ←
-      </button>
-      
-      <div style={{ fontWeight: '600', fontSize: '15px' }}>
-        {selectedDate.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' })}
-      </div>
+            {/* ==================== НАВИГАЦИЯ ПО НЕДЕЛЯМ ==================== */}
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center', 
+              marginBottom: '20px',
+              color: '#CBD5E1',
+              flexShrink: 0,
+              gap: '16px'
+            }}>
+              <button 
+                onClick={() => {
+                  const newDate = new Date(selectedDate);
+                  newDate.setDate(newDate.getDate() - 7);
+                  setSelectedDate(newDate);
+                }}
+                style={{ 
+                  background: 'none', 
+                  border: 'none', 
+                  color: '#94A3B8', 
+                  fontSize: '32px', 
+                  cursor: 'pointer',
+                  padding: '8px 16px',
+                  flexShrink: 0,
+                  userSelect: 'none'
+                }}
+              >
+                ←
+              </button>
 
-      <button 
-        onClick={() => {
-          const newDate = new Date(selectedDate);
-          newDate.setDate(newDate.getDate() + 14);
-          setSelectedDate(newDate);
-        }}
-        style={{ background: 'none', border: 'none', color: '#94A3B8', fontSize: '18px', cursor: 'pointer' }}
-      >
-        →
-      </button>
-    </div>
-
-    {/* ==================== СПИСОК ДНЕЙ СО СКРОЛЛОМ ==================== */}
-    <div style={{ 
-      flex: 1,
-      overflowY: 'auto', 
-      scrollbarWidth: 'thin',
-      scrollbarColor: '#3B82F6 #25334A',
-      paddingRight: '8px',
-      minHeight: '0'                    // важно для скролла
-    }}>
-      {(() => {
-        const days = [];
-        const startDate = new Date(selectedDate);
-        startDate.setDate(startDate.getDate() - 14);
-
-        for (let i = 0; i < 29; i++) {
-          const d = new Date(startDate);
-          d.setDate(startDate.getDate() + i);
-          
-          const dateStr = d.toISOString().split('T')[0];
-          const count = getOrdersCountForDate(d);
-          const isSelected = dateStr === selectedDateStr;
-          const isToday = d.toDateString() === new Date().toDateString();
-
-          days.push(
-            <div
-              key={i}
-              onClick={() => setSelectedDate(d)}
-              style={{
-                padding: '14px 20px',
-                marginBottom: '8px',
-                background: isSelected ? '#3B82F620' : '#25334A',
-                borderRadius: '16px',
-                cursor: 'pointer',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                border: isSelected ? '2px solid #3B82F6' : isToday ? '1px solid #60A5FA' : 'none',
-                transition: 'all 0.2s'
-              }}
-            >
-              <div style={{ fontWeight: '600' }}>
-                {d.toLocaleDateString('ru-RU', { 
-                  weekday: 'short', 
-                  day: 'numeric', 
-                  month: 'short' 
-                })}
-                {isToday && <span style={{ color: '#60A5FA', marginLeft: '6px' }}>●</span>}
-              </div>
-              
               <div style={{ 
-                background: '#334155', 
-                color: '#CBD5E1', 
-                padding: '4px 12px', 
-                borderRadius: '9999px',
-                fontSize: '14px',
-                fontWeight: '600',
-                minWidth: '28px',
-                textAlign: 'center'
+                fontWeight: '700', 
+                fontSize: '18px', 
+                textAlign: 'center',
+                flex: 1,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
               }}>
-                {count}
+                {selectedDate.toLocaleDateString('ru-RU', { 
+                  month: 'long', 
+                  year: 'numeric' 
+                })}
               </div>
+
+              <button 
+                onClick={() => {
+                  const newDate = new Date(selectedDate);
+                  newDate.setDate(newDate.getDate() + 7);
+                  setSelectedDate(newDate);
+                }}
+                style={{ 
+                  background: 'none', 
+                  border: 'none', 
+                  color: '#94A3B8', 
+                  fontSize: '32px', 
+                  cursor: 'pointer',
+                  padding: '8px 16px',
+                  flexShrink: 0,
+                  userSelect: 'none'
+                }}
+              >
+                →
+              </button>
             </div>
-          );
-        }
-        return days;
-      })()}
-    </div>
-  </div>
-</div>
+
+            {/* ==================== СПИСОК ДНЕЙ НЕДЕЛИ ==================== */}
+            <div style={{ 
+              flex: 1,
+              overflowY: 'hidden',
+              paddingRight: '8px',
+              minHeight: '0'
+            }}>
+              {weekDays.map((d) => {
+                const dateStr = getLocalDateString(d);
+                const count = getOrdersCountForDate(d);
+                const isSelected = dateStr === selectedDateStr;
+                const isToday = d.toDateString() === new Date().toDateString();
+
+                return (
+                  <div
+                    key={dateStr}
+                    onClick={() => setSelectedDate(d)}
+                    style={{
+                      padding: '16px 20px',
+                      marginBottom: '8px',
+                      background: isSelected ? '#3B82F620' : '#25334A',
+                      borderRadius: '16px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      border: isSelected ? '2px solid #3B82F6' : 'none',
+                      transition: 'all 0.2s ease',
+                      userSelect: 'none',
+                      WebkitUserSelect: 'none'
+                    }}
+                    onMouseDown={(e) => e.preventDefault()}
+                  >
+                    <div style={{ fontWeight: '600' }}>
+                      {d.toLocaleDateString('ru-RU', { 
+                        weekday: 'short', 
+                        day: 'numeric', 
+                        month: 'short' 
+                      })}
+                      {isToday && <span style={{ color: '#60A5FA', marginLeft: '6px' }}>●</span>}
+                    </div>
+                    
+                    <div style={{ 
+                      background: '#334155', 
+                      color: '#CBD5E1', 
+                      padding: '4px 12px', 
+                      borderRadius: '9999px',
+                      fontSize: '14px',
+                      fontWeight: '600',
+                      minWidth: '28px',
+                      textAlign: 'center'
+                    }}>
+                      {count}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+                        {/* ==================== РАЗДЕЛИТЕЛЬ + СВОДКА ЗА НЕДЕЛЮ ==================== */}
+            <div style={{ marginTop: '12px', paddingTop: '16px', borderTop: '1px solid #334155' }}>
+              <div style={{ 
+                background: '#25334A', 
+                borderRadius: '16px', 
+                padding: '16px 18px',
+                fontSize: '15px'
+              }}>
+                <div style={{ color: '#94A3B8', marginBottom: '12px', fontWeight: '600' }}>Итого за неделю</div>
+                
+                {/* 1. Количество заявок */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '15px' }}>Всего заявок:</span>
+                  <strong style={{ fontSize: '17px' }}>
+                    {weekDays.reduce((sum, d) => sum + getOrdersCountForDate(d), 0)}
+                  </strong>
+                </div>
+                
+                {/* 2. Запланировано (общий объём) */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '15px' }}>Запланировано:</span>
+                  <strong style={{ fontSize: '17px' }}>
+                    {weekDays.reduce((sum, d) => {
+                      const dateStr = getLocalDateString(d);
+                      return sum + allOrders
+                        .filter(o => {
+                          if (!o?.delivery_date) return false;
+                          const orderDate = typeof o.delivery_date === 'string' 
+                            ? o.delivery_date.substring(0, 10) 
+                            : getLocalDateString(new Date(o.delivery_date));
+                          return orderDate === dateStr;
+                        })
+                        .reduce((v, o) => v + Number(o.volume || 0), 0);
+                    }, 0)} м³
+                  </strong>
+                </div>
+
+                {/* 3. Отгружено */}
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '15px' }}>Отгружено:</span>
+                  <strong style={{ fontSize: '17px', color: '#10B981' }}>
+                    {weekDays.reduce((sum, d) => {
+                      const dateStr = getLocalDateString(d);
+                      return sum + allOrders
+                        .filter(o => {
+                          if (!o?.delivery_date) return false;
+                          const orderDate = typeof o.delivery_date === 'string' 
+                            ? o.delivery_date.substring(0, 10) 
+                            : getLocalDateString(new Date(o.delivery_date));
+                          return orderDate === dateStr && o.status === 'completed';
+                        })
+                        .reduce((v, o) => v + Number(o.volume || 0), 0);
+                    }, 0)} м³
+                  </strong>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setShowNewOrderModal(true)}
+                style={{
+                  width: '100%',
+                  marginTop: '12px',
+                  padding: '14px',
+                  background: '#10B981',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '12px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  fontSize: '16px'
+                }}
+              >
+                + Новый заказ
+              </button>
+            </div>
+
+          </div>
+        </div>
 
         {/* ==================== ПРАВАЯ КОЛОНКА — ОСНОВНОЙ СПИСОК ==================== */}
 <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>

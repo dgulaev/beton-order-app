@@ -47,57 +47,74 @@ export async function POST(request: NextRequest) {
       else referredBy = null;
     }
 
-        // ==================== СОЗДАНИЕ КЛИЕНТА ИЗ АДМИНКИ ====================
+            // ==================== СОЗДАНИЕ / ПОИСК КЛИЕНТА ====================
     let finalUserId = userId;
+    const isFromAdmin = !!(payload.isFromAdmin === true || payload.source === 'admin');
 
-    const isFromAdmin = payload.isFromAdmin === true || payload.source === 'admin';
+    console.log(`📍 Источник заявки: ${isFromAdmin ? 'Админка Цифра' : 'Мини-приложение Макс'}`);
 
-    const clientName = payload.organization_name || payload.full_name;
-    const clientPhone = payload.phone?.trim();
-    const clientInn = payload.inn || null;
-    const isLegal = payload.customerType?.includes('Юридическое') || !!payload.organization_name;
+    if (isFromAdmin) {
+      const phoneRaw = payload.phone?.trim();
+      const phone = phoneRaw ? phoneRaw.replace(/\D/g, '') : null;
+      const fullName = payload.fullName?.trim() || payload.full_name?.trim() || null;
+      const organizationName = payload.organizationName?.trim() || payload.organization_name?.trim() || null;
+      const inn = payload.inn?.trim() || null;
+      const isLegal = !!organizationName || payload.customerType?.includes('Юридическое');
 
-    if (isFromAdmin && clientName && clientPhone) {
-      console.log(`👤 Проверка/создание клиента: ${clientName}`);
+      if (!phone) {
+        return NextResponse.json({ 
+          success: false, 
+          message: 'Телефон обязателен при создании заявки из админки' 
+        }, { status: 400 });
+      }
 
       const supabase = getSupabaseClient();
 
-      // Ищем существующего клиента
-      const { data: existing } = await supabase
+      // Ищем клиента по телефону (самый надёжный способ)
+      const { data: existingClient } = await supabase
         .from('users')
-        .select('user_id')
-        .or(`phone.eq.${clientPhone},full_name.eq.${clientName},organization_name.eq.${clientName}`)
-        .limit(1)
-        .single();
+        .select('user_id, full_name, organization_name')
+        .eq('phone', '+' + phone)
+        .maybeSingle();
 
-      if (!existing) {
+      if (existingClient) {
+        finalUserId = existingClient.user_id;
+        console.log(`👤 Найден существующий клиент #${finalUserId}`);
+      } else {
         // Создаём нового клиента
-        const { data: newClient, error: clientError } = await supabase
+        const { data: newClient, error: createError } = await supabase
           .from('users')
           .insert({
-            user_id: Date.now(),                    // ← Генерируем user_id (временное решение)
             role: 'client',
-            full_name: isLegal ? null : clientName,
-            organization_name: isLegal ? clientName : null,
-            inn: clientInn,
-            phone: clientPhone,
-            created_by: userId,
+            phone: '+' + phone,
+            full_name: isLegal ? null : fullName,
+            organization_name: isLegal ? organizationName : fullName,
+            inn: inn,
             balance: 0,
             referral_code: 'R' + Math.random().toString(36).substring(2, 8).toUpperCase(),
           })
           .select('user_id')
           .single();
 
-        if (clientError) {
-          console.warn('⚠️ Не удалось создать клиента:', clientError.message);
+        if (createError) {
+          console.error('❌ Ошибка создания клиента:', createError);
+          // Продолжаем с переданным userId, если создание не удалось
         } else if (newClient) {
           finalUserId = newClient.user_id;
-          console.log(`✅ Создан новый клиент #${finalUserId} — ${clientName}`);
+          console.log(`✅ Создан новый клиент #${finalUserId} → ${isLegal ? organizationName : fullName}`);
         }
-      } else {
-        finalUserId = existing.user_id;
-        console.log(`👤 Найден существующий клиент #${finalUserId}`);
       }
+    } 
+    // Если заявка из Мини-приложения — используем переданный userId
+    else {
+      finalUserId = userId;
+    }
+
+    if (!finalUserId) {
+      return NextResponse.json({ 
+        success: false, 
+        message: 'Не удалось определить userId клиента' 
+      }, { status: 400 });
     }
     // =====================================================================
 
@@ -290,42 +307,50 @@ console.log(`✅ Время успешно принято.`);
         console.log(`✅ УСПЕШНО ЗАМОРОЖЕНО ${bonusPoints} баллов для реферера ${referredBy} (заказ #${orderId})`);
       }
     }
-    // ==================== ФОРМИРОВАНИЕ И ОТПРАВКА УВЕДОМЛЕНИЯ В MAX ====================
-    // Закомментировано — теперь уведомление отправляется вручную из модалки
-    /*
-    const messageText = `
-      ✅ *Новая заявка на отгрузку бетона*
+    // ==================== ОТПРАВКА УВЕДОМЛЕНИЯ В MAX ====================
+    // Автоматическое уведомление отправляется ТОЛЬКО если заявка пришла ИЗ МИНИ-ПРИЛОЖЕНИЯ
+    if (BOT_TOKEN && CHAT_ID && !isFromAdmin) {
+      
+      const messageText = `
+✅ *Новая заявка на отгрузку бетона*
 
-      📌 Марка: ${grade}
-      📦 Объём: ${volume} м³
-      📅 Дата: ${finalDeliveryDate} ${finalDeliveryTime}
-      📍 Адрес: ${address}
+📌 Марка: ${grade}
+📦 Объём: ${volume} м³
+📅 Дата: ${finalDeliveryDate} ${finalDeliveryTime}
+📍 Адрес: ${address}
 
-      👤 Тип: ${customerType}
-      ${customerType?.includes('Юридическое') 
-   ? `🏢 ${finalOrganizationName || '—'}`
-   : `🙍 ${finalFullName || '—'}`}
+👤 Тип: ${customerType}
+${customerType?.includes('Юридическое') 
+  ? `🏢 ${finalOrganizationName || '—'}`
+  : `🙍 ${finalFullName || '—'}`}
 
-      📞 Телефон: ${phone}
-      💰 Бетон: ${concreteCost?.toLocaleString('ru-RU')} ₽
-      🚚 Доставка: ${deliveryCost?.toLocaleString('ru-RU')} ₽
-      💵 *Итого: ${totalPrice?.toLocaleString('ru-RU')} ₽*
+📞 Телефон: ${phone}
+💰 Бетон: ${concreteCost?.toLocaleString('ru-RU')} ₽
+🚚 Доставка: ${deliveryCost?.toLocaleString('ru-RU')} ₽
+💵 *Итого: ${totalPrice?.toLocaleString('ru-RU')} ₽*
 
-      💬 Комментарий: ${comment || '—'}
-      🕒 ${new Date().toLocaleString('ru-RU')}
-      👤 MAX ID: ${userId}
-    `.trim();
+💬 Комментарий: ${comment || '—'}
+🕒 ${new Date().toLocaleString('ru-RU')}
+👤 Источник: Мини-приложение Макс
+      `.trim();
 
-    if (BOT_TOKEN && CHAT_ID) {
-      await fetch(`https://platform-api.max.ru/messages?chat_id=${CHAT_ID}`, {
-        method: 'POST',
-        headers: { 'Authorization': BOT_TOKEN, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: messageText }),
-      }).catch(err => {
-        console.warn('Не удалось отправить уведомление в Max:', err);
-      });
+      try {
+        await fetch(`https://platform-api.max.ru/messages?chat_id=${CHAT_ID}`, {
+          method: 'POST',
+          headers: { 
+            'Authorization': BOT_TOKEN, 
+            'Content-Type': 'application/json' 
+          },
+          body: JSON.stringify({ text: messageText }),
+        });
+        console.log(`✅ Автоматическое уведомление отправлено в Max (заказ #${orderId})`);
+      } catch (err) {
+        console.error('❌ Не удалось отправить уведомление в Max:', err);
+      }
+    } 
+    else if (isFromAdmin) {
+      console.log(`👮 Заявка создана из админки — автоматическое уведомление отключено`);
     }
-    */
     // =====================================================================
 
     return NextResponse.json({ 
