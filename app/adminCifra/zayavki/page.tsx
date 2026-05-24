@@ -555,7 +555,9 @@ ${order.customer_type?.includes('Юридическое')
             background: '#1E2937', 
             borderRadius: '20px', 
             padding: '24px',
-            height: 'calc(60vh - 1px)',   
+            minHeight: '880px',                    // минимальная комфортная высота для 1920
+            height: 'calc(100vh - 180px)',         // основная высота
+            maxHeight: 'calc(80vh - 120px)',      // ограничение сверху на 4K
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden'
