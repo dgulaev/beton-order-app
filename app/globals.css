@@ -16,3 +16,40 @@ h1 {
 input, select, textarea, button {
   font-size: 1rem;
 }
+
+/* ==================== АНИМАЦИИ ДЛЯ УВЕДОМЛЕНИЙ ==================== */
+
+@keyframes bellRing {
+  0%   { transform: rotate(0deg); }
+  10%  { transform: rotate(20deg); }
+  20%  { transform: rotate(-18deg); }
+  30%  { transform: rotate(14deg); }
+  40%  { transform: rotate(-8deg); }
+  50%  { transform: rotate(6deg); }
+  60%  { transform: rotate(-4deg); }
+  70%  { transform: rotate(2deg); }
+  100% { transform: rotate(0deg); }
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(120%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* Дополнительная анимация для всплывающего уведомления */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+  20%, 40%, 60%, 80% { transform: translateX(4px); }
+}
+
+/* Стиль для уведомления (на всякий случай) */
+.notification {
+  animation: slideIn 0.4s ease forwards;
+}

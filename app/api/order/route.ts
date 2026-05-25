@@ -6,7 +6,7 @@ const BOT_TOKEN = process.env.MAX_BOT_TOKEN;
 const CHAT_ID = process.env.MANAGER_CHAT_ID;
 
 // ================================================
-// КОНФИГУРАЦИЯ ДЛИТЕЛЬНОСТИ ОТГРУЗКИ (легко менять)
+// 1. КОНФИГУРАЦИЯ ДЛИТЕЛЬНОСТИ ОТГРУЗКИ
 // ================================================
 const MINUTES_PER_CUBIC_METER = 0.1;        // ←←← ИЗМЕНИТЬ ЗДЕСЬ при необходимости
 
@@ -23,35 +23,23 @@ function getSupabaseClient() {
 
 export async function POST(request: NextRequest) {
   try {
-    const payload: any = await request.json();   // ← any чтобы не было ошибок TS
-
-    const userId = payload.userId || payload.user_id || null;
-    let referredBy = payload.referredBy || payload.referred_by || null;
+    const payload: any = await request.json();
 
     console.log('📥 [Order API] Получен payload:', payload);
 
-    if (!userId) {
-      return NextResponse.json({ success: false, message: 'userId is required' }, { status: 400 });
-    }
+    let userId = payload.userId || payload.user_id || null;
+    let referredBy = payload.referredBy || payload.referred_by || null;
 
-// === ПРЕОБРАЗОВАНИЕ РЕФЕРАЛЬНОГО КОДА ===
-    if (referredBy && typeof referredBy === 'string' && referredBy.startsWith('R')) {
-      const supabase = getSupabaseClient();
-      const { data: referrer } = await supabase
-        .from('users')
-        .select('user_id')
-        .eq('referral_code', referredBy)
-        .maybeSingle();
-
-      if (referrer) referredBy = referrer.user_id;
-      else referredBy = null;
-    }
-
-            // ==================== СОЗДАНИЕ / ПОИСК КЛИЕНТА ====================
-    let finalUserId = userId;
+    // ================================================
+    // 2. ОПРЕДЕЛЕНИЕ ИСТОЧНИКА ЗАЯВКИ
+    // ================================================
     const isFromAdmin = !!(payload.isFromAdmin === true || payload.source === 'admin');
+    console.log(`📍 [Order API] Источник заявки: ${isFromAdmin ? 'АДМИНКА ЦИФРА' : 'МИНИ-ПРИЛОЖЕНИЕ МАКС'}`);
 
-    console.log(`📍 Источник заявки: ${isFromAdmin ? 'Админка Цифра' : 'Мини-приложение Макс'}`);
+    // ================================================
+    // 3. ЛОГИКА СОЗДАНИЯ/ПОИСКА КЛИЕНТА ИЗ АДМИНКИ
+    // ================================================
+    let finalUserId = userId;
 
     if (isFromAdmin) {
       const phoneRaw = payload.phone?.trim();
@@ -70,10 +58,10 @@ export async function POST(request: NextRequest) {
 
       const supabase = getSupabaseClient();
 
-      // Ищем клиента по телефону (самый надёжный способ)
+      // Ищем клиента по телефону
       const { data: existingClient } = await supabase
         .from('users')
-        .select('user_id, full_name, organization_name')
+        .select('user_id')
         .eq('phone', '+' + phone)
         .maybeSingle();
 
@@ -82,9 +70,12 @@ export async function POST(request: NextRequest) {
         console.log(`👤 Найден существующий клиент #${finalUserId}`);
       } else {
         // Создаём нового клиента
+        const newUserId = Date.now() + Math.floor(Math.random() * 10000);
+
         const { data: newClient, error: createError } = await supabase
           .from('users')
           .insert({
+            user_id: newUserId,
             role: 'client',
             phone: '+' + phone,
             full_name: isLegal ? null : fullName,
@@ -92,21 +83,20 @@ export async function POST(request: NextRequest) {
             inn: inn,
             balance: 0,
             referral_code: 'R' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+            created_at: new Date().toISOString()
           })
           .select('user_id')
           .single();
 
         if (createError) {
           console.error('❌ Ошибка создания клиента:', createError);
-          // Продолжаем с переданным userId, если создание не удалось
         } else if (newClient) {
           finalUserId = newClient.user_id;
           console.log(`✅ Создан новый клиент #${finalUserId} → ${isLegal ? organizationName : fullName}`);
         }
       }
-    } 
-    // Если заявка из Мини-приложения — используем переданный userId
-    else {
+    } else {
+      // Из мини-приложения используем переданный userId
       finalUserId = userId;
     }
 
@@ -116,9 +106,10 @@ export async function POST(request: NextRequest) {
         message: 'Не удалось определить userId клиента' 
       }, { status: 400 });
     }
-    // =====================================================================
 
-    // ==================== ДЕСТРУКТУРИЗАЦИЯ ====================
+    // ================================================
+    // 4. НОРМАЛИЗАЦИЯ ПОЛЕЙ
+    // ================================================
     const {
       grade,
       volume,
@@ -140,13 +131,14 @@ export async function POST(request: NextRequest) {
       totalPrice
     } = payload;
 
-    // Нормализация
     const finalDeliveryDate = delivery_date || deliveryDate;
     const finalDeliveryTime = delivery_time || deliveryTime;
     const finalOrganizationName = organization_name || organizationName;
     const finalFullName = full_name || fullName;
 
-    // ==================== ВАЛИДАЦИЯ ====================
+    // ================================================
+    // 5. ВАЛИДАЦИЯ
+    // ================================================
     if (!grade || !volume || !finalDeliveryDate || !finalDeliveryTime || !address || !phone) {
       return NextResponse.json({ 
         success: false, 
@@ -157,9 +149,8 @@ export async function POST(request: NextRequest) {
     const supabase = getSupabaseClient();
 
     // ================================================
-    // === ПРОВЕРКА КОНФЛИКТОВ ПО ВРЕМЕНИ ===
+    // 6. ПРОВЕРКА КОНФЛИКТОВ ПО ВРЕМЕНИ
     // ================================================
-
     let hasConflict = false;
     let conflictingOrderId = null;
     let suggestions: any[] = [];
@@ -205,37 +196,13 @@ export async function POST(request: NextRequest) {
       console.log(`👮 Админ создаёт заявку — проверка времени ОТКЛЮЧЕНА`);
     }
 
-console.log(`✅ Время успешно принято.`);
-
-// ================================================
-// === НАДЁЖНАЯ ОБРАБОТКА РЕФЕРАЛА ===
-// ================================================
-    let finalReferredBy = referredBy || payload.referredBy || payload.referred_by || null;
-
-    console.log('📥 [Order API] Получен referredBy:', finalReferredBy);
-
-    // Преобразование реферального кода в user_id
-    if (finalReferredBy && typeof finalReferredBy === 'string' && finalReferredBy.startsWith('R')) {
-      const { data: referrer } = await supabase
-        .from('users')
-        .select('user_id')
-        .eq('referral_code', finalReferredBy)
-        .maybeSingle();
-
-      if (referrer && referrer.user_id) {
-        finalReferredBy = referrer.user_id;
-        console.log(`🔍 Реферальный код ${finalReferredBy} преобразован в user_id ${finalReferredBy}`);
-      } else {
-        console.log(`⚠️ Реферер с кодом ${finalReferredBy} не найден`);
-        finalReferredBy = null;
-      }
-    }
-
-    // Создание заявки
+    // ================================================
+    // 7. СОЗДАНИЕ ЗАКАЗА (ВАЖНО: finalUserId!)
+    // ================================================
     const { data: orderData, error: insertError } = await supabase
       .from('orders')
       .insert([{
-        user_id: userId,
+        user_id: finalUserId,                    // ← КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ
         grade,
         volume: parseFloat(volume),
         delivery_date: finalDeliveryDate,
@@ -244,7 +211,7 @@ console.log(`✅ Время успешно принято.`);
         customer_type: customerType,
         full_name: finalFullName || null,
         organization_name: finalOrganizationName || null,
-        inn: inn || null,                    // ← Теперь точно сохранится
+        inn: inn || null,
         phone,
         comment: comment || null,
         concrete_cost: concreteCost || 0,
@@ -262,31 +229,11 @@ console.log(`✅ Время успешно принято.`);
     }
 
     const orderId = orderData.id;
-    console.log(`✅ Заказ #${orderId} успешно создан.`);
+    console.log(`✅ Заказ #${orderId} успешно создан для клиента ${finalUserId}`);
 
-    // === ПОГАШЕНИЕ БАЛЛОВ (СКИДКА) ===
-    const redeemAmount = Number(payload.redeemAmount) || 0;
-
-    if (redeemAmount > 0) {
-      const { error: redeemError } = await supabase
-        .from('balance_redemptions')
-        .insert({
-          user_id: userId,
-          order_id: orderId,
-          amount: redeemAmount,
-          type: 'discount',
-          status: 'completed',
-          processed_at: new Date().toISOString()
-        });
-
-      if (redeemError) {
-        console.error('Ошибка записи погашения баллов:', redeemError);
-      } else {
-        console.log(`✅ Погашено ${redeemAmount} баллов при создании заказа #${orderId}`);
-      }
-    }
-
-    // === ЗАМОРОЗКА РЕФЕРАЛЬНЫХ БАЛЛОВ ===
+    // ================================================
+    // 8. РЕФЕРАЛЬНЫЕ БАЛЛЫ
+    // ================================================
     if (referredBy && parseFloat(volume) > 0) {
       const bonusPoints = Math.round(parseFloat(volume) * 100);
 
@@ -294,7 +241,7 @@ console.log(`✅ Время успешно принято.`);
         .from('referral_transactions')
         .insert({
           referrer_id: referredBy,
-          referred_user_id: userId,
+          referred_user_id: finalUserId,
           order_id: orderId,
           volume: parseFloat(volume),
           potential_bonus: bonusPoints,
@@ -304,13 +251,14 @@ console.log(`✅ Время успешно принято.`);
       if (refError) {
         console.error('❌ Ошибка создания referral_transaction:', refError);
       } else {
-        console.log(`✅ УСПЕШНО ЗАМОРОЖЕНО ${bonusPoints} баллов для реферера ${referredBy} (заказ #${orderId})`);
+        console.log(`✅ УСПЕШНО ЗАМОРОЖЕНО ${bonusPoints} баллов`);
       }
     }
-    // ==================== ОТПРАВКА УВЕДОМЛЕНИЯ В MAX ====================
-    // Автоматическое уведомление отправляется ТОЛЬКО если заявка пришла ИЗ МИНИ-ПРИЛОЖЕНИЯ
+
+    // ================================================
+    // 9. ОТПРАВКА УВЕДОМЛЕНИЯ В MAX
+    // ================================================
     if (BOT_TOKEN && CHAT_ID && !isFromAdmin) {
-      
       const messageText = `
 ✅ *Новая заявка на отгрузку бетона*
 
@@ -343,19 +291,18 @@ ${customerType?.includes('Юридическое')
           },
           body: JSON.stringify({ text: messageText }),
         });
-        console.log(`✅ Автоматическое уведомление отправлено в Max (заказ #${orderId})`);
+        console.log(`✅ Уведомление отправлено в Max`);
       } catch (err) {
-        console.error('❌ Не удалось отправить уведомление в Max:', err);
+        console.error('❌ Не удалось отправить уведомление:', err);
       }
-    } 
-    else if (isFromAdmin) {
-      console.log(`👮 Заявка создана из админки — автоматическое уведомление отключено`);
+    } else if (isFromAdmin) {
+      console.log(`👮 Заявка из админки — уведомление отключено`);
     }
-    // =====================================================================
 
     return NextResponse.json({ 
       success: true, 
       orderId: orderId,
+      userId: finalUserId,
       message: 'Заявка успешно создана' 
     });
 
@@ -369,7 +316,7 @@ ${customerType?.includes('Юридическое')
 }
 
 // ================================================
-// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ПРЕДЛОЖЕНИЯ ВРЕМЕНИ
+// 10. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ================================================
 async function getFreeTimeSuggestions(supabase: any, date: string, requestedTime: Date, newDurationMin: number) {
   const suggestions: Array<{ time: string; reason: string }> = [];
@@ -392,7 +339,6 @@ async function getFreeTimeSuggestions(supabase: any, date: string, requestedTime
     }
   }
 
-  // Сортировка по близости
   suggestions.sort((a, b) => {
     const ta = parseInt(a.time.replace(':', ''));
     const tb = parseInt(b.time.replace(':', ''));
