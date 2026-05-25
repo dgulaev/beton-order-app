@@ -1214,7 +1214,7 @@ ${order.customer_type?.includes('Юридическое')
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     ...selectedOrder,
-                    userRole: currentRole,           // для совместимости
+                   userRole: currentRole || 'admin',
                    
                   })
                 });

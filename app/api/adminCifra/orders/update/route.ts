@@ -12,11 +12,14 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { id, userRole, ...updateData } = body;
 
+    // ==================== 1. ПРОВЕРКА ВХОДНЫХ ДАННЫХ ====================
     if (!id) {
       return NextResponse.json({ success: false, message: 'ID заявки обязателен' }, { status: 400 });
     }
 
-    // Получаем текущую версию заявки
+    console.log('🔄 [Update API] Получена роль от фронта:', userRole);
+
+    // ==================== 2. ПОЛУЧЕНИЕ ТЕКУЩЕЙ ЗАЯВКИ ====================
     const { data: currentOrder, error: fetchError } = await supabase
       .from('orders')
       .select('*')
@@ -27,12 +30,12 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'Заявка не найдена' }, { status: 404 });
     }
 
-                    // ==================== ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
+    // ==================== 3. ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
     const changes: any[] = [];
     
-    // Получаем имя пользователя из запроса (приоритет), потом роль
-    const userName = body.userName || userRole || 'Администратор';
-    const userRoleValue = userRole || 'unknown';
+    // === КРИТИЧНОЕ МЕСТО: ОПРЕДЕЛЕНИЕ РОЛИ ===
+    const finalUserRole = userRole || 'unknown';           // ← Главное исправление
+    const userName = body.userName || finalUserRole || 'Администратор';
 
     const fieldsToTrack = [
       'grade', 'volume', 'delivery_date', 'delivery_time',
@@ -40,7 +43,7 @@ export async function PUT(request: NextRequest) {
       'inn', 'comment', 'status'
     ];
 
-    console.log('🔄 Сравнение полей. Пользователь:', userName);
+    console.log(`🔄 Сравнение полей. Роль: ${finalUserRole} | Имя: ${userName}`);
 
     for (const field of fieldsToTrack) {
       const oldValue = currentOrder[field];
@@ -59,8 +62,8 @@ export async function PUT(request: NextRequest) {
         changes.push({
           order_id: id,
           action: actionText,
-          user_name: userName,           // ← Здесь будет имя пользователя
-          user_role: userRoleValue,
+          user_name: userName,
+          user_role: finalUserRole,          // ← Используем корректную роль
           field_name: field,
           old_value: oldStr || null,
           new_value: newStr || null
@@ -68,7 +71,7 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    // Сохраняем историю изменений
+    // Сохраняем историю
     if (changes.length > 0) {
       const { error: historyError } = await supabase
         .from('order_history')
@@ -77,13 +80,11 @@ export async function PUT(request: NextRequest) {
       if (historyError) {
         console.error('❌ Ошибка записи истории:', historyError);
       } else {
-        console.log(`✅ Успешно записано ${changes.length} изменений в историю`);
+        console.log(`✅ Успешно записано ${changes.length} изменений от роли: ${finalUserRole}`);
       }
-    } else {
-      console.log('⚠️ Нет реальных изменений для записи');
     }
 
-    // ==================== ОБНОВЛЕНИЕ ЗАЯВКИ ====================
+    // ==================== 4. ОБНОВЛЕНИЕ ЗАЯВКИ ====================
     const { error: updateError } = await supabase
       .from('orders')
       .update({
@@ -97,7 +98,7 @@ export async function PUT(request: NextRequest) {
         full_name: updateData.full_name,
         inn: updateData.inn,
         comment: updateData.comment,
-        status: updateData.status,           // ← Добавили!
+        status: updateData.status,
       })
       .eq('id', id);
 
