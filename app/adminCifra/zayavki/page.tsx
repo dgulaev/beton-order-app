@@ -49,24 +49,27 @@ export default function ZayavkiPage() {
     }
   }, [loadOrderHistory]);
 
-                // ==================== ЗАГРУЗКА РОЛИ ====================
+                  // ==================== ЗАГРУЗКА РОЛИ И ИМЕНИ (ИСПРАВЛЕННЫЙ ВАРИАНТ) ====================
   const [currentRole, setCurrentRole] = useState<string>('');
+  const [currentUserName, setCurrentUserName] = useState<string>('');
 
   useEffect(() => {
     const loadRole = async () => {
-      console.log('🔄 Запуск загрузки роли...');
+      console.log('🔄 [Role Loader] Запуск загрузки роли...');
 
+      // 1. Очистка старых данных (на всякий случай)
+      const savedUserId = localStorage.getItem('userId');
       const savedRole = localStorage.getItem('userRole');
-      if (savedRole) {
-        const role = savedRole.toLowerCase();
-        setCurrentRole(role);
-        console.log('✅ Роль из localStorage:', role);
-        return;
-      }
+      const savedName = localStorage.getItem('userName');
 
+      console.log('📦 Из localStorage:', { userId: savedUserId, role: savedRole, name: savedName });
+
+      // 2. Запрос к серверу (самое надёжное)
       try {
         const res = await fetch('/api/user/role', { 
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: savedUserId }),
           cache: 'no-store',
           credentials: 'include'
         });
@@ -74,18 +77,23 @@ export default function ZayavkiPage() {
         if (res.ok) {
           const data = await res.json();
           const role = (data.role || 'client').toLowerCase();
+          const name = data.full_name || data.username || data.name || 'Пользователь';
+
           setCurrentRole(role);
+          setCurrentUserName(name);
+
+          // Сохраняем в localStorage
           localStorage.setItem('userRole', role);
-          console.log('✅ Роль получена с сервера:', role);
+          localStorage.setItem('userName', name);
+
+          console.log('✅ Роль успешно загружена:', role, '| Имя:', name);
         } else {
-          console.warn('⚠️ API /api/user/role вернул ошибку, ставим admin');
-          setCurrentRole('admin');
-          localStorage.setItem('userRole', 'admin');
+          console.warn('⚠️ API /api/user/role вернул ошибку');
+          setCurrentRole('client');
         }
       } catch (err) {
         console.error('❌ Ошибка запроса роли:', err);
-        setCurrentRole('admin');
-        localStorage.setItem('userRole', 'admin');
+        setCurrentRole('client');
       }
     };
 

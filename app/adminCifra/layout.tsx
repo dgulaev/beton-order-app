@@ -40,6 +40,13 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       .catch(() => setUserRole('client'))
       .finally(() => setLoading(false));
   }, []);
+  // ==================== 3.1 ОЧИСТКА СТАРЫХ ЗАКРЫТЫХ УВЕДОМЛЕНИЙ ====================
+  useEffect(() => {
+  const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
+  if (closed.length > 50) {
+    localStorage.setItem('closedNotifications', JSON.stringify(closed.slice(-30)));
+   }
+  }, []);
 
   // ==================== 4. ИНИЦИАЛИЗАЦИЯ ЗВУКА ====================
   useEffect(() => {
@@ -59,95 +66,163 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     setTimeout(() => setIsBellAnimating(false), 2500);
   };
 
-  const showVisualNotification = (type: 'new' | 'update', orderData?: any) => {
-    const message = type === 'new' ? 'Новая заявка!' : 'Заявка обновлена!';
-    const emoji = type === 'new' ? '🔔' : '🔄';
+  // ==================== БЛОК 4.1 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
+const showVisualNotification = (type: 'new' | 'update', orderData?: any) => {
+  const orderId = orderData?.id || '—';
 
-    const notif = document.createElement('div');
-    notif.style.cssText = `
-      position: fixed;
-      top: 24px;
-      right: 24px;
-      background: linear-gradient(135deg, #ef4444, #f97316);
-      color: white;
-      padding: 16px 20px;
-      border-radius: 16px;
-      z-index: 10000;
-      font-weight: 600;
-      box-shadow: 0 20px 40px rgba(239, 68, 68, 0.4);
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      min-width: 280px;
-      animation: slideIn 0.4s ease;
-    `;
-    notif.innerHTML = `
-      <div style="font-size: 28px;">${emoji}</div>
-      <div>
-        <div style="font-size: 15px;">${message}</div>
-        <div style="font-size: 13px; opacity: 0.9;">Проверьте раздел "Заявки"</div>
-      </div>
-    `;
-    document.body.appendChild(notif);
-
-    setTimeout(() => {
-      notif.style.transition = 'all 0.4s ease';
-      notif.style.opacity = '0';
-      notif.style.transform = 'translateY(-20px)';
-      setTimeout(() => notif.remove(), 400);
-    }, 4500);
+  // Перевод статусов на русский
+  const getStatusText = (status: string) => {
+    switch (status?.toLowerCase()) {
+      case 'new': return 'Новая';
+      case 'processing': return 'В работе';
+      case 'completed': return 'Выполнена';
+      case 'cancelled': return 'Отменена';
+      default: return status || '—';
+    }
   };
 
-  // ==================== 5. SUPABASE REALTIME (INSERT + UPDATE) ====================
-  useEffect(() => {
-    if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) return;
+  let title = '';
+  let message = '';
+  let emoji = '';
 
-    const supabase = createClient();
-
-    const channel = supabase
-      .channel('realtime-orders')
-      .on(
-  'postgres_changes',
-  { event: 'INSERT', schema: 'public', table: 'orders' },
-  (payload) => {
-    const newOrder = payload.new as any;
-    
-    setNewOrdersCount(prev => prev + 1);        // ← Главное изменение
-    setLastNotificationId(newOrder.id);
-
-    playNotificationSound();
-    showVisualNotification('new', newOrder);
-    triggerBellAnimation();
-
-    console.log('🆕 Новая заявка! Счётчик =', newOrdersCount + 1);
+  if (type === 'new') {
+    emoji = '🆕';
+    title = 'Новая заявка!';
+    message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} м³`;
+  } else {
+    emoji = '🔄';
+    title = 'Статус изменён';
+    message = `Заявка №${orderId} → ${getStatusText(orderData?.status)}`;
   }
-)
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'orders',
-        },
-        (payload) => {
-          const updatedOrder = payload.new as any;
-          
-          // Уведомляем только при важных изменениях (статус)
-          playNotificationSound();
-          showVisualNotification('update', updatedOrder);
-          triggerBellAnimation();
 
-          console.log('🔄 Заявка обновлена:', updatedOrder);
-        }
-      )
-      .subscribe((status) => {
-        console.log('Realtime subscription status:', status);
+  const notif = document.createElement('div');
+  notif.style.cssText = `
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    background: linear-gradient(135deg, #ef4444, #f97316);
+    color: white;
+    padding: 16px 22px;
+    border-radius: 16px;
+    z-index: 10000;
+    font-weight: 600;
+    box-shadow: 0 20px 40px rgba(239, 68, 68, 0.5);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 360px;
+    cursor: pointer;
+  `;
+
+  notif.innerHTML = `
+    <div style="font-size: 34px;">${emoji}</div>
+    <div style="flex: 1;">
+      <div style="font-size: 16px; font-weight: 700;">${title}</div>
+      <div style="font-size: 14px; opacity: 0.95;">${message}</div>
+      <div style="font-size: 12.5px; opacity: 0.75; margin-top: 4px;">От: Сотрудник</div>
+    </div>
+    <div style="font-size: 24px; opacity: 0.8; cursor: pointer; padding: 4px 8px;" class="close-btn">✕</div>
+  `;
+
+  const closeBtn = notif.querySelector('.close-btn') as HTMLElement;
+
+  const closeNotification = () => {
+    notif.remove();
+    const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
+    if (!closed.includes(orderId)) {
+      closed.push(orderId);
+      localStorage.setItem('closedNotifications', JSON.stringify(closed));
+    }
+    setNewOrdersCount(prev => Math.max(0, prev - 1));
+  };
+
+  if (closeBtn) {
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeNotification();
+    });
+  }
+
+  notif.addEventListener('click', (e) => {
+    if (e.target !== closeBtn) {
+      window.location.href = '/adminCifra/zayavki';
+      closeNotification();
+    }
+  });
+
+  document.body.appendChild(notif);
+};
+
+  // ==================== 5. УЛУЧШЕННЫЙ POLLING С СОХРАНЕНИЕМ СОСТОЯНИЯ ====================
+useEffect(() => {
+  if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) {
+    return;
+  }
+
+  console.log(`✅ Polling с сохранением состояния запущен для: ${userRole}`);
+
+  // Загружаем сохранённое состояние
+  let lastOrderCount = parseInt(localStorage.getItem('lastOrderCount') || '0');
+  let lastKnownStatuses: Record<number, string> = JSON.parse(localStorage.getItem('lastKnownStatuses') || '{}');
+
+  const checkOrders = async () => {
+    try {
+      const res = await fetch('/api/adminCifra/all-orders', {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' }
       });
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [userRole, lastNotificationId]);
+      if (!res.ok) return;
+
+      const data = await res.json();
+      const orders = data.orders || data || [];
+
+      // === 1. Новые заявки ===
+      if (orders.length > lastOrderCount) {
+        const newCount = orders.length - lastOrderCount;
+        console.log(`🆕 Новых заявок: ${newCount}`);
+
+        setNewOrdersCount(prev => prev + newCount);
+        playNotificationSound();
+        showVisualNotification('new', orders[0]);
+        triggerBellAnimation();
+      }
+
+      // === 2. Изменение статуса ===
+      orders.forEach((order: any) => {
+        const prevStatus = lastKnownStatuses[order.id];
+        const currentStatus = order.status || 'new';
+
+        if (prevStatus && prevStatus !== currentStatus) {
+          console.log(`🔄 Изменение статуса #${order.id}: ${prevStatus} → ${currentStatus}`);
+
+          playNotificationSound();
+          showVisualNotification('update', order);
+          triggerBellAnimation();
+        }
+
+        lastKnownStatuses[order.id] = currentStatus;
+      });
+
+      lastOrderCount = orders.length;
+
+      // Сохраняем состояние
+      localStorage.setItem('lastOrderCount', lastOrderCount.toString());
+      localStorage.setItem('lastKnownStatuses', JSON.stringify(lastKnownStatuses));
+
+    } catch (err) {
+      console.warn('Polling error:', err);
+    }
+  };
+
+  const initialTimer = setTimeout(checkOrders, 1500);
+  const interval = setInterval(checkOrders, 5000);
+
+  return () => {
+    clearTimeout(initialTimer);
+    clearInterval(interval);
+  };
+}, [userRole]);
 
   // ==================== 6. СБРОС СЧЁТЧИКА ====================
   useEffect(() => {
@@ -242,60 +317,61 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               <Home size={22} /> {!isCollapsed && <span>Дашборд</span>}
             </Link>
 
-            {/* ==================== 9. ПУНКТ "ЗАЯВКИ" С БЕЙДЖЕМ И КОЛОКОЛЬЧИКОМ ==================== */}
+            {/* ==================== БЛОК 9: ПУНКТ МЕНЮ "ЗАЯВКИ" ==================== */}
 <div style={{ position: 'relative' }}>
   <Link 
     href="/adminCifra/zayavki" 
     style={navLinkStyle(isActive('/adminCifra/zayavki'), isCollapsed)}
-    onClick={() => {
-      setNewOrdersCount(0);           // ← Сброс счётчика при клике
-    }}
+    onClick={() => setNewOrdersCount(0)}
   >
     <Package size={22} /> 
     {!isCollapsed && <span>Заявки</span>}
-    
-    {/* Анимированный колокольчик */}
-    {newOrdersCount > 0 && (
+  </Link>
+
+  {newOrdersCount > 0 && (
+    <>
+      {/* Бейдж */}
+      <div style={{
+        position: 'absolute',
+        top: isCollapsed ? '-9px' : '-6px',
+        right: isCollapsed ? '-6px' : '8px',
+        background: '#ef4444',
+        color: 'white',
+        fontSize: '11px',
+        fontWeight: '700',
+        minWidth: '20px',
+        height: '20px',
+        borderRadius: '9999px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '0 6px',
+        border: '2px solid #1E2937',
+        boxShadow: '0 0 0 3px rgba(239, 68, 68, 0.5)',
+        zIndex: 30,
+        cursor: 'pointer'
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        setNewOrdersCount(0);
+      }}
+      >
+        {newOrdersCount > 9 ? '9+' : newOrdersCount}
+      </div>
+
+      {/* Колокольчик — улучшенное позиционирование */}
       <Bell 
         size={18} 
         style={{ 
-          marginLeft: '8px',
+          position: 'absolute',
+          top: isCollapsed ? '9px' : '13px',
+          right: isCollapsed ? '2px' : '12px',
           color: '#fbbf24',
-          animation: isBellAnimating ? 'bellRing 0.7s ease 4' : 'none'
+          animation: isBellAnimating ? 'bellRing 0.7s ease 4' : 'none',
+          zIndex: 25
         }} 
       />
-    )}
-  </Link>
-
-  {/* Красный бейдж */}
-  {newOrdersCount > 0 && (
-    <div style={{
-      position: 'absolute',
-      top: '-8px',
-      right: isCollapsed ? '-8px' : '8px',
-      background: '#ef4444',
-      color: 'white',
-      fontSize: '12px',
-      fontWeight: '700',
-      minWidth: '20px',
-      height: '20px',
-      borderRadius: '9999px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '0 6px',
-      border: '2px solid #1E2937',
-      boxShadow: '0 0 0 3px rgba(239, 68, 68, 0.4)',
-      zIndex: 10,
-      cursor: 'pointer'
-    }}
-    onClick={(e) => {
-      e.stopPropagation();
-      setNewOrdersCount(0);
-    }}
-    >
-      {newOrdersCount > 9 ? '9+' : newOrdersCount}
-    </div>
+    </>
   )}
 </div>
 
