@@ -20,6 +20,17 @@ export default function ZayavkiPage() {
   const [isSendingNotification, setIsSendingNotification] = useState(false);
 
   const [recipes, setRecipes] = useState<any[]>([]);
+
+    // ==================== HELPER ДЛЯ ПРОВЕРКИ ПРАВ ====================
+  const hasManagerPermissions = (role: string): boolean => {
+    if (!role) return false;
+    const r = role.toLowerCase().trim();
+    return r === 'admin' || r === 'manager' || r === 'dispatcher' || r === 'logist';
+  };
+
+  const isAdmin = (role: string): boolean => {
+    return role?.toLowerCase().trim() === 'admin';
+  };
  
 
   // ==================== ЗАГРУЗКА ИСТОРИИ ИЗМЕНЕНИЙ ====================
@@ -700,7 +711,7 @@ ${order.customer_type?.includes('Юридическое')
               })}
             </div>
 
-                        {/* ==================== РАЗДЕЛИТЕЛЬ + СВОДКА ЗА НЕДЕЛЮ ==================== */}
+                                    {/* ==================== РАЗДЕЛИТЕЛЬ + СВОДКА ЗА НЕДЕЛЮ ==================== */}
             <div style={{ marginTop: '12px', paddingTop: '16px', borderTop: '1px solid #334155' }}>
               <div style={{ 
                 background: '#25334A', 
@@ -718,11 +729,11 @@ ${order.customer_type?.includes('Юридическое')
                   </strong>
                 </div>
                 
-                {/* 2. Запланировано (общий объём) */}
+                {/* 2. Запланировано */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '15px' }}>Запланировано:</span>
+                  <span style={{ fontSize: '15px' }}>Запланировано на неделю:</span>
                   <strong style={{ fontSize: '17px' }}>
-                    {weekDays.reduce((sum, d) => {
+                    {Math.round(weekDays.reduce((sum, d) => {
                       const dateStr = getLocalDateString(d);
                       return sum + allOrders
                         .filter(o => {
@@ -733,7 +744,7 @@ ${order.customer_type?.includes('Юридическое')
                           return orderDate === dateStr;
                         })
                         .reduce((v, o) => v + Number(o.volume || 0), 0);
-                    }, 0)} м³
+                    }, 0))} м³
                   </strong>
                 </div>
 
@@ -741,7 +752,7 @@ ${order.customer_type?.includes('Юридическое')
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ fontSize: '15px' }}>Отгружено:</span>
                   <strong style={{ fontSize: '17px', color: '#10B981' }}>
-                    {weekDays.reduce((sum, d) => {
+                    {Math.round(weekDays.reduce((sum, d) => {
                       const dateStr = getLocalDateString(d);
                       return sum + allOrders
                         .filter(o => {
@@ -752,7 +763,7 @@ ${order.customer_type?.includes('Юридическое')
                           return orderDate === dateStr && o.status === 'completed';
                         })
                         .reduce((v, o) => v + Number(o.volume || 0), 0);
-                    }, 0)} м³
+                    }, 0))} м³
                   </strong>
                 </div>
               </div>
@@ -1209,7 +1220,7 @@ ${order.customer_type?.includes('Юридическое')
         {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
     <div style={{ marginTop: '40px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
 
-      {(currentRole === 'admin' || currentRole === 'manager') && (
+      { hasManagerPermissions(currentRole) && (
         <>
                               {/* Сохранить изменения */}
           <button 
