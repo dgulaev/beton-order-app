@@ -196,7 +196,7 @@ export default function NewOrderModal({
       return;
     }
 
-    // ================================================
+        // ================================================
     // 2. ПОДГОТОВКА PAYLOAD
     // ================================================
     const payload = {
@@ -215,8 +215,12 @@ export default function NewOrderModal({
       deliveryCost: deliveryCost || 0,
       totalPrice: totalPrice || 0,
       comment: form.comment?.trim() || null,
+      
+      // ==================== ДЛЯ ИСТОРИИ ====================
       isFromAdmin: true,
-      source: 'admin'
+      source: 'admin',
+      userRole: 'admin',                    // ← Добавлено
+      userName: 'Администратор',            // ← Добавлено
     };
 
     try {
@@ -240,8 +244,8 @@ export default function NewOrderModal({
           status: 'new'
         };
 
-        setOrderCreated(createdOrder);     // ← Это важно!
-        setNotificationSent(false);        // сбрасываем статус
+        setOrderCreated(createdOrder);
+        setNotificationSent(false);
 
         alert(`✅ Заявка #${data.orderId} успешно создана!`);
         onSuccess(createdOrder);

@@ -23,6 +23,7 @@ export default function ClientsPage() {
   const [dadataSuggestions, setDadataSuggestions] = useState<any[]>([]);
   const [isLoadingDadata, setIsLoadingDadata] = useState(false);
   const [isNewClientModalOpen, setIsNewClientModalOpen] = useState(false);
+    const [currentRole, setCurrentRole] = useState<string>('admin');
   
   // Новое состояние для формы создания клиента
   const [newClientForm, setNewClientForm] = useState({
@@ -69,6 +70,35 @@ export default function ClientsPage() {
     };
 
     fetchAllUsers();
+  }, []);
+
+    // ==================== ЗАГРУЗКА РОЛИ ====================
+  useEffect(() => {
+    const loadRole = async () => {
+      const savedRole = localStorage.getItem('userRole');
+      if (savedRole) {
+        setCurrentRole(savedRole.toLowerCase());
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/user/role', { 
+          method: 'POST',
+          cache: 'no-store'
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const role = (data.role || 'admin').toLowerCase();
+          setCurrentRole(role);
+          localStorage.setItem('userRole', role);
+        }
+      } catch (err) {
+        console.error('Ошибка загрузки роли:', err);
+      }
+    };
+
+    loadRole();
   }, []);
 
         // ==================== 3. ЗАГРУЗКА ЗАКАЗОВ ВЫБРАННОГО ПОЛЬЗОВАТЕЛЯ ====================
@@ -343,7 +373,7 @@ export default function ClientsPage() {
     }
   };
 
-          // ==================== 3.2 АВТОЗАПОЛНЕНИЕ ПО ИНН (DaData) ====================
+            // ==================== 3.2 АВТОЗАПОЛНЕНИЕ ПО ИНН (DaData) ====================
   const fetchByInn = async (inn: string, clientIndex?: number) => {
     if (!inn || inn.length < 10) {
       setDadataSuggestions([]);
@@ -351,6 +381,7 @@ export default function ClientsPage() {
     }
 
     setIsLoadingDadata(true);
+    console.log(`🔍 Запрос DaData по ИНН: ${inn}, index: ${clientIndex}`);
 
     try {
       const res = await fetch('/api/dadata/party', {
@@ -364,31 +395,31 @@ export default function ClientsPage() {
         const suggestions = data.suggestions || [];
 
         setDadataSuggestions(suggestions);
-
         console.log('✅ DaData вернул:', suggestions.length, 'подсказок');
 
-        // Если передан индекс — это режим редактирования группы
-        if (clientIndex !== undefined && suggestions.length > 0) {
+        if (suggestions.length > 0) {
           const s = suggestions[0];
-          const newClients = [...editingClient];
-          
-          newClients[clientIndex] = {
-            ...newClients[clientIndex],
-            inn: s.data.inn,
-            organization_name: s.value || s.data.name?.short || s.data.name?.full || '',
-            full_name: s.data.name?.full || '',
-            address: s.data.address?.value || '',
-          };
 
-          setEditingClient(newClients);
-          setDadataSuggestions([]); // закрываем список после автоподстановки
+          if (clientIndex !== undefined && editingClient && Array.isArray(editingClient)) {
+            // === РЕЖИМ ГРУППЫ ===
+            const newClients = [...editingClient];
+            newClients[clientIndex] = {
+              ...newClients[clientIndex],
+              inn: s.data.inn || inn,
+              organization_name: s.value || s.data.name?.short_with_opf || s.data.name?.full_with_opf || '',
+              full_name: s.data.name?.full || '',
+              address: s.data.address?.value || '',
+            };
+            setEditingClient(newClients);
+            console.log(`✅ Автозаполнение для клиента #${clientIndex}`);
+          } 
         }
       } else {
-        console.warn('DaData вернул ошибку');
+        console.warn('⚠️ DaData вернул ошибку');
         setDadataSuggestions([]);
       }
     } catch (err) {
-      console.error('Ошибка DaData:', err);
+      console.error('❌ Ошибка DaData:', err);
       setDadataSuggestions([]);
     } finally {
       setIsLoadingDadata(false);
@@ -1134,6 +1165,7 @@ export default function ClientsPage() {
         userId={selectedProfile?.user_id || selectedProfile?.id}
         userName={selectedProfile?.full_name || selectedProfile?.name || selectedProfile?.username || 'Клиент'}
         userPhone={selectedProfile?.phone || ''}
+        currentRole={currentRole}
         onOrderCreated={() => {
           if (selectedProfile) {
             const uid = selectedProfile.user_id || selectedProfile.id;

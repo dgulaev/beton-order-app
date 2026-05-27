@@ -1177,43 +1177,89 @@ ${order.customer_type?.includes('Юридическое')
                 </div>
 
                                                {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ ==================== */}
-                <div>
-                  <h3 style={{ marginBottom: '12px', color: '#94A3B8' }}>История изменений</h3>
-                  <div style={{ 
-                    background: '#25334A', 
-                    borderRadius: '16px', 
-                    padding: '20px', 
-                    height: '340px', 
-                    overflowY: 'auto',
-                    fontSize: '14px',
-                    lineHeight: '1.6'
-                  }}>
-                    {orderHistory.length > 0 ? (
-                      orderHistory.map((entry, index) => (
-                        <div key={index} style={{ marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid #334155' }}>
-                          <div style={{ color: '#64748B', fontSize: '13px' }}>
-                            {new Date(entry.created_at).toLocaleString('ru-RU')}
-                          </div>
-                          
-                          <div>
-                            <strong>{entry.user_role || entry.user_name || 'Администратор'}</strong> 
-                            {' '}изменил 
-                            <strong> {entry.field_name}</strong>
-                          </div>
-                          
-                          <div style={{ fontSize: '13px', marginTop: '4px', color: '#CBD5E1' }}>
-                            Было: <span style={{ color: '#94A3B8' }}>{entry.old_value || '—'}</span><br />
-                            Стало: <span style={{ color: '#60A5FA' }}>{entry.new_value || '—'}</span>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div style={{ color: '#64748B', textAlign: 'center', paddingTop: '100px' }}>
-                        История изменений пока пустая
-                      </div>
-                    )}
-                  </div>
-                </div>
+<div>
+  <h3 style={{ marginBottom: '12px', color: '#94A3B8' }}>История изменений</h3>
+  <div style={{ 
+    background: '#25334A', 
+    borderRadius: '16px', 
+    padding: '20px', 
+    height: '340px', 
+    overflowY: 'auto',
+    fontSize: '14px',
+    lineHeight: '1.6'
+  }}>
+    {orderHistory.length > 0 ? orderHistory.map((entry, index) => {
+      const actionText = entry.action === 'Создал заявку' 
+        ? 'Создал заявку' 
+        : entry.action;
+
+      let newValueDisplay = entry.new_value;
+      let statusColor = '#CBD5E1';
+
+      if (entry.field_name === 'status' || entry.action === 'Создал заявку') {
+        if (entry.new_value === 'new' || entry.new_value === null) {
+          newValueDisplay = 'Новая';
+          statusColor = '#FACC15';           // Жёлтый
+        } else if (entry.new_value === 'processing') {
+          newValueDisplay = 'В работе';
+          statusColor = '#3B82F6';           // Синий
+        } else if (entry.new_value === 'completed') {
+          newValueDisplay = 'Выполнена';
+          statusColor = '#10B981';           // Зелёный
+        } else if (entry.new_value === 'cancelled') {
+          newValueDisplay = 'Отменена';
+          statusColor = '#EF4444';           // Красный
+        }
+      }
+
+      let oldValueDisplay = entry.old_value;
+      if (entry.field_name === 'status') {
+        if (entry.old_value === 'new') oldValueDisplay = 'Новая';
+        else if (entry.old_value === 'processing') oldValueDisplay = 'В работе';
+        else if (entry.old_value === 'completed') oldValueDisplay = 'Выполнена';
+        else if (entry.old_value === 'cancelled') oldValueDisplay = 'Отменена';
+      }
+
+      return (
+        <div key={index} style={{ 
+          marginBottom: '16px', 
+          paddingBottom: '12px', 
+          borderBottom: index < orderHistory.length - 1 ? '1px solid #334155' : 'none' 
+        }}>
+          <div style={{ color: '#94A3B8', fontSize: '13px' }}>
+            {new Date(entry.created_at).toLocaleString('ru-RU')}
+          </div>
+          
+          <div style={{ marginTop: '4px', fontWeight: '600' }}>
+            {actionText}
+          </div>
+          
+          <div style={{ color: '#60A5FA', marginTop: '2px' }}>
+            {entry.user_name} 
+            {entry.user_role && entry.user_role !== 'unknown' && (
+              <span style={{ color: '#94A3B8', fontSize: '13px' }}> ({entry.user_role})</span>
+            )}
+          </div>
+
+          {entry.field_name && (
+            <div style={{ marginTop: '6px', color: '#CBD5E1' }}>
+              {entry.field_name}: 
+              <span style={{ color: '#EF4444' }}> {oldValueDisplay || '—'} </span> 
+              → 
+              <span style={{ color: statusColor, fontWeight: '600' }}> 
+                {newValueDisplay || '—'}
+              </span>
+            </div>
+          )}
+        </div>
+      );
+    }) : (
+      <div style={{ color: '#64748B', textAlign: 'center', padding: '60px 0' }}>
+        История изменений пуста
+      </div>
+    )}
+  </div>
+</div>
               </div>
             </div>
             

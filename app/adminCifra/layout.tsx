@@ -66,20 +66,9 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     setTimeout(() => setIsBellAnimating(false), 2500);
   };
 
-  // ==================== БЛОК 4.1 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
-const showVisualNotification = (type: 'new' | 'update', orderData?: any) => {
+ // ==================== БЛОК 4.1 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
+const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', orderData?: any, oldData?: any) => {
   const orderId = orderData?.id || '—';
-
-  // Перевод статусов на русский
-  const getStatusText = (status: string) => {
-    switch (status?.toLowerCase()) {
-      case 'new': return 'Новая';
-      case 'processing': return 'В работе';
-      case 'completed': return 'Выполнена';
-      case 'cancelled': return 'Отменена';
-      default: return status || '—';
-    }
-  };
 
   let title = '';
   let message = '';
@@ -88,11 +77,34 @@ const showVisualNotification = (type: 'new' | 'update', orderData?: any) => {
   if (type === 'new') {
     emoji = '🆕';
     title = 'Новая заявка!';
+    // Добавляем дату доставки
+    const deliveryDate = orderData?.delivery_date 
+      ? new Date(orderData.delivery_date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) 
+      : '';
+    
     message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} м³`;
-  } else {
+    if (deliveryDate) {
+      message += ` — на ${deliveryDate}`;
+    }
+  } 
+  else if (type === 'status') {
     emoji = '🔄';
     title = 'Статус изменён';
-    message = `Заявка №${orderId} → ${getStatusText(orderData?.status)}`;
+    const statusText = 
+      orderData?.status === 'processing' ? 'В работе' :
+      orderData?.status === 'completed' ? 'Выполнена' :
+      orderData?.status === 'cancelled' ? 'Отменена' : orderData?.status || '—';
+    message = `Заявка №${orderId} → ${statusText}`;
+  } 
+  else if (type === 'volume') {
+    emoji = '📦';
+    title = 'Изменён объём';
+    message = `Заявка №${orderId} — было ${oldData?.volume || '?'} → стало ${orderData?.volume} м³`;
+  } 
+  else if (type === 'datetime') {
+    emoji = '🕒';
+    title = 'Изменены дата и время';
+    message = `Заявка №${orderId} — ${orderData?.delivery_date} ${orderData?.delivery_time || ''}`;
   }
 
   const notif = document.createElement('div');
@@ -100,17 +112,17 @@ const showVisualNotification = (type: 'new' | 'update', orderData?: any) => {
     position: fixed;
     top: 24px;
     right: 24px;
-    background: linear-gradient(135deg, #ef4444, #f97316);
-    color: white;
+    background: linear-gradient(135deg, #22c55e, #86efac);
+    color: #0f172a;
     padding: 16px 22px;
     border-radius: 16px;
     z-index: 10000;
     font-weight: 600;
-    box-shadow: 0 20px 40px rgba(239, 68, 68, 0.5);
+    box-shadow: 0 20px 40px rgba(34, 197, 94, 0.45);
     display: flex;
     align-items: center;
     gap: 14px;
-    min-width: 360px;
+    min-width: 380px;   /* чуть шире из-за даты */
     cursor: pointer;
   `;
 
@@ -118,10 +130,9 @@ const showVisualNotification = (type: 'new' | 'update', orderData?: any) => {
     <div style="font-size: 34px;">${emoji}</div>
     <div style="flex: 1;">
       <div style="font-size: 16px; font-weight: 700;">${title}</div>
-      <div style="font-size: 14px; opacity: 0.95;">${message}</div>
-      <div style="font-size: 12.5px; opacity: 0.75; margin-top: 4px;">От: Сотрудник</div>
+      <div style="font-size: 14px; opacity: 0.92;">${message}</div>
     </div>
-    <div style="font-size: 24px; opacity: 0.8; cursor: pointer; padding: 4px 8px;" class="close-btn">✕</div>
+    <div style="font-size: 24px; opacity: 0.75; cursor: pointer; padding: 4px 8px;" class="close-btn">✕</div>
   `;
 
   const closeBtn = notif.querySelector('.close-btn') as HTMLElement;
@@ -153,17 +164,16 @@ const showVisualNotification = (type: 'new' | 'update', orderData?: any) => {
   document.body.appendChild(notif);
 };
 
-  // ==================== 5. УЛУЧШЕННЫЙ POLLING С СОХРАНЕНИЕМ СОСТОЯНИЯ ====================
+ // ==================== БЛОК 5. УЛУЧШЕННЫЙ POLLING (4 ТИПА УВЕДОМЛЕНИЙ) ====================
 useEffect(() => {
   if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) {
     return;
   }
 
-  console.log(`✅ Polling с сохранением состояния запущен для: ${userRole}`);
+  console.log(`✅ Polling (4 типа) запущен для роли: ${userRole}`);
 
-  // Загружаем сохранённое состояние
-  let lastOrderCount = parseInt(localStorage.getItem('lastOrderCount') || '0');
-  let lastKnownStatuses: Record<number, string> = JSON.parse(localStorage.getItem('lastKnownStatuses') || '{}');
+  let lastOrderCount = 0;
+  let lastKnownData: Record<number, any> = {}; // сохраняем предыдущие данные заявки
 
   const checkOrders = async () => {
     try {
@@ -188,27 +198,41 @@ useEffect(() => {
         triggerBellAnimation();
       }
 
-      // === 2. Изменение статуса ===
+      // === 2,3,4. Изменения в существующих заявках ===
       orders.forEach((order: any) => {
-        const prevStatus = lastKnownStatuses[order.id];
-        const currentStatus = order.status || 'new';
+        const prev = lastKnownData[order.id];
 
-        if (prevStatus && prevStatus !== currentStatus) {
-          console.log(`🔄 Изменение статуса #${order.id}: ${prevStatus} → ${currentStatus}`);
+        if (prev) {
+          // Изменение статуса
+          if (prev.status !== order.status) {
+            console.log(`🔄 Изменение статуса #${order.id}`);
+            playNotificationSound();
+            showVisualNotification('status', order);
+            triggerBellAnimation();
+          }
 
-          playNotificationSound();
-          showVisualNotification('update', order);
-          triggerBellAnimation();
+          // Изменение объёма
+          if (prev.volume !== order.volume) {
+            console.log(`📦 Изменение объёма #${order.id}`);
+            playNotificationSound();
+            showVisualNotification('volume', order, prev);
+            triggerBellAnimation();
+          }
+
+          // Изменение даты/времени
+          if (prev.delivery_date !== order.delivery_date || prev.delivery_time !== order.delivery_time) {
+            console.log(`🕒 Изменение даты/времени #${order.id}`);
+            playNotificationSound();
+            showVisualNotification('datetime', order);
+            triggerBellAnimation();
+          }
         }
 
-        lastKnownStatuses[order.id] = currentStatus;
+        // Сохраняем текущие данные
+        lastKnownData[order.id] = { ...order };
       });
 
       lastOrderCount = orders.length;
-
-      // Сохраняем состояние
-      localStorage.setItem('lastOrderCount', lastOrderCount.toString());
-      localStorage.setItem('lastKnownStatuses', JSON.stringify(lastKnownStatuses));
 
     } catch (err) {
       console.warn('Polling error:', err);

@@ -8,7 +8,7 @@ const CHAT_ID = process.env.MANAGER_CHAT_ID;
 // ================================================
 // 1. КОНФИГУРАЦИЯ ДЛИТЕЛЬНОСТИ ОТГРУЗКИ
 // ================================================
-const MINUTES_PER_CUBIC_METER = 0.1;        // ←←← ИЗМЕНИТЬ ЗДЕСЬ при необходимости
+const MINUTES_PER_CUBIC_METER = 0.1;
 
 function getSupabaseClient() {
   const supabaseUrl = process.env.SUPABASE_URL;
@@ -42,45 +42,60 @@ export async function POST(request: NextRequest) {
     let finalUserId = userId;
 
     if (isFromAdmin) {
-      const phoneRaw = payload.phone?.trim();
-      const phone = phoneRaw ? phoneRaw.replace(/\D/g, '') : null;
-      const fullName = payload.fullName?.trim() || payload.full_name?.trim() || null;
+      let phoneRaw = payload.phone?.trim() || payload.client_phone?.trim();
+      const fullName = payload.fullName?.trim() || payload.full_name?.trim() || payload.client_name?.trim() || null;
       const organizationName = payload.organizationName?.trim() || payload.organization_name?.trim() || null;
       const inn = payload.inn?.trim() || null;
-      const isLegal = !!organizationName || payload.customerType?.includes('Юридическое');
 
-      if (!phone) {
-        return NextResponse.json({ 
-          success: false, 
-          message: 'Телефон обязателен при создании заявки из админки' 
-        }, { status: 400 });
+      if (!phoneRaw) {
+        return NextResponse.json({ success: false, message: 'Телефон обязателен при создании заявки из админки' }, { status: 400 });
       }
+
+      const phoneNormalized = phoneRaw.replace(/\D/g, '');
+      const phoneWithPlus = phoneNormalized.length === 11 && phoneNormalized.startsWith('7') 
+        ? '+' + phoneNormalized 
+        : phoneNormalized.length === 10 
+          ? '+7' + phoneNormalized 
+          : '+' + phoneNormalized;
 
       const supabase = getSupabaseClient();
 
-      // Ищем клиента по телефону
-      const { data: existingClient } = await supabase
+      let existingClient = null;
+
+      const { data: phoneClient } = await supabase
         .from('users')
-        .select('user_id')
-        .eq('phone', '+' + phone)
+        .select('user_id, phone, organization_name, full_name')
+        .or(`phone.eq.${phoneWithPlus},phone.eq.${phoneRaw}`)
         .maybeSingle();
+
+      if (phoneClient) {
+        existingClient = phoneClient;
+      } else if (organizationName) {
+        const { data: orgClient } = await supabase
+          .from('users')
+          .select('user_id, phone, organization_name, full_name')
+          .ilike('organization_name', `%${organizationName}%`)
+          .limit(1)
+          .maybeSingle();
+
+        if (orgClient) existingClient = orgClient;
+      }
 
       if (existingClient) {
         finalUserId = existingClient.user_id;
         console.log(`👤 Найден существующий клиент #${finalUserId}`);
       } else {
-        // Создаём нового клиента
-        const newUserId = Date.now() + Math.floor(Math.random() * 10000);
+        const newUserId = Date.now() + Math.floor(Math.random() * 100000);
 
         const { data: newClient, error: createError } = await supabase
           .from('users')
           .insert({
             user_id: newUserId,
             role: 'client',
-            phone: '+' + phone,
-            full_name: isLegal ? null : fullName,
-            organization_name: isLegal ? organizationName : fullName,
-            inn: inn,
+            phone: phoneWithPlus,
+            full_name: organizationName ? null : fullName,
+            organization_name: organizationName || fullName,
+            inn: inn || null,
             balance: 0,
             referral_code: 'R' + Math.random().toString(36).substring(2, 8).toUpperCase(),
             created_at: new Date().toISOString()
@@ -92,43 +107,24 @@ export async function POST(request: NextRequest) {
           console.error('❌ Ошибка создания клиента:', createError);
         } else if (newClient) {
           finalUserId = newClient.user_id;
-          console.log(`✅ Создан новый клиент #${finalUserId} → ${isLegal ? organizationName : fullName}`);
+          console.log(`✅ Создан новый клиент #${finalUserId}`);
         }
       }
     } else {
-      // Из мини-приложения используем переданный userId
       finalUserId = userId;
     }
 
     if (!finalUserId) {
-      return NextResponse.json({ 
-        success: false, 
-        message: 'Не удалось определить userId клиента' 
-      }, { status: 400 });
+      return NextResponse.json({ success: false, message: 'Не удалось определить userId клиента' }, { status: 400 });
     }
 
     // ================================================
     // 4. НОРМАЛИЗАЦИЯ ПОЛЕЙ
     // ================================================
     const {
-      grade,
-      volume,
-      delivery_date,
-      delivery_time,
-      deliveryDate,
-      deliveryTime,
-      address,
-      phone,
-      customerType,
-      organization_name,
-      organizationName,
-      full_name,
-      fullName,
-      inn,
-      comment,
-      concreteCost,
-      deliveryCost,
-      totalPrice
+      grade, volume, delivery_date, delivery_time, deliveryDate, deliveryTime,
+      address, phone, customerType, organization_name, organizationName,
+      full_name, fullName, inn, comment, concreteCost, deliveryCost, totalPrice
     } = payload;
 
     const finalDeliveryDate = delivery_date || deliveryDate;
@@ -140,10 +136,7 @@ export async function POST(request: NextRequest) {
     // 5. ВАЛИДАЦИЯ
     // ================================================
     if (!grade || !volume || !finalDeliveryDate || !finalDeliveryTime || !address || !phone) {
-      return NextResponse.json({ 
-        success: false, 
-        message: 'Не все обязательные поля заполнены' 
-      }, { status: 400 });
+      return NextResponse.json({ success: false, message: 'Не все обязательные поля заполнены' }, { status: 400 });
     }
 
     const supabase = getSupabaseClient();
@@ -182,7 +175,6 @@ export async function POST(request: NextRequest) {
 
       if (hasConflict) {
         suggestions = await getFreeTimeSuggestions(supabase, finalDeliveryDate, requestedStart, newDurationMin);
-
         return NextResponse.json({
           success: false,
           message: `Время ${finalDeliveryTime} занято (заявка #${conflictingOrderId}).`,
@@ -190,19 +182,15 @@ export async function POST(request: NextRequest) {
           conflict: true
         }, { status: 409 });
       }
-
-      console.log(`✅ Проверка времени прошла успешно (клиент)`);
-    } else {
-      console.log(`👮 Админ создаёт заявку — проверка времени ОТКЛЮЧЕНА`);
     }
 
     // ================================================
-    // 7. СОЗДАНИЕ ЗАКАЗА (ВАЖНО: finalUserId!)
+    // 7. СОЗДАНИЕ ЗАКАЗА
     // ================================================
     const { data: orderData, error: insertError } = await supabase
       .from('orders')
       .insert([{
-        user_id: finalUserId,                    // ← КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ
+        user_id: finalUserId,
         grade,
         volume: parseFloat(volume),
         delivery_date: finalDeliveryDate,
@@ -232,7 +220,47 @@ export async function POST(request: NextRequest) {
     console.log(`✅ Заказ #${orderId} успешно создан для клиента ${finalUserId}`);
 
     // ================================================
-    // 8. РЕФЕРАЛЬНЫЕ БАЛЛЫ
+    // 8. ЗАПИСЬ В ИСТОРИЮ СОЗДАНИЯ ЗАЯВКИ
+    // ================================================
+    if (orderId) {
+      let creatorRole = 'client';
+      
+      if (payload.userRole) {
+        creatorRole = payload.userRole;
+      } else if (isFromAdmin) {
+        creatorRole = 'admin';
+      }
+
+      const creatorName = 
+        creatorRole === 'admin' ? 'Администратор' :
+        creatorRole === 'manager' ? 'Менеджер' :
+        creatorRole === 'dispatcher' ? 'Диспетчер' :
+        creatorRole === 'logist' ? 'Логист' : 'Клиент';
+
+      const historyEntry = {
+        order_id: orderId,
+        action: 'Создал заявку',
+        user_name: creatorName,
+        user_role: creatorRole,
+        field_name: null,          // важно
+        old_value: null,
+        new_value: null,
+        created_at: new Date().toISOString()
+      };
+
+      try {
+        await supabase
+          .from('order_history')
+          .insert([historyEntry]);
+
+        console.log(`📜 УСПЕШНО ЗАПИСАНА ИСТОРИЯ: "${creatorName}" создал заявку #${orderId}`);
+      } catch (err: any) {
+        console.error('Ошибка записи истории создания заявки:', err);
+      }
+    }
+
+    // ================================================
+    // 9. РЕФЕРАЛЬНЫЕ БАЛЛЫ
     // ================================================
     if (referredBy && parseFloat(volume) > 0) {
       const bonusPoints = Math.round(parseFloat(volume) * 100);
@@ -248,11 +276,7 @@ export async function POST(request: NextRequest) {
           status: 'pending'
         });
 
-      if (refError) {
-        console.error('❌ Ошибка создания referral_transaction:', refError);
-      } else {
-        console.log(`✅ УСПЕШНО ЗАМОРОЖЕНО ${bonusPoints} баллов`);
-      }
+      if (refError) console.error('❌ Ошибка referral_transaction:', refError);
     }
 
     // ================================================

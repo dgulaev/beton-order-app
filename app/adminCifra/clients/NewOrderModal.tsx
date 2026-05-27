@@ -8,6 +8,7 @@ interface NewOrderModalProps {
   userId?: any;
   userName?: string;
   userPhone?: string;
+  currentRole?: string;
   onOrderCreated?: () => void;
 }
 
@@ -17,6 +18,7 @@ export default function NewOrderModal({
   userId, 
   userName, 
   userPhone, 
+  currentRole = 'admin',
   onOrderCreated 
 }: NewOrderModalProps) {
 
@@ -97,6 +99,9 @@ export default function NewOrderModal({
 
     setIsSubmitting(true);
 
+    // ================================================
+    // ПОДГОТОВКА PAYLOAD
+    // ================================================
     const payload = {
       userId,
       grade: form.grade,
@@ -113,7 +118,15 @@ export default function NewOrderModal({
       concreteCost,
       deliveryCost,
       comment: form.comment,
+
+      // ==================== ДЛЯ ИСТОРИИ ====================
       isFromAdmin: true,
+      source: 'admin',
+      userRole: currentRole || 'admin',           // ← Будет брать из props
+      userName: currentRole === 'admin' ? 'Администратор' :
+                currentRole === 'manager' ? 'Менеджер' :
+                currentRole === 'dispatcher' ? 'Диспетчер' :
+                currentRole === 'logist' ? 'Логист' : 'Администратор',
     };
 
     try {
