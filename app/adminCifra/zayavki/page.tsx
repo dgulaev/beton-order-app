@@ -1418,21 +1418,22 @@ ${order.customer_type?.includes('Юридическое')
 )}
 
 
-      {showNewOrderModal && (
-  <NewOrderModal 
-    onClose={() => {
-      setShowNewOrderModal(false);
-      setNewOrderInitialData(null);
-    }} 
-    onSuccess={(newOrder) => {
-      if (newOrder) {
-        setAllOrders(prev => [newOrder, ...prev]);
-      }
-    }} 
-    initialData={newOrderInitialData}
-    defaultDeliveryDate={selectedDateStr}     // ← Добавили передачу выбранной даты
-  />
-)}
+           {showNewOrderModal && (
+        <NewOrderModal 
+          onClose={() => {
+            setShowNewOrderModal(false);
+            setNewOrderInitialData(null);
+          }} 
+          onSuccess={(newOrder) => {
+            if (newOrder) {
+              setAllOrders(prev => [newOrder, ...prev]);
+            }
+          }} 
+          initialData={newOrderInitialData}
+          defaultDeliveryDate={selectedDateStr}
+          currentRole={currentRole}           // ← Добавлено для правильной записи в историю
+        />
+      )}
     </div>
     </div>
   );

@@ -7,27 +7,28 @@ interface NewOrderModalProps {
   onSuccess: (newOrder?: any) => void;
   initialData?: any;
   defaultDeliveryDate?: string;
+  currentRole?: string;           // ← Добавлено для правильной истории
 }
 
 export default function NewOrderModal({ 
   onClose, 
   onSuccess, 
-  initialData = null,  // ← Добавлено
-  defaultDeliveryDate          // ← Добавлено
+  initialData = null,
+  defaultDeliveryDate,
+  currentRole = 'admin'           // ← Добавлено с дефолтом
 }: NewOrderModalProps) {
 
+  // ==================== 1. СОСТОЯНИЯ ====================
   const [adminUserId, setAdminUserId] = useState<number>(1);
   const [recipes, setRecipes] = useState<any[]>([]);
   
-  // Новые состояния для ручного управления уведомлением
   const [orderCreated, setOrderCreated] = useState<any>(null);
   const [notificationSent, setNotificationSent] = useState(false);
   const [isSendingNotification, setIsSendingNotification] = useState(false);
 
-  // ==================== ПРЕДЗАПОЛНЕНИЕ ДАННЫМИ ПРИ КОПИРОВАНИИ ====================
+  // ==================== 2. ПРЕДЗАПОЛНЕНИЕ ДАННЫМИ ====================
   useEffect(() => {
     if (initialData) {
-      // Если пришли данные от копирования заявки
       setForm({
         grade: initialData.grade || 'М300',
         volume: initialData.volume?.toString() || '',
@@ -42,7 +43,6 @@ export default function NewOrderModal({
         comment: initialData.comment || '',
       });
     } else if (defaultDeliveryDate) {
-      // Если открываем новую заявку из календаря — ставим выбранную дату
       setForm(prev => ({
         ...prev,
         deliveryDate: defaultDeliveryDate
@@ -50,7 +50,7 @@ export default function NewOrderModal({
     }
   }, [initialData, defaultDeliveryDate]);
 
-  // ==================== ЗАГРУЗКА USER_ID АДМИНА ====================
+  // ==================== 3. ЗАГРУЗКА USER_ID АДМИНА ====================
   useEffect(() => {
     const savedId = localStorage.getItem('userId');
     if (savedId) {
@@ -62,7 +62,7 @@ export default function NewOrderModal({
     }
   }, []);
 
-  // ==================== ЗАГРУЗКА РЕЦЕПТОВ ИЗ БАЗЫ ====================
+  // ==================== 4. ЗАГРУЗКА РЕЦЕПТОВ ====================
   useEffect(() => {
     const loadRecipes = async () => {
       try {
@@ -78,6 +78,7 @@ export default function NewOrderModal({
     loadRecipes();
   }, []);
 
+  // ==================== 5. ФОРМА ====================
   const [form, setForm] = useState({
     grade: 'М300',
     volume: '',
@@ -95,7 +96,7 @@ export default function NewOrderModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingInn, setLoadingInn] = useState(false);
 
-  // ==================== РАСЧЁТ СТОИМОСТИ ====================
+  // ==================== 6. РАСЧЁТ СТОИМОСТИ ====================
   const selectedRecipe = recipes.find(r => r.code === form.grade);
   const volume = parseFloat(form.volume) || 0;
 
@@ -115,13 +116,13 @@ export default function NewOrderModal({
   }
   const totalPrice = concreteCost + deliveryCost;
 
-  // ==================== ОБРАБОТЧИК ИЗМЕНЕНИЙ ====================
+  // ==================== 7. ОБРАБОТЧИКИ ====================
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setForm(prev => ({ ...prev, [name]: value }));
   };
 
-    // ==================== АВТОЗАПОЛНЕНИЕ ПО ИНН ====================
+  // ==================== 8. АВТОЗАПОЛНЕНИЕ ПО ИНН ====================
   const fetchByInn = async (inn: string) => {
     if (inn.length < 10) return;
     setLoadingInn(true);
@@ -137,34 +138,25 @@ export default function NewOrderModal({
 
       if (data.suggestions?.[0]) {
         const company = data.suggestions[0].data;
-
         setForm(prev => ({
           ...prev,
           organizationName: company.name?.short_with_opf || company.name?.short || prev.organizationName || '',
           address: company.address?.value || prev.address || '',
-          fullName: prev.fullName, // не трогаем для физлиц
         }));
-
-        console.log('✅ Данные по ИНН загружены:', company.name?.short);
-      } else {
-        console.log('⚠️ По ИНН ничего не найдено');
       }
     } catch (err) {
       console.error('Ошибка Dadata:', err);
-      alert('Не удалось получить данные по ИНН');
     } finally {
       setLoadingInn(false);
     }
   };
 
-    // ==================== СОЗДАНИЕ ЗАЯВКИ ====================
+  // ==================== 9. СОЗДАНИЕ ЗАЯВКИ ====================
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
 
-    // ================================================
-    // 1. ВАЛИДАЦИЯ ВВОДА (оставь как было)
-    // ================================================
+    // 1. ВАЛИДАЦИЯ ВВОДА
     if (!form.volume || parseFloat(form.volume) <= 0) {
       alert('Укажите объём бетона больше 0 м³');
       setIsSubmitting(false);
@@ -196,9 +188,7 @@ export default function NewOrderModal({
       return;
     }
 
-        // ================================================
     // 2. ПОДГОТОВКА PAYLOAD
-    // ================================================
     const payload = {
       userId: adminUserId,
       grade: form.grade,
@@ -215,12 +205,15 @@ export default function NewOrderModal({
       deliveryCost: deliveryCost || 0,
       totalPrice: totalPrice || 0,
       comment: form.comment?.trim() || null,
-      
+
       // ==================== ДЛЯ ИСТОРИИ ====================
       isFromAdmin: true,
       source: 'admin',
-      userRole: 'admin',                    // ← Добавлено
-      userName: 'Администратор',            // ← Добавлено
+      userRole: currentRole || 'admin',
+      userName: currentRole === 'admin' ? 'Администратор' :
+                currentRole === 'manager' ? 'Менеджер' :
+                currentRole === 'dispatcher' ? 'Диспетчер' :
+                currentRole === 'logist' ? 'Логист' : 'Администратор',
     };
 
     try {
@@ -260,7 +253,7 @@ export default function NewOrderModal({
     }
   };
 
-  // ==================== РУЧНАЯ ОТПРАВКА УВЕДОМЛЕНИЯ В MAX ====================
+  // ==================== 10. РУЧНАЯ ОТПРАВКА УВЕДОМЛЕНИЯ ====================
   const sendNotification = async () => {
     if (!orderCreated) return alert('Сначала создайте заявку');
 

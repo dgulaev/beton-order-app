@@ -39,7 +39,7 @@ export default function OrderDetailModal({
 
   if (!order) return null;
 
-  // ==================== ЛОКАЛЬНОЕ СОСТОЯНИЕ ЗАКАЗА ====================
+  // ==================== 1. ЛОКАЛЬНОЕ СОСТОЯНИЕ ЗАКАЗА ====================
   const [localOrder, setLocalOrder] = useState(order);
 
   // Синхронизация при смене заказа
@@ -47,7 +47,20 @@ export default function OrderDetailModal({
     setLocalOrder(order);
   }, [order]);
 
-  // ==================== ФУНКЦИИ СМЕНЫ ОЧЕРЕДИ С ЗАПИСЬЮ В ИСТОРИЮ ====================
+  // ==================== 2. HELPER ДЛЯ ОПРЕДЕЛЕНИЯ РОЛИ ====================
+  const getCurrentRole = () => {
+    return currentUser?.role?.toLowerCase().trim() || 'unknown';
+  };
+
+  const getCurrentUserName = () => {
+    return currentUser?.name || 
+           (getCurrentRole() === 'admin' ? 'Администратор' :
+            getCurrentRole() === 'manager' ? 'Менеджер' :
+            getCurrentRole() === 'dispatcher' ? 'Диспетчер' :
+            getCurrentRole() === 'logist' ? 'Логист' : 'Пользователь');
+  };
+
+  // ==================== 3. ФУНКЦИИ СМЕНЫ ОЧЕРЕДИ С ЗАПИСЬЮ В ИСТОРИЮ ====================
   const moveMixerUp = async (mixerId: number) => {
     const mixer = mixerAssignments.find(m => m.id === mixerId);
     const mixerName = mixer?.mixerName || mixer?.number || mixer?.mixer_name || 'Миксер';
@@ -57,10 +70,8 @@ export default function OrderDetailModal({
       const index = newList.findIndex(m => m.id === mixerId);
       if (index <= 0) return prev;
 
-      // Меняем местами
       [newList[index], newList[index - 1]] = [newList[index - 1], newList[index]];
 
-      // Обновляем sortOrder
       newList.forEach((m, i) => {
         if (m.orderId === order.id) m.sortOrder = i;
       });
@@ -70,7 +81,6 @@ export default function OrderDetailModal({
 
     await saveSortOrderToDB();
 
-    // Запись в историю
     if (typeof addToHistory === 'function') {
       await addToHistory(`Переместил миксер ${mixerName} ↑ выше в очереди`);
     }
@@ -96,13 +106,12 @@ export default function OrderDetailModal({
 
     await saveSortOrderToDB();
 
-    // Запись в историю
     if (typeof addToHistory === 'function') {
       await addToHistory(`Переместил миксер ${mixerName} ↓ ниже в очереди`);
     }
   };
 
-  // Сохранение порядка в базу
+  // ==================== 4. СОХРАНЕНИЕ ПОРЯДКА В БАЗУ ====================
   const saveSortOrderToDB = async () => {
     const currentOrderMixers = mixerAssignments.filter(m => m.orderId === order.id);
 
@@ -119,56 +128,53 @@ export default function OrderDetailModal({
     }
   };
 
-  // ==================== ОБНОВЛЕНИЕ СТАТУСА МИКСЕРА + ИСТОРИЯ ====================
+  // ==================== 5. ОБНОВЛЕНИЕ СТАТУСА МИКСЕРА + ИСТОРИЯ ====================
   const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
-  const oldMixer = mixerAssignments.find(m => m.id === mixerId);
-  const oldStatus = oldMixer?.status || 'В пути';
-  const mixerName = oldMixer?.mixerName || oldMixer?.number || oldMixer?.mixer_name || 'Миксер';
+    const oldMixer = mixerAssignments.find(m => m.id === mixerId);
+    const oldStatus = oldMixer?.status || 'В пути';
+    const mixerName = oldMixer?.mixerName || oldMixer?.number || oldMixer?.mixer_name || 'Миксер';
 
-  // Optimistic update
-  setMixerAssignments(prev =>
-    prev.map(m =>
-      m.id === mixerId ? { ...m, status: newStatus } : m
-    )
-  );
-
-  try {
-    const res = await fetch('/api/adminCifra/order-mixers/status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        id: mixerId, 
-        status: newStatus 
-      })
-    });
-
-    const data = await res.json();
-
-    if (data.success) {
-      // Записываем в историю только если статус реально изменился
-      if (typeof addToHistory === 'function' && oldStatus !== newStatus) {
-        await addToHistory(
-          `Изменил статус миксера ${mixerName} с "${oldStatus}" → "${newStatus}"`
-        );
-      }
-    } else {
-      throw new Error(data.message || 'Не удалось обновить статус');
-    }
-  } catch (err) {
-    console.error('Ошибка обновления статуса:', err);
-
-    // Откат optimistic update при ошибке
     setMixerAssignments(prev =>
       prev.map(m =>
-        m.id === mixerId ? { ...m, status: oldStatus } : m
+        m.id === mixerId ? { ...m, status: newStatus } : m
       )
     );
 
-    alert(`Не удалось изменить статус. Ошибка: ${err}`);
-  }
-};
+    try {
+      const res = await fetch('/api/adminCifra/order-mixers/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          id: mixerId, 
+          status: newStatus 
+        })
+      });
 
-  // Получаем миксеры текущего заказа (используется в JSX)
+      const data = await res.json();
+
+      if (data.success) {
+        if (typeof addToHistory === 'function' && oldStatus !== newStatus) {
+          await addToHistory(
+            `Изменил статус миксера ${mixerName} с "${oldStatus}" → "${newStatus}"`
+          );
+        }
+      } else {
+        throw new Error(data.message || 'Не удалось обновить статус');
+      }
+    } catch (err) {
+      console.error('Ошибка обновления статуса:', err);
+
+      setMixerAssignments(prev =>
+        prev.map(m =>
+          m.id === mixerId ? { ...m, status: oldStatus } : m
+        )
+      );
+
+      alert(`Не удалось изменить статус. Ошибка: ${err}`);
+    }
+  };
+
+  // ==================== 6. ПОЛУЧЕНИЕ МИКСЕРОВ ТЕКУЩЕГО ЗАКАЗА ====================
   const currentMixers = mixerAssignments
     .filter(m => m.orderId === order.id)
     .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
