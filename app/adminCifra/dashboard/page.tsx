@@ -1478,11 +1478,11 @@ const isReadyInDB = (order as any).logistics_ready === true;
   padding: '24px', 
   display: 'flex', 
   flexDirection: 'column',
-  height: '92vh',
-  minHeight: '1000px',
-  alignSelf: 'stretch',
-  position: 'sticky',
-  top: '20px'
+  
+  height: 'auto',                    // ← Изменить с '92vh' на 'auto'
+  maxHeight: '92vh',                 // ← Оставить (ограничивает максимум)
+  minHeight: '1400px',                // ← Минимальная высота (чтобы не сжималось слишком сильно)
+  overflow: 'hidden'                 // ← Оставить
 }}>
   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
     <h3 style={{ fontSize: '24px', margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1491,13 +1491,14 @@ const isReadyInDB = (order as any).logistics_ready === true;
     </h3>
 
     <div style={{ 
-      background: '#10B98120', 
-      color: '#10B981', 
-      padding: '6px 14px', 
-      borderRadius: '9999px', 
-      fontSize: '15px',
-      fontWeight: '600'
-    }}>
+    flex: 1,                           // ← Самый важный параметр
+    overflowY: 'auto',                 // ← Включаем скролл внутри
+    display: 'flex', 
+    flexDirection: 'column', 
+    gap: '20px',
+    paddingRight: '8px',
+    minHeight: '0'                     // ← Обязательно для flex
+  }}>
       {activeMixersToday.length} на линии
     </div>
   </div>
