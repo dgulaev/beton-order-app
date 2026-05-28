@@ -18,6 +18,7 @@ interface OrderDetailModalProps {
   history: any[];
   addToHistory: (action: string) => Promise<void>;
   getStatusConfig: (status: string) => any;
+  setHistory: React.Dispatch<React.SetStateAction<any[]>>;
 }
 
 export default function OrderDetailModal({
@@ -34,10 +35,47 @@ export default function OrderDetailModal({
   completeLogistics,
   history,           
   addToHistory,
-  getStatusConfig,      
+  getStatusConfig,
+  setHistory,      
 }: OrderDetailModalProps) {
 
   if (!order) return null;
+
+  // ==================== 0. ЗАГРУЗКА МИКСЕРОВ ДЛЯ МОДАЛКИ (новые внизу) ====================
+useEffect(() => {
+  if (!order?.id) {
+    setMixerAssignments([]);
+    setHistory([]);
+    return;
+  }
+
+  const loadData = async () => {
+    try {
+      const res = await fetch(`/api/adminCifra/order-mixers?orderId=${order.id}`);
+      if (res.ok) {
+        let data = await res.json();
+
+        // Сортировка: старые сверху, новые внизу
+        const sorted = [...data].sort((a, b) => {
+          const timeA = new Date(a.updated_at || a.created_at).getTime();
+          const timeB = new Date(b.updated_at || b.created_at).getTime();
+          return timeA - timeB;   // ← новые внизу
+        });
+
+        setMixerAssignments(sorted);
+      }
+
+      const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}`);
+      if (histRes.ok) {
+        setHistory(await histRes.json());
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки данных модалки:', err);
+    }
+  };
+
+  loadData();
+}, [order?.id]);
 
   // ==================== 1. ЛОКАЛЬНОЕ СОСТОЯНИЕ ЗАКАЗА ====================
   const [localOrder, setLocalOrder] = useState(order);
@@ -60,73 +98,74 @@ export default function OrderDetailModal({
             getCurrentRole() === 'logist' ? 'Логист' : 'Пользователь');
   };
 
-  // ==================== 3. ФУНКЦИИ СМЕНЫ ОЧЕРЕДИ С ЗАПИСЬЮ В ИСТОРИЮ ====================
-  const moveMixerUp = async (mixerId: number) => {
-    const mixer = mixerAssignments.find(m => m.id === mixerId);
-    const mixerName = mixer?.mixerName || mixer?.number || mixer?.mixer_name || 'Миксер';
+  // ==================== 3. ФУНКЦИИ СМЕНЫ ОЧЕРЕДИ ====================
+const moveMixerUp = async (mixerId: number) => {
+  const mixer = mixerAssignments.find(m => m.id === mixerId);
+  const mixerName = mixer?.mixerName || mixer?.number || mixer?.mixer_name || 'Миксер';
 
-    setMixerAssignments(prev => {
-      const newList = [...prev];
-      const index = newList.findIndex(m => m.id === mixerId);
-      if (index <= 0) return prev;
+  setMixerAssignments(prev => {
+    const newList = [...prev];
+    const index = newList.findIndex(m => m.id === mixerId);
+    if (index <= 0) return prev;
 
-      [newList[index], newList[index - 1]] = [newList[index - 1], newList[index]];
+    [newList[index], newList[index - 1]] = [newList[index - 1], newList[index]];
 
-      newList.forEach((m, i) => {
-        if (m.orderId === order.id) m.sortOrder = i;
-      });
-
-      return newList;
+    newList.forEach((m, i) => {
+      if (String(m.orderId) === String(order.id)) m.sortOrder = i;
     });
 
-    await saveSortOrderToDB();
+    return newList;
+  });
 
-    if (typeof addToHistory === 'function') {
-      await addToHistory(`Переместил миксер ${mixerName} ↑ выше в очереди`);
-    }
-  };
+  await saveSortOrderToDB();
+};
 
-  const moveMixerDown = async (mixerId: number) => {
-    const mixer = mixerAssignments.find(m => m.id === mixerId);
-    const mixerName = mixer?.mixerName || mixer?.number || mixer?.mixer_name || 'Миксер';
+const moveMixerDown = async (mixerId: number) => {
+  const mixer = mixerAssignments.find(m => m.id === mixerId);
+  const mixerName = mixer?.mixerName || mixer?.number || mixer?.mixer_name || 'Миксер';
 
-    setMixerAssignments(prev => {
-      const newList = [...prev];
-      const index = newList.findIndex(m => m.id === mixerId);
-      if (index === -1 || index === newList.length - 1) return prev;
+  setMixerAssignments(prev => {
+    const newList = [...prev];
+    const index = newList.findIndex(m => m.id === mixerId);
+    if (index === -1 || index === newList.length - 1) return prev;
 
-      [newList[index], newList[index + 1]] = [newList[index + 1], newList[index]];
+    [newList[index], newList[index + 1]] = [newList[index + 1], newList[index]];
 
-      newList.forEach((m, i) => {
-        if (m.orderId === order.id) m.sortOrder = i;
-      });
-
-      return newList;
+    newList.forEach((m, i) => {
+      if (String(m.orderId) === String(order.id)) m.sortOrder = i;
     });
 
-    await saveSortOrderToDB();
+    return newList;
+  });
 
-    if (typeof addToHistory === 'function') {
-      await addToHistory(`Переместил миксер ${mixerName} ↓ ниже в очереди`);
-    }
-  };
+  await saveSortOrderToDB();
+};
 
-  // ==================== 4. СОХРАНЕНИЕ ПОРЯДКА В БАЗУ ====================
-  const saveSortOrderToDB = async () => {
-    const currentOrderMixers = mixerAssignments.filter(m => m.orderId === order.id);
+// ==================== 4. СОХРАНЕНИЕ ПОРЯДКА В БАЗУ (улучшенная версия) ====================
+const saveSortOrderToDB = async () => {
+  const currentMixers = mixerAssignments
+    .filter(m => String(m.orderId) === String(order.id))
+    .sort((a, b) => (b.sortOrder || 0) - (a.sortOrder || 0));
 
-    for (let i = 0; i < currentOrderMixers.length; i++) {
-      const mixer = currentOrderMixers[i];
-      await fetch('/api/adminCifra/order-mixers/sort', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: mixer.id,
-          sortOrder: i
-        })
-      });
-    }
-  };
+  console.log('💾 Сохраняем порядок:', currentMixers.map(m => ({id: m.id, sortOrder: m.sortOrder})));
+
+  for (let i = 0; i < currentMixers.length; i++) {
+    const mixer = currentMixers[i];
+    if (!mixer.id) continue;
+
+    const res = await fetch('/api/adminCifra/order-mixers/sort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: mixer.id,
+        sortOrder: i
+      })
+    });
+
+    const data = await res.json();
+    console.log(`   → Миксер ${mixer.id} → sortOrder=${i} | success: ${data.success}`);
+  }
+};
 
   // ==================== 5. ОБНОВЛЕНИЕ СТАТУСА МИКСЕРА + ИСТОРИЯ ====================
   const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
@@ -174,10 +213,16 @@ export default function OrderDetailModal({
     }
   };
 
-  // ==================== 6. ПОЛУЧЕНИЕ МИКСЕРОВ ТЕКУЩЕГО ЗАКАЗА ====================
-  const currentMixers = mixerAssignments
-    .filter(m => m.orderId === order.id)
-    .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+  // ==================== 6. ПОЛУЧЕНИЕ МИКСЕРОВ ТЕКУЩЕГО ЗАКАЗА (новые внизу) ====================
+const currentMixers = mixerAssignments
+  .filter(m => String(m.orderId) === String(order.id))
+  .sort((a, b) => {
+    const timeA = new Date(a.updated_at || a.created_at).getTime();
+    const timeB = new Date(b.updated_at || b.created_at).getTime();
+    return timeA - timeB;   // ← новые внизу
+  });
+
+
 
   return (
     <div 
@@ -376,89 +421,153 @@ export default function OrderDetailModal({
                     </div>
                   </div>
 
-                  {/* ==================== СПИСОК НАЗНАЧЕННЫХ МИКСЕРОВ (с фиксированной высотой) ==================== */}
-                  <div style={{ marginBottom: '24px' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '12px', display: 'flex', justifyContent: 'space-between' }}>
-                      <span>Назначенные миксеры ({currentMixers.length})</span>
-                      <span style={{ fontSize: '13px', color: '#64748B' }}>Перетаскивай ↑ ↓</span>
-                    </div>
-                    
-                    {/* Фиксированная высота + скролл */}
-                    <div style={{ 
-                      maxHeight: '150px',           // ← Основная настройка высоты
-                      overflowY: 'auto',
-                      paddingRight: '8px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '10px'
-                    }}>
-                      {currentMixers.length > 0 ? (
-                        currentMixers.map((mixer, index) => (
-                          <div key={mixer.id || index} style={{ 
-                            background: '#1E2937', 
-                            padding: '12px 16px',     // ← Уменьшил высоту строки
-                            borderRadius: '14px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '12px',
-                            minHeight: '24px'         // ← Фиксированная минимальная высота
-                          }}>
-                            {/* Порядковый номер */}
-                            <div style={{
-                              width: '28px',
-                              height: '28px',
-                              background: '#334155',
-                              borderRadius: '9999px',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontWeight: '700',
-                              color: '#94A3B8',
-                              fontSize: '15px',
-                              flexShrink: 0
-                            }}>
-                              {index + 1}
-                            </div>
+                  {/* ==================== СПИСОК НАЗНАЧЕННЫХ МИКСЕРОВ (максимально узкий) ==================== */}
+<div style={{ marginBottom: '24px' }}>
+  <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between' }}>
+    <span>Назначенные миксеры ({currentMixers.length})</span>
+    <span style={{ fontSize: '13px', color: '#64748B' }}>Перетаскивай мышкой</span>
+  </div>
+  
+  <div style={{ 
+    maxHeight: '240px',
+    overflowY: 'auto',
+    paddingRight: '8px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px'                    // ← уменьшил расстояние между строками
+  }}>
+    {currentMixers.length > 0 ? (
+      currentMixers.map((mixer, index) => (
+        <div 
+          key={mixer.id || index}
+          draggable
+          onDragStart={(e) => e.dataTransfer.setData('text/plain', index.toString())}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+            const toIndex = index;
+            if (fromIndex === toIndex) return;
 
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: '700', fontSize: '15.5px' }}>
-                                {mixer.mixerName || mixer.number}
-                              </div>
-                              <div style={{ color: '#94A3B8', fontSize: '13.5px' }}>
-                                {mixer.time} • {mixer.volume} м³
-                              </div>
-                            </div>
+            const newList = [...currentMixers];
+            const [movedItem] = newList.splice(fromIndex, 1);
+            newList.splice(toIndex, 0, movedItem);
 
-                            {/* Кнопки очереди */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-                              <button onClick={() => moveMixerUp(mixer.id)} disabled={index === 0} style={{ padding: '2px 6px', background: 'none', border: 'none', color: index === 0 ? '#475569' : '#94A3B8', cursor: index === 0 ? 'default' : 'pointer', fontSize: '16px' }}>↑</button>
-                              <button onClick={() => moveMixerDown(mixer.id)} disabled={index === currentMixers.length - 1} style={{ padding: '2px 6px', background: 'none', border: 'none', color: index === currentMixers.length - 1 ? '#475569' : '#94A3B8', cursor: index === currentMixers.length - 1 ? 'default' : 'pointer', fontSize: '16px' }}>↓</button>
-                            </div>
+            const updatedList = newList.map((item, i) => ({
+              ...item,
+              sortOrder: i
+            }));
 
-                            <select value={mixer.status || 'Загрузка'} onChange={(e) => handleStatusChangeLocal(mixer.id, e.target.value)} style={{ padding: '6px 12px', borderRadius: '9999px', background: '#0F172A', color: 'white', border: 'none', fontSize: '14px', minWidth: '140px' }}>
-                              <option value="Загрузка">🟡 Загрузка</option>
-                              <option value="В пути">🔵 В пути</option>
-                              <option value="На объекте">📍 На объекте</option>
-                              <option value="Разгружен">🟢 Разгружен</option>
-                              <option value="Возврат">↩️ Возврат</option>
-                              <option value="Проблема">🔴 Проблема</option>
-                            </select>
+            setMixerAssignments(prev => 
+              prev.map(item => 
+                item.orderId === order.id 
+                  ? updatedList.find(m => m.id === item.id) || item 
+                  : item
+              )
+            );
+          }}
+          style={{ 
+            background: '#1E2937', 
+            padding: '6px 12px',        // ← максимально узкие отступы
+            borderRadius: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            minHeight: '36px',          // ← максимально узкая высота
+            cursor: 'grab',
+            userSelect: 'none'
+          }}
+        >
+          {/* Номер */}
+          <div style={{
+            width: '22px',
+            height: '22px',
+            background: '#334155',
+            borderRadius: '9999px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontWeight: '700',
+            color: '#94A3B8',
+            fontSize: '13px',
+            flexShrink: 0
+          }}>
+            {index + 1}
+          </div>
 
-                            <button onClick={() => deleteMixer(mixer.id, index)} style={{ color: '#EF4444', background: 'none', border: 'none', cursor: 'pointer', fontSize: '20px' }}>✕</button>
-                          </div>
-                        ))
-                      ) : (
-                        <div style={{ color: '#64748B', textAlign: 'center', padding: '40px 0', fontStyle: 'italic' }}>
-                          Пока нет назначенных миксеров
-                        </div>
-                      )}
-                    </div>
-                  </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: '700', fontSize: '14.5px' }}>
+              {mixer.mixerName || mixer.number}
+            </div>
+            <div style={{ color: '#94A3B8', fontSize: '12.5px' }}>
+              {mixer.time} • {mixer.volume} м³
+            </div>
+          </div>
 
-                  {/* Кнопка завершения */}
-                  <button onClick={() => completeLogistics(order)} style={{ width: '100%', padding: '18px', background: isFullyReady ? '#10B981' : '#475569', color: 'white', border: 'none', borderRadius: '16px', fontSize: '17px', fontWeight: '700', cursor: 'pointer' }}>
-                    {isFullyReady ? '✓ Завершить логистику и сохранить в базу' : '⚠️ Сохранить частичную логистику'}
-                  </button>
+          <select 
+            value={mixer.status || 'Загрузка'} 
+            onChange={(e) => handleStatusChangeLocal(mixer.id, e.target.value)} 
+            style={{ 
+              padding: '4px 8px', 
+              borderRadius: '9999px', 
+              background: '#0F172A', 
+              color: 'white', 
+              border: 'none', 
+              fontSize: '13px', 
+              minWidth: '120px' 
+            }}
+          >
+            <option value="Загрузка">🟡 Загрузка</option>
+            <option value="В пути">🔵 В пути</option>
+            <option value="На объекте">📍 На объекте</option>
+            <option value="Разгружен">🟢 Разгружен</option>
+            <option value="Возврат">↩️ Возврат</option>
+            <option value="Проблема">🔴 Проблема</option>
+          </select>
+
+          <button 
+            onClick={() => deleteMixer(mixer.id, index)} 
+            style={{ 
+              color: '#EF4444', 
+              background: 'none', 
+              border: 'none', 
+              cursor: 'pointer', 
+              fontSize: '17px',
+              padding: '2px 6px'
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      ))
+    ) : (
+      <div style={{ color: '#64748B', textAlign: 'center', padding: '30px 0', fontStyle: 'italic' }}>
+        Пока нет назначенных миксеров
+      </div>
+    )}
+  </div>
+</div>
+
+                 {/* ==================== КНОПКА ЗАВЕРШЕНИЯ ЛОГИСТИКИ ==================== */}
+<button 
+  onClick={async () => {
+    console.log('🛠 Нажата кнопка сохранения логистики — сохраняем порядок...');
+    await saveSortOrderToDB();     // ← сначала сохраняем порядок
+    await completeLogistics(order); // ← потом логистику
+  }} 
+  style={{ 
+    width: '100%', 
+    padding: '18px', 
+    background: isFullyReady ? '#10B981' : '#475569', 
+    color: 'white', 
+    border: 'none', 
+    borderRadius: '16px', 
+    fontSize: '17px', 
+    fontWeight: '700', 
+    cursor: 'pointer' 
+  }}
+>
+  {isFullyReady ? '✓ Завершить логистику и сохранить в базу' : '⚠️ Сохранить частичную логистику'}
+</button>
                 </div>
               );
             })()}
@@ -533,10 +642,10 @@ export default function OrderDetailModal({
               />
             </div>
 
-            {/* Время погрузки */}
+            {/* Время погрузки — теперь НЕОБЯЗАТЕЛЬНОЕ */}
             <div>
               <label style={{ display: 'block', color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
-                Время
+                Время <span style={{ fontSize: '12px', color: '#64748B' }}>(необязательно)</span>
               </label>
               <input 
                 type="time" 
@@ -577,111 +686,112 @@ export default function OrderDetailModal({
             {/* Кнопки действий (рядом справа) */}
             <div style={{ display: 'flex', gap: '12px', alignItems: 'end' }}>
 
-                            {/* Кнопка Добавить + сохранение в базу */}
-              <button 
-                onClick={async () => {
-                  const name = (document.getElementById('mixerName') as HTMLInputElement).value.trim();
-                  const time = (document.getElementById('mixerTime') as HTMLInputElement).value;
-                  const vol = parseFloat((document.getElementById('mixerVolume') as HTMLInputElement).value || '0');
+              {/* ==================== КНОПКА ДОБАВЛЕНИЯ МИКСЕРА ==================== */}
+<button 
+  onClick={async () => {
+    const name = (document.getElementById('mixerName') as HTMLInputElement).value.trim();
+    const time = (document.getElementById('mixerTime') as HTMLInputElement).value || '—';
+    const vol = parseFloat((document.getElementById('mixerVolume') as HTMLInputElement).value || '0');
 
-                  if (!name || !time || vol <= 0) {
-                    alert('Заполните все поля');
-                    return;
-                  }
+    if (!name || vol <= 0) {
+      alert('Укажите название миксера и объём');
+      return;
+    }
 
-                  // Вычисляем позицию нового миксера в очереди (в конец)
-                  const currentQueueLength = mixerAssignments
-                    .filter(m => m.orderId === order.id)
-                    .length;
+    // Находим максимальный sortOrder среди уже существующих миксеров этого заказа
+    const existingMixers = mixerAssignments.filter(m => String(m.orderId) === String(order.id));
+    const maxSortOrder = existingMixers.length > 0 
+      ? Math.max(...existingMixers.map(m => Number(m.sortOrder) || 0)) 
+      : -1;
 
-                  // === СОХРАНЕНИЕ В БАЗУ ===
-                  const res = await fetch('/api/adminCifra/order-mixers', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      orderId: order.id,
-                      mixerName: name,
-                      time: time,
-                      volume: vol,
-                      sortOrder: currentQueueLength,
-                      status: 'Загрузка'                    // Начальный статус
-                    })
-                  });
+    const newSortOrder = maxSortOrder + 1;
 
-                  if (res.ok) {
-                    const newMixerData = await res.json();
+    // === 1. Сохраняем миксер в базу ===
+    const res = await fetch('/api/adminCifra/order-mixers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        orderId: order.id,
+        mixerName: name,
+        time: time,
+        volume: vol,
+        sortOrder: newSortOrder,
+        status: 'Загрузка'
+      })
+    });
 
-                    // Добавляем новый миксер в локальное состояние
-                    setMixerAssignments(prev => [...prev, {
-                      id: newMixerData.id || Date.now(),
-                      orderId: order.id,
-                      mixerName: name,
-                      time: time,
-                      volume: vol,
-                      sortOrder: currentQueueLength,
-                      status: 'Загрузка'
-                    }]);
+    if (res.ok) {
+      const result = await res.json();
+      const savedId = result.data?.id || result.id || Date.now();
 
-                    // ==================== АВТОМАТИЧЕСКАЯ СМЕНА СТАТУСА ЗАКАЗА ====================
-                    const assignedVolume = [...mixerAssignments, { volume: vol }]
-                      .filter(m => m.orderId === order.id)
-                      .reduce((sum, m) => sum + Number(m.volume || 0), 0);
+      // === 2. Создаём объект нового миксера ===
+      const newMixer = {
+        id: savedId,
+        orderId: order.id,
+        mixerName: name,
+        number: name,
+        time: time,
+        volume: vol,
+        status: 'Загрузка',
+        sortOrder: newSortOrder
+      };
 
-                    const orderVolume = Number(order.volume || 0);
-                    const isFullyReady = assignedVolume >= orderVolume && assignedVolume > 0;
+      // === 3. Добавляем в конец списка и сортируем по sortOrder (маленькие сверху) ===
+      setMixerAssignments(prev => {
+        const updated = [...prev, newMixer];
+        return updated.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+      });
 
-                    if (isFullyReady && order.status !== 'processing') {
-                      setAllOrders(prev => prev.map(o => 
-                        o.id === order.id ? { ...o, status: 'processing', logistics_ready: true } : o
-                      ));
+      // === 4. Авто-смена статуса заказа (если полностью заполнен) ===
+      const newAssignedVolume = [...mixerAssignments, newMixer]
+        .filter(m => String(m.orderId) === String(order.id))
+        .reduce((sum, m) => sum + Number(m.volume || 0), 0);
 
-                      if (typeof addToHistory === 'function') {
-                        await addToHistory(`Автоматически переведён в "В работе" (полная логистика ${assignedVolume}/${orderVolume} м³)`);
-                      }
-                    }
+      const orderVolume = Number(order.volume || 0);
+      const isFullyReady = newAssignedVolume >= orderVolume && newAssignedVolume > 0;
 
-                    // ==================== ОДНА ЗАПИСЬ В ИСТОРИЮ ====================
-                    if (typeof addToHistory === 'function') {
-                      await addToHistory(`Добавил миксер ${name} (${vol} м³ в ${time})`);
-                    }
+      if (isFullyReady && order.status === 'new') {
+        setAllOrders(prev => prev.map(o => 
+          o.id === order.id ? { ...o, status: 'processing', logistics_ready: true } : o
+        ));
+      }
 
-                    // Оптимистично обновляем allOrders
-                    setAllOrders(prev => prev.map(o => 
-                      o.id === order.id ? { ...o, logistics_ready: true } : o
-                    ));
+      // === 5. Запись в историю ===
+      if (typeof addToHistory === 'function') {
+        await addToHistory(`Добавил миксер ${name} (${vol} м³ в ${time})`);
+      }
 
-                    // После setMixerAssignments и setAllOrders
-                    if (typeof window !== 'undefined') {
-                    window.dispatchEvent(new Event('mixerAdded'));
-                     }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('mixerAdded'));
+      }
 
-                    // Очистка формы
-                    (document.getElementById('mixerName') as HTMLInputElement).value = '';
-                    (document.getElementById('mixerTime') as HTMLInputElement).value = '';
-                    (document.getElementById('mixerVolume') as HTMLInputElement).value = '';
-                    (document.getElementById('mixerSelect') as HTMLSelectElement).value = '';
+      // === 6. Очистка формы ===
+      (document.getElementById('mixerName') as HTMLInputElement).value = '';
+      (document.getElementById('mixerTime') as HTMLInputElement).value = '';
+      (document.getElementById('mixerVolume') as HTMLInputElement).value = '';
+      (document.getElementById('mixerSelect') as HTMLSelectElement).value = '';
 
-                    console.log(`✅ Миксер ${name} добавлен со статусом "Загрузка"`);
-                  } else {
-                    alert('Ошибка сохранения миксера в базу');
-                  }
-                }}
-                style={{
-                  padding: '14px 32px',
-                  background: '#10B981',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '12px',
-                  fontWeight: '600',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                  height: '52px'
-                }}
-              >
-                Добавить
-              </button>
+      console.log(`✅ Миксер ${name} добавлен в конец списка (sortOrder = ${newSortOrder})`);
+    } else {
+      alert('Ошибка сохранения миксера в базу');
+    }
+  }}
+  style={{
+    padding: '14px 32px',
+    background: '#10B981',
+    color: 'white',
+    border: 'none',
+    borderRadius: '12px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    height: '52px'
+  }}
+>
+  Добавить
+</button>
 
-              {/* Кнопка Завершить логистику (справа) */}
+              {/* Кнопка Завершить логистику */}
               <button 
                 onClick={() => completeLogistics(order)}
                 style={{

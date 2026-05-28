@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Calendar from '../Calendar';
 import { Order } from '../hooks/useCalendarOrders';
 import { createClient } from '@supabase/supabase-js';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import OrderDetailModal from '../components/OrderDetailModal';
+
 
 // Создаём клиент Supabase (один раз на весь файл)
 const supabase = createClient(
@@ -14,7 +15,8 @@ const supabase = createClient(
 );
 
 export default function AdminCifraDashboard() {
-   // ==================== ВСЕ СОСТОЯНИЯ ====================
+
+   // ==================== 1. ВСЕ СОСТОЯНИЯ ===========================================
   const [userId, setUserId] = useState<number | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [loadingRole, setLoadingRole] = useState(true);
@@ -24,7 +26,7 @@ export default function AdminCifraDashboard() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const MINUTES_PER_CUBIC_METER = 1;
 
-  // ==================== СТАТУСЫ ЗАКАЗОВ (глобальная функция) ====================
+  // ==================== 2. СТАТУСЫ ЗАКАЗОВ (глобальная функция) ====================
   const getStatusConfig = (status: string) => {
     switch (status) {
       case 'new':
@@ -50,7 +52,7 @@ export default function AdminCifraDashboard() {
  const [history, setHistory] = useState<any[]>([]);
  const [currentUser, setCurrentUser] = useState<{ id: number; name?: string; role: string } | null>(null);
 
-      // ==================== ДОБАВЛЕНИЕ В ИСТОРИЮ (с красивым названием роли) ====================
+      // ==================== 3. ДОБАВЛЕНИЕ В ИСТОРИЮ (с красивым названием роли) ====================
   const addToHistory = async (action: string) => {
     if (!selectedOrder) return;
 
@@ -80,7 +82,7 @@ export default function AdminCifraDashboard() {
     }
   };
 
-      // ==================== ЗАГРУЗКА НАЗНАЧЕННЫХ МИКСЕРОВ ====================
+    // ==================== 4. ЗАГРУЗКА НАЗНАЧЕННЫХ МИКСЕРОВ ====================
   useEffect(() => {
     const fetchAssignedMixers = async () => {
       try {
@@ -97,7 +99,7 @@ export default function AdminCifraDashboard() {
     fetchAssignedMixers();
   }, []);
 
- // ==================== НОВЫЙ РЕАКТИВНЫЙ МАСШТАБ ====================
+    // ==================== 5. РЕАКТИВНЫЙ МАСШТАБ =================================
   const [scale, setScale] = useState(1);
 
   useEffect(() => {
@@ -121,7 +123,7 @@ export default function AdminCifraDashboard() {
     return () => window.removeEventListener('resize', updateScale);
   }, []);
 
-  // ==================== УВЕДОМЛЕНИЯ О ВЫВОДЕ НАЛИЧНЫХ ====================
+  // ==================== 6. УВЕДОМЛЕНИЯ О ВЫВОДЕ НАЛИЧНЫХ ==========================
   const fetchNotifications = async () => {
     if (!['admin', 'manager'].includes(userRole || '')) {
       setNotifications([]);
@@ -170,7 +172,7 @@ export default function AdminCifraDashboard() {
     };
   }, [userRole, userId]);
 
-  // ==================== ЗАГРУЗКА ВСЕХ ЗАКАЗОВ ====================
+  // ==================== 7. ЗАГРУЗКА ВСЕХ ЗАКАЗОВ ====================
   useEffect(() => {
     const fetchAllOrders = async () => {
       setLoadingOrders(true);
@@ -189,7 +191,7 @@ export default function AdminCifraDashboard() {
     fetchAllOrders();
   }, []);
 
-    // ==================== ЗАГРУЗКА МИКСЕРОВ В РАБОТЕ ====================
+    // ==================== 8. ЗАГРУЗКА АКТИВНЫХ МИКСЕРОВ ====================
   useEffect(() => {
     const fetchActiveMixers = async () => {
       try {
@@ -208,7 +210,7 @@ export default function AdminCifraDashboard() {
 
   const today = new Date().toISOString().split('T')[0];
 
-  // ==================== ФИНАЛЬНЫЙ РАСЧЁТ ЗАКАЗОВ (учёт timezone) ====================
+  // ==================== 9. ФИНАЛЬНЫЙ РАСЧЁТ ЗАКАЗОВ (учёт timezone) =========
 const selectedYear = selectedDate.getFullYear();
 const selectedMonth = String(selectedDate.getMonth() + 1).padStart(2, '0');
 const selectedDay = String(selectedDate.getDate()).padStart(2, '0');
@@ -242,7 +244,7 @@ const todayOrders = allOrders
 
 console.log(`Выбрана дата: ${selectedDateStr} | Найдено заказов: ${todayOrders.length}`);
 
-// ==================== РАСЧЁТ ЗАДЕРЖЕК ОТГРУЗОК (реал-тайм) ====================
+// ==================== 10. РАСЧЁТ ЗАДЕРЖЕК ОТГРУЗОК (реал-тайм) ====================
 const now = new Date();
 const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
@@ -265,7 +267,43 @@ const delayedOrders = todayOrders
   .filter(order => order.delayMinutes > 15) // задержка больше 15 минут
   .sort((a, b) => b.delayMinutes - a.delayMinutes);
 
-// ==================== ДИНАМИЧЕСКИЕ KPI ====================
+  // ==================== 11. МИКСЕРЫ ЗА ДЕНЬ =========================================
+  const activeMixersToday = activeMixers.filter((mixer: any) => {
+    return todayOrders.some(order => String(order.id) === String(mixer.orderId));
+  });
+
+  // ==================== 12. ГРУППИРОВКА МИКСЕРОВ ====================================
+  const groupedMixers = React.useMemo(() => {
+    const groups: Array<{
+      orderId: number | string;
+      client: string;
+      deliveryTime: string;
+      mixers: any[];
+    }> = [];
+
+    const sortedOrders = [...todayOrders].sort((a, b) => 
+      (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00')
+    );
+
+    sortedOrders.forEach(order => {
+      const mixersForOrder = activeMixersToday
+        .filter(m => String(m.orderId) === String(order.id))
+        .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+
+      if (mixersForOrder.length > 0) {
+        groups.push({
+          orderId: order.id,
+          client: order.organization_name || order.full_name || '—',
+          deliveryTime: order.delivery_time || '—',
+          mixers: mixersForOrder
+        });
+      }
+    });
+
+    return groups;
+  }, [todayOrders, activeMixersToday]);
+
+// ==================== 13. ДИНАМИЧЕСКИЕ KPI ==============================================
 const planToday = todayOrders.reduce((sum, o) => sum + Number(o.volume || 0), 0);
 const newOrders = todayOrders.filter(o => o.status === 'new').length;
 const inWorkOrders = todayOrders.filter(o => o.status === 'processing').length;
@@ -282,23 +320,7 @@ const completionPercent = planToday > 0
   ? Math.round((completedVolume / planToday) * 100) 
   : 0;
 
-      // ==================== МИКСЕРЫ ЗА ВЫБРАННУЮ ДАТУ (улучшенная) ====================
-  const activeMixersToday = activeMixers.filter((mixer: any) => {
-    if (!mixer.orderId) return false;
-
-    // Основная проверка
-    const hasOrderToday = todayOrders.some(order => 
-      String(order.id) === String(mixer.orderId)
-    );
-
-    if (hasOrderToday) return true;
-
-    // Дополнительно: если заказ перетекает (например, поздний рейс)
-    // Можно добавить логику по времени, но пока оставим просто
-    return false;
-  });
-
-  // ==================== ЗАГРУЗКА USER ID ====================
+  // ==================== 14. ЗАГРУЗКА USER ID / ROLE / CURRENT USER ====================
   useEffect(() => {
     const saved = localStorage.getItem('userId');
     if (saved) setUserId(parseInt(saved, 10));
@@ -322,7 +344,7 @@ const completionPercent = planToday > 0
       .finally(() => setLoadingRole(false));
   }, [userId]);
 
-    // ==================== ЗАГРУЗКА CURRENT USER ====================
+  // ==================== ЗАГРУЗКА CURRENT USER ====================
   useEffect(() => {
     if (userId && userRole) {
       setCurrentUser({
@@ -333,7 +355,7 @@ const completionPercent = planToday > 0
     }
   }, [userId, userRole]);
 
-// ==================== ЗАГРУЗКА ВСЕХ МИКСЕРОВ ====================
+// ==================== 15. ЗАГРУЗКА МИКСЕРОВ ====================
   useEffect(() => {
     const fetchMixers = async () => {
       try {
@@ -351,7 +373,7 @@ const completionPercent = planToday > 0
     fetchMixers();
   }, []);
 
-    // ==================== ЗАГРУЗКА АКТИВНЫХ МИКСЕРОВ ====================
+    // ==================== 16. ЗАГРУЗКА АКТИВНЫХ МИКСЕРОВ ====================
   useEffect(() => {
     const fetchActiveMixers = async () => {
       try {
@@ -374,7 +396,7 @@ const completionPercent = planToday > 0
     fetchActiveMixers();
   }, []);
 
-      // ==================== СМЕНА СТАТУСА МИКСЕРА ====================
+      // ==================== 17. СМЕНА СТАТУСА МИКСЕРА ====================
   const handleStatusChange = async (mixerId: number | string, newStatus: string) => {
     console.log(`🔄 Меняем статус миксера ${mixerId} → ${newStatus}`);
 
@@ -411,7 +433,7 @@ const completionPercent = planToday > 0
     }
   };
 
-  // ==================== ТАЙМЛАЙН ====================
+  // ==================== 18. ТАЙМЛАЙН ==============================================
   useEffect(() => {
     const updateTime = () => {
       const now = new Date();
@@ -423,7 +445,7 @@ const completionPercent = planToday > 0
     return () => clearInterval(interval);
   }, []);
 
-    // ==================== АВТО-ОБНОВЛЕНИЕ ТАЙМЛАЙНА ====================
+    // ==================== 19. АВТО-ОБНОВЛЕНИЕ ТАЙМЛАЙНА ============================
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -440,10 +462,10 @@ const completionPercent = planToday > 0
     return () => clearInterval(interval);
   }, []);
 
-  // ==================== REALTIME ====================
+  // ==================== 20. REALTIME ==================================================
   useRealtimeOrders(setAllOrders);
 
-      // ==================== АВТО-ОБНОВЛЕНИЕ ДАННЫХ ====================
+      // ==================== 21. АВТО-ОБНОВЛЕНИЕ ДАННЫХ ================================
   useEffect(() => {
     const refreshData = async () => {
       try {
@@ -471,7 +493,7 @@ const completionPercent = planToday > 0
     return () => clearInterval(interval);
   }, []);
 
-    // ==================== ГЛОБАЛЬНАЯ ЗАГРУЗКА ВСЕХ НАЗНАЧЕННЫХ МИКСЕРОВ ====================
+    // ==================== 22. ГЛОБАЛЬНАЯ ЗАГРУЗКА ВСЕХ НАЗНАЧЕННЫХ МИКСЕРОВ ===============
   useEffect(() => {
     const fetchAllAssignedMixers = async () => {
       try {
@@ -489,7 +511,7 @@ const completionPercent = planToday > 0
     fetchAllAssignedMixers();
   }, []);
 
-    // ==================== ВОССТАНОВЛЕНИЕ ГЛОБАЛЬНОГО СОСТОЯНИЯ ПРИ ЗАКРЫТИИ МОДАЛКИ ====================
+    // ============ 23. ВОССТАНОВЛЕНИЕ ГЛОБАЛЬНОГО СОСТОЯНИЯ ПРИ ЗАКРЫТИИ МОДАЛКИ ============
   useEffect(() => {
     if (!selectedOrder) {
       // При закрытии модалки — перезагружаем все миксеры
@@ -506,7 +528,7 @@ const completionPercent = planToday > 0
     }
   }, [selectedOrder]);
 
-  // ==================== ЗАГРУЗКА МИКСЕРОВ ДЛЯ ОТКРЫТОЙ МОДАЛКИ ====================
+  // ==================== 24. ЗАГРУЗКА МИКСЕРОВ ДЛЯ ОТКРЫТОЙ МОДАЛКИ ==========================
         useEffect(() => {
     if (!selectedOrder?.id) {
       setMixerAssignments([]);        // очищаем при закрытии
@@ -529,7 +551,7 @@ const completionPercent = planToday > 0
     loadOrderMixers();
   }, [selectedOrder?.id]);
 
-  // ==================== ЗАГРУЗКА ИСТОРИИ ПРИ ОТКРЫТИИ МОДАЛКИ ====================
+  // ==================== 25. ЗАГРУЗКА ИСТОРИИ ПРИ ОТКРЫТИИ МОДАЛКИ ============================
   useEffect(() => {
     if (!selectedOrder?.id) {
       setHistory([]);   // очищаем при закрытии модалки
@@ -552,7 +574,7 @@ const completionPercent = planToday > 0
     loadHistory();
   }, [selectedOrder?.id]);   // ← важно: зависимость только от id
 
-  // ==================== СЛУШАТЕЛЬ ДЛЯ ОБНОВЛЕНИЯ ПОСЛЕ ДОБАВЛЕНИЯ МИКСЕРА ====================
+  // ==================== 26. СЛУШАТЕЛЬ ДЛЯ ОБНОВЛЕНИЯ ПОСЛЕ ДОБАВЛЕНИЯ МИКСЕРА ====================
   useEffect(() => {
     const handleMixerAdded = () => {
       console.log('🔄 Миксер добавлен из модалки, обновляем данные...');
@@ -582,7 +604,7 @@ const completionPercent = planToday > 0
     return <div style={{ minHeight: '100vh', background: '#0F172A', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Загрузка дашборда...</div>;
   }
 
-    // ==================== КРАСИВЫЕ НАЗВАНИЯ РОЛЕЙ ====================
+    // ================================= 27. КРАСИВЫЕ НАЗВАНИЯ РОЛЕЙ =================================
   const getRoleDisplayName = (role: string | null): string => {
     switch (role) {
       case 'admin':      return 'Админ';
@@ -594,7 +616,7 @@ const completionPercent = planToday > 0
     }
   };
 
-    // ==================== УДАЛЕНИЕ МИКСЕРА + ЗАПИСЬ В ИСТОРИЮ ====================
+    // ========================== 28. УДАЛЕНИЕ МИКСЕРА + ЗАПИСЬ В ИСТОРИЮ =============================
   const deleteMixer = async (mixerId: number | string, index: number) => {
     if (!mixerId) return;
 
@@ -623,7 +645,34 @@ const completionPercent = planToday > 0
     }
   };
 
-        // ==================== ЗАВЕРШЕНИЕ ЛОГИСТИКИ + АВТО-СМЕНА СТАТУСА ====================
+  // ==================== 29. DRAG & DROP МИКСЕРОВ ВНУТРИ ЗАКАЗА ========================================
+const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
+  const data = e.dataTransfer.getData('text/plain');
+  const [fromOrderId, fromIndexStr] = data.split('-');
+  const fromIndex = parseInt(fromIndexStr);
+
+  if (String(fromOrderId) !== String(orderId)) return; // нельзя перемещать между заказами
+
+  const group = groupedMixers.find(g => String(g.orderId) === String(orderId));
+  if (!group) return;
+
+  const newMixers = [...group.mixers];
+  const [moved] = newMixers.splice(fromIndex, 1);
+  newMixers.splice(fromIndex, 0, moved); // просто меняем порядок
+
+  // Обновляем глобальный массив
+  setMixerAssignments(prev => 
+    prev.map(item => {
+      if (String(item.orderId) === String(orderId)) {
+        const updated = newMixers.find(m => m.id === item.id);
+        return updated ? { ...item, sortOrder: newMixers.indexOf(updated) } : item;
+      }
+      return item;
+    })
+  );
+};
+
+    // ==================== 30. ЗАВЕРШЕНИЕ ЛОГИСТИКИ + АВТО-СМЕНА СТАТУСА =================================
 const completeLogistics = async (selectedOrderParam?: Order) => {
   const targetOrder = selectedOrderParam || selectedOrder;
   if (!targetOrder) return;
@@ -635,12 +684,14 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
   const orderVolume = Number(targetOrder.volume || 0);
   const isFullyReady = assignedVolume >= orderVolume && assignedVolume > 0;
 
-  const newStatus = isFullyReady ? 'processing' : 'new';
+  // Новое строгое условие — не меняем статус, если уже финальный
+  const isFinalStatus = targetOrder.status === 'completed' || targetOrder.status === 'cancelled';
+  const newStatus = isFullyReady && !isFinalStatus ? 'processing' : targetOrder.status;
 
   // Optimistic update
-  setAllOrders(prev => prev.map(o => 
-    o.id === targetOrder.id 
-      ? { ...o, logistics_ready: true, status: newStatus } 
+  setAllOrders(prev => prev.map(o =>
+    o.id === targetOrder.id
+      ? { ...o, logistics_ready: true, status: newStatus }
       : o
   ));
 
@@ -662,17 +713,16 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
     const data = await res.json();
 
     if (data.success) {
-      // ==================== КОРРЕКТНАЯ ЗАПИСЬ В ИСТОРИЮ ====================
-      const actionText = isFullyReady 
-        ? `Завершил логистику: ${assignedVolume}/${orderVolume} м³ (полностью)` 
+      const actionText = isFullyReady
+        ? `Завершил логистику: ${assignedVolume}/${orderVolume} м³ (полностью)`
         : `Сохранил частичную логистику: ${assignedVolume}/${orderVolume} м³`;
 
       if (typeof addToHistory === 'function') {
         await addToHistory(actionText);
       }
 
-      alert(isFullyReady 
-        ? `✅ Полная логистика (${assignedVolume}/${orderVolume} м³). Заказ переведён в "В работе"` 
+      alert(isFullyReady
+        ? `✅ Полная логистика (${assignedVolume}/${orderVolume} м³)`
         : `⚠️ Сохранена частичная логистика (${assignedVolume}/${orderVolume} м³)`
       );
       
@@ -686,7 +736,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
   }
 };
 
-     // ==================== ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ ДЛЯ МОДАЛКИ ====================
+  // ==================== 31. ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ ДЛЯ МОДАЛКИ =================================
   const modalCurrentUser = currentUser || {
     id: userId || 0,
     name: getRoleDisplayName(userRole) || 'Сотрудник',
@@ -880,7 +930,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
   </div>
   
   <div style={{ fontSize: '42px', fontWeight: '700', marginBottom: '4px' }}>
-    {completedVolume} <span style={{ fontSize: '28px', color: '#64748B' }}>/ {planToday}</span> м³
+    {Math.round(completedVolume)} <span style={{ fontSize: '28px', color: '#64748B' }}>/ {Math.round(planToday)}</span> м³
   </div>
 
   <div style={{ 
@@ -1419,123 +1469,203 @@ const isReadyInDB = (order as any).logistics_ready === true;
     </div>
    </div>
   </div>
-            {/* ==================== МИКСЕРЫ В РАБОТЕ (только по выбранной дате) ==================== */}
-      <div style={{ 
-            width: '100%', 
-            maxWidth: '480px', 
-            background: '#1E2937', 
-            borderRadius: '24px', 
-            padding: '24px', 
-            display: 'flex', 
-            flexDirection: 'column',
-            height: '92vh',                    // ← Основная настройка высоты (в процентах от высоты экрана)
-            minHeight: '1000px',                // минимальная высота на маленьких экранах
-            alignSelf: 'stretch',
-            position: 'sticky',
-            top: '20px'
-       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-          <h3 style={{ fontSize: '24px', margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <img src="/icons/mixer-truck.png" alt="Миксер" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
-            Миксеры в работе
-          </h3>
+            {/* ==================== МИКСЕРЫ В РАБОТЕ (группировка по заказам + drag & drop) ==================== */}
+<div style={{ 
+  width: '100%', 
+  maxWidth: '480px', 
+  background: '#1E2937', 
+  borderRadius: '24px', 
+  padding: '24px', 
+  display: 'flex', 
+  flexDirection: 'column',
+  height: '92vh',
+  minHeight: '1000px',
+  alignSelf: 'stretch',
+  position: 'sticky',
+  top: '20px'
+}}>
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+    <h3 style={{ fontSize: '24px', margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <img src="/icons/mixer-truck.png" alt="Миксер" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+      Миксеры в работе
+    </h3>
 
-          <div style={{ 
-            background: '#10B98120', 
-            color: '#10B981', 
-            padding: '6px 14px', 
-            borderRadius: '9999px', 
-            fontSize: '15px',
-            fontWeight: '600'
-          }}>
-            {activeMixersToday.length} на линии
-          </div>
-        </div>
+    <div style={{ 
+      background: '#10B98120', 
+      color: '#10B981', 
+      padding: '6px 14px', 
+      borderRadius: '9999px', 
+      fontSize: '15px',
+      fontWeight: '600'
+    }}>
+      {activeMixersToday.length} на линии
+    </div>
+  </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: 1 }}>
-          {activeMixersToday.length > 0 ? (
-            activeMixersToday.map((mixer: any) => (
-              <div key={mixer.id} style={{ 
-                background: '#25334A', 
-                borderRadius: '18px', 
-                padding: '20px'
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                  <div>
-                    <div style={{ fontSize: '18px', fontWeight: '700' }}>
-                      {mixer.number || mixer.mixer_name}
-                    </div>
-                    <div style={{ fontSize: '15px', color: '#60A5FA', marginTop: '2px' }}>
-                      Заказ #{mixer.orderId}
-                    </div>
-                  </div>
-
-                  <select 
-                    value={mixer.status || 'Загрузка'}
-                    onChange={(e) => handleStatusChange(mixer.id, e.target.value)}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: '9999px',
-                      background: '#1E2937',
-                      color: 'white',
-                      border: 'none',
-                      fontSize: '14px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <option value="Загрузка">🟡 Загрузка</option>
-                    <option value="В пути">🔵 В пути</option>
-                    <option value="На объекте">📍 На объекте</option>
-                    <option value="Разгружен">🟢 Разгружен</option>
-                    <option value="Возврат">↩️ Возврат</option>
-                    <option value="Проблема">🔴 Проблема</option>
-                  </select>
-                </div>
-
-                <div style={{ color: '#CBD5E1', fontSize: '15px', marginBottom: '8px' }}>
-                  {mixer.volume} м³ • {mixer.client || '—'}
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '15px', color: '#94A3B8' }}>
-                  <span>⏱</span>
-                  <span style={{ color: '#10B981', fontWeight: '600' }}>{mixer.time}</span>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div style={{ 
-              flex: 1, 
-              display: 'flex', 
-              alignItems: 'center', 
-              justifyContent: 'center',
-              color: '#64748B',
-              fontSize: '17px'
-            }}>
-              На выбранный день нет активных миксеров
-            </div>
-          )}
-        </div>
-
-        <button style={{ 
-          marginTop: '28px',
-          padding: '18px', 
-          background: '#3B82F6', 
-          color: 'white', 
-          border: 'none', 
-          borderRadius: '9999px', 
-          fontSize: '17px', 
-          fontWeight: '600',
-          cursor: 'pointer'
+  <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    {groupedMixers.length > 0 ? (
+      groupedMixers.map((group) => (
+        <div key={group.orderId} style={{ 
+          background: '#25334A', 
+          borderRadius: '18px', 
+          overflow: 'hidden'
         }}>
-          📍 Показать все миксеры на карте
-        </button>
+          {/* Шапка заказа */}
+          <div style={{ 
+            background: '#1E2937', 
+            padding: '14px 20px', 
+            borderBottom: '1px solid #334155',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <div>
+              <div style={{ fontWeight: '700', fontSize: '16px' }}>
+                Заказ #{group.orderId}
+              </div>
+              <div style={{ color: '#94A3B8', fontSize: '14px' }}>
+                {group.client} • {group.deliveryTime}
+              </div>
+            </div>
+            <div style={{ color: '#60A5FA', fontSize: '15px' }}>
+              {group.mixers.length} миксеров
+            </div>
+          </div>
+
+         {/* Строки миксеров внутри заказа */}
+<div style={{ padding: '8px' }}>
+  {group.mixers.map((mixer: any, index: number) => (
+  <div 
+    key={mixer.id}
+    draggable
+    onDragStart={(e) => e.dataTransfer.setData('text/plain', `${group.orderId}-${index}`)}
+    onDragOver={(e) => {
+      e.preventDefault();
+      e.currentTarget.style.background = '#2A3A52'; // подсветка при перетаскивании
+    }}
+    onDragLeave={(e) => {
+      e.currentTarget.style.background = '#1E2937';
+    }}
+    onDrop={(e) => {
+      e.preventDefault();
+      e.currentTarget.style.background = '#1E2937';
+      handleMixerDrop(e, group.orderId);
+    }}
+    style={{ 
+      background: '#1E2937', 
+      padding: '6px 12px',
+      borderRadius: '10px',
+      marginBottom: '5px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      minHeight: '34px',           // ← можно сделать ещё меньше (32px)
+      cursor: 'grab',
+      userSelect: 'none',
+      transition: 'background 0.1s'
+    }}
+  >
+    {/* Порядковый номер */}
+    <div style={{
+      width: '22px',
+      height: '22px',
+      background: '#334155',
+      borderRadius: '9999px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontWeight: '700',
+      color: '#94A3B8',
+      fontSize: '13px',
+      flexShrink: 0
+    }}>
+      {index + 1}
+    </div>
+
+    {/* Информация */}
+    <div style={{ flex: 1 }}>
+      <div style={{ fontWeight: '700', fontSize: '14.5px' }}>
+        {mixer.number || mixer.mixer_name}
       </div>
-   </div>
+      <div style={{ color: '#94A3B8', fontSize: '12.5px' }}>
+        {mixer.model || ''}
+      </div>
+    </div>
+
+    {/* Статус */}
+    <select 
+      value={mixer.status || 'Загрузка'}
+      onChange={(e) => handleStatusChange(mixer.id, e.target.value)}
+      style={{
+        padding: '4px 8px',
+        borderRadius: '9999px',
+        background: '#0F172A',
+        color: 'white',
+        border: 'none',
+        fontSize: '13px',
+        minWidth: '125px'
+      }}
+    >
+      <option value="Загрузка">🟡 Загрузка</option>
+      <option value="В пути">🔵 В пути</option>
+      <option value="На объекте">📍 На объекте</option>
+      <option value="Разгружен">🟢 Разгружен</option>
+      <option value="Возврат">↩️ Возврат</option>
+      <option value="Проблема">🔴 Проблема</option>
+    </select>
+
+    <button 
+      onClick={() => deleteMixer(mixer.id, index)}
+      style={{ 
+        color: '#EF4444', 
+        background: 'none', 
+        border: 'none', 
+        cursor: 'pointer', 
+        fontSize: '17px',
+        padding: '2px 6px'
+      }}
+    >
+      ✕
+    </button>
+  </div>
+))}
+</div>
+        </div>
+      ))
+    ) : (
+      <div style={{ 
+        flex: 1, 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center',
+        color: '#64748B',
+        fontSize: '17px'
+      }}>
+        На выбранный день нет активных миксеров
+      </div>
+    )}
+  </div>
+
+  <button style={{ 
+    marginTop: '24px',
+    padding: '18px', 
+    background: '#3B82F6', 
+    color: 'white', 
+    border: 'none', 
+    borderRadius: '9999px', 
+    fontSize: '17px', 
+    fontWeight: '600',
+    cursor: 'pointer'
+  }}>
+    📍 Показать все миксеры на карте
+  </button>
+</div>
+</div>
 
      {/* ==================== МОДАЛЬНОЕ ОКНО ЗАКАЗА ==================== */}
 {selectedOrder && (
   <OrderDetailModal
-    key={selectedOrder.id}                    // ← важно для React
+    key={selectedOrder.id}                    
     order={selectedOrder}
     onClose={() => setSelectedOrder(null)}
     mixerAssignments={mixerAssignments}
@@ -1550,6 +1680,9 @@ const isReadyInDB = (order as any).logistics_ready === true;
     history={history}
     addToHistory={addToHistory}
     getStatusConfig={getStatusConfig}
+    
+    // ← ЭТУ СТРОКУ ОБЯЗАТЕЛЬНО ДОБАВЬ:
+    setHistory={setHistory}
   />
 )}
 
