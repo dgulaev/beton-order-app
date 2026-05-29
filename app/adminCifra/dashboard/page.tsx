@@ -6,6 +6,7 @@ import { Order } from '../hooks/useCalendarOrders';
 import { createClient } from '@supabase/supabase-js';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import OrderDetailModal from '../components/OrderDetailModal';
+import Image from 'next/image';
 
 
 // Создаём клиент Supabase (один раз на весь файл)
@@ -796,7 +797,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
       fontWeight: '700', 
       margin: 0 
     }}>
-      РБУ ТрейдКом
+      Дашборд
     </h1>
     
     <div 
@@ -1646,20 +1647,6 @@ const isReadyInDB = (order as any).logistics_ready === true;
       </div>
     )}
   </div>
-
-  <button style={{ 
-    marginTop: '24px',
-    padding: '18px', 
-    background: '#3B82F6', 
-    color: 'white', 
-    border: 'none', 
-    borderRadius: '9999px', 
-    fontSize: '17px', 
-    fontWeight: '600',
-    cursor: 'pointer'
-  }}>
-    📍 Показать все миксеры на карте
-  </button>
 </div>
 </div>
 

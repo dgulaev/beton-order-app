@@ -119,6 +119,71 @@ export async function POST(request: NextRequest) {
     }
 
     // ================================================
+// 3.1 АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ КОНТАКТОВ КЛИЕНТА (УЛУЧШЕННЫЙ)
+// ================================================
+const supabase = getSupabaseClient();
+const now = new Date().toISOString();
+
+console.log(`🔄 [3.1] Обновление контактов для userId: ${finalUserId}`);
+
+// Обновляем last_contact
+await supabase
+  .from('users')
+  .update({ last_contact: now })
+  .eq('user_id', finalUserId);
+
+// ==================== УЛУЧШЕННЫЙ РАСЧЁТ next_contact ====================
+const { data: orders } = await supabase
+  .from('orders')
+  .select('delivery_date, created_at')
+  .eq('user_id', finalUserId)
+  .order('delivery_date', { ascending: true });
+
+let nextContact = null;
+
+if (orders && orders.length >= 2) {
+  const dates = orders
+    .map((o: any) => new Date(o.delivery_date || o.created_at))
+    .filter(d => d && !isNaN(d.getTime()))
+    .sort((a: Date, b: Date) => a.getTime() - b.getTime());
+
+  if (dates.length >= 2) {
+    let totalDays = 0;
+    for (let i = 1; i < dates.length; i++) {
+      totalDays += (dates[i].getTime() - dates[i-1].getTime()) / (1000 * 3600 * 24);
+    }
+    const avgInterval = totalDays / (dates.length - 1);
+    
+    // Улучшенная логика:
+    // Минимум 14 дней, максимум 60 дней, +20% буфер
+    let daysToAdd = Math.ceil(avgInterval * 1.2);
+    daysToAdd = Math.max(14, Math.min(60, daysToAdd));
+
+    const lastOrder = dates[dates.length - 1];
+    const nextDate = new Date(lastOrder.getTime() + daysToAdd * 86400000);
+    
+    nextContact = nextDate.toISOString();
+    
+    console.log(`📅 Рассчитан next_contact: ${nextDate.toLocaleDateString('ru-RU')} (+${daysToAdd} дней)`);
+  }
+}
+
+// Fallback — минимум через 25 дней
+if (!nextContact) {
+  const defaultNext = new Date();
+  defaultNext.setDate(defaultNext.getDate() + 25);
+  nextContact = defaultNext.toISOString();
+  console.log(`📅 Fallback next_contact (+25 дней)`);
+}
+
+await supabase
+  .from('users')
+  .update({ next_contact: nextContact })
+  .eq('user_id', finalUserId);
+
+console.log(`✅ next_contact сохранён: ${nextContact}`);
+
+    // ================================================
     // 4. НОРМАЛИЗАЦИЯ ПОЛЕЙ
     // ================================================
     const {
@@ -138,8 +203,6 @@ export async function POST(request: NextRequest) {
     if (!grade || !volume || !finalDeliveryDate || !finalDeliveryTime || !address || !phone) {
       return NextResponse.json({ success: false, message: 'Не все обязательные поля заполнены' }, { status: 400 });
     }
-
-    const supabase = getSupabaseClient();
 
     // ================================================
     // 6. ПРОВЕРКА КОНФЛИКТОВ ПО ВРЕМЕНИ

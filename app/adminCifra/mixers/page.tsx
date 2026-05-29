@@ -114,7 +114,7 @@ export default function MixersPage() {
       {/* ==================== ЗАГОЛОВОК + КНОПКА ДОБАВИТЬ ==================== */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
         <h1 style={{
-          fontSize: '34px',
+          fontSize: '32px',
           fontWeight: '700',
           display: 'flex',
           alignItems: 'flex-end',

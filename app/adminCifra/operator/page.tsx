@@ -59,7 +59,7 @@ export default function OperatorBSUPage() {
         justifyContent: 'space-between'
       }}>
         <div>
-          <div style={{ fontSize: '28px', fontWeight: '700' }}>Бетонный завод</div>
+          <div style={{ fontSize: '32px', fontWeight: '700' }}>Бетонный завод</div>
           <div style={{ color: '#94A3B8', fontSize: '15px' }}>Оператор БСУ • Реальное время</div>
         </div>
 
@@ -75,7 +75,6 @@ export default function OperatorBSUPage() {
 
       {/* ====================== ОСНОВНОЙ КОНТЕНТ ====================== */}
       <div style={{ padding: '40px' }}>
-        <h1 style={{ fontSize: '28px', fontWeight: '700', marginBottom: '8px' }}>Оператор БСУ</h1>
         <p style={{ color: '#64748B', fontSize: '18px', marginBottom: '32px' }}>
           Управление загрузкой бетона в реальном времени
         </p>

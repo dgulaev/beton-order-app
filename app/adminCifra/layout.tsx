@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
 import { createClient } from '@/app/utils/supabase/client';
+import Image from 'next/image';
 
 export default function AdminCifraLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -21,6 +22,9 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const [isBellAnimating, setIsBellAnimating] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // ==================== 2.1 СОСТОЯНИЕ УВЕДОМЛЕНИЙ ПО КЛИЕНТАМ ====================
+  const [clientReminders, setClientReminders] = useState<any[]>([]);
 
   // ==================== 3. ПРОВЕРКА РОЛИ ====================
   useEffect(() => {
@@ -55,15 +59,82 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   }, []);
 
   const playNotificationSound = () => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(err => console.log('Sound play error:', err));
-    }
-  };
+  if (audioRef.current) {
+    audioRef.current.currentTime = 0;
+    audioRef.current.play().catch(err => {
+      console.log('Sound play error (ожидаемо в некоторых браузерах):', err.message);
+      // Не показываем ошибку пользователю
+    });
+  }
+};
 
   const triggerBellAnimation = () => {
     setIsBellAnimating(true);
     setTimeout(() => setIsBellAnimating(false), 2500);
+  };
+
+  // ==================== 4.2 УВЕДОМЛЕНИЕ ПО КЛИЕНТУ (НОВЫЙ БЛОК) ====================
+  const showClientReminder = (client: any) => {
+    const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
+    const key = `client-reminder-${client.groupId || client.user_id}`;
+
+    if (closed.includes(key)) return;
+
+    const notif = document.createElement('div');
+    notif.style.cssText = `
+      position: fixed;
+      top: 90px;
+      right: 24px;
+      background: linear-gradient(135deg, #f59e0b, #fbbf24);
+      color: #0f172a;
+      padding: 18px 24px;
+      borderRadius: 16px;
+      z-index: 10000;
+      box-shadow: 0 20px 40px rgba(245, 158, 11, 0.4);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      min-width: 420px;
+      cursor: pointer;
+    `;
+
+    notif.innerHTML = `
+      <div style="font-size: 36px;">📞</div>
+      <div style="flex: 1;">
+        <div style="font-size: 17px; font-weight: 700;">Пора позвонить клиенту!</div>
+        <div style="font-size: 15px; margin-top: 4px;">
+          ${client.organization_name || client.full_name || 'Клиент'}
+        </div>
+        <div style="font-size: 14px; opacity: 0.9;">
+          Следующий контакт: ${new Date(client.next_contact).toLocaleDateString('ru-RU')}
+        </div>
+      </div>
+      <div style="font-size: 28px; cursor: pointer; padding: 4px 10px;" class="close-reminder">✕</div>
+    `;
+
+    const closeBtn = notif.querySelector('.close-reminder') as HTMLElement;
+    const closeNotification = () => {
+      notif.remove();
+      const closedList = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
+      closedList.push(key);
+      localStorage.setItem('closedNotifications', JSON.stringify(closedList));
+    };
+
+    if (closeBtn) {
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeNotification();
+      });
+    }
+
+    notif.addEventListener('click', () => {
+      window.location.href = '/adminCifra/clients';
+      closeNotification();
+    });
+
+    document.body.appendChild(notif);
+    playNotificationSound();
+    triggerBellAnimation();
   };
 
  // ==================== БЛОК 4.1 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
@@ -248,6 +319,56 @@ useEffect(() => {
   };
 }, [userRole]);
 
+// ==================== 5.1 ПРОВЕРКА НАПОМИНАНИЙ ПО КЛИЕНТАМ (ОДИН РАЗ В ДЕНЬ) ====================
+useEffect(() => {
+  if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) return;
+
+  const checkClientReminders = async () => {
+    try {
+      const savedUserId = localStorage.getItem('userId');
+      if (!savedUserId) return;
+
+      const res = await fetch(`/api/adminCifra/clients/reminders?userId=${savedUserId}`);
+
+      if (!res.ok) {
+        console.warn('Reminders API returned:', res.status);
+        return;
+      }
+
+      const reminders = await res.json();
+
+      console.log(`📢 Получено ${reminders.length} напоминаний`);
+
+      reminders.forEach((reminder: any) => {
+        const key = `client-reminder-${reminder.groupId || reminder.user_id}`;
+        const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
+
+        if (!closed.includes(key)) {
+          showClientReminder(reminder);
+        }
+      });
+    } catch (err) {
+      console.warn('Client reminders check error:', err);
+    }
+  };
+
+  // Первый запуск
+  checkClientReminders();
+
+  // Ежедневная проверка в 9:00 утра
+  const now = new Date();
+  const tomorrow9AM = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0);
+  const timeUntil9AM = tomorrow9AM.getTime() - now.getTime();
+
+  const dailyTimer = setTimeout(() => {
+    checkClientReminders();
+    setInterval(checkClientReminders, 24 * 60 * 60 * 1000);
+  }, timeUntil9AM);
+
+  return () => clearTimeout(dailyTimer);
+
+}, [userRole]);
+
   // ==================== 6. СБРОС СЧЁТЧИКА ====================
   useEffect(() => {
     if (pathname === '/adminCifra/zayavki') {
@@ -328,15 +449,42 @@ useEffect(() => {
             </button>
           </div>
 
-          {/* Логотип */}
-          <div style={{ padding: '0 12px', marginBottom: '40px', textAlign: isCollapsed ? 'center' : 'left' }}>
-            <h1 style={{ fontSize: isCollapsed ? '22px' : '28px', fontWeight: '700' }}>
-              {isCollapsed ? 'РБ' : 'РБУ ТрейдКом'}
-            </h1>
-            {!isCollapsed && <p style={{ fontSize: '13px', color: '#64748B' }}>Цифра • Диспетчеризация</p>}
+      {/* ==================== ЛОГОТИП TRADECOM ==================== */}
+          <div style={{ 
+            padding: '0 12px', 
+            marginBottom: '40px', 
+            textAlign: 'center',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center'
+          }}>
+            <Image 
+              src={isCollapsed ? "/logo-tradecom-circle.png" : "/logo-tradecom-white.png"} 
+              alt="TRADECOM" 
+              width={isCollapsed ? 52 : 270} 
+              height={isCollapsed ? 52 : 130} 
+              style={{ 
+                objectFit: 'contain',
+                borderRadius: isCollapsed ? '50%' : '8px',
+                transition: 'all 0.3s ease'
+              }} 
+              priority
+            />
+            
+            {!isCollapsed && (
+              <p style={{ 
+                fontSize: '13px', 
+                color: '#64748B', 
+                marginTop: '8px',
+                letterSpacing: '0.5px'
+              }}>
+                ТрейдКом • ДИСПЕТЧЕРИЗАЦИЯ
+              </p>
+            )}
           </div>
 
           <nav style={{ flex: 1 }}>
+
             <Link href="/adminCifra/dashboard" style={navLinkStyle(isActive('/adminCifra/dashboard'), isCollapsed)}>
               <Home size={22} /> {!isCollapsed && <span>Дашборд</span>}
             </Link>

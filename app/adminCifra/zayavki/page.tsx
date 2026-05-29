@@ -512,7 +512,7 @@ ${order.customer_type?.includes('Юридическое')
       flexShrink: 0
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '40px' }}>
-        <div style={{ fontSize: '24px', fontWeight: '700' }}>РБУ ТрейдКом</div>
+        <div style={{ fontSize: '32px', fontWeight: '700' }}>Заявки</div>
         
         
       </div>

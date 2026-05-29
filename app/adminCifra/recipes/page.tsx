@@ -85,8 +85,8 @@ export default function RecipesPage() {
       
       {/* ==================== ЗАГОЛОВОК + КНОПКА ==================== */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
-        <h1 style={{ fontSize: '34px', fontWeight: '700' }}>
-          📋 Рецепты бетона
+        <h1 style={{ fontSize: '32px', fontWeight: '700' }}>
+        Рецепты
         </h1>
 
         <button 

@@ -1,5 +1,5 @@
 // app/api/adminCifra/clients/grouped/route.ts
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
@@ -9,75 +9,69 @@ const supabase = createClient(
 
 export async function GET() {
   try {
-    const { data: users, error } = await supabase
+    console.log('🚀 Запрос grouped clients...');
+
+    // Загружаем всех клиентов
+    const { data: clients, error } = await supabase
       .from('users')
-      .select('user_id, phone, full_name, organization_name, inn, created_at')
+      .select('*')
       .eq('role', 'client')
-      .order('organization_name');
+      .order('created_at', { ascending: false });
 
     if (error) throw error;
 
-    const { data: allOrders } = await supabase
-      .from('orders')
-      .select('user_id, volume');
+    const grouped = new Map();
 
-    // Очень агрессивная нормализация названия
-    const normalizeName = (name: string): string => {
-      if (!name) return 'no-name';
-      return name
-        .replace(/["«»]/g, '')           // убираем кавычки
-        .replace(/ООО\s*/gi, '')         // убираем "ООО"
-        .replace(/ИП\s*/gi, '')          // убираем "ИП"
-        .replace(/\s+/g, '')             // убираем все пробелы
-        .replace(/[^a-zA-Zа-яА-Я0-9]/g, '') // убираем все спецсимволы
-        .toLowerCase()
-        .trim();
-    };
+    for (const client of clients) {
+      const key = client.inn 
+        ? `${client.inn}_${(client.organization_name || '').toLowerCase().replace(/[^a-zа-я0-9]/g, '')}`
+        : `no-inn_${client.user_id}`;
 
-    const grouped = users.reduce((acc: any, user: any) => {
-      const innKey = user.inn ? user.inn.trim() : 'no-inn';
-      const nameKey = normalizeName(user.organization_name || user.full_name || '');
-
-      const key = `${innKey}_${nameKey}`;
-
-      if (!acc[key]) {
-        acc[key] = {
+      if (!grouped.has(key)) {
+        grouped.set(key, {
           groupId: key,
-          inn: user.inn,
-          organization_name: user.organization_name || user.full_name,
-          full_name: user.full_name,
+          inn: client.inn,
+          organization_name: client.organization_name,
+          full_name: client.full_name,
           phones: [],
-          totalVolume: 0,
-          totalOrders: 0,
+          total_volume: 0,
+          total_orders: 0,
+          last_contact: client.last_contact,
+          next_contact: client.next_contact,
+          predicted_next_order: client.predicted_next_order,
           clients: []
-        };
+        });
       }
 
-      if (user.phone) acc[key].phones.push(user.phone);
-      acc[key].clients.push(user);
+      const group = grouped.get(key);
 
-      return acc;
-    }, {});
+      if (client.phone) group.phones.push(client.phone);
 
-    // Распределяем заказы
-    if (allOrders) {
-      allOrders.forEach((order: any) => {
-        Object.values(grouped).forEach((group: any) => {
-          if (group.clients.some((c: any) => c.user_id === order.user_id)) {
-            group.totalVolume += Number(order.volume || 0);
-            group.totalOrders += 1;
-          }
-        });
-      });
+      // === КРИТИЧНО: Суммируем объём из orders таблицы ===
+      if (client.user_id) {
+        const { data: orders } = await supabase
+          .from('orders')
+          .select('volume')
+          .eq('user_id', client.user_id);
+
+        if (orders) {
+          const vol = orders.reduce((sum: number, o: any) => sum + Number(o.volume || 0), 0);
+          group.total_volume += vol;
+          group.total_orders += orders.length;
+        }
+      }
+
+      group.clients.push(client);
     }
 
-    const result = Object.values(grouped);
+    const result = Array.from(grouped.values());
 
-    console.log(`✅ Сформировано ${result.length} групп (агрессивная нормализация)`);
+    console.log(`✅ Сформировано ${result.length} групп. Пример объёма:`, result[0]?.total_volume || 0);
+
     return NextResponse.json(result);
 
   } catch (error: any) {
-    console.error('❌ Grouped API Error:', error.message);
+    console.error('Grouped clients API error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

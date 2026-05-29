@@ -3,6 +3,13 @@
 import { useState, useEffect } from 'react';
 import NewOrderModal from './NewOrderModal';
 
+// ==================== 0.1 ГЛОБАЛЬНЫЕ ТИПЫ ДЛЯ WINDOW ===============
+declare global {
+  interface Window {
+    callClient: (clientId: number | string) => void;
+  }
+}
+
 export default function ClientsPage() {
 
   // ==================== 1. ОСНОВНЫЕ СОСТОЯНИЯ ====================
@@ -36,7 +43,7 @@ export default function ClientsPage() {
   });
   
 
-                // ==================== 2. ЗАГРУЗКА ВСЕХ ПОЛЬЗОВАТЕЛЕЙ + ГРУППИРОВКА КЛИЕНТОВ ====================
+  // ==================== 2. ЗАГРУЗКА ВСЕХ ПОЛЬЗОВАТЕЛЕЙ + ГРУППИРОВКА КЛИЕНТОВ ====================
   useEffect(() => {
     const fetchAllUsers = async () => {
       setLoading(true);
@@ -426,6 +433,87 @@ export default function ClientsPage() {
     }
   };
 
+  // ==================== 3.3 ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ И СОХРАНЕНИЕ next_contact ====================
+const refreshClientData = async () => {
+  if (!selectedProfile) {
+    alert('Сначала выберите клиента');
+    return;
+  }
+
+  const uid = selectedProfile.user_id || selectedProfile.id || selectedProfile.clients?.[0]?.user_id;
+  if (!uid) {
+    alert('Не удалось определить ID клиента');
+    return;
+  }
+
+  try {
+    // Пересчёт next_contact
+    let newNextContact = null;
+
+    if (userOrders && userOrders.length >= 2) {
+      const dates = userOrders
+        .map((o: any) => new Date(o.delivery_date || o.created_at))
+        .filter(d => d && !isNaN(d.getTime()))
+        .sort((a: Date, b: Date) => a.getTime() - b.getTime());
+
+      if (dates.length >= 2) {
+        let totalDays = 0;
+        for (let i = 1; i < dates.length; i++) {
+          totalDays += (dates[i].getTime() - dates[i-1].getTime()) / (1000 * 3600 * 24);
+        }
+        const avgInterval = totalDays / (dates.length - 1);
+        const daysToAdd = Math.max(14, Math.ceil(avgInterval * 1.25));
+        const lastOrder = dates[dates.length - 1];
+        const nextDate = new Date(lastOrder.getTime() + daysToAdd * 86400000);
+        newNextContact = nextDate.toISOString();
+      }
+    }
+
+    if (!newNextContact) {
+      const defaultNext = new Date();
+      defaultNext.setDate(defaultNext.getDate() + 30);
+      newNextContact = defaultNext.toISOString();
+    }
+
+    // Сохраняем в базу
+    await fetch('/api/adminCifra/clients/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: uid,
+        next_contact: newNextContact
+      })
+    });
+
+    alert(`✅ Дата обновлена: ${new Date(newNextContact).toLocaleDateString('ru-RU')}`);
+
+    // Полная перезагрузка страницы — самое надёжное решение для групп
+    window.location.reload();
+
+  } catch (err: any) {
+    console.error(err);
+    alert('Ошибка сохранения');
+  }
+};
+
+      // ==================== 3.4 ТЕСТОВОЕ УВЕДОМЛЕНИЕ ====================
+const testClientReminder = () => {
+  if (!selectedProfile) {
+    alert('Сначала выберите клиента');
+    return;
+  }
+
+  console.log('🧪 Тест уведомления для клиента:', selectedProfile.organization_name);
+
+  const testReminder = {
+    ...selectedProfile,
+    next_contact: new Date().toISOString(),
+    isOverdue: true
+  };
+
+  showClientReminder(testReminder, true);   // ← важно: true = тест
+};
+
       // ==================== 4. ФИЛЬТРАЦИЯ КЛИЕНТОВ И СОТРУДНИКОВ ====================
   
   // Клиенты — показываем только сгруппированные карточки
@@ -460,6 +548,95 @@ export default function ClientsPage() {
       );
     }
   });
+
+  // ==================== 4.2 УВЕДОМЛЕНИЕ ПО КЛИЕНТУ ====================
+const showClientReminder = (client: any, isTest = false) => {
+  const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
+  const key = `client-reminder-${client.groupId || client.user_id}`;
+
+  if (!isTest && closed.includes(key)) {
+    console.log('Автоматическое уведомление уже было закрыто');
+    return;
+  }
+
+  const notif = document.createElement('div');
+
+  Object.assign(notif.style, {
+    position: 'fixed',
+    top: '90px',
+    right: '24px',
+    background: 'linear-gradient(135deg, #f59e0b, #fbbf24)',
+    color: '#0f172a',
+    padding: '20px 24px',
+    borderRadius: '16px',
+    zIndex: '10000',
+    boxShadow: '0 25px 50px rgba(0,0,0,0.5)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '18px',
+    minWidth: '480px',
+    cursor: 'pointer'
+  });
+
+  notif.innerHTML = `
+    <div style="font-size: 42px; line-height: 1;">📞</div>
+    <div style="flex: 1;">
+      <div style="font-size: 18px; font-weight: 700; margin-bottom: 4px;">
+        Пора позвонить клиенту!
+      </div>
+      <div style="font-size: 15.5px; font-weight: 600;">
+        ${client.organization_name || client.full_name || 'Клиент'}
+      </div>
+      <div style="font-size: 14px; opacity: 0.95; margin-top: 2px;">
+        Следующий контакт: ${new Date(client.next_contact).toLocaleDateString('ru-RU')}
+      </div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <button onclick="window.callClient(${client.user_id || client.clients?.[0]?.user_id || 'null'})" 
+        style="padding: 12px 22px; background: #10B981; color: white; border: none; border-radius: 10px; font-weight: 600; cursor: pointer; white-space: nowrap;">
+        📞 Позвонить
+      </button>
+      <div style="font-size: 26px; cursor: pointer; padding: 4px 8px; opacity: 0.7;" class="close-reminder">✕</div>
+    </div>
+  `;
+
+  const closeBtn = notif.querySelector('.close-reminder') as HTMLElement;
+
+  const closeNotification = () => {
+    notif.remove();
+    if (!isTest) {
+      const closedList = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
+      if (!closedList.includes(key)) {
+        closedList.push(key);
+        localStorage.setItem('closedNotifications', JSON.stringify(closedList));
+      }
+    }
+  };
+
+  if (closeBtn) {
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeNotification();
+    });
+  }
+
+  notif.addEventListener('click', (e) => {
+    if (!(e.target as HTMLElement).closest('button')) {
+      window.location.href = '/adminCifra/clients';
+      closeNotification();
+    }
+  });
+
+  document.body.appendChild(notif);
+
+  try {
+    const audio = new Audio('/sounds/new-order.mp3');
+    audio.volume = 0.7;
+    audio.play().catch(() => {});
+  } catch (e) {}
+
+  console.log(`🔔 Уведомление показано (${isTest ? 'ТЕСТ' : 'автоматическое'})`);
+};
 
           // ==================== 5. ЗАГРУЗКА ЗАКАЗОВ ПРИ ВЫБОРЕ КЛИЕНТА ====================
   useEffect(() => {
@@ -507,9 +684,60 @@ export default function ClientsPage() {
 
   if (loading) return <div style={{ padding: '120px', textAlign: 'center', color: '#94A3B8' }}>Загрузка CRM...</div>;
 
+  // ==================== 7. ГЛОБАЛЬНАЯ ФУНКЦИЯ ЗВОНКА ====================
+window.callClient = async (clientId: number | string) => {
+  if (!clientId) {
+    alert('❌ Не удалось определить ID клиента');
+    return;
+  }
+
+  const phone = prompt("📞 Введите номер для звонка:", "+7");
+  if (!phone) return;
+
+  window.open(`tel:${phone}`, '_self');
+
+  // Ждём 800мс и спрашиваем результат
+  setTimeout(async () => {
+    const resultInput = prompt(
+      "✅ Результат звонка:\n\n" +
+      "1 — Положительный (клиент заказал)\n" +
+      "2 — Нейтральный (скоро закажет)\n" +
+      "3 — Отрицательный (не нужен)\n\n" +
+      "Введите 1, 2 или 3:",
+      "1"
+    );
+
+    if (!resultInput) return;
+
+    let result = 'neutral';
+    let comment = '';
+
+    if (resultInput === '1') { result = 'positive'; comment = 'Клиент заказал бетон'; }
+    else if (resultInput === '2') { result = 'neutral'; comment = 'Клиент сказал, что скоро закажет'; }
+    else if (resultInput === '3') { result = 'negative'; comment = 'Клиент отказался'; }
+
+    try {
+      const res = await fetch('/api/adminCifra/client-call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId, result, comment })
+      });
+
+      if (res.ok) {
+        alert('✅ Результат звонка сохранён');
+      } else {
+        alert('⚠️ Не удалось сохранить результат');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка соединения');
+    }
+  }, 800);
+};
+
   return (
     <div style={{ background: '#0F172A', minHeight: '100vh', color: '#fff', padding: '32px 40px' }}>
-      <h1 style={{ fontSize: '34px', fontWeight: '700', marginBottom: '32px' }}>👥 CRM</h1>
+      <h1 style={{ fontSize: '32px', fontWeight: '700', marginBottom: '32px' }}>Клиенты CRM</h1>
 
       {/* ====================== ВЕРХНЯЯ ПАНЕЛЬ УПРАВЛЕНИЯ ====================== */}
 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
@@ -608,7 +836,7 @@ export default function ClientsPage() {
       <span style={{ fontSize: '22px', opacity: 0.9 }}>🔗</span>
       Объединить дубли
     </button>
-    {/* Кнопка Новый клиент */}
+  {/* Кнопка Новый клиент */}
 <button 
   onClick={() => setIsNewClientModalOpen(true)}
   style={{
@@ -629,6 +857,27 @@ export default function ClientsPage() {
   <span style={{ fontSize: '22px' }}>➕</span>
   Новый клиент
 </button>
+  {/* Кнопка Эффективность отдела продаж */}
+    <button 
+      onClick={() => window.location.href = '/adminCifra/efficiency'}
+      style={{
+        padding: '12px 24px',
+        background: 'transparent',
+        border: 'none',
+        color: '#A78BFA',
+        fontSize: '17px',
+        fontWeight: '600',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        position: 'relative',
+        transition: 'color 0.25s ease',
+        cursor: 'pointer',
+      }}
+    >
+      <span style={{ fontSize: '22px' }}>📏</span>
+      Эффективность
+    </button>
 
   </div>
 
@@ -651,7 +900,7 @@ export default function ClientsPage() {
         cursor: 'pointer',
       }}
     >
-      <span style={{ fontSize: '22px', opacity: viewMode === 'cards' ? 0.9 : 0.45 }}>🃏</span>
+      <span style={{ fontSize: '22px', opacity: viewMode === 'cards' ? 0.9 : 0.45 }}>▦</span>
       Карточки
       {viewMode === 'cards' && (
         <div style={{
@@ -685,7 +934,7 @@ export default function ClientsPage() {
         cursor: 'pointer',
       }}
     >
-      <span style={{ fontSize: '24px', opacity: viewMode === 'table' ? 0.9 : 0.45, lineHeight: 1 }}>📋</span>
+      <span style={{ fontSize: '24px', opacity: viewMode === 'table' ? 0.9 : 0.45, lineHeight: 1 }}>≡</span>
       Список
       {viewMode === 'table' && (
         <div style={{
@@ -738,70 +987,82 @@ export default function ClientsPage() {
 
          {/* ==================== 10. ОТОБРАЖЕНИЕ КЛИЕНТОВ (СПИСОК) ==================== */}
 {viewMode === 'table' && (
-  <div style={{ background: '#1E2937', borderRadius: '20px', overflow: 'hidden' }}>
-    <div style={{ 
-      display: 'grid', 
-      gridTemplateColumns: '2fr 1fr 140px 140px 100px', 
-      padding: '16px 28px', 
+  <div style={{ background: '#1E2937', borderRadius: '16px', overflow: 'hidden' }}>
+    
+    {/* ==================== ШАПКА ТАБЛИЦЫ ==================== */}
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: '2fr 1fr 140px 140px 120px',
+      padding: '18px 28px',
       background: '#25334A',
+      borderBottom: '2px solid #334155',
+      fontSize: '15px',
       fontWeight: '600',
       color: '#94A3B8',
-      fontSize: '14px',
-      borderBottom: '1px solid #334155'
+      textTransform: 'uppercase',
+      letterSpacing: '0.5px'
     }}>
       <div>Клиент / Организация</div>
       <div>ИНН</div>
-      <div>Телефоны</div>
-      <div>Общий объём</div>
-      <div>Заказов</div>
+      <div>Статус</div>
+      <div>Объём бетона</div>
+      <div>Заказы</div>
     </div>
 
+    {/* ==================== СТРОКИ ТАБЛИЦЫ ==================== */}
     {filteredList.map((client: any) => {
-      const totalVol = client.totalVolume || 0;
-      
-      // Надёжный уникальный ключ
-      const uniqueKey = client.groupId || client.user_id || client.id || `row-${Math.random().toString(36).slice(2)}`;
+      const vol = client.total_volume || client.totalVolume || 0;
+      const ordersCount = client.total_orders || client.totalOrders || 0;
+
+      let statusText = '❄️ Холодный';
+      let statusColor = '#64748B';
+
+      if (vol >= 30 || ordersCount >= 5) {
+        statusText = '🔥 Горячий';
+        statusColor = '#EF4444';
+      } else if (vol >= 8 || ordersCount >= 2) {
+        statusText = '🌡️ Тёплый';
+        statusColor = '#F59E0B';
+      }
 
       return (
-        <div 
-          key={uniqueKey} 
-          onClick={() => setSelectedProfile(client)} 
-          style={{ 
-            display: 'grid', 
-            gridTemplateColumns: '2fr 1fr 140px 140px 100px', 
-            padding: '20px 28px', 
+        <div
+          key={client.groupId || client.user_id || client.id}
+          onClick={() => setSelectedProfile(client)}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '2fr 1fr 140px 140px 120px',
+            padding: '12px 12px',           // ← увеличил вертикальные отступы
             borderBottom: '1px solid #334155',
             cursor: 'pointer',
+            alignItems: 'center',
             transition: 'background 0.2s',
+            minHeight: '10px'               // ← ВЫСОТА СТРОКИ (здесь регулируй)
           }}
           onMouseOver={(e) => e.currentTarget.style.background = '#25334A'}
           onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
         >
-          <div style={{ fontWeight: '600' }}>
-            {client.organization_name || client.full_name || 'Без названия'}
-            {client.clients && client.clients.length > 1 && (
-              <span style={{ color: '#8B5CF6', fontSize: '13px', marginLeft: '8px' }}>
-                ({client.clients.length})
-              </span>
-            )}
+          <div>
+            <div style={{ fontWeight: '600', fontSize: '17px' }}>
+              {client.organization_name || client.full_name || 'Без названия'}
+            </div>
+            <div style={{ color: '#94A3B8', fontSize: '14px' }}>
+              {client.phones ? client.phones.join(' • ') : client.phone || '—'}
+            </div>
           </div>
 
-          <div style={{ color: '#94A3B8' }}>
-            {client.inn || '—'}
+          <div style={{ color: '#94A3B8' }}>{client.inn || '—'}</div>
+
+          <div style={{ color: statusColor, fontWeight: '600' }}>
+            {statusText}
           </div>
 
-          <div style={{ color: '#94A3B8', fontSize: '14px' }}>
-            {client.phones && client.phones.length > 0 
-              ? client.phones.filter(Boolean).join(', ') 
-              : '—'}
+          <div style={{ fontSize: '18px', fontWeight: '700', color: '#60A5FA' }}>
+            {vol.toFixed(1)} м³
           </div>
 
-          <div style={{ fontWeight: '700', color: '#60A5FA' }}>
-            {totalVol.toFixed(1)} м³
-          </div>
-
-          <div style={{ color: '#94A3B8' }}>
-            {client.totalOrders || 0}
+          <div style={{ color: '#94A3B8', fontWeight: '500' }}>
+            {ordersCount} шт.
           </div>
         </div>
       );
@@ -809,73 +1070,92 @@ export default function ClientsPage() {
   </div>
 )}
 
-            {/* ==================== 8. ОТОБРАЖЕНИЕ КЛИЕНТОВ (КАРТОЧКИ) ==================== */}
+            {/* ==================== 8. ОТОБРАЖЕНИЕ КЛИЕНТОВ (КАРТОЧКИ) — КОМПАКТНЫЙ ==================== */}
 {viewMode === 'cards' && (
-  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '24px' }}>
+  <div style={{ 
+    display: 'grid', 
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', 
+    gap: '16px'        // расстояние между карточками
+  }}>
     {filteredList.map((client: any) => {
-      const totalVol = client.totalVolume || 0;
+      const vol = client.total_volume || client.totalVolume || 0;
+      const ordersCount = client.total_orders || client.totalOrders || 0;
+
+      let statusText = '❄️ Холодный';
+      let statusColor = '#64748B';
+      let statusBg = '#334155';
+
+      if (vol >= 30 || ordersCount >= 5) {
+        statusText = '🔥 Горячий';
+        statusColor = '#EF4444';
+        statusBg = '#EF444420';
+      } else if (vol >= 8 || ordersCount >= 2) {
+        statusText = '🌡️ Тёплый';
+        statusColor = '#F59E0B';
+        statusBg = '#F59E0B20';
+      }
 
       return (
         <div 
-          key={client.groupId || client.user_id || Math.random()}   // ← исправленный key
+          key={client.groupId || client.user_id || client.id} 
           onClick={() => setSelectedProfile(client)} 
           style={{ 
             background: '#1E2937', 
-            borderRadius: '20px', 
-            padding: '24px', 
+            borderRadius: '16px', 
+            padding: '16px 18px',     // ← уменьшил отступы внутри
             cursor: 'pointer',
-            border: selectedProfile?.groupId === client.groupId ? '2px solid #10B981' : '1px solid #334155',
-            transition: 'all 0.2s'
+            border: selectedProfile?.groupId === client.groupId || 
+                    selectedProfile?.user_id === client.user_id 
+              ? '2px solid #10B981' 
+              : '1px solid #334155',
+            transition: 'all 0.2s',
+            minHeight: '148px',        // ← ОСНОВНАЯ ВЫСОТА КАРТОЧКИ (здесь регулируй)
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between'
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <div style={{ fontSize: '20px', fontWeight: '700', marginBottom: '6px' }}>
-                {client.organization_name || client.full_name || 'Без названия'}
-              </div>
-              {client.inn && (
-                <div style={{ color: '#94A3B8', fontSize: '14px' }}>
-                  ИНН: {client.inn}
-                </div>
-              )}
+          {/* Заголовок и телефон */}
+          <div>
+            <div style={{ fontSize: '17px', fontWeight: '700', marginBottom: '4px', lineHeight: 1.3 }}>
+              {client.organization_name || client.full_name || client.name || 'Без названия'}
             </div>
-
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: '28px', fontWeight: '700', color: '#60A5FA' }}>
-                {totalVol.toFixed(1)} м³
-              </div>
-              <div style={{ color: '#94A3B8', fontSize: '14px' }}>
-                {client.totalOrders || 0} заказов
-              </div>
+            
+            <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '10px' }}>
+              {client.phones ? client.phones.join(' • ') : client.phone || '—'}
             </div>
           </div>
 
-          {client.phones && client.phones.length > 0 && (
-            <div style={{ 
-              marginTop: '16px', 
-              padding: '10px 14px', 
-              background: '#25334A', 
-              borderRadius: '12px',
-              fontSize: '14px',
-              color: '#94A3B8'
-            }}>
-              📞 {client.phones.filter(Boolean).join(' • ')}
-            </div>
-          )}
+          {/* Статус */}
+          <div style={{ 
+            display: 'inline-block',
+            padding: '4px 12px',
+            background: statusBg,
+            color: statusColor,
+            borderRadius: '9999px',
+            fontSize: '13.5px',
+            fontWeight: '600',
+            marginBottom: '12px'
+          }}>
+            {statusText}
+          </div>
 
-          {client.clients && client.clients.length > 1 && (
-            <div style={{
-              marginTop: '12px',
-              display: 'inline-block',
-              padding: '4px 12px',
-              background: '#334155',
-              borderRadius: '9999px',
-              fontSize: '13px',
-              color: '#CBD5E1'
-            }}>
-              {client.clients.length} карточки
+          {/* Объём и Заказы */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+            <div>
+              <div style={{ color: '#60A5FA', fontSize: '26px', fontWeight: '700', lineHeight: 1 }}>
+                {vol.toFixed(1)}
+              </div>
+              <div style={{ color: '#94A3B8', fontSize: '13px' }}>м³ заказано</div>
             </div>
-          )}
+
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '24px', fontWeight: '700', color: '#94A3B8' }}>
+                {ordersCount}
+              </div>
+              <div style={{ color: '#94A3B8', fontSize: '13px' }}>заказов</div>
+            </div>
+          </div>
         </div>
       );
     })}
@@ -888,14 +1168,18 @@ export default function ClientsPage() {
     position: 'fixed', 
     top: 0, 
     right: 0, 
-    width: '620px', 
-    height: '100vh', 
+    width: '720px', 
+    height: '95vh',
+    minHeight: '1400px',
     background: '#1E2937', 
     borderLeft: '1px solid #334155', 
     zIndex: 1000, 
+
     overflow: 'auto' 
   }}>
     <div style={{ padding: '32px' }}>
+
+      {/* 9.1 Кнопка закрытия */}
       <button 
         onClick={() => setSelectedProfile(null)} 
         style={{ float: 'right', fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8' }}
@@ -903,17 +1187,18 @@ export default function ClientsPage() {
         ×
       </button>
 
-      <h2>
+      {/* 9.2 Заголовок и телефоны */}
+      <h2 style={{ marginBottom: '8px' }}>
         {selectedProfile.organization_name || selectedProfile.full_name || 'Без названия'}
       </h2>
 
-      {/* Все телефоны группы */}
       {selectedProfile.phones && selectedProfile.phones.length > 0 && (
         <p style={{ color: '#94A3B8', fontSize: '18px', marginTop: '4px' }}>
           📞 {selectedProfile.phones.filter(Boolean).join(' • ')}
         </p>
       )}
 
+      {/* 9.3 Действия (кнопки) — ВСЕ КНОПКИ СОХРАНЕНЫ */}
       <div style={{ display: 'flex', gap: '12px', margin: '28px 0', flexWrap: 'wrap' }}>
         <button 
           onClick={() => window.open(`tel:${selectedProfile.phone || selectedProfile.phones?.[0]}`, '_self')} 
@@ -948,90 +1233,252 @@ export default function ClientsPage() {
         </button>
       </div>
 
-      {/* Статистика группы */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', marginBottom: '24px' }}>
-        <div style={{ background: '#25334A', padding: '16px', borderRadius: '12px' }}>
-          <div style={{ color: '#94A3B8', fontSize: '14px' }}>Всего м³</div>
-          <div style={{ fontSize: '32px', fontWeight: '700' }}>
-            {selectedProfile.totalVolume ? selectedProfile.totalVolume.toFixed(1) : '0'}
-          </div>
-        </div>
-        <div style={{ background: '#25334A', padding: '16px', borderRadius: '12px' }}>
-          <div style={{ color: '#94A3B8', fontSize: '14px' }}>Заказов</div>
-          <div style={{ fontSize: '32px', fontWeight: '700', color: '#60A5FA' }}>
-            {selectedProfile.totalOrders || 0}
-          </div>
-        </div>
+      {/* 9.4 Статус и Лояльность (с расчётом для групп) */}
+<div style={{ display: 'flex', gap: '16px', margin: '20px 0', alignItems: 'center' }}>
+  <div style={{ 
+    padding: '8px 20px', 
+    borderRadius: '9999px', 
+    fontSize: '16px',
+    fontWeight: '600',
+    background: (() => {
+      const vol = selectedProfile.total_volume || selectedProfile.totalVolume || 0;
+      const orders = selectedProfile.total_orders || userOrders.length || 0;
+      
+      if (vol >= 30 || orders >= 5) return '#EF444420';
+      if (vol >= 8 || orders >= 2) return '#F59E0B20';
+      return '#64748B20';
+    })(),
+    color: (() => {
+      const vol = selectedProfile.total_volume || selectedProfile.totalVolume || 0;
+      const orders = selectedProfile.total_orders || userOrders.length || 0;
+      
+      if (vol >= 30 || orders >= 5) return '#EF4444';      // Горячий
+      if (vol >= 8 || orders >= 2) return '#F59E0B';      // Тёплый
+      return '#94A3B8';                                   // Холодный
+    })()
+  }}>
+    {(() => {
+      const vol = selectedProfile.total_volume || selectedProfile.totalVolume || 0;
+      const orders = selectedProfile.total_orders || userOrders.length || 0;
+      
+      if (vol >= 30 || orders >= 5) return '🔥 Горячий';
+      if (vol >= 8 || orders >= 2) return '🌡️ Тёплый';
+      return '❄️ Холодный';
+    })()}
+  </div>
+
+  {/* Полоса лояльности */}
+  <div style={{ flex: 1, background: '#25334A', borderRadius: '9999px', height: '10px' }}>
+    <div style={{ 
+      width: `${Math.min(100, (selectedProfile.total_volume || selectedProfile.totalVolume || 0) / 5)}%`, 
+      height: '100%', 
+      background: '#10B981', 
+      borderRadius: '9999px' 
+    }} />
+  </div>
+  <div style={{ fontSize: '16px', fontWeight: '600', minWidth: '60px' }}>
+    {(selectedProfile.total_volume || selectedProfile.totalVolume || 0).toFixed(0)} м³
+  </div>
+</div>
+
+{/* 9.5 Контакты и Прогноз (умный расчёт next_contact для групп) */}
+<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+  
+  {/* Последний контакт */}
+  <div style={{ background: '#25334A', padding: '16px', borderRadius: '14px' }}>
+    <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>
+      Последний контакт
+    </div>
+    <div style={{ fontSize: '19px', fontWeight: '600' }}>
+      {selectedProfile.last_contact 
+        ? new Date(selectedProfile.last_contact).toLocaleDateString('ru-RU', { 
+            day: 'numeric', month: 'long', year: 'numeric' 
+          })
+        : (userOrders.length > 0 
+            ? new Date(Math.max(...userOrders.map((o: any) => 
+                new Date(o.delivery_date || o.created_at).getTime()
+              ))).toLocaleDateString('ru-RU', { 
+                day: 'numeric', month: 'long', year: 'numeric' 
+              })
+            : '—')}
+    </div>
+  </div>
+
+  {/* Следующий контакт — умный расчёт */}
+  <div style={{ background: '#25334A', padding: '16px', borderRadius: '14px' }}>
+    <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>
+      Следующий контакт
+    </div>
+    <div style={{ fontSize: '19px', fontWeight: '600', color: '#F59E0B' }}>
+      {(() => {
+        // 1. Если есть сохранённый next_contact
+        if (selectedProfile.next_contact) {
+          return new Date(selectedProfile.next_contact).toLocaleDateString('ru-RU', { 
+            day: 'numeric', month: 'long', year: 'numeric' 
+          });
+        }
+
+        // 2. Если есть predicted_next_order
+        if (selectedProfile.predicted_next_order) {
+          return new Date(selectedProfile.predicted_next_order).toLocaleDateString('ru-RU', { 
+            day: 'numeric', month: 'long', year: 'numeric' 
+          });
+        }
+
+        // 3. Умный расчёт по истории заказов (для групп)
+        if (userOrders && userOrders.length >= 2) {
+          const dates = userOrders
+            .map((o: any) => new Date(o.delivery_date || o.created_at))
+            .filter(d => d && !isNaN(d.getTime()))
+            .sort((a: Date, b: Date) => a.getTime() - b.getTime());
+
+          if (dates.length >= 2) {
+            let totalDays = 0;
+            for (let i = 1; i < dates.length; i++) {
+              totalDays += (dates[i].getTime() - dates[i-1].getTime()) / (1000 * 3600 * 24);
+            }
+            const avgInterval = totalDays / (dates.length - 1);
+            const lastOrder = dates[dates.length - 1];
+            const nextDate = new Date(lastOrder.getTime() + avgInterval * 1.25 * 86400000); // +25% буфер
+            
+            return nextDate.toLocaleDateString('ru-RU', { 
+              day: 'numeric', month: 'long', year: 'numeric' 
+            });
+          }
+        }
+
+        return 'Недостаточно данных';
+      })()}
+    </div>
+
+    {/* Компактные кнопки в стиле Цифра */}
+    <div style={{ marginTop: '14px', display: 'flex', gap: '8px' }}>
+      <button 
+        onClick={() => refreshClientData()}
+        style={{
+          padding: '6px 12px',
+          background: '#475569',
+          color: '#fff',
+          border: 'none',
+          borderRadius: '8px',
+          fontSize: '13px',
+          cursor: 'pointer',
+          flex: 1
+        }}
+      >
+        🔄 Обновить
+      </button>
+
+      <button 
+        onClick={() => testClientReminder()}
+        style={{
+          padding: '6px 12px',
+          background: '#10B981',
+          color: '#fff',
+          border: 'none',
+          borderRadius: '8px',
+          fontSize: '13px',
+          cursor: 'pointer',
+          flex: 1
+        }}
+      >
+        🧪 Тест
+      </button>
+    </div>
+  </div>
+</div>
+
+      {/* ==================== 9.5.1 ПРОГНОЗ СЛЕДУЮЩЕГО ЗАКАЗА + ОБЪЁМ ==================== */}
+<div style={{ 
+  background: '#25334A', 
+  padding: '20px', 
+  borderRadius: '16px', 
+  marginBottom: '24px',
+  border: '2px solid #F59E0B'
+}}>
+  <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '12px' }}>
+    📅 Прогноз следующего заказа
+  </div>
+
+  {selectedProfile.predicted_next_order || (selectedProfile.groupId && userOrders.length >= 2) ? (
+    <div>
+      {/* Дата */}
+      <div style={{ fontSize: '24px', fontWeight: '700', color: '#F59E0B', marginBottom: '8px' }}>
+        {(() => {
+          let nextDate;
+          if (selectedProfile.predicted_next_order) {
+            nextDate = new Date(selectedProfile.predicted_next_order);
+          } else {
+            const dates = userOrders
+              .map((o: any) => new Date(o.delivery_date || o.created_at))
+              .filter(d => d && !isNaN(d.getTime()))
+              .sort((a, b) => a.getTime() - b.getTime());
+            
+            if (dates.length >= 2) {
+              let totalDays = 0;
+              for (let i = 1; i < dates.length; i++) {
+                totalDays += (dates[i].getTime() - dates[i-1].getTime()) / (1000 * 3600 * 24);
+              }
+              const avgInterval = totalDays / (dates.length - 1);
+              const lastOrder = dates[dates.length - 1];
+              nextDate = new Date(lastOrder.getTime() + avgInterval * 1.2 * 86400000);
+            }
+          }
+          return nextDate 
+            ? nextDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+            : '—';
+        })()}
       </div>
 
-      <h3>📦 История заказов ({userOrders.length})</h3>
+      {/* Прогнозируемый объём */}
+      <div style={{ marginTop: '12px' }}>
+        <span style={{ color: '#94A3B8', fontSize: '15px' }}>Примерный объём: </span>
+        <span style={{ fontSize: '22px', fontWeight: '700', color: '#60A5FA' }}>
+          {(() => {
+            const volumes = userOrders
+              .map((o: any) => Number(o.volume || 0))
+              .filter(v => v > 0);
+            
+            if (volumes.length === 0) return '—';
+            
+            const avgVolume = volumes.reduce((sum, v) => sum + v, 0) / volumes.length;
+            return avgVolume.toFixed(1) + ' м³';
+          })()}
+        </span>
+      </div>
+    </div>
+  ) : (
+    <div style={{ color: '#94A3B8' }}>
+      Недостаточно заказов для прогноза (минимум 2)
+    </div>
+  )}
+</div>
 
-      {/* ==================== СПИСОК ЗАКАЗОВ ==================== */}
-      {ordersLoading ? (
-        <div style={{ textAlign: 'center', padding: '60px 0', color: '#64748B' }}>Загрузка заказов...</div>
-      ) : userOrders.length > 0 ? (
-        userOrders
-          .sort((a, b) => new Date(b.created_at || b.delivery_date).getTime() - new Date(a.created_at || a.delivery_date).getTime())
-          .map((o: any) => (
-            <div 
-              key={o.id} 
-              style={{ 
-                background: '#25334A', 
-                padding: '18px', 
-                borderRadius: '16px', 
-                marginBottom: '16px' 
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+      {/* ==================== 9.6 ИСТОРИЯ ВЗАИМОДЕЙСТВИЯ ==================== */}
+      <h3 style={{ marginBottom: '16px' }}>📋 История взаимодействия</h3>
+      <div style={{ background: '#25334A', borderRadius: '16px', padding: '20px', maxHeight: '720px', overflowY: 'auto' }}>
+        {userOrders.length > 0 ? (
+          userOrders.slice(0, 8).map((o: any) => (
+            <div key={o.id} style={{ padding: '14px', background: '#1E2937', borderRadius: '12px', marginBottom: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                 <strong>Заказ #{o.id}</strong>
-                <span>{new Date(o.delivery_date).toLocaleDateString('ru-RU')}</span>
+                <span style={{ color: '#94A3B8' }}>{new Date(o.delivery_date || o.created_at).toLocaleDateString('ru-RU')}</span>
               </div>
-
-              <div style={{ marginTop: '8px' }}>
-                {o.volume} м³ • {o.grade || '—'} • 
-                <span style={{ color: o.status === 'completed' ? '#10B981' : o.status === 'cancelled' ? '#EF4444' : '#FACC15' }}>
-                  {o.status}
-                </span>
-              </div>
-
-              {/* Телефон заказа */}
-              {o.phone && (
-                <div style={{ 
-                  marginTop: '10px', 
-                  padding: '8px 12px', 
-                  background: '#1E2937', 
-                  borderRadius: '10px',
-                  fontSize: '14px',
-                  color: '#94A3B8'
-                }}>
-                  📞 {o.phone}
-                </div>
-              )}
-
-              {o.address && <div style={{ marginTop: '8px', color: '#94A3B8' }}>📍 {o.address}</div>}
-
-              {o.total_price && (
-                <div style={{ 
-                  marginTop: '12px', 
-                  fontSize: '18px', 
-                  fontWeight: '700', 
-                  color: '#60A5FA' 
-                }}>
-                  {Number(o.total_price).toLocaleString('ru-RU')} ₽
-                </div>
-              )}
+              <div>{o.volume} м³ • {o.grade || '—'}</div>
+              {o.comment && <div style={{ marginTop: '8px', fontSize: '14px', color: '#94A3B8' }}>{o.comment}</div>}
             </div>
           ))
-      ) : (
-        <div style={{ color: '#94A3B8', textAlign: 'center', padding: '80px 0' }}>
-          Заказов пока нет
-        </div>
-      )}
+        ) : (
+          <div style={{ textAlign: 'center', padding: '60px 0', color: '#64748B' }}>
+            История взаимодействия пока пуста
+          </div>
+        )}
+      </div>
     </div>
   </div>
 )}
 
-      {/* ==================== 9.1 МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ ==================== */}
+      {/* ==================== 9.7 МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ ==================== */}
 {isEditModalOpen && editingClient && Array.isArray(editingClient) && (
   <div style={{
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -1039,23 +1486,20 @@ export default function ClientsPage() {
     display: 'flex', alignItems: 'center', justifyContent: 'center'
   }}>
     <div style={{
-      background: '#1E2937', width: '680px', borderRadius: '20px', padding: '32px', color: '#fff', maxHeight: '90vh', overflow: 'auto'
+      background: '#1E2937', width: '720px', borderRadius: '20px', padding: '32px', color: '#fff', maxHeight: '90vh', overflow: 'auto'
     }}>
       <h2 style={{ marginBottom: '8px' }}>
         Редактирование {editingClient.length > 1 ? 'группы клиентов' : 'клиента'}
       </h2>
-      <p style={{ color: '#94A3B8', marginBottom: '24px' }}>
-        {editingClient.length} {editingClient.length > 1 ? 'карточки' : 'карточка'}
-      </p>
 
       {editingClient.map((client: any, index: number) => (
         <div key={client.user_id || index} style={{ 
           background: '#25334A', 
-          padding: '20px', 
+          padding: '24px', 
           borderRadius: '16px', 
           marginBottom: '20px' 
         }}>
-          <h4 style={{ marginBottom: '16px' }}>Клиент #{index + 1}</h4>
+          <h4 style={{ marginBottom: '20px' }}>Клиент #{index + 1}</h4>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
 
@@ -1069,88 +1513,102 @@ export default function ClientsPage() {
                   const newClients = [...editingClient];
                   newClients[index].inn = value;
                   setEditingClient(newClients);
-
-                  if (value.length === 10 || value.length === 12) {
-                    fetchByInn(value, index);   // ← передаём index
-                  }
+                  if (value.length === 10 || value.length === 12) fetchByInn(value, index);
                 }}
                 style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }}
               />
             </div>
 
-            {/* Название организации */}
+            {/* Название и ФИО */}
             <div style={{ gridColumn: '1 / -1' }}>
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Название организации</label>
-              <input 
-                value={client.organization_name || ''} 
-                onChange={(e) => {
-                  const newClients = [...editingClient];
-                  newClients[index].organization_name = e.target.value;
-                  setEditingClient(newClients);
-                }}
-                style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }}
-              />
+              <input value={client.organization_name || ''} onChange={(e) => {
+                const newClients = [...editingClient]; newClients[index].organization_name = e.target.value; setEditingClient(newClients);
+              }} style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
             </div>
 
-            {/* ФИО */}
             <div style={{ gridColumn: '1 / -1' }}>
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>ФИО</label>
-              <input 
-                value={client.full_name || ''} 
-                onChange={(e) => {
-                  const newClients = [...editingClient];
-                  newClients[index].full_name = e.target.value;
-                  setEditingClient(newClients);
-                }}
-                style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }}
-              />
+              <input value={client.full_name || ''} onChange={(e) => {
+                const newClients = [...editingClient]; newClients[index].full_name = e.target.value; setEditingClient(newClients);
+              }} style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
             </div>
 
-            {/* Телефон */}
+            {/* Телефон и Адрес */}
             <div>
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Телефон</label>
-              <input 
-                value={client.phone || ''} 
+              <input value={client.phone || ''} onChange={(e) => {
+                const newClients = [...editingClient]; newClients[index].phone = e.target.value; setEditingClient(newClients);
+              }} style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Адрес</label>
+              <input value={client.address || ''} onChange={(e) => {
+                const newClients = [...editingClient]; newClients[index].address = e.target.value; setEditingClient(newClients);
+              }} style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+            </div>
+
+            {/* Новые поля из презентации Цифра */}
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Статус клиента</label>
+              <select 
+                value={client.client_status || 'cold'} 
                 onChange={(e) => {
                   const newClients = [...editingClient];
-                  newClients[index].phone = e.target.value;
+                  newClients[index].client_status = e.target.value;
                   setEditingClient(newClients);
                 }}
                 style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }}
-              />
+              >
+                <option value="cold">❄️ Холодный</option>
+                <option value="warm">🔥 Тёплый</option>
+                <option value="hot">🔥 Горячий</option>
+              </select>
             </div>
 
-           {/* Адрес */}
-<div>
-  <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Адрес</label>
-  <input 
-    value={client.address || ''} 
-    onChange={(e) => {
-      const newValue = e.target.value;
-      const newClients = [...editingClient];
-      newClients[index].address = newValue;
-      setEditingClient(newClients);
-      
-      console.log(`📝 Изменён адрес для клиента #${index}:`, newValue);
-    }}
-    style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }}
-  />
-</div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Последний контакт</label>
+              <input type="date" value={client.last_contact ? client.last_contact.split('T')[0] : ''} 
+                onChange={(e) => {
+                  const newClients = [...editingClient];
+                  newClients[index].last_contact = e.target.value ? e.target.value + 'T00:00:00Z' : null;
+                  setEditingClient(newClients);
+                }}
+                style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Следующий контакт</label>
+              <input type="date" value={client.next_contact ? client.next_contact.split('T')[0] : ''} 
+                onChange={(e) => {
+                  const newClients = [...editingClient];
+                  newClients[index].next_contact = e.target.value ? e.target.value + 'T00:00:00Z' : null;
+                  setEditingClient(newClients);
+                }}
+                style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Коэффициент лояльности (0-100)</label>
+              <input type="number" min="0" max="100" value={client.loyalty_score || 50} 
+                onChange={(e) => {
+                  const newClients = [...editingClient];
+                  newClients[index].loyalty_score = parseInt(e.target.value) || 50;
+                  setEditingClient(newClients);
+                }}
+                style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+            </div>
+
           </div>
         </div>
       ))}
 
       <div style={{ display: 'flex', gap: '12px', marginTop: '32px' }}>
-        <button 
-          onClick={() => { setIsEditModalOpen(false); setEditingClient(null); }}
-          style={{ flex: 1, padding: '16px', background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}
-        >
+        <button onClick={() => { setIsEditModalOpen(false); setEditingClient(null); }} style={{ flex: 1, padding: '16px', background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}>
           Отмена
         </button>
-        <button 
-          onClick={updateGroupClients}
-          style={{ flex: 1, padding: '16px', background: '#10B981', border: 'none', borderRadius: '12px', color: '#fff', fontWeight: '600' }}
-        >
+        <button onClick={updateGroupClients} style={{ flex: 1, padding: '16px', background: '#10B981', border: 'none', borderRadius: '12px', color: '#fff', fontWeight: '600' }}>
           Сохранить все изменения
         </button>
       </div>
