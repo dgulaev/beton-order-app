@@ -461,8 +461,8 @@ useEffect(() => {
             <Image 
               src={isCollapsed ? "/logo-tradecom-circle.png" : "/logo-tradecom-white.png"} 
               alt="TRADECOM" 
-              width={isCollapsed ? 52 : 270} 
-              height={isCollapsed ? 52 : 130} 
+              width={isCollapsed ? 82 : 270} 
+              height={isCollapsed ? 82 : 130} 
               style={{ 
                 objectFit: 'contain',
                 borderRadius: isCollapsed ? '50%' : '8px',

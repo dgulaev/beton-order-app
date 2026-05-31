@@ -618,33 +618,55 @@ const completionPercent = planToday > 0
   };
 
     // ========================== 28. УДАЛЕНИЕ МИКСЕРА + ЗАПИСЬ В ИСТОРИЮ =============================
-  const deleteMixer = async (mixerId: number | string, index: number) => {
-    if (!mixerId) return;
+const deleteMixer = async (mixerId: number | string, index: number) => {
+  if (!mixerId) return;
 
-    // Находим информацию о миксере для истории
-    const mixerToDelete = mixerAssignments.find(m => String(m.id) === String(mixerId));
-    const mixerName = mixerToDelete?.mixerName || mixerToDelete?.number || mixerToDelete?.mixer_name || 'Миксер';
+  const mixerToDelete = mixerAssignments.find(m => String(m.id) === String(mixerId));
+  if (!mixerToDelete) return;
 
-    try {
-      await fetch('/api/adminCifra/order-mixers', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: mixerId })
-      });
+  const mixerName = mixerToDelete.mixerName || mixerToDelete.number || mixerToDelete.mixer_name || 'Миксер';
+  const currentStatus = mixerToDelete.status || 'Загрузка';
 
-      // Удаляем из локального состояния
-      setMixerAssignments(prev => prev.filter((_, i) => i !== index));
+  // ==================== ЗАПРЕЩЁННЫЕ СТАТУСЫ ====================
+  const forbiddenStatuses = ['В пути', 'На объекте', 'Разгружен', 'Возврат', 'Проблема'];
 
-      // ==================== ЗАПИСЬ В ИСТОРИЮ ====================
-      if (typeof addToHistory === 'function' && selectedOrder) {
-        await addToHistory(`Удалил миксер ${mixerName} из заказа`);
+  if (forbiddenStatuses.includes(currentStatus)) {
+    alert(`❌ Невозможно удалить миксер ${mixerName}.\n\n`
+        + `Рейс уже в статусе "${currentStatus}".\n`
+        + `Удаление возможно только для рейсов со статусом "Загрузка".`);
+    return;
+  }
+
+  // Оптимистическое удаление
+  const previousState = [...mixerAssignments];
+  setMixerAssignments(prev => prev.filter(m => String(m.id) !== String(mixerId)));
+
+  try {
+    const res = await fetch('/api/adminCifra/order-mixers', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: mixerId })
+    });
+
+    const data = await res.json();
+
+    if (res.ok && (data.success || !data.error)) {
+      console.log(`🗑️ Миксер ${mixerName} успешно удалён`);
+
+      if (typeof addToHistory === 'function') {
+        await addToHistory(`Удалил миксер ${mixerName} (статус: ${currentStatus})`);
       }
-
-    } catch (err) {
-      console.error('Ошибка удаления миксера:', err);
-      alert('Не удалось удалить миксер');
+    } else {
+      throw new Error(data.error || data.message || 'Не удалось удалить');
     }
-  };
+  } catch (err: any) {
+    console.error('Ошибка удаления миксера:', err);
+
+    // Откат при ошибке
+    setMixerAssignments(previousState);
+    alert(`Не удалось удалить миксер ${mixerName}.\n\nОшибка: ${err.message || err}`);
+  }
+};
 
   // ==================== 29. DRAG & DROP МИКСЕРОВ ВНУТРИ ЗАКАЗА ========================================
 const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
@@ -1537,100 +1559,104 @@ const isReadyInDB = (order as any).logistics_ready === true;
          {/* Строки миксеров внутри заказа */}
 <div style={{ padding: '8px' }}>
   {group.mixers.map((mixer: any, index: number) => (
-  <div 
-    key={mixer.id}
-    draggable
-    onDragStart={(e) => e.dataTransfer.setData('text/plain', `${group.orderId}-${index}`)}
-    onDragOver={(e) => {
-      e.preventDefault();
-      e.currentTarget.style.background = '#2A3A52'; // подсветка при перетаскивании
-    }}
-    onDragLeave={(e) => {
-      e.currentTarget.style.background = '#1E2937';
-    }}
-    onDrop={(e) => {
-      e.preventDefault();
-      e.currentTarget.style.background = '#1E2937';
-      handleMixerDrop(e, group.orderId);
-    }}
-    style={{ 
-      background: '#1E2937', 
-      padding: '6px 12px',
-      borderRadius: '10px',
-      marginBottom: '5px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px',
-      minHeight: '34px',           // ← можно сделать ещё меньше (32px)
-      cursor: 'grab',
-      userSelect: 'none',
-      transition: 'background 0.1s'
-    }}
-  >
-    {/* Порядковый номер */}
-    <div style={{
-      width: '22px',
-      height: '22px',
-      background: '#334155',
-      borderRadius: '9999px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      fontWeight: '700',
-      color: '#94A3B8',
-      fontSize: '13px',
-      flexShrink: 0
-    }}>
-      {index + 1}
-    </div>
+    <div 
+      key={mixer.id}
+      draggable
+      onDragStart={(e) => e.dataTransfer.setData('text/plain', `${group.orderId}-${index}`)}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.currentTarget.style.background = '#2A3A52';
+      }}
+      onDragLeave={(e) => {
+        e.currentTarget.style.background = '#1E2937';
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.currentTarget.style.background = '#1E2937';
+        handleMixerDrop(e, group.orderId);
+      }}
+      style={{ 
+        background: '#1E2937', 
+        padding: '6px 12px',
+        borderRadius: '10px',
+        marginBottom: '5px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+        minHeight: '34px',
+        cursor: 'grab',
+        userSelect: 'none'
+      }}
+    >
+      {/* Порядковый номер */}
+      <div style={{
+        width: '24px',
+        height: '24px',
+        background: '#334155',
+        borderRadius: '9999px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontWeight: '700',
+        color: '#94A3B8',
+        fontSize: '13px',
+        flexShrink: 0
+      }}>
+        {index + 1}
+      </div>
 
-    {/* Информация */}
-    <div style={{ flex: 1 }}>
-      <div style={{ fontWeight: '700', fontSize: '14.5px' }}>
+      {/* Номер миксера */}
+      <div style={{ fontWeight: '700', fontSize: '14.5px', minWidth: '120px' }}>
         {mixer.number || mixer.mixer_name}
       </div>
-      <div style={{ color: '#94A3B8', fontSize: '12.5px' }}>
-        {mixer.model || ''}
-      </div>
-    </div>
 
-    {/* Статус */}
-    <select 
-      value={mixer.status || 'Загрузка'}
-      onChange={(e) => handleStatusChange(mixer.id, e.target.value)}
-      style={{
-        padding: '4px 8px',
-        borderRadius: '9999px',
-        background: '#0F172A',
-        color: 'white',
-        border: 'none',
+      {/* ==================== ВРЕМЯ + ОБЪЁМ (в одну строку справа) ==================== */}
+      <div style={{ 
+        color: '#94A3B8', 
         fontSize: '13px',
-        minWidth: '125px'
-      }}
-    >
-      <option value="Загрузка">🟡 Загрузка</option>
-      <option value="В пути">🔵 В пути</option>
-      <option value="На объекте">📍 На объекте</option>
-      <option value="Разгружен">🟢 Разгружен</option>
-      <option value="Возврат">↩️ Возврат</option>
-      <option value="Проблема">🔴 Проблема</option>
-    </select>
+        flex: 1,
+        textAlign: 'left'
+      }}>
+        {mixer.time && mixer.time !== '—' ? mixer.time : '—'} • {mixer.volume} м³
+      </div>
 
-    <button 
-      onClick={() => deleteMixer(mixer.id, index)}
-      style={{ 
-        color: '#EF4444', 
-        background: 'none', 
-        border: 'none', 
-        cursor: 'pointer', 
-        fontSize: '17px',
-        padding: '2px 6px'
-      }}
-    >
-      ✕
-    </button>
-  </div>
-))}
+      {/* Статус */}
+      <select 
+        value={mixer.status || 'Загрузка'}
+        onChange={(e) => handleStatusChange(mixer.id, e.target.value)}
+        style={{
+          padding: '4px 8px',
+          borderRadius: '9999px',
+          background: '#0F172A',
+          color: 'white',
+          border: 'none',
+          fontSize: '13px',
+          minWidth: '125px'
+        }}
+      >
+        <option value="Загрузка">🟡 Загрузка</option>
+        <option value="В пути">🔵 В пути</option>
+        <option value="На объекте">📍 На объекте</option>
+        <option value="Разгружен">🟢 Разгружен</option>
+        <option value="Возврат">↩️ Возврат</option>
+        <option value="Проблема">🔴 Проблема</option>
+      </select>
+
+      <button 
+        onClick={() => deleteMixer(mixer.id, index)}
+        style={{ 
+          color: '#EF4444', 
+          background: 'none', 
+          border: 'none', 
+          cursor: 'pointer', 
+          fontSize: '17px',
+          padding: '2px 6px'
+        }}
+      >
+        ✕
+      </button>
+    </div>
+  ))}
 </div>
         </div>
       ))
@@ -1668,9 +1694,8 @@ const isReadyInDB = (order as any).logistics_ready === true;
     history={history}
     addToHistory={addToHistory}
     getStatusConfig={getStatusConfig}
-    
-    // ← ЭТУ СТРОКУ ОБЯЗАТЕЛЬНО ДОБАВЬ:
     setHistory={setHistory}
+    setSelectedOrder={setSelectedOrder}
   />
 )}
 

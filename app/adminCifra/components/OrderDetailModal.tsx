@@ -19,6 +19,7 @@ interface OrderDetailModalProps {
   addToHistory: (action: string) => Promise<void>;
   getStatusConfig: (status: string) => any;
   setHistory: React.Dispatch<React.SetStateAction<any[]>>;
+  setSelectedOrder: React.Dispatch<React.SetStateAction<Order | null>>;
 }
 
 export default function OrderDetailModal({
@@ -36,7 +37,8 @@ export default function OrderDetailModal({
   history,           
   addToHistory,
   getStatusConfig,
-  setHistory,      
+  setHistory,  
+  setSelectedOrder,    
 }: OrderDetailModalProps) {
 
   if (!order) return null;
@@ -76,6 +78,13 @@ useEffect(() => {
 
   loadData();
 }, [order?.id]);
+
+// ==================== 0.5. ПРОВЕРКА СТАТУСА ЗАЯВКИ ПРИ ОТКРЫТИИ МОДАЛКИ ====================
+useEffect(() => {
+  if (order?.id) {
+    checkAndUpdateOrderStatus();
+  }
+}, [order?.id]);   // срабатывает каждый раз при открытии новой заявки
 
   // ==================== 1. ЛОКАЛЬНОЕ СОСТОЯНИЕ ЗАКАЗА ====================
   const [localOrder, setLocalOrder] = useState(order);
@@ -167,51 +176,96 @@ const saveSortOrderToDB = async () => {
   }
 };
 
-  // ==================== 5. ОБНОВЛЕНИЕ СТАТУСА МИКСЕРА + ИСТОРИЯ ====================
-  const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
-    const oldMixer = mixerAssignments.find(m => m.id === mixerId);
-    const oldStatus = oldMixer?.status || 'В пути';
-    const mixerName = oldMixer?.mixerName || oldMixer?.number || oldMixer?.mixer_name || 'Миксер';
+  // ==================== 5. ОБНОВЛЕНИЕ СТАТУСА МИКСЕРА + АВТО-СМЕНА СТАТУСА ЗАЯВКИ ====================
+const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
+  const oldMixer = mixerAssignments.find(m => m.id === mixerId);
+  const oldStatus = oldMixer?.status || 'Загрузка';
+  const mixerName = oldMixer?.mixerName || oldMixer?.number || oldMixer?.mixer_name || 'Миксер';
 
-    setMixerAssignments(prev =>
-      prev.map(m =>
-        m.id === mixerId ? { ...m, status: newStatus } : m
-      )
-    );
+  // Оптимистическое обновление
+  setMixerAssignments(prev =>
+    prev.map(m => m.id === mixerId ? { ...m, status: newStatus } : m)
+  );
 
-    try {
-      const res = await fetch('/api/adminCifra/order-mixers/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          id: mixerId, 
-          status: newStatus 
-        })
-      });
+  try {
+    const res = await fetch('/api/adminCifra/order-mixers/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: mixerId, status: newStatus })
+    });
 
-      const data = await res.json();
+    const data = await res.json();
 
-      if (data.success) {
-        if (typeof addToHistory === 'function' && oldStatus !== newStatus) {
-          await addToHistory(
-            `Изменил статус миксера ${mixerName} с "${oldStatus}" → "${newStatus}"`
-          );
-        }
-      } else {
-        throw new Error(data.message || 'Не удалось обновить статус');
+    if (data.success) {
+      if (typeof addToHistory === 'function' && oldStatus !== newStatus) {
+        await addToHistory(`Изменил статус миксера ${mixerName} с "${oldStatus}" → "${newStatus}"`);
       }
-    } catch (err) {
-      console.error('Ошибка обновления статуса:', err);
 
-      setMixerAssignments(prev =>
-        prev.map(m =>
-          m.id === mixerId ? { ...m, status: oldStatus } : m
-        )
-      );
+      // Автоматическая проверка и смена статуса заявки
+      await checkAndUpdateOrderStatus();
 
-      alert(`Не удалось изменить статус. Ошибка: ${err}`);
+    } else {
+      throw new Error(data.message || 'Не удалось обновить статус');
     }
-  };
+  } catch (err) {
+    console.error('Ошибка обновления статуса:', err);
+    
+    // Откат
+    setMixerAssignments(prev =>
+      prev.map(m => m.id === mixerId ? { ...m, status: oldStatus } : m)
+    );
+    alert(`Не удалось изменить статус. Ошибка: ${err}`);
+  }
+};
+
+// ==================== 6. АВТОМАТИЧЕСКАЯ СМЕНА СТАТУСА ЗАЯВКИ ====================
+const checkAndUpdateOrderStatus = async () => {
+  if (!order?.id) return;
+
+  const orderMixers = mixerAssignments.filter(m => String(m.orderId) === String(order.id));
+  if (orderMixers.length === 0) return;
+
+  const totalAssignedVolume = orderMixers.reduce((sum, m) => sum + Number(m.volume || 0), 0);
+  const orderVolume = Number(order.volume || 0);
+
+  // Проверяем, ВСЕ ли миксеры имеют статус "Разгружен"
+  const allUnloaded = orderMixers.length > 0 && 
+                     orderMixers.every(m => m.status === 'Разгружен');
+
+  let newStatus = order.status;
+
+  // Приоритет 1: Если все миксеры разгружены — Выполнена (самый высокий приоритет)
+  if (allUnloaded) {
+    newStatus = 'completed';
+  } 
+  // Приоритет 2: Если объём набран, но заявка ещё "Новая" — В работе
+  else if (totalAssignedVolume >= orderVolume && order.status === 'new') {
+    newStatus = 'processing';
+  }
+
+  // Защита: Никогда не меняем статус обратно из финальных состояний
+  if (order.status === 'completed' || order.status === 'cancelled') {
+    newStatus = order.status;
+  }
+
+  // Если нужно изменить статус
+  if (newStatus !== order.status) {
+    console.log(`🔄 Автосмена статуса заявки #${order.id}: ${order.status} → ${newStatus}`);
+
+    // Обновляем глобальный список
+    setAllOrders(prev => prev.map(o => 
+      o.id === order.id ? { ...o, status: newStatus, logistics_ready: true } : o
+    ));
+
+    // Обновляем текущую модалку
+    setSelectedOrder(prev => prev ? { ...prev, status: newStatus, logistics_ready: true } : null);
+
+    if (typeof addToHistory === 'function') {
+      const statusText = newStatus === 'completed' ? 'Выполнена' : 'В работе';
+      await addToHistory(`Автоматически изменил статус заявки на "${statusText}"`);
+    }
+  }
+};
 
   // ==================== 6. ПОЛУЧЕНИЕ МИКСЕРОВ ТЕКУЩЕГО ЗАКАЗА (новые внизу) ====================
 const currentMixers = mixerAssignments
@@ -269,6 +323,7 @@ const currentMixers = mixerAssignments
   </label>
 
   {getStatusConfig(localOrder.status).final ? (
+    // ==================== ФИНАЛЬНЫЕ СТАТУСЫ (нельзя менять) ====================
     <div style={{ 
       backgroundColor: getStatusConfig(localOrder.status).bg,
       color: getStatusConfig(localOrder.status).color,
@@ -283,6 +338,7 @@ const currentMixers = mixerAssignments
       {getStatusConfig(localOrder.status).label} — конечный статус
     </div>
   ) : (
+    // Можно менять (только если не финальный статус)
     <select 
       value={localOrder.status || 'new'}
       onChange={async (e) => {
@@ -312,7 +368,7 @@ const currentMixers = mixerAssignments
           const data = await res.json();
 
           if (!data.success) {
-            // Откат
+            // Откат при ошибке
             setLocalOrder(prev => ({ ...prev, status: oldStatus }));
             setAllOrders(prev => prev.map(o => 
               o.id === order.id ? { ...o, status: oldStatus } : o
@@ -434,7 +490,7 @@ const currentMixers = mixerAssignments
     paddingRight: '8px',
     display: 'flex',
     flexDirection: 'column',
-    gap: '4px'                    // ← уменьшил расстояние между строками
+    gap: '4px'
   }}>
     {currentMixers.length > 0 ? (
       currentMixers.map((mixer, index) => (
@@ -467,17 +523,17 @@ const currentMixers = mixerAssignments
           }}
           style={{ 
             background: '#1E2937', 
-            padding: '6px 12px',        // ← максимально узкие отступы
+            padding: '6px 12px',
             borderRadius: '10px',
             display: 'flex',
             alignItems: 'center',
-            gap: '10px',
-            minHeight: '36px',          // ← максимально узкая высота
+            gap: '12px',
+            minHeight: '36px',
             cursor: 'grab',
             userSelect: 'none'
           }}
         >
-          {/* Номер */}
+          {/* Порядковый номер */}
           <div style={{
             width: '22px',
             height: '22px',
@@ -494,15 +550,23 @@ const currentMixers = mixerAssignments
             {index + 1}
           </div>
 
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: '700', fontSize: '14.5px' }}>
-              {mixer.mixerName || mixer.number}
-            </div>
-            <div style={{ color: '#94A3B8', fontSize: '12.5px' }}>
-              {mixer.time} • {mixer.volume} м³
-            </div>
+          {/* Номер миксера */}
+          <div style={{ fontWeight: '700', fontSize: '14.5px', minWidth: '120px' }}>
+            {mixer.mixerName || mixer.number}
           </div>
 
+          {/* ==================== ВРЕМЯ + ОБЪЁМ (в одну строку справа) ==================== */}
+          {/* Здесь добавили отображение времени и объема как в боковом окне */}
+          <div style={{ 
+            color: '#94A3B8', 
+            fontSize: '13px',
+            flex: 1,
+            textAlign: 'left'
+          }}>
+            {mixer.time && mixer.time !== '—' ? mixer.time : '—'} • {mixer.volume} м³
+          </div>
+
+          {/* Статус */}
           <select 
             value={mixer.status || 'Загрузка'} 
             onChange={(e) => handleStatusChangeLocal(mixer.id, e.target.value)} 
@@ -642,25 +706,26 @@ const currentMixers = mixerAssignments
               />
             </div>
 
-            {/* Время погрузки — теперь НЕОБЯЗАТЕЛЬНОЕ */}
-            <div>
-              <label style={{ display: 'block', color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
-                Время <span style={{ fontSize: '12px', color: '#64748B' }}>(необязательно)</span>
-              </label>
-              <input 
-                type="time" 
-                id="mixerTime"
-                style={{ 
-                  width: '80%', 
-                  padding: '14px', 
-                  background: '#1E2937', 
-                  border: '2px solid #475569',
-                  borderRadius: '12px', 
-                  color: '#E2E8F0',
-                  colorScheme: 'dark'
-                }}
-              />
-            </div>
+            {/* ==================== ВРЕМЯ ПОГРУЗКИ (ОБЯЗАТЕЛЬНОЕ) ==================== */}
+<div>
+  <label style={{ display: 'block', color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
+    Время погрузки <span style={{ color: '#EF4444' }}>*</span>
+  </label>
+  <input 
+    type="time" 
+    id="mixerTime"
+    required
+    style={{ 
+      width: '80%', 
+      padding: '14px', 
+      background: '#1E2937', 
+      border: '2px solid #475569',
+      borderRadius: '12px', 
+      color: '#E2E8F0',
+      colorScheme: 'dark'
+    }}
+  />
+</div>
 
             {/* Объём */}
             <div>
@@ -687,16 +752,17 @@ const currentMixers = mixerAssignments
             <div style={{ display: 'flex', gap: '12px', alignItems: 'end' }}>
 
               {/* ==================== КНОПКА ДОБАВЛЕНИЯ МИКСЕРА ==================== */}
-<button 
-  onClick={async () => {
-    const name = (document.getElementById('mixerName') as HTMLInputElement).value.trim();
-    const time = (document.getElementById('mixerTime') as HTMLInputElement).value || '—';
-    const vol = parseFloat((document.getElementById('mixerVolume') as HTMLInputElement).value || '0');
+               <button 
+               onClick={async () => {
+                 const name = (document.getElementById('mixerName') as HTMLInputElement).value.trim();
+                 const time = (document.getElementById('mixerTime') as HTMLInputElement).value;
+                 const vol = parseFloat((document.getElementById('mixerVolume') as HTMLInputElement).value || '0');
 
-    if (!name || vol <= 0) {
-      alert('Укажите название миксера и объём');
-      return;
-    }
+              // ← Обязательная проверка времени
+                 if (!name || !time || vol <= 0) {
+                 alert('Пожалуйста, заполните все обязательные поля:\n• Название миксера\n• Время погрузки\n• Объём');
+                 return;
+              }
 
     // Находим максимальный sortOrder среди уже существующих миксеров этого заказа
     const existingMixers = mixerAssignments.filter(m => String(m.orderId) === String(order.id));

@@ -21,6 +21,22 @@ export default function ZayavkiPage() {
 
   const [recipes, setRecipes] = useState<any[]>([]);
 
+  // ==================== HELPER ДЛЯ СТАТУСОВ (getStatusConfig) ====================
+const getStatusConfig = (status: string) => {
+  switch (status) {
+    case 'new':
+      return { label: 'Новая', bg: '#FACC1520', color: '#FACC15', final: false };
+    case 'processing':
+      return { label: 'В работе', bg: '#3B82F620', color: '#3B82F6', final: false };
+    case 'completed':
+      return { label: 'Выполнена', bg: '#10B98120', color: '#10B981', final: true };
+    case 'cancelled':
+      return { label: 'Отменена', bg: '#EF444420', color: '#EF4444', final: true };
+    default:
+      return { label: status, bg: '#64748B20', color: '#64748B', final: false };
+  }
+};
+
     // ==================== HELPER ДЛЯ ПРОВЕРКИ ПРАВ ====================
   const hasManagerPermissions = (role: string): boolean => {
     if (!role) return false;
@@ -1059,24 +1075,45 @@ ${order.customer_type?.includes('Юридическое')
                 style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
               />
 
-                <div style={{ color: '#94A3B8' }}>Статус заявки</div>
-                <select 
-                value={selectedOrder.status || 'new'} 
-                onChange={(e) => setSelectedOrder({ ...selectedOrder, status: e.target.value })}
-                style={{ 
-                  background: '#334155', 
-                  border: 'none', 
-                  borderRadius: '8px', 
-                  padding: '10px 12px', 
-                  color: '#fff',
-                  fontSize: '16px'
-                }}
-              >
-                <option value="new">🟡 Новый</option>
-                <option value="processing">🔵 В работе</option>
-                <option value="completed">🟢 Выполнен</option>
-                <option value="cancelled">🔴 Отменён</option>
-                </select>
+                                <div style={{ color: '#94A3B8' }}>Статус заявки</div>
+                
+                {getStatusConfig(selectedOrder.status).final ? (
+                  // ==================== ФИНАЛЬНЫЕ СТАТУСЫ — ЗАЩИЩЕНЫ ====================
+                  <div style={{ 
+                    backgroundColor: getStatusConfig(selectedOrder.status).bg,
+                    color: getStatusConfig(selectedOrder.status).color,
+                    padding: '12px 20px',
+                    borderRadius: '16px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontWeight: '600',
+                    fontSize: '16px',
+                    width: '88%'
+                  }}>
+                    {getStatusConfig(selectedOrder.status).label} — конечный статус
+                  </div>
+                ) : (
+                  // Можно менять
+                  <select 
+                    value={selectedOrder.status || 'new'} 
+                    onChange={(e) => setSelectedOrder({ ...selectedOrder, status: e.target.value })}
+                    style={{ 
+                      background: '#334155', 
+                      border: 'none', 
+                      borderRadius: '8px', 
+                      padding: '10px 12px', 
+                      color: '#fff',
+                      fontSize: '16px',
+                      width: '100%'
+                    }}
+                  >
+                    <option value="new">🟡 Новый</option>
+                    <option value="processing">🔵 В работе</option>
+                    <option value="completed">🟢 Выполнен</option>
+                    <option value="cancelled">🔴 Отменён</option>
+                  </select>
+                )}
 
               <div style={{ color: '#94A3B8' }}>Адрес доставки</div>
               <textarea 

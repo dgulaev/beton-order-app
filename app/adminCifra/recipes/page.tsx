@@ -89,6 +89,25 @@ export default function RecipesPage() {
         Рецепты
         </h1>
 
+        
+          <button 
+            onClick={() => window.location.href = '/adminCifra/operator'}
+            style={{
+              backgroundColor: 'transparent',
+              border: 'none',
+              color: '#94A3B8',
+              fontSize: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              cursor: 'pointer',
+              padding: '8px 16px',
+              borderRadius: '9999px'
+            }}
+          >
+            ← Назад к оператору
+          </button>
+
         <button 
           onClick={() => setEditingRecipe({ code: '', name: '', price: 0, cement: 0, sand: 0, gravel: 0, water: 0, additive: 0, is_active: true })}
           style={{ 

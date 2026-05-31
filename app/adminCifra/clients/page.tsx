@@ -30,7 +30,8 @@ export default function ClientsPage() {
   const [dadataSuggestions, setDadataSuggestions] = useState<any[]>([]);
   const [isLoadingDadata, setIsLoadingDadata] = useState(false);
   const [isNewClientModalOpen, setIsNewClientModalOpen] = useState(false);
-    const [currentRole, setCurrentRole] = useState<string>('admin');
+  const [currentRole, setCurrentRole] = useState<string>('admin');
+  const [callHistory, setCallHistory] = useState<any[]>([]);
   
   // Новое состояние для формы создания клиента
   const [newClientForm, setNewClientForm] = useState({
@@ -44,40 +45,51 @@ export default function ClientsPage() {
   
 
   // ==================== 2. ЗАГРУЗКА ВСЕХ ПОЛЬЗОВАТЕЛЕЙ + ГРУППИРОВКА КЛИЕНТОВ ====================
-  useEffect(() => {
-    const fetchAllUsers = async () => {
-      setLoading(true);
-      try {
-        const res = await fetch('/api/adminCifra/clients');
-        
-        if (res.ok) {
-          const allUsers = await res.json();
-          
-          const staffList = allUsers.filter((u: any) => 
-            ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase())
-          );
+useEffect(() => {
+  const fetchAllUsers = async () => {
+    setLoading(true);
+    try {
+      console.log('🔄 [Загрузка] Начинаем загрузку данных...');
 
-          const clientGroupsRes = await fetch('/api/adminCifra/clients/grouped');
-          let clientGroups = [];
-          
-          if (clientGroupsRes.ok) {
-            clientGroups = await clientGroupsRes.json();
-          }
-
-          const combined = [...staffList, ...clientGroups];
-          setProfiles(combined);
-          
-          console.log(`✅ Загружено: ${clientGroups.length} групп + ${staffList.length} стаффа`);
-        }
-      } catch (err) {
-        console.error('Ошибка загрузки пользователей:', err);
-      } finally {
-        setLoading(false);
+      // 1. Загружаем группы клиентов
+      const clientGroupsRes = await fetch('/api/adminCifra/clients/grouped');
+      let clientGroups: any[] = [];
+      if (clientGroupsRes.ok) {
+        clientGroups = await clientGroupsRes.json();
       }
-    };
 
-    fetchAllUsers();
-  }, []);
+      // 2. Загружаем всех пользователей (включая стафф)
+      const allRes = await fetch('/api/adminCifra/clients?all=true');
+      let allUsers: any[] = [];
+      if (allRes.ok) {
+        allUsers = await allRes.json();
+      }
+
+      // 3. Отделяем стафф
+      const staffList = allUsers.filter((u: any) => 
+        ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase())
+      );
+
+      console.log(`👔 Загружено сотрудников: ${staffList.length}`);
+      console.log(`👥 Загружено групп клиентов: ${clientGroups.length}`);
+
+      // 4. Объединяем стафф + группы клиентов
+      const combined = [
+        ...staffList.map((s: any) => ({ ...s, isStaff: true })),
+        ...clientGroups
+      ];
+
+      setProfiles(combined);
+      console.log(`✅ Итого в profiles: ${combined.length} записей`);
+    } catch (err) {
+      console.error('❌ Ошибка загрузки пользователей:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  fetchAllUsers();
+}, []);
 
     // ==================== ЗАГРУЗКА РОЛИ ====================
   useEffect(() => {
@@ -133,37 +145,52 @@ export default function ClientsPage() {
     }
   };
 
-      // ==================== 3.0 ЗАГРУЗКА ЗАКАЗОВ ДЛЯ ГРУППЫ КЛИЕНТОВ ====================
-  const loadGroupOrders = async (group: any) => {
-    if (!group?.clients || group.clients.length === 0) {
-      setUserOrders([]);
-      return;
-    }
+      // ==================== 3.0 ЗАГРУЗКА ЗАКАЗОВ И ЗВОНКОВ ДЛЯ ГРУППЫ ====================
+const loadGroupOrders = async (group: any) => {
+  if (!group?.clients || group.clients.length === 0) {
+    setUserOrders([]);
+    setCallHistory([]);
+    return;
+  }
 
-    setOrdersLoading(true);
-    try {
-      const allOrders: any[] = [];
+  setOrdersLoading(true);
+  try {
+    const allOrders: any[] = [];
+    const allCalls: any[] = [];
 
-      for (const client of group.clients) {
-        const userId = client.user_id || client.id;
-        if (!userId) continue;
+    for (const client of group.clients) {
+      const userId = client.user_id || client.id;
+      if (!userId) continue;
 
-        const res = await fetch(`/api/adminCifra/client-orders?userId=${userId}`);
-        if (res.ok) {
-          const orders = await res.json();
-          allOrders.push(...orders);
-        }
+      // Заказы
+      const resOrders = await fetch(`/api/adminCifra/client-orders?userId=${userId}`);
+      if (resOrders.ok) {
+        const orders = await resOrders.json();
+        allOrders.push(...orders);
       }
 
-      setUserOrders(allOrders);
-      console.log(`📦 Загружено ${allOrders.length} заказов для группы`);
-    } catch (err) {
-      console.error('Ошибка загрузки заказов группы:', err);
-      setUserOrders([]);
-    } finally {
-      setOrdersLoading(false);
+      // Звонки
+      const resCalls = await fetch(`/api/adminCifra/client-calls?clientId=${userId}`);
+      if (resCalls.ok) {
+        const calls = await resCalls.json();
+        allCalls.push(...calls);
+      }
     }
-  };
+
+    setUserOrders(allOrders);
+    setCallHistory(allCalls.sort((a, b) => 
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    ));
+
+    console.log(`📦 Загружено ${allOrders.length} заказов и ${allCalls.length} звонков для группы`);
+  } catch (err) {
+    console.error('Ошибка загрузки данных группы:', err);
+    setUserOrders([]);
+    setCallHistory([]);
+  } finally {
+    setOrdersLoading(false);
+  }
+};
 
           // ==================== 3.0.1 ОТКРЫТИЕ РЕДАКТИРОВАНИЯ ====================
   const openEditModal = async (item: any) => {
@@ -514,40 +541,43 @@ const testClientReminder = () => {
   showClientReminder(testReminder, true);   // ← важно: true = тест
 };
 
-      // ==================== 4. ФИЛЬТРАЦИЯ КЛИЕНТОВ И СОТРУДНИКОВ ====================
+     // ==================== 4. ФИЛЬТРАЦИЯ КЛИЕНТОВ И СОТРУДНИКОВ ====================
   
-  // Клиенты — показываем только сгруппированные карточки
-  const clients = profiles.filter((item: any) => item.groupId);
+// Клиенты — только сгруппированные карточки (имеют groupId)
+const clients = profiles.filter((item: any) => item.groupId);
 
-  // Стафф — НЕ применяем группировку, показываем как есть
-  const staff = profiles.filter((item: any) => 
-    ['admin', 'manager', 'dispatcher', 'operator'].includes((item.role || '').toLowerCase())
-  );
+// Стафф — пользователи с ролью (без groupId)
+const staff = profiles.filter((item: any) => 
+  !item.groupId && 
+  ['admin', 'manager', 'dispatcher', 'operator'].includes((item.role || '').toLowerCase())
+);
 
-  const currentList = activeTab === 'clients' ? clients : staff;
+const currentList = activeTab === 'clients' ? clients : staff;
 
-  // Фильтрация по поиску
-  const filteredList = currentList.filter((item: any) => {
-    if (!search || search.trim() === '') return true;
+// Фильтрация по поиску
+const filteredList = currentList.filter((item: any) => {
+  if (!search || search.trim() === '') return true;
 
-    const searchLower = search.toLowerCase().trim();
+  const searchLower = search.toLowerCase().trim();
 
-    if (activeTab === 'clients' && item.groupId) {
-      // Поиск по группе клиентов
-      return (
-        (item.organization_name || '').toLowerCase().includes(searchLower) ||
-        (item.full_name || '').toLowerCase().includes(searchLower) ||
-        (item.inn || '').toLowerCase().includes(searchLower) ||
-        item.phones?.some((phone: string) => phone.toLowerCase().includes(searchLower))
-      );
-    } else {
-      // Поиск по стаффу (без группировки)
-      return (
-        (item.name || item.full_name || item.organization_name || item.username || '').toLowerCase().includes(searchLower) ||
-        (item.phone || '').toLowerCase().includes(searchLower)
-      );
-    }
-  });
+  if (activeTab === 'clients' && item.groupId) {
+    // Поиск по группе клиентов
+    return (
+      (item.organization_name || '').toLowerCase().includes(searchLower) ||
+      (item.full_name || '').toLowerCase().includes(searchLower) ||
+      (item.inn || '').toLowerCase().includes(searchLower) ||
+      (item.phones || []).some((phone: string) => 
+        phone.toLowerCase().includes(searchLower)
+      )
+    );
+  } else {
+    // Поиск по стаффу
+    return (
+      (item.name || item.full_name || item.organization_name || item.username || '').toLowerCase().includes(searchLower) ||
+      (item.phone || '').toLowerCase().includes(searchLower)
+    );
+  }
+});
 
   // ==================== 4.2 УВЕДОМЛЕНИЕ ПО КЛИЕНТУ ====================
 const showClientReminder = (client: any, isTest = false) => {
@@ -1454,29 +1484,85 @@ window.callClient = async (clientId: number | string) => {
   )}
 </div>
 
-      {/* ==================== 9.6 ИСТОРИЯ ВЗАИМОДЕЙСТВИЯ ==================== */}
-      <h3 style={{ marginBottom: '16px' }}>📋 История взаимодействия</h3>
-      <div style={{ background: '#25334A', borderRadius: '16px', padding: '20px', maxHeight: '720px', overflowY: 'auto' }}>
-        {userOrders.length > 0 ? (
-          userOrders.slice(0, 8).map((o: any) => (
-            <div key={o.id} style={{ padding: '14px', background: '#1E2937', borderRadius: '12px', marginBottom: '12px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <strong>Заказ #{o.id}</strong>
-                <span style={{ color: '#94A3B8' }}>{new Date(o.delivery_date || o.created_at).toLocaleDateString('ru-RU')}</span>
-              </div>
-              <div>{o.volume} м³ • {o.grade || '—'}</div>
-              {o.comment && <div style={{ marginTop: '8px', fontSize: '14px', color: '#94A3B8' }}>{o.comment}</div>}
-            </div>
-          ))
-        ) : (
-          <div style={{ textAlign: 'center', padding: '60px 0', color: '#64748B' }}>
-            История взаимодействия пока пуста
+{/* ==================== 9.6.1 ИСТОРИЯ ВЗАИМОДЕЙСТВИЯ ==================== */}
+<h3 style={{ margin: '32px 0 16px 0' }}>📋 История взаимодействия</h3>
+
+{/* === Заказы === */}
+<div style={{ marginBottom: '28px' }}>
+  <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '12px', fontWeight: '600' }}>
+    📦 Заказы ({userOrders.length})
+  </div>
+
+  {ordersLoading ? (
+    <div style={{ padding: '40px', textAlign: 'center', color: '#64748B' }}>Загрузка заказов...</div>
+  ) : userOrders.length > 0 ? (
+    userOrders.map((o: any) => (
+      <div key={o.id} style={{ background: '#25334A', padding: '18px', borderRadius: '16px', marginBottom: '12px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <strong>Заказ #{o.id}</strong>
+          <span>{new Date(o.delivery_date).toLocaleDateString('ru-RU')}</span>
+        </div>
+        <div style={{ marginTop: '8px' }}>
+          {o.volume} м³ • {o.grade || '—'} • <span style={{ color: o.status === 'completed' ? '#10B981' : o.status === 'cancelled' ? '#EF4444' : '#FACC15' }}>{o.status}</span>
+        </div>
+        {o.address && <div style={{ marginTop: '8px', color: '#94A3B8' }}>📍 {o.address}</div>}
+        {o.total_price && <div style={{ marginTop: '10px', fontSize: '18px', fontWeight: '700', color: '#60A5FA' }}>{Number(o.total_price).toLocaleString('ru-RU')} ₽</div>}
+      </div>
+    ))
+  ) : (
+    <div style={{ color: '#94A3B8', textAlign: 'center', padding: '40px 0' }}>Заказов пока нет</div>
+  )}
+</div>
+
+{/* === Звонки === */}
+<div>
+  <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '12px', fontWeight: '600' }}>
+    📞 Звонки ({callHistory.length})
+  </div>
+
+  {callHistory.length > 0 ? (
+    callHistory.map((call: any, index: number) => (
+      <div 
+        key={index} 
+        style={{ 
+          padding: '14px', 
+          background: '#1E2937', 
+          borderRadius: '12px', 
+          marginBottom: '12px' 
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+          <span style={{ 
+            fontWeight: '600',
+            color: call.result === 'positive' ? '#10B981' : 
+                   call.result === 'negative' ? '#EF4444' : '#F59E0B'
+          }}>
+            {call.result === 'positive' ? '✅ Положительный' : 
+             call.result === 'negative' ? '❌ Отрицательный' : '⚪ Нейтральный'}
+          </span>
+          <span style={{ color: '#94A3B8', fontSize: '14px' }}>
+            {new Date(call.created_at).toLocaleDateString('ru-RU', { 
+              day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' 
+            })}
+          </span>
+        </div>
+        {call.comment && (
+          <div style={{ fontSize: '15px', color: '#CBD5E1' }}>
+            {call.comment}
           </div>
         )}
       </div>
+    ))
+  ) : (
+    <div style={{ textAlign: 'center', padding: '50px 0', color: '#64748B' }}>
+      Звонков пока нет
     </div>
-  </div>
-)}
+  )}
+          </div>
+        </div>
+      </div>
+    )}
+
 
       {/* ==================== 9.7 МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ ==================== */}
 {isEditModalOpen && editingClient && Array.isArray(editingClient) && (

@@ -11,37 +11,69 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const userId = searchParams.get('userId');
+    const all = searchParams.get('all'); // Новый параметр: если true — возвращаем всех (включая стафф)
 
+    // ==================== 1. ЗАГРУЗКА ОДНОГО КЛИЕНТА ====================
     if (userId) {
       const { data, error } = await supabase
         .from('users')
         .select('*')
         .eq('user_id', userId)
         .single();
+
       if (error) throw error;
       return NextResponse.json(data);
     }
 
-    const { data: clientsRaw, error } = await supabase
+    // ==================== 2. ЗАГРУЗКА ВСЕХ ЗАПИСЕЙ ====================
+    let query = supabase
       .from('users')
       .select('*')
-      .eq('role', 'client')
       .order('created_at', { ascending: false });
+
+    // Если ?all=true — возвращаем всех пользователей (клиенты + стафф)
+    if (all === 'true') {
+      console.log('📋 [Clients API] Возвращаем ВСЕХ пользователей (all=true)');
+    } else {
+      // По умолчанию — только клиенты (как было раньше)
+      query = query.eq('role', 'client');
+      console.log('📋 [Clients API] Возвращаем только клиентов (role = client)');
+    }
+
+    const { data: usersRaw, error } = await query;
 
     if (error) throw error;
 
-    const clients = clientsRaw || [];
+    const users = usersRaw || [];
 
-    const clientsWithData = await Promise.all(
-      clients.map(async (client: any) => {
-        if (!client?.user_id) {
-          return { ...client, total_volume: 0, total_orders: 0, predicted_next_order: null, client_status: 'cold' };
+    // ==================== 3. ОБОГАЩЕНИЕ КЛИЕНТОВ (объёмы, прогноз, статус) ====================
+    const enrichedUsers = await Promise.all(
+      users.map(async (user: any) => {
+        // Если это стафф — возвращаем как есть, без обогащения
+        if (['admin', 'manager', 'dispatcher', 'operator'].includes((user.role || '').toLowerCase())) {
+          return { 
+            ...user, 
+            isStaff: true,
+            total_volume: 0, 
+            total_orders: 0 
+          };
+        }
+
+        // ==================== Для клиентов — полное обогащение ====================
+        if (!user?.user_id) {
+          return { 
+            ...user, 
+            total_volume: 0, 
+            total_orders: 0, 
+            predicted_next_order: null, 
+            client_status: 'cold' 
+          };
         }
 
         const { data: orders } = await supabase
           .from('orders')
           .select('volume, delivery_date, created_at')
-          .eq('user_id', client.user_id);
+          .eq('user_id', user.user_id);
 
         const total_volume = orders 
           ? orders.reduce((sum: number, o: any) => sum + Number(o.volume || 0), 0) 
@@ -49,7 +81,7 @@ export async function GET(request: NextRequest) {
 
         const total_orders = orders ? orders.length : 0;
 
-        // ==================== ПРОГНОЗ ====================
+        // Прогноз следующего заказа
         let predicted_next_order = null;
         if (orders && orders.length >= 2) {
           const dates = orders
@@ -69,9 +101,8 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        // ==================== АВТОМАТИЧЕСКИЙ СТАТУС (МАКСИМАЛЬНО МЯГКИЙ) ====================
+        // Автоматический статус
         let client_status = 'cold';
-
         if (total_orders >= 1) {
           const lastOrderDate = orders && orders.length > 0 
             ? new Date(Math.max(...orders.map((o: any) => new Date(o.delivery_date || o.created_at).getTime())))
@@ -79,19 +110,15 @@ export async function GET(request: NextRequest) {
 
           const daysSinceLast = (Date.now() - lastOrderDate.getTime()) / (1000 * 3600 * 24);
 
-          console.log(`[Status Debug] Клиент ${client.organization_name || client.full_name} | Заказов: ${total_orders} | Объём: ${total_volume} м³ | Дней с последнего: ${daysSinceLast.toFixed(0)}`);
-
           if (total_volume >= 30 || total_orders >= 5) {
             client_status = 'hot';
           } else if (total_volume >= 8 || total_orders >= 2) {
             client_status = 'warm';
-          } else {
-            client_status = 'cold';
           }
         }
 
         return {
-          ...client,
+          ...user,
           total_volume,
           total_orders,
           predicted_next_order,
@@ -100,7 +127,8 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    return NextResponse.json(clientsWithData);
+    console.log(`📊 [Clients API] Возвращено записей: ${enrichedUsers.length}`);
+    return NextResponse.json(enrichedUsers);
   } catch (error: any) {
     console.error('Clients API error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

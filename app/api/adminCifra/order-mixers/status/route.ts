@@ -20,41 +20,67 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'Недопустимый статус' }, { status: 400 });
     }
 
-    const { data, error } = await supabase
+    // Получаем текущий миксер и заказ
+    const { data: mixer, error: fetchError } = await supabase
+      .from('order_mixers')
+      .select(`
+        *,
+        orders!inner(id, status)
+      `)
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !mixer) {
+      return NextResponse.json({ success: false, message: `Миксер #${id} не найден` }, { status: 404 });
+    }
+
+    const orderId = mixer.order_id;
+
+    // Обновляем статус миксера
+    const { error: updateError } = await supabase
       .from('order_mixers')
       .update({ 
-        status: status,
+        status,
         updated_at: new Date().toISOString()
       })
-      .eq('id', id)
-      .select()
-      .maybeSingle();     // ← Изменено с .single() на .maybeSingle()
+      .eq('id', id);
 
-    if (error) {
-      console.error('Supabase error:', error);
-      return NextResponse.json({ success: false, message: error.message }, { status: 500 });
+    if (updateError) throw updateError;
+
+    // === КРИТИЧНАЯ ЛОГИКА: ПРОВЕРКА ЗАВЕРШЕНИЯ ЗАКАЗА ===
+    if (status === 'Разгружен') {
+      const { data: remaining } = await supabase
+        .from('order_mixers')
+        .select('id')
+        .eq('order_id', orderId)
+        .neq('status', 'Разгружен');
+
+      if (remaining?.length === 0) {
+        // Все миксеры разгружены → закрываем заказ
+        await supabase
+          .from('orders')
+          .update({ 
+            status: 'completed',
+            logistics_ready: true,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', orderId);
+
+        console.log(`🎉 Заказ #${orderId} полностью выполнен`);
+      }
     }
-
-    if (!data) {
-      return NextResponse.json({ 
-        success: false, 
-        message: `Миксер с id ${id} не найден` 
-      }, { status: 404 });
-    }
-
-    console.log(`✅ Статус миксера ${id} обновлён на: ${status}`);
 
     return NextResponse.json({ 
       success: true, 
-      message: `Статус обновлён на "${status}"`,
-      data 
+      message: `Статус миксера обновлён на "${status}"`,
+      data: { mixerId: id, status, orderId }
     });
 
   } catch (error: any) {
-    console.error('Update status error:', error);
+    console.error('❌ Ошибка обновления статуса миксера:', error);
     return NextResponse.json({ 
       success: false, 
-      message: error.message || 'Внутренняя ошибка' 
+      message: error.message || 'Внутренняя ошибка сервера' 
     }, { status: 500 });
   }
 }
