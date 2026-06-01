@@ -241,21 +241,24 @@ const checkAndUpdateOrderStatus = async () => {
     newStatus = 'processing';
   }
 
-  // ==================== ЖЁСТКАЯ ЗАЩИТА ФИНАЛЬНЫХ СТАТУСОВ ====================
+  // ==================== ЗАЩИТА ФИНАЛЬНЫХ СТАТУСОВ ====================
   if (order.status === 'completed' || order.status === 'cancelled') {
-    newStatus = order.status;   // Защищаем от любого изменения
+    newStatus = order.status;
   }
 
   // Меняем только если статус действительно другой
   if (newStatus !== order.status) {
-    console.log(`🔄 Автосмена #${order.id}: ${order.status} → ${newStatus} (allUnloaded=${allUnloaded})`);
+    console.log(`🔄 Автосмена #${order.id}: ${order.status} → ${newStatus}`);
 
+    // Обновляем глобальный список
     setAllOrders(prev => prev.map(o => 
       o.id === order.id ? { ...o, status: newStatus, logistics_ready: true } : o
     ));
 
+    // Обновляем текущую модалку
     setSelectedOrder(prev => prev ? { ...prev, status: newStatus, logistics_ready: true } : null);
 
+    // ==================== ЗАПИСЬ В ИСТОРИЮ ====================
     if (typeof addToHistory === 'function') {
       const statusText = newStatus === 'completed' ? 'Выполнена' : 'В работе';
       await addToHistory(`Автоматически изменил статус заявки на "${statusText}"`);
@@ -263,7 +266,7 @@ const checkAndUpdateOrderStatus = async () => {
   }
 };
 
-  // ==================== 6. ПОЛУЧЕНИЕ МИКСЕРОВ ТЕКУЩЕГО ЗАКАЗА (новые внизу) ====================
+  // ==================== 6.1 ПОЛУЧЕНИЕ МИКСЕРОВ ТЕКУЩЕГО ЗАКАЗА (новые внизу) ====================
 const currentMixers = mixerAssignments
   .filter(m => String(m.orderId) === String(order.id))
   .sort((a, b) => {
