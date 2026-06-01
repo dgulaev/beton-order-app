@@ -2,11 +2,15 @@
 
 import { useState, useEffect } from 'react';
 import { useTodayLoadingMixers } from '../hooks/useTodayLoadingMixers';
+import WarehousePage from '../warehouse/page';
+import ReportsPage from '../reports/page';
+import RecipesPage from '../recipes/page';
+
 
 export default function OperatorBSUPage() {
   const [currentShift] = useState('Дневная смена');
   const [selectedTrip, setSelectedTrip] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState<'zayavki' | 'reports' | 'recipes'>('zayavki');
+  const [activeTab, setActiveTab] = useState<'zayavki' | 'warehouse' | 'reports' | 'recipes'>('zayavki');
 
     // ==================== 0. УПРАВЛЕНИЕ ДАТОЙ ====================
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -45,9 +49,9 @@ export default function OperatorBSUPage() {
       const shouldShow = tripDateStr === selectedDateStr;
 
       // Отладка
-      if (trip.order_id === 161 || trip.orderId === 161) {
-        console.log(`[ФИЛЬТР 161] delivery_date="${tripDateStr}" | selected="${selectedDateStr}" → ${shouldShow ? '✅ ПОКАЗЫВАЕМ' : '❌ СКРЫВАЕМ'}`);
-      }
+      //if (trip.order_id === 161 || trip.orderId === 161) {
+      //  console.log(`[ФИЛЬТР 161] delivery_date="${tripDateStr}" | selected="${selectedDateStr}" → ${shouldShow ? '✅ ПОКАЗЫВАЕМ' : '❌ СКРЫВАЕМ'}`);
+      // }
 
       return shouldShow;
     })
@@ -141,9 +145,9 @@ export default function OperatorBSUPage() {
       const shouldShow = tripDateStr === selectedDateStr;
 
       // Отладка
-      if (trip.order_id === 161) {
-        console.log(`[ФИЛЬТР 161] production_created_at="${trip.production_created_at}" | selected="${selectedDateStr}" → ${shouldShow ? '✅ ПОКАЗЫВАЕМ' : '❌ СКРЫВАЕМ'}`);
-      }
+      //if (trip.order_id === 161) {
+      //  console.log(`[ФИЛЬТР 161] production_created_at="${trip.production_created_at}" | selected="${selectedDateStr}" → ${shouldShow ? '✅ ПОКАЗЫВАЕМ' : '❌ СКРЫВАЕМ'}`);
+      //  }
 
       return shouldShow;
     })
@@ -320,82 +324,92 @@ export default function OperatorBSUPage() {
 
       <div style={{ padding: '20px 40px 40px 40px' }}>
 
-              {/* ==================== 2. БЛОК СТАТИСТИКИ ==================== */}
-      <div style={{ 
-        display: 'grid', 
-        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
-        gap: '16px',
-        marginBottom: '24px'
+             {/* ==================== 2. БЛОК СТАТИСТИКИ (только на вкладке Заявки) ==================== */}
+{activeTab === 'zayavki' && (
+  <div style={{ 
+    display: 'grid', 
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
+    gap: '16px',
+    marginBottom: '24px'
+  }}>
+    {stats.map((stat, index) => (
+      <div key={index} style={{
+        backgroundColor: '#1E2937',
+        borderRadius: '20px',
+        padding: '20px 24px',
+        border: '1px solid #334155'
       }}>
-        {stats.map((stat, index) => (
-          <div key={index} style={{
-            backgroundColor: '#1E2937',
-            borderRadius: '20px',
-            padding: '20px 24px',
-            border: '1px solid #334155'
-          }}>
-            <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
-              {stat.label}
-            </div>
-            <div style={{ 
-              fontSize: '32px', 
-              fontWeight: '700', 
-              color: stat.color,
-              marginBottom: '4px'
-            }}>
-              {stat.value}
-            </div>
-            <div style={{ color: '#64748B', fontSize: '15px' }}>
-              {stat.unit}
-            </div>
-          </div>
-        ))}
-      </div>
-
-                        {/* ==================== 3. МИНИМАЛИСТИЧНЫЕ ТАБЫ ==================== */}
-        <div style={{ 
-          display: 'flex', 
-          gap: '40px', 
-          marginBottom: '32px',
-          borderBottom: '1px solid #334155',
-          paddingBottom: '4px'
-        }}>
-          {[
-            { key: 'zayavki', label: 'Заявки', action: () => setActiveTab('zayavki') },
-            { key: 'reports', label: 'Отчеты', action: () => window.location.href = '/adminCifra/reports' },
-            { key: 'recipes', label: 'Рецепты', action: () => window.location.href = '/adminCifra/recipes' }
-          ].map((tab, i) => (
-            <button
-              key={tab.key}
-              onClick={tab.action}
-              style={{
-                padding: '12px 0',
-                background: 'transparent',
-                border: 'none',
-                fontSize: '17px',
-                fontWeight: '600',
-                color: activeTab === tab.key ? '#10B981' : '#64748B',
-                cursor: 'pointer',
-                position: 'relative'
-              }}
-            >
-              {tab.label}
-              {activeTab === tab.key && (
-                <div style={{
-                  position: 'absolute',
-                  bottom: '-6px',
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  width: '5px',
-                  height: '5px',
-                  backgroundColor: '#10B981',
-                  borderRadius: '50%',
-                  boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.3)'
-                }} />
-              )}
-            </button>
-          ))}
+        <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
+          {stat.label}
         </div>
+        <div style={{ 
+          fontSize: '32px', 
+          fontWeight: '700', 
+          color: stat.color,
+          marginBottom: '4px'
+        }}>
+          {stat.value}
+        </div>
+        <div style={{ color: '#64748B', fontSize: '15px' }}>
+          {stat.unit}
+        </div>
+      </div>
+    ))}
+  </div>
+)}
+
+                              {/* ==================== 3. ТАБЫ + КНОПКА ЗАГРУЗКИ ==================== */}
+<div style={{ 
+  display: 'flex', 
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginBottom: '32px',
+  borderBottom: '1px solid #334155',
+  paddingBottom: '8px'
+}}>
+  
+  {/* Табы слева */}
+  <div style={{ display: 'flex', gap: '48px' }}>
+    {[
+      { key: 'zayavki',   label: 'Заявки',    action: () => setActiveTab('zayavki') },
+      { key: 'warehouse', label: 'Склад',     action: () => setActiveTab('warehouse') },
+      { key: 'reports',   label: 'Отчеты',    action: () => setActiveTab('reports') },
+      { key: 'recipes',   label: 'Рецепты',   action: () => setActiveTab('recipes') }
+    ].map((tab) => (
+      <button
+        key={tab.key}
+        onClick={tab.action}
+        style={{
+          padding: '12px 0',
+          background: 'transparent',
+          border: 'none',
+          fontSize: '17px',
+          fontWeight: '600',
+          color: activeTab === tab.key ? '#10B981' : '#64748B',
+          cursor: 'pointer',
+          position: 'relative',
+          transition: 'color 0.2s'
+        }}
+      >
+        {tab.label}
+        {activeTab === tab.key && (
+          <div style={{
+            position: 'absolute',
+            bottom: '-6px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: '5px',
+            height: '5px',
+            backgroundColor: '#10B981',
+            borderRadius: '50%',
+            boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.3)'
+          }} />
+        )}
+      </button>
+    ))}
+  </div>
+</div>
+  
 
         {/* ==================== 4. ОСНОВНОЙ КОНТЕНТ ==================== */}
         {activeTab === 'zayavki' && (
@@ -449,22 +463,22 @@ export default function OperatorBSUPage() {
                     <div 
                       key={trip.id} 
                       onClick={async () => {
-  try {
-    const res = await fetch(`/api/adminCifra/orders/${trip.order_id || trip.orderId}`);
-    if (res.ok) {
-      const fullOrder = await res.json();
-      setSelectedTrip({
-        ...trip,
-        comment: fullOrder.comment,           // ← главное
-        orders: fullOrder
-      });
-    } else {
-      setSelectedTrip(trip);
-    }
-  } catch (e) {
-    setSelectedTrip(trip);
-  }
-}}
+                  try {
+                  const res = await fetch(`/api/adminCifra/orders/${trip.order_id || trip.orderId}`);
+                  if (res.ok) {
+                  const fullOrder = await res.json();
+                  setSelectedTrip({
+                  ...trip,
+                  comment: fullOrder.comment,           // ← главное
+                  orders: fullOrder
+                });
+                } else {
+                  setSelectedTrip(trip);
+                }
+                } catch (e) {
+                  setSelectedTrip(trip);
+                }
+                }}
 
                       style={{
                         backgroundColor: '#25334A',
@@ -613,6 +627,12 @@ export default function OperatorBSUPage() {
             </div>
           </div>
         )}
+        {/* ==================== СКЛАД ==================== */}
+        {activeTab === 'warehouse' && <WarehousePage />}
+        {/* ==================== ОТЧЕТЫ ==================== */}
+        {activeTab === 'reports' && <ReportsPage />}
+        {/* ==================== РЕЦЕПТЫ ==================== */}
+        {activeTab === 'recipes' && <RecipesPage />}
       </div>    
 
    {/* ==================== 5. МОДАЛЬНОЕ ОКНО ==================== */}

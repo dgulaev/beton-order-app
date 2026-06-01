@@ -243,7 +243,7 @@ const todayOrders = allOrders
     (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00')
   );
 
-console.log(`Выбрана дата: ${selectedDateStr} | Найдено заказов: ${todayOrders.length}`);
+// console.log(`Выбрана дата: ${selectedDateStr} | Найдено заказов: ${todayOrders.length}`);
 
 // ==================== 10. РАСЧЁТ ЗАДЕРЖЕК ОТГРУЗОК (реал-тайм) ====================
 const now = new Date();
@@ -1337,7 +1337,7 @@ const assignedVolume = mixerAssignments
 
 const orderVolume = Number(order.volume || 0);
 const isLogisticsReady = assignedVolume >= orderVolume && assignedVolume > 0;
-console.log(`Заказ #${order.id}: ${assignedVolume}/${orderVolume} м³ → ${isLogisticsReady ? 'ЗЕЛЁНЫЙ' : assignedVolume > 0 ? 'ОРАНЖЕВЫЙ' : 'СЕРЫЙ'}`);
+//  console.log(`Заказ #${order.id}: ${assignedVolume}/${orderVolume} м³ → ${isLogisticsReady ? 'ЗЕЛЁНЫЙ' : assignedVolume > 0 ? 'ОРАНЖЕВЫЙ' : 'СЕРЫЙ'}`);
 // Основная логика
 const isFullyAssigned = assignedVolume >= orderVolume && assignedVolume > 0;
 const isReadyInDB = (order as any).logistics_ready === true;
@@ -1492,7 +1492,7 @@ const isReadyInDB = (order as any).logistics_ready === true;
     </div>
    </div>
   </div>
-            {/* ==================== МИКСЕРЫ В РАБОТЕ (группировка по заказам + drag & drop) ==================== */}
+            {/* ==================== МИКСЕРЫ В РАБОТЕ ==================== */}
 <div style={{ 
   width: '100%', 
   maxWidth: '480px', 
@@ -1501,27 +1501,49 @@ const isReadyInDB = (order as any).logistics_ready === true;
   padding: '24px', 
   display: 'flex', 
   flexDirection: 'column',
-  
-  height: 'auto',                    // ← Изменить с '92vh' на 'auto'
-  maxHeight: '92vh',                 // ← Оставить (ограничивает максимум)
-  minHeight: '1400px',                // ← Минимальная высота (чтобы не сжималось слишком сильно)
-  overflow: 'hidden'                 // ← Оставить
+  height: 'auto',
+  maxHeight: '92vh',
+  minHeight: '1400px',
+  overflow: 'hidden'
 }}>
-  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-    <h3 style={{ fontSize: '24px', margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
-      <img src="/icons/mixer-truck.png" alt="Миксер" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+  
+  {/* Заголовок + счётчик */}
+  <div style={{ 
+    display: 'flex', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: '24px',
+    flexWrap: 'wrap',
+    gap: '12px'
+  }}>
+    
+    <h3 style={{ 
+      fontSize: '24px', 
+      margin: 0, 
+      display: 'flex', 
+      alignItems: 'center', 
+      gap: '12px',
+      color: 'white'
+    }}>
+      <img 
+        src="/icons/mixer-truck.png" 
+        alt="Миксер" 
+        style={{ width: '32px', height: '32px', objectFit: 'contain' }} 
+      />
       Миксеры в работе
     </h3>
 
+    {/* Отдельный блок со счётчиком */}
     <div style={{ 
-    flex: 1,                           // ← Самый важный параметр
-    overflowY: 'auto',                 // ← Включаем скролл внутри
-    display: 'flex', 
-    flexDirection: 'column', 
-    gap: '20px',
-    paddingRight: '8px',
-    minHeight: '0'                     // ← Обязательно для flex
-  }}>
+      background: 'rgba(255,255,255,0.1)', 
+      padding: '8px 16px',
+      borderRadius: '9999px',
+      fontSize: '17px',
+      fontWeight: '600',
+      color: '#60A5FA',
+      whiteSpace: 'nowrap',
+      marginTop: '5px'
+    }}>
       {activeMixersToday.length} на линии
     </div>
   </div>

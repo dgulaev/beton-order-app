@@ -534,7 +534,7 @@ ${order.customer_type?.includes('Юридическое')
       </div>
     </div>
 
-                        {/* ==================== KPI БАР ==================== */}
+                              {/* ==================== KPI БАР ==================== */}
       <div style={{ 
         padding: '24px 40px', 
         background: '#1E2937', 
@@ -549,7 +549,7 @@ ${order.customer_type?.includes('Юридическое')
         <div>
           <div style={{ color: '#94A3B8', fontSize: '14px' }}>Выполнено сегодня</div>
           <div style={{ fontSize: '32px', fontWeight: '700' }}>
-            {completedVolume} / <span style={{ opacity: 0.6, color: '#94A3B8' }}>{totalVolume}</span> м³
+            {Math.round(completedVolume)} / <span style={{ opacity: 0.6, color: '#94A3B8' }}>{Math.round(totalVolume)}</span> м³
           </div>
         </div>
 
@@ -557,15 +557,21 @@ ${order.customer_type?.includes('Юридическое')
         <div>
           <div style={{ color: '#94A3B8', fontSize: '14px' }}>Понадобится цемента</div>
           <div style={{ fontSize: '28px', fontWeight: '700', color: '#60A5FA' }}>
-            {calculateCementNeeded(true)} / <span style={{ opacity: 0.6, color: '#94A3B8' }}>{calculateCementNeeded(false)}</span> т
+            {calculateCementNeeded(true)} / 
+            <span style={{ opacity: 0.6, color: '#94A3B8' }}>
+              {Math.round(Number(calculateCementNeeded(false)))}
+            </span> т
           </div>
         </div>
 
-        {/* Понадобится добавок (в кг) */}
+        {/* Понадобится добавок */}
         <div>
           <div style={{ color: '#94A3B8', fontSize: '14px' }}>Понадобится добавок</div>
           <div style={{ fontSize: '28px', fontWeight: '700', color: '#FACC15' }}>
-            {calculateAdditiveNeeded(true)} / <span style={{ opacity: 0.6, color: '#94A3B8' }}>{calculateAdditiveNeeded(false)}</span> кг
+            {calculateAdditiveNeeded(true)} / 
+            <span style={{ opacity: 0.6, color: '#94A3B8' }}>
+              {Math.round(Number(calculateAdditiveNeeded(false)))}
+            </span> кг
           </div>
         </div>
 

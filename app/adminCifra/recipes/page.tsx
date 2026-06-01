@@ -80,44 +80,47 @@ export default function RecipesPage() {
     }
   };
 
-  return (
-    <div style={{ background: '#0F172A', minHeight: '100vh', color: '#fff', padding: '32px 40px' }}>
+    return (
+    <div style={{ padding: '30px 40px' }}>
       
       {/* ==================== ЗАГОЛОВОК + КНОПКА ==================== */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
-        <h1 style={{ fontSize: '32px', fontWeight: '700' }}>
-        Рецепты
-        </h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <div>
+          <h1 style={{ 
+            fontSize: '28px', 
+            fontWeight: '700', 
+            marginBottom: '6px' 
+          }}>
+            Рецепты бетона и растворов
+          </h1>
+        </div>
 
         
-          <button 
-            onClick={() => window.location.href = '/adminCifra/operator'}
-            style={{
-              backgroundColor: 'transparent',
-              border: 'none',
-              color: '#94A3B8',
-              fontSize: '16px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              cursor: 'pointer',
-              padding: '8px 16px',
-              borderRadius: '9999px'
-            }}
-          >
-            ← Назад к оператору
-          </button>
 
         <button 
-          onClick={() => setEditingRecipe({ code: '', name: '', price: 0, cement: 0, sand: 0, gravel: 0, water: 0, additive: 0, is_active: true })}
+          onClick={() => setEditingRecipe({ 
+            code: '', 
+            name: '', 
+            price: 0, 
+            cement: 0, 
+            sand: 0, 
+            gravel: 0, 
+            water: 0, 
+            additive: 0, 
+            is_active: true 
+          })}
           style={{ 
-            padding: '14px 28px', 
+            padding: '13px 28px', 
             background: '#10B981', 
             color: 'white', 
             border: 'none', 
             borderRadius: '9999px', 
             fontWeight: '600',
-            fontSize: '16px'
+            fontSize: '15.5px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
           }}
         >
           + Новый рецепт

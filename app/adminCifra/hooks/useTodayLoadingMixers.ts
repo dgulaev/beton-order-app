@@ -16,8 +16,8 @@ export const useTodayLoadingMixers = () => {
 
         const data = await res.json();
         
-        console.log(`[useTodayLoadingMixers] Загружено ${data.length} записей`);
-        console.log('Пример первой записи:', data[0]);
+       // console.log(`[useTodayLoadingMixers] Загружено ${data.length} записей`);
+       // console.log('Пример первой записи:', data[0]);
         
         setAllMixers(data || []);
       } catch (err) {

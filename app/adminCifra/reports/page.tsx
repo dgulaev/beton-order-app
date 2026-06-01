@@ -14,9 +14,9 @@ export default function ReportsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [viewMode, setViewMode] = useState<'month' | 'day'>('month');
+  const [viewMode, setViewMode] = useState<'month' | 'day'>('day');
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 31;
+  const itemsPerPage = 10;
 
   const loadHistory = async () => {
     try {
@@ -196,7 +196,7 @@ export default function ReportsPage() {
   }, [filteredHistory]);
 
   // ==================== СТАТИСТИКА ====================
-  const stats = useMemo(() => {
+    const stats = useMemo(() => {
     const totalVolume = filteredHistory.reduce((sum, r) => sum + (r.total_volume || 0), 0);
     const totalCement = filteredHistory.reduce((sum, r) => sum + (r.total_cement || 0), 0);
 
@@ -208,68 +208,33 @@ export default function ReportsPage() {
   }, [filteredHistory]);
 
   return (
-    <div style={{ 
-      backgroundColor: '#0F172A', 
-      minHeight: '100vh', 
-      color: '#fff',
-      fontFamily: 'system-ui, -apple-system, sans-serif'
-    }}>
-
-      {/* Верхняя панель */}
-      <div style={{
-        backgroundColor: '#1E2937',
-        padding: '20px 40px',
-        borderBottom: '1px solid #334155',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between'
+    <div style={{ padding: '5px 40px 40px 40px' }}>
+      
+      <h1 style={{ 
+        fontSize: '20px', 
+        fontWeight: '700', 
+        marginBottom: '8px' 
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <button 
-            onClick={() => window.location.href = '/adminCifra/operator'}
-            style={{
-              backgroundColor: 'transparent',
-              border: 'none',
-              color: '#94A3B8',
-              fontSize: '16px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              cursor: 'pointer',
-              padding: '8px 16px',
-              borderRadius: '9999px'
-            }}
-          >
-            ← Назад к оператору
-          </button>
+        Отчеты производства MEKA
+      </h1>
 
-          <div>
-            <div style={{ fontSize: '28px', fontWeight: '700' }}>Отчеты производства MEKA</div>
-            <div style={{ color: '#94A3B8', fontSize: '15px' }}>Анализ и загрузка отчётов завода</div>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ padding: '40px' }}>
-        <div style={{ maxWidth: '1600px', margin: '0 auto' }}>
-
-          {/* ====================== КНОПКА ЗАГРУЗКИ НОВОГО ОТЧЕТА ====================== */}
-
-<div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '32px' }}>
-  <label style={{
-    backgroundColor: '#3B82F6',
-    color: 'white',
-    padding: '16px 36px',
-    borderRadius: '9999px',
+      {/* ====================== КНОПКА ЗАГРУЗКИ НОВОГО ОТЧЕТА ====================== */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '32px' }}>
+        <label style={{
+    color: '#10B981',
+    padding: '10px 20px',
     fontWeight: '600',
+    fontSize: '15.5px',
     cursor: 'pointer',
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '10px',
-    fontSize: '16px',
-    boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
-  }}>
-    📤 Загрузить новый отчёт MEKA (.xls / .xlsx)
+    gap: '8px',
+    backgroundColor: 'transparent',
+    border: 'none',
+    transition: 'all 0.2s ease',
+    whiteSpace: 'nowrap'
+   }}>
+    Загрузить новый отчёт MEKA (.xls / .xlsx)
     
     <input
       type="file"
@@ -757,8 +722,6 @@ export default function ReportsPage() {
               </table>
             </div>
           )}
-        </div>
-      </div>
     </div>
   );
 }

@@ -151,12 +151,14 @@ export default function NewOrderModal({
     }
   };
 
-  // ==================== 9. СОЗДАНИЕ ЗАЯВКИ ====================
+    // ==================== 9. СОЗДАНИЕ ЗАЯВКИ ====================
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
 
+    // ================================================
     // 1. ВАЛИДАЦИЯ ВВОДА
+    // ================================================
     if (!form.volume || parseFloat(form.volume) <= 0) {
       alert('Укажите объём бетона больше 0 м³');
       setIsSubmitting(false);
@@ -188,7 +190,9 @@ export default function NewOrderModal({
       return;
     }
 
+    // ================================================
     // 2. ПОДГОТОВКА PAYLOAD
+    // ================================================
     const payload = {
       userId: adminUserId,
       grade: form.grade,
@@ -226,6 +230,9 @@ export default function NewOrderModal({
       const data = await response.json();
 
       if (data.success) {
+        // ================================================
+        // 3. ПОЛНЫЙ ОБЪЕКТ ДЛЯ ОПТИМИСТИЧЕСКОГО ОБНОВЛЕНИЯ
+        // ================================================
         const createdOrder = {
           id: data.orderId,
           grade: form.grade,
@@ -234,14 +241,21 @@ export default function NewOrderModal({
           delivery_time: form.deliveryTime,
           address: form.address,
           phone: currentPhone,
-          status: 'new'
+          status: 'new',
+
+          // ← Эти поля добавлены, чтобы не было прочерков при добавлении в список
+          customer_type: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
+          full_name: form.fullName?.trim() || null,
+          organization_name: form.organizationName?.trim() || null,
+          inn: form.inn?.trim() || null,
+          comment: form.comment?.trim() || null,
         };
 
         setOrderCreated(createdOrder);
         setNotificationSent(false);
 
         alert(`✅ Заявка #${data.orderId} успешно создана!`);
-        onSuccess(createdOrder);
+        onSuccess(createdOrder);   // ← Передаём полный объект
       } else {
         alert(data.message || 'Ошибка создания заявки');
       }

@@ -218,7 +218,7 @@ const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
   }
 };
 
-// ==================== 6. АВТОМАТИЧЕСКАЯ СМЕНА СТАТУСА ЗАЯВКИ ====================
+// ==================== 6. АВТОМАТИЧЕСКАЯ СМЕНА СТАТУСА ЗАЯВКИ (ФИНАЛЬНАЯ) ====================
 const checkAndUpdateOrderStatus = async () => {
   if (!order?.id) return;
 
@@ -228,36 +228,32 @@ const checkAndUpdateOrderStatus = async () => {
   const totalAssignedVolume = orderMixers.reduce((sum, m) => sum + Number(m.volume || 0), 0);
   const orderVolume = Number(order.volume || 0);
 
-  // Проверяем, ВСЕ ли миксеры имеют статус "Разгружен"
   const allUnloaded = orderMixers.length > 0 && 
                      orderMixers.every(m => m.status === 'Разгружен');
 
   let newStatus = order.status;
 
-  // Приоритет 1: Если все миксеры разгружены — Выполнена (самый высокий приоритет)
+  // ==================== СТРОГИЙ ПРИОРИТЕТ ====================
   if (allUnloaded) {
-    newStatus = 'completed';
+    newStatus = 'completed';                    // Высший приоритет
   } 
-  // Приоритет 2: Если объём набран, но заявка ещё "Новая" — В работе
   else if (totalAssignedVolume >= orderVolume && order.status === 'new') {
     newStatus = 'processing';
   }
 
-  // Защита: Никогда не меняем статус обратно из финальных состояний
+  // ==================== ЖЁСТКАЯ ЗАЩИТА ФИНАЛЬНЫХ СТАТУСОВ ====================
   if (order.status === 'completed' || order.status === 'cancelled') {
-    newStatus = order.status;
+    newStatus = order.status;   // Защищаем от любого изменения
   }
 
-  // Если нужно изменить статус
+  // Меняем только если статус действительно другой
   if (newStatus !== order.status) {
-    console.log(`🔄 Автосмена статуса заявки #${order.id}: ${order.status} → ${newStatus}`);
+    console.log(`🔄 Автосмена #${order.id}: ${order.status} → ${newStatus} (allUnloaded=${allUnloaded})`);
 
-    // Обновляем глобальный список
     setAllOrders(prev => prev.map(o => 
       o.id === order.id ? { ...o, status: newStatus, logistics_ready: true } : o
     ));
 
-    // Обновляем текущую модалку
     setSelectedOrder(prev => prev ? { ...prev, status: newStatus, logistics_ready: true } : null);
 
     if (typeof addToHistory === 'function') {

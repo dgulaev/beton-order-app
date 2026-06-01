@@ -47,42 +47,44 @@ export default function ClientsPage() {
   // ==================== 2. ЗАГРУЗКА ВСЕХ ПОЛЬЗОВАТЕЛЕЙ + ГРУППИРОВКА КЛИЕНТОВ ====================
 useEffect(() => {
   const fetchAllUsers = async () => {
+    const startTime = Date.now();
     setLoading(true);
+
     try {
-      console.log('🔄 [Загрузка] Начинаем загрузку данных...');
+      console.log('🔄 [Загрузка] Начинаем...');
 
-      // 1. Загружаем группы клиентов
-      const clientGroupsRes = await fetch('/api/adminCifra/clients/grouped');
-      let clientGroups: any[] = [];
-      if (clientGroupsRes.ok) {
-        clientGroups = await clientGroupsRes.json();
-      }
+      const [groupsRes, allRes] = await Promise.all([
+        fetch('/api/adminCifra/clients/grouped'),
+        fetch('/api/adminCifra/clients?all=true')
+      ]);
 
-      // 2. Загружаем всех пользователей (включая стафф)
-      const allRes = await fetch('/api/adminCifra/clients?all=true');
-      let allUsers: any[] = [];
-      if (allRes.ok) {
-        allUsers = await allRes.json();
-      }
+      const clientGroups = groupsRes.ok ? await groupsRes.json() : [];
+      const allUsers = allRes.ok ? await allRes.json() : [];
 
-      // 3. Отделяем стафф
       const staffList = allUsers.filter((u: any) => 
         ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase())
       );
 
-      console.log(`👔 Загружено сотрудников: ${staffList.length}`);
-      console.log(`👥 Загружено групп клиентов: ${clientGroups.length}`);
-
-      // 4. Объединяем стафф + группы клиентов
-      const combined = [
+      // Основное объединение
+      let combined = [
         ...staffList.map((s: any) => ({ ...s, isStaff: true })),
         ...clientGroups
       ];
 
+      // === УДАЛЕНИЕ ДУБЛИКАТОВ ===
+      const seen = new Set();
+      combined = combined.filter(item => {
+        const key = item.groupId || item.user_id || item.id;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
       setProfiles(combined);
-      console.log(`✅ Итого в profiles: ${combined.length} записей`);
+
+      console.log(`✅ Загрузка завершена за ${Date.now() - startTime} мс | Всего: ${combined.length} записей (дубли удалены)`);
     } catch (err) {
-      console.error('❌ Ошибка загрузки пользователей:', err);
+      console.error('❌ Ошибка загрузки:', err);
     } finally {
       setLoading(false);
     }
@@ -1104,12 +1106,16 @@ window.callClient = async (clientId: number | string) => {
 {viewMode === 'cards' && (
   <div style={{ 
     display: 'grid', 
-    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', 
-    gap: '16px'        // расстояние между карточками
+    gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))', 
+    gap: '16px' 
   }}>
     {filteredList.map((client: any) => {
       const vol = client.total_volume || client.totalVolume || 0;
       const ordersCount = client.total_orders || client.totalOrders || 0;
+
+      const uniqueKey = client.groupId 
+        ? `${client.groupId}_${client.user_id || client.id || 'x'}`
+        : `client_${client.user_id || client.id || Math.random().toString(36).substr(2, 9)}`;
 
       let statusText = '❄️ Холодный';
       let statusColor = '#64748B';
@@ -1127,25 +1133,25 @@ window.callClient = async (clientId: number | string) => {
 
       return (
         <div 
-          key={client.groupId || client.user_id || client.id} 
+          key={uniqueKey}
           onClick={() => setSelectedProfile(client)} 
           style={{ 
             background: '#1E2937', 
             borderRadius: '16px', 
-            padding: '16px 18px',     // ← уменьшил отступы внутри
+            padding: '16px 18px',
             cursor: 'pointer',
-            border: selectedProfile?.groupId === client.groupId || 
-                    selectedProfile?.user_id === client.user_id 
+            border: (selectedProfile?.groupId === client.groupId || 
+                    selectedProfile?.user_id === client.user_id) 
               ? '2px solid #10B981' 
               : '1px solid #334155',
             transition: 'all 0.2s',
-            minHeight: '148px',        // ← ОСНОВНАЯ ВЫСОТА КАРТОЧКИ (здесь регулируй)
+            minHeight: '168px',
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'space-between'
           }}
         >
-          {/* Заголовок и телефон */}
+          {/* Заголовок */}
           <div>
             <div style={{ fontSize: '17px', fontWeight: '700', marginBottom: '4px', lineHeight: 1.3 }}>
               {client.organization_name || client.full_name || client.name || 'Без названия'}
@@ -1156,27 +1162,40 @@ window.callClient = async (clientId: number | string) => {
             </div>
           </div>
 
-          {/* Статус */}
-          <div style={{ 
-            display: 'inline-block',
-            padding: '4px 12px',
-            background: statusBg,
-            color: statusColor,
-            borderRadius: '9999px',
-            fontSize: '13.5px',
-            fontWeight: '600',
-            marginBottom: '12px'
-          }}>
-            {statusText}
+          {/* Строка: Количество карточек + Статус */}
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+            {client.clients && client.clients.length > 1 && (
+              <div style={{
+                padding: '4px 10px',
+                background: '#334155',
+                color: '#CBD5E1',
+                borderRadius: '9999px',
+                fontSize: '12.5px',
+                fontWeight: '600'
+              }}>
+                {client.clients.length} карточки
+              </div>
+            )}
+
+            <div style={{ 
+              padding: '4px 12px',
+              background: statusBg,
+              color: statusColor,
+              borderRadius: '9999px',
+              fontSize: '13.5px',
+              fontWeight: '600'
+            }}>
+              {statusText}
+            </div>
           </div>
 
-          {/* Объём и Заказы */}
+          {/* Статистика */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
             <div>
               <div style={{ color: '#60A5FA', fontSize: '26px', fontWeight: '700', lineHeight: 1 }}>
                 {vol.toFixed(1)}
               </div>
-              <div style={{ color: '#94A3B8', fontSize: '13px' }}>м³ заказано</div>
+              <div style={{ color: '#94A3B8', fontSize: '13px' }}>м³ всего</div>
             </div>
 
             <div style={{ textAlign: 'right' }}>
