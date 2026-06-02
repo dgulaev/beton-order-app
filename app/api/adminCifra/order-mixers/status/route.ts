@@ -8,7 +8,7 @@ const supabase = createClient(
 
 export async function POST(request: NextRequest) {
   try {
-    const { id, status } = await request.json();
+    const { id, status, loading_started_at } = await request.json();
 
     if (!id || !status) {
       return NextResponse.json({ success: false, message: 'id и status обязательны' }, { status: 400 });
@@ -36,13 +36,21 @@ export async function POST(request: NextRequest) {
 
     const orderId = mixer.order_id;
 
+    // Подготовка данных для обновления
+    const updateData: any = {
+      status,
+      updated_at: new Date().toISOString()
+    };
+
+    // Добавляем время начала загрузки (только если статус "Загрузка" и время передано)
+    if (status === 'Загрузка' && loading_started_at) {
+      updateData.loading_started_at = loading_started_at;
+    }
+
     // Обновляем статус миксера
     const { error: updateError } = await supabase
       .from('order_mixers')
-      .update({ 
-        status,
-        updated_at: new Date().toISOString()
-      })
+      .update(updateData)
       .eq('id', id);
 
     if (updateError) throw updateError;

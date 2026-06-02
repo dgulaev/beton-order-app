@@ -102,8 +102,8 @@ export default function EfficiencyPage() {
   if (loading) return <div style={{padding: '140px', textAlign: 'center', color: '#94A3B8'}}>Загрузка аналитики...</div>;
 
   return (
-    <div style={{ padding: '32px', background: '#0F172A', minHeight: '100vh', color: '#fff' }}>
-      <h1 style={{ fontSize: '38px', fontWeight: '700', marginBottom: '32px' }}>📈 Эффективность отдела продаж</h1>
+    <div style={{ marginBottom: '30px' }}>
+      
 
       <div style={{ display: 'grid', gridTemplateColumns: '420px 1fr', gap: '28px' }}>
         

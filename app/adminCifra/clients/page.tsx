@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import NewOrderModal from './NewOrderModal';
+import EfficiencyPage from '../efficiency/page';
 
 // ==================== 0.1 ГЛОБАЛЬНЫЕ ТИПЫ ДЛЯ WINDOW ===============
 declare global {
@@ -18,7 +19,6 @@ export default function ClientsPage() {
   const [loading, setLoading] = useState(true);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<'clients' | 'staff'>('clients');
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
   const [selectedProfile, setSelectedProfile] = useState<any>(null);
   const [isNewOrderModalOpen, setIsNewOrderModalOpen] = useState(false);
@@ -32,6 +32,8 @@ export default function ClientsPage() {
   const [isNewClientModalOpen, setIsNewClientModalOpen] = useState(false);
   const [currentRole, setCurrentRole] = useState<string>('admin');
   const [callHistory, setCallHistory] = useState<any[]>([]);
+  
+  const [activeTab, setActiveTab] = useState<'clients' | 'staff' | 'efficiency'>('clients');
   
   // Новое состояние для формы создания клиента
   const [newClientForm, setNewClientForm] = useState({
@@ -47,44 +49,42 @@ export default function ClientsPage() {
   // ==================== 2. ЗАГРУЗКА ВСЕХ ПОЛЬЗОВАТЕЛЕЙ + ГРУППИРОВКА КЛИЕНТОВ ====================
 useEffect(() => {
   const fetchAllUsers = async () => {
-    const startTime = Date.now();
     setLoading(true);
-
     try {
-      console.log('🔄 [Загрузка] Начинаем...');
+      console.log('🔄 [Загрузка] Начинаем загрузку данных...');
 
-      const [groupsRes, allRes] = await Promise.all([
-        fetch('/api/adminCifra/clients/grouped'),
-        fetch('/api/adminCifra/clients?all=true')
-      ]);
+      // 1. Загружаем группы клиентов
+      const clientGroupsRes = await fetch('/api/adminCifra/clients/grouped');
+      let clientGroups: any[] = [];
+      if (clientGroupsRes.ok) {
+        clientGroups = await clientGroupsRes.json();
+      }
 
-      const clientGroups = groupsRes.ok ? await groupsRes.json() : [];
-      const allUsers = allRes.ok ? await allRes.json() : [];
+      // 2. Загружаем всех пользователей (включая стафф)
+      const allRes = await fetch('/api/adminCifra/clients?all=true');
+      let allUsers: any[] = [];
+      if (allRes.ok) {
+        allUsers = await allRes.json();
+      }
 
+      // 3. Отделяем стафф
       const staffList = allUsers.filter((u: any) => 
         ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase())
       );
 
-      // Основное объединение
-      let combined = [
+      console.log(`👔 Загружено сотрудников: ${staffList.length}`);
+      console.log(`👥 Загружено групп клиентов: ${clientGroups.length}`);
+
+      // 4. Объединяем стафф + группы клиентов
+      const combined = [
         ...staffList.map((s: any) => ({ ...s, isStaff: true })),
         ...clientGroups
       ];
 
-      // === УДАЛЕНИЕ ДУБЛИКАТОВ ===
-      const seen = new Set();
-      combined = combined.filter(item => {
-        const key = item.groupId || item.user_id || item.id;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-
       setProfiles(combined);
-
-      console.log(`✅ Загрузка завершена за ${Date.now() - startTime} мс | Всего: ${combined.length} записей (дубли удалены)`);
+      console.log(`✅ Итого в profiles: ${combined.length} записей`);
     } catch (err) {
-      console.error('❌ Ошибка загрузки:', err);
+      console.error('❌ Ошибка загрузки пользователей:', err);
     } finally {
       setLoading(false);
     }
@@ -774,146 +774,163 @@ window.callClient = async (clientId: number | string) => {
       {/* ====================== ВЕРХНЯЯ ПАНЕЛЬ УПРАВЛЕНИЯ ====================== */}
 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
 
-  {/* Левая группа — Табы + Кнопка объединения */}
-  <div style={{ display: 'flex', gap: '8px' }}>
+  {/* Левая группа — Табы + Кнопки действий */}
+<div style={{ display: 'flex', gap: '8px' }}>
 
-    {/* Кнопка Клиенты */}
-    <button 
-      onClick={() => setActiveTab('clients')} 
-      style={{
-        padding: '12px 24px',
-        background: 'transparent',
-        border: 'none',
-        color: activeTab === 'clients' ? '#10B981' : '#64748B',
-        fontSize: '17px',
-        fontWeight: '600',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        position: 'relative',
-        transition: 'color 0.25s ease',
-        cursor: 'pointer',
-      }}
-    >
-      <span style={{ fontSize: '22px', opacity: activeTab === 'clients' ? 0.9 : 0.45 }}>👥</span>
-      Клиенты
-      {activeTab === 'clients' && (
-        <div style={{
-          position: 'absolute',
-          bottom: '3px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: '5px',
-          height: '5px',
-          backgroundColor: '#10B981',
-          borderRadius: '50%',
-          boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
-        }} />
-      )}
-    </button>
+  {/* Кнопка Клиенты */}
+  <button 
+    onClick={() => setActiveTab('clients')} 
+    style={{
+      padding: '12px 24px',
+      background: 'transparent',
+      border: 'none',
+      color: activeTab === 'clients' ? '#10B981' : '#64748B',
+      fontSize: '17px',
+      fontWeight: '600',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      position: 'relative',
+      transition: 'color 0.25s ease',
+      cursor: 'pointer',
+    }}
+  >
+    <span style={{ fontSize: '22px', opacity: activeTab === 'clients' ? 0.9 : 0.45 }}>👥</span>
+    Клиенты
+    {activeTab === 'clients' && (
+      <div style={{
+        position: 'absolute',
+        bottom: '3px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        width: '5px',
+        height: '5px',
+        backgroundColor: '#10B981',
+        borderRadius: '50%',
+        boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
+      }} />
+    )}
+  </button>
 
-    {/* Кнопка Стафф */}
-    <button 
-      onClick={() => setActiveTab('staff')} 
-      style={{
-        padding: '12px 24px',
-        background: 'transparent',
-        border: 'none',
-        color: activeTab === 'staff' ? '#10B981' : '#64748B',
-        fontSize: '17px',
-        fontWeight: '600',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        position: 'relative',
-        transition: 'color 0.25s ease',
-        cursor: 'pointer',
-      }}
-    >
-      <span style={{ fontSize: '22px', opacity: activeTab === 'staff' ? 0.9 : 0.45 }}>👔</span>
-      Стафф
-      {activeTab === 'staff' && (
-        <div style={{
-          position: 'absolute',
-          bottom: '3px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: '5px',
-          height: '5px',
-          backgroundColor: '#10B981',
-          borderRadius: '50%',
-          boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
-        }} />
-      )}
-    </button>
+  {/* Кнопка Стафф */}
+  <button 
+    onClick={() => setActiveTab('staff')} 
+    style={{
+      padding: '12px 24px',
+      background: 'transparent',
+      border: 'none',
+      color: activeTab === 'staff' ? '#10B981' : '#64748B',
+      fontSize: '17px',
+      fontWeight: '600',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      position: 'relative',
+      transition: 'color 0.25s ease',
+      cursor: 'pointer',
+    }}
+  >
+    <span style={{ fontSize: '22px', opacity: activeTab === 'staff' ? 0.9 : 0.45 }}>👔</span>
+    Стафф
+    {activeTab === 'staff' && (
+      <div style={{
+        position: 'absolute',
+        bottom: '3px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        width: '5px',
+        height: '5px',
+        backgroundColor: '#10B981',
+        borderRadius: '50%',
+        boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
+      }} />
+    )}
+  </button>
 
-    {/* Кнопка Объединить дубли */}
-    <button 
-      onClick={findDuplicates}
-      style={{
-        padding: '12px 24px',
-        background: 'transparent',
-        border: 'none',
-        color: '#8B5CF6',
-        fontSize: '17px',
-        fontWeight: '600',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        position: 'relative',
-        transition: 'color 0.25s ease',
-        cursor: 'pointer',
-      }}
-    >
-      <span style={{ fontSize: '22px', opacity: 0.9 }}>🔗</span>
-      Объединить дубли
-    </button>
+  {/* Кнопка Объединить дубли */}
+  <button 
+    onClick={findDuplicates}
+    style={{
+      padding: '12px 24px',
+      background: 'transparent',
+      border: 'none',
+      color: '#8B5CF6',
+      fontSize: '17px',
+      fontWeight: '600',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      position: 'relative',
+      transition: 'color 0.25s ease',
+      cursor: 'pointer',
+    }}
+  >
+    <span style={{ fontSize: '22px', opacity: 0.9 }}>🔗</span>
+    Объединить дубли
+  </button>
+
   {/* Кнопка Новый клиент */}
-<button 
-  onClick={() => setIsNewClientModalOpen(true)}
-  style={{
-    padding: '12px 24px',
-    background: 'transparent',
-    border: 'none',
-    color: '#34D399',
-    fontSize: '17px',
-    fontWeight: '600',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    position: 'relative',
-    transition: 'color 0.25s ease',
-    cursor: 'pointer',
-  }}
->
-  <span style={{ fontSize: '22px' }}>➕</span>
-  Новый клиент
-</button>
-  {/* Кнопка Эффективность отдела продаж */}
-    <button 
-      onClick={() => window.location.href = '/adminCifra/efficiency'}
-      style={{
-        padding: '12px 24px',
-        background: 'transparent',
-        border: 'none',
-        color: '#A78BFA',
-        fontSize: '17px',
-        fontWeight: '600',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        position: 'relative',
-        transition: 'color 0.25s ease',
-        cursor: 'pointer',
-      }}
-    >
-      <span style={{ fontSize: '22px' }}>📏</span>
-      Эффективность
-    </button>
+  <button 
+    onClick={() => setIsNewClientModalOpen(true)}
+    style={{
+      padding: '12px 24px',
+      background: 'transparent',
+      border: 'none',
+      color: '#34D399',
+      fontSize: '17px',
+      fontWeight: '600',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      position: 'relative',
+      transition: 'color 0.25s ease',
+      cursor: 'pointer',
+    }}
+  >
+    <span style={{ fontSize: '22px' }}>➕</span>
+    Новый клиент
+  </button>
 
-  </div>
+  {/* Кнопка Эффективность */}
+  <button 
+    onClick={() => setActiveTab('efficiency')}
+    style={{
+      padding: '12px 24px',
+      background: 'transparent',
+      border: 'none',
+      color: activeTab === 'efficiency' ? '#10B981' : '#A78BFA',
+      fontSize: '17px',
+      fontWeight: '600',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      position: 'relative',
+      transition: 'color 0.25s ease',
+      cursor: 'pointer',
+    }}
+  >
+    <span style={{ fontSize: '22px', opacity: activeTab === 'efficiency' ? 0.9 : 0.7 }}>📊</span>
+    Эффективность
+    {activeTab === 'efficiency' && (
+      <div style={{
+        position: 'absolute',
+        bottom: '3px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        width: '5px',
+        height: '5px',
+        backgroundColor: '#10B981',
+        borderRadius: '50%',
+        boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
+      }} />
+    )}
+  </button>
 
-  {/* Правая группа — Вид отображения (Карточки / Список) */}
+</div>
+  
+
+  {/* Правая группа — Вид отображения (Карточки / Список) — ТОЛЬКО НА КЛИЕНТАХ И СТАФФЕ */}
+{(activeTab === 'clients' || activeTab === 'staff') && (
   <div style={{ display: 'flex', gap: '8px' }}>
     <button 
       onClick={() => setViewMode('cards')} 
@@ -983,42 +1000,45 @@ window.callClient = async (clientId: number | string) => {
       )}
     </button>
   </div>
+)}
 </div>
 
-{/* ==================== ПОЛЕ ПОИСКА С ИКОНКОЙ ==================== */}
-      <div style={{ position: 'relative', width: '100%', maxWidth: '720px', marginBottom: '32px' }}>
-        <div style={{ 
-          position: 'absolute', 
-          left: '20px', 
-          top: '50%', 
-          transform: 'translateY(-50%)',
-          color: '#94A3B8',
-          fontSize: '20px',
-          pointerEvents: 'none'
-        }}>
-          🔍
-        </div>
-        
-        <input 
-          type="text" 
-          placeholder="Поиск по имени, организации или телефону..." 
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          style={{ 
-            width: '100%', 
-            padding: '16px 20px 16px 56px', 
-            background: '#1E2937', 
-            border: 'none', 
-            borderRadius: '9999px', 
-            color: '#fff', 
-            fontSize: '16px',
-            boxShadow: '0 4px 15px rgba(0, 0, 0, 0.15)'
-          }}
-        />
-      </div>
+{/* ==================== ПОЛЕ ПОИСКА — ТОЛЬКО НА КЛИЕНТАХ И СТАФФЕ ==================== */}
+{(activeTab === 'clients' || activeTab === 'staff') && (
+  <div style={{ position: 'relative', width: '100%', maxWidth: '720px', marginBottom: '32px' }}>
+    <div style={{ 
+      position: 'absolute', 
+      left: '20px', 
+      top: '50%', 
+      transform: 'translateY(-50%)',
+      color: '#94A3B8',
+      fontSize: '20px',
+      pointerEvents: 'none'
+    }}>
+      🔍
+    </div>
+    
+    <input 
+      type="text" 
+      placeholder="Поиск по имени, организации или телефону..." 
+      value={search}
+      onChange={(e) => setSearch(e.target.value)}
+      style={{ 
+        width: '100%', 
+        padding: '16px 20px 16px 56px', 
+        background: '#1E2937', 
+        border: 'none', 
+        borderRadius: '9999px', 
+        color: '#fff', 
+        fontSize: '16px',
+        boxShadow: '0 4px 15px rgba(0, 0, 0, 0.15)'
+      }}
+    />
+  </div>
+)}
 
-         {/* ==================== 10. ОТОБРАЖЕНИЕ КЛИЕНТОВ (СПИСОК) ==================== */}
-{viewMode === 'table' && (
+    {/* ==================== 10. ОТОБРАЖЕНИЕ КЛИЕНТОВ (СПИСОК) — ТОЛЬКО НА КЛИЕНТАХ И СТАФФЕ ==================== */}
+{(activeTab === 'clients' || activeTab === 'staff') && viewMode === 'table' && (
   <div style={{ background: '#1E2937', borderRadius: '16px', overflow: 'hidden' }}>
     
     {/* ==================== ШАПКА ТАБЛИЦЫ ==================== */}
@@ -1102,20 +1122,16 @@ window.callClient = async (clientId: number | string) => {
   </div>
 )}
 
-            {/* ==================== 8. ОТОБРАЖЕНИЕ КЛИЕНТОВ (КАРТОЧКИ) — КОМПАКТНЫЙ ==================== */}
-{viewMode === 'cards' && (
+{/* ==================== 8. ОТОБРАЖЕНИЕ КЛИЕНТОВ (КАРТОЧКИ) — ТОЛЬКО НА КЛИЕНТАХ И СТАФФЕ ==================== */}
+{(activeTab === 'clients' || activeTab === 'staff') && viewMode === 'cards' && (
   <div style={{ 
     display: 'grid', 
-    gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))', 
-    gap: '16px' 
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', 
+    gap: '16px'
   }}>
     {filteredList.map((client: any) => {
       const vol = client.total_volume || client.totalVolume || 0;
       const ordersCount = client.total_orders || client.totalOrders || 0;
-
-      const uniqueKey = client.groupId 
-        ? `${client.groupId}_${client.user_id || client.id || 'x'}`
-        : `client_${client.user_id || client.id || Math.random().toString(36).substr(2, 9)}`;
 
       let statusText = '❄️ Холодный';
       let statusColor = '#64748B';
@@ -1133,25 +1149,25 @@ window.callClient = async (clientId: number | string) => {
 
       return (
         <div 
-          key={uniqueKey}
+          key={client.groupId || client.user_id || client.id} 
           onClick={() => setSelectedProfile(client)} 
           style={{ 
             background: '#1E2937', 
             borderRadius: '16px', 
-            padding: '16px 18px',
+            padding: '16px 18px',     // ← уменьшил отступы внутри
             cursor: 'pointer',
-            border: (selectedProfile?.groupId === client.groupId || 
-                    selectedProfile?.user_id === client.user_id) 
+            border: selectedProfile?.groupId === client.groupId || 
+                    selectedProfile?.user_id === client.user_id 
               ? '2px solid #10B981' 
               : '1px solid #334155',
             transition: 'all 0.2s',
-            minHeight: '168px',
+            minHeight: '148px',        // ← ОСНОВНАЯ ВЫСОТА КАРТОЧКИ (здесь регулируй)
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'space-between'
           }}
         >
-          {/* Заголовок */}
+          {/* Заголовок и телефон */}
           <div>
             <div style={{ fontSize: '17px', fontWeight: '700', marginBottom: '4px', lineHeight: 1.3 }}>
               {client.organization_name || client.full_name || client.name || 'Без названия'}
@@ -1162,40 +1178,27 @@ window.callClient = async (clientId: number | string) => {
             </div>
           </div>
 
-          {/* Строка: Количество карточек + Статус */}
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
-            {client.clients && client.clients.length > 1 && (
-              <div style={{
-                padding: '4px 10px',
-                background: '#334155',
-                color: '#CBD5E1',
-                borderRadius: '9999px',
-                fontSize: '12.5px',
-                fontWeight: '600'
-              }}>
-                {client.clients.length} карточки
-              </div>
-            )}
-
-            <div style={{ 
-              padding: '4px 12px',
-              background: statusBg,
-              color: statusColor,
-              borderRadius: '9999px',
-              fontSize: '13.5px',
-              fontWeight: '600'
-            }}>
-              {statusText}
-            </div>
+          {/* Статус */}
+          <div style={{ 
+            display: 'inline-block',
+            padding: '4px 12px',
+            background: statusBg,
+            color: statusColor,
+            borderRadius: '9999px',
+            fontSize: '13.5px',
+            fontWeight: '600',
+            marginBottom: '12px'
+          }}>
+            {statusText}
           </div>
 
-          {/* Статистика */}
+          {/* Объём и Заказы */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
             <div>
               <div style={{ color: '#60A5FA', fontSize: '26px', fontWeight: '700', lineHeight: 1 }}>
                 {vol.toFixed(1)}
               </div>
-              <div style={{ color: '#94A3B8', fontSize: '13px' }}>м³ всего</div>
+              <div style={{ color: '#94A3B8', fontSize: '13px' }}>м³ заказано</div>
             </div>
 
             <div style={{ textAlign: 'right' }}>
@@ -1206,10 +1209,15 @@ window.callClient = async (clientId: number | string) => {
             </div>
           </div>
         </div>
+        
       );
     })}
+    
   </div>
+  
 )}
+     {/* ==================== ВКЛАДКА ЭФФЕКТИВНОСТЬ ================================ */}
+             {activeTab === 'efficiency' && <EfficiencyPage />}
 
      {/* ==================== 9. БОКОВАЯ ПАНЕЛЬ ПРОФИЛЯ КЛИЕНТА ==================== */}
 {selectedProfile && (
@@ -1581,7 +1589,6 @@ window.callClient = async (clientId: number | string) => {
         </div>
       </div>
     )}
-
 
       {/* ==================== 9.7 МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ ==================== */}
 {isEditModalOpen && editingClient && Array.isArray(editingClient) && (

@@ -92,89 +92,71 @@ export default function OperatorBSUPage() {
     fetchRecipes();
   }, []);
 
-              // ==================== 1. ДЕЙСТВИЯ ОПЕРАТОРА ====================
+      // ==================== 1. ДЕЙСТВИЯ ОПЕРАТОРА ====================
   const [loadingTrips, setLoadingTrips] = useState<Record<number, boolean>>({});
   const [tripStartTimes, setTripStartTimes] = useState<Record<number, string>>({});
 
-        // ==================== 1.2 ОТГРУЖЕНО СЕГОДНЯ (загрузка из базы) ====================
-  const [completedTrips, setCompletedTrips] = useState<any[]>([]);
-
-  // Загрузка отгруженных рейсов из базы
+    // ==================== 1.0 ЗАГРУЗКА СОСТОЯНИЯ ЗАГРУЗКИ ПРИ СТАРТЕ ====================
   useEffect(() => {
-    const fetchCompletedTrips = async () => {
+    const loadLoadingState = async () => {
       try {
-        const res = await fetch('/api/adminCifra/production-log');
-        if (res.ok) {
-          const data = await res.json();
-          setCompletedTrips(Array.isArray(data) ? data : []);
-        }
+        const res = await fetch('/api/adminCifra/active-mixers');
+        if (!res.ok) return;
+
+        const data = await res.json();
+        const newLoading: Record<number, boolean> = {};
+        const newStartTimes: Record<number, string> = {};
+
+        data.forEach((trip: any) => {
+          // Улучшенная проверка
+          if ((trip.status === 'Загрузка' || trip.status === 'В работе') && 
+              (trip.loading_started_at || trip.loadingStartedAt)) {
+            
+            newLoading[trip.id] = true;
+            newStartTimes[trip.id] = trip.loading_started_at || trip.loadingStartedAt;
+          }
+        });
+
+        setLoadingTrips(newLoading);
+        setTripStartTimes(newStartTimes);
+
+        console.log(`[Loading State] Восстановлено ${Object.keys(newLoading).length} активных загрузок`);
       } catch (err) {
-        console.error('Ошибка загрузки отгруженных рейсов:', err);
+        console.error('Ошибка загрузки состояния загрузки:', err);
       }
     };
 
-    fetchCompletedTrips();
+    loadLoadingState();
   }, []);
 
-  // ==================== МАКСИМАЛЬНО СТРОГАЯ ФИЛЬТРАЦИЯ ====================
-  const filteredCompletedTrips = completedTrips
-    .filter((trip: any) => {
-      if (!trip) return false;
-
-      let tripDateStr = '';
-
-      // ПРИОРИТЕТ 1: Дата фактического выполнения (самое важное)
-      if (trip.production_created_at) {
-        tripDateStr = String(trip.production_created_at).substring(0, 10).trim();
-      } else if (trip.created_at) {
-        tripDateStr = String(trip.created_at).substring(0, 10).trim();
-      } 
-      // ПРИОРИТЕТ 2: delivery_date
-      else if (trip.delivery_date) {
-        tripDateStr = String(trip.delivery_date).substring(0, 10).trim();
-      } else if (trip.orders?.delivery_date) {
-        tripDateStr = String(trip.orders.delivery_date).substring(0, 10).trim();
-      }
-
-      // Локальная выбранная дата (без UTC сдвига)
-      const year = selectedDate.getFullYear();
-      const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
-      const day = String(selectedDate.getDate()).padStart(2, '0');
-      const selectedDateStr = `${year}-${month}-${day}`;
-
-      const shouldShow = tripDateStr === selectedDateStr;
-
-      // Отладка
-      //if (trip.order_id === 161) {
-      //  console.log(`[ФИЛЬТР 161] production_created_at="${trip.production_created_at}" | selected="${selectedDateStr}" → ${shouldShow ? '✅ ПОКАЗЫВАЕМ' : '❌ СКРЫВАЕМ'}`);
-      //  }
-
-      return shouldShow;
-    })
-    .map((trip: any) => ({
-      ...trip,
-      time: trip.start_time 
-        ? new Date(trip.start_time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) 
-        : '—',
-      loadedTime: trip.duration_minutes 
-        ? `${trip.duration_minutes} мин` 
-        : '—',
-      order_id: trip.order_id,
-      mixer_name: trip.mixer_name,
-      concrete_grade: trip.concrete_grade,
-      volume: trip.volume
-    }));
-
-  const startLoading = (trip: any) => {
+  // ==================== 1.1 НАЧАТЬ ЗАГРУЗКУ ====================
+  const startLoading = async (trip: any) => {
     const now = new Date().toISOString();
-    setTripStartTimes(prev => ({ ...prev, [trip.id]: now }));
-    setLoadingTrips(prev => ({ ...prev, [trip.id]: true }));
 
-    alert(`🚛 Загрузка начата: ${trip.mixer_name || trip.number} — Заказ #${trip.order_id || trip.orderId}`);
+    try {
+      await fetch('/api/adminCifra/order-mixers/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          id: trip.id, 
+          status: 'Загрузка',
+          loading_started_at: now 
+        })
+      });
+
+      setLoadingTrips(prev => ({ ...prev, [trip.id]: true }));
+      setTripStartTimes(prev => ({ ...prev, [trip.id]: now }));
+
+      alert(`🚛 Загрузка миксера ${trip.mixer_name || trip.number} начата`);
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка начала загрузки');
+    }
   };
 
+  // ==================== 1.2 ЗАВЕРШИТЬ ЗАГРУЗКУ ====================
   const completeLoading = async (trip: any) => {
-    const startTime = tripStartTimes[trip.id];
+    const startTime = tripStartTimes[trip.id] || trip.loading_started_at;
     if (!startTime) {
       alert('❗ Сначала нажмите кнопку "Начать"');
       return;
@@ -206,13 +188,11 @@ export default function OperatorBSUPage() {
 
       alert(`✅ Миксер успешно загружен!\nДлительность: ${durationMinutes} минут`);
 
-      // Обновляем список
       const res = await fetch('/api/adminCifra/production-log');
       if (res.ok) {
         const updated = await res.json();
         setCompletedTrips(Array.isArray(updated) ? updated : []);
       }
-
     } catch (err) {
       console.error(err);
       alert('Ошибка при сохранении производства');
@@ -225,6 +205,72 @@ export default function OperatorBSUPage() {
       return copy;
     });
   };
+
+        // ==================== 1.2 ОТГРУЖЕНО СЕГОДНЯ (загрузка из базы) ====================
+  const [completedTrips, setCompletedTrips] = useState<any[]>([]);
+
+  // Загрузка отгруженных рейсов из базы
+  useEffect(() => {
+    const fetchCompletedTrips = async () => {
+      try {
+        const res = await fetch('/api/adminCifra/production-log');
+        if (res.ok) {
+          const data = await res.json();
+          setCompletedTrips(Array.isArray(data) ? data : []);
+        }
+      } catch (err) {
+        console.error('Ошибка загрузки отгруженных рейсов:', err);
+      }
+    };
+
+    fetchCompletedTrips();
+  }, []);
+
+  
+
+   // ==================== МАКСИМАЛЬНО СТРОГАЯ ФИЛЬТРАЦИЯ ====================
+  const filteredCompletedTrips = completedTrips
+    .filter((trip: any) => {
+      if (!trip) return false;
+
+      let tripDateStr = '';
+
+      // ПРИОРИТЕТ 1: Дата фактического выполнения (самое важное)
+      if (trip.production_created_at) {
+        tripDateStr = String(trip.production_created_at).substring(0, 10).trim();
+      } else if (trip.created_at) {
+        tripDateStr = String(trip.created_at).substring(0, 10).trim();
+      } 
+      // ПРИОРИТЕТ 2: delivery_date
+      else if (trip.delivery_date) {
+        tripDateStr = String(trip.delivery_date).substring(0, 10).trim();
+      } else if (trip.orders?.delivery_date) {
+        tripDateStr = String(trip.orders.delivery_date).substring(0, 10).trim();
+      }
+
+      // Локальная выбранная дата (без UTC сдвига)
+      const year = selectedDate.getFullYear();
+      const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
+      const day = String(selectedDate.getDate()).padStart(2, '0');
+      const selectedDateStr = `${year}-${month}-${day}`;
+
+      const shouldShow = tripDateStr === selectedDateStr;
+
+      return shouldShow;
+    })
+    .map((trip: any) => ({
+      ...trip,
+      time: trip.start_time 
+        ? new Date(trip.start_time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) 
+        : '—',
+      loadedTime: trip.duration_minutes 
+        ? `${trip.duration_minutes} мин` 
+        : '—',
+      order_id: trip.order_id,
+      mixer_name: trip.mixer_name,
+      concrete_grade: trip.concrete_grade,
+      volume: trip.volume
+    }));
 
     // ==================== 2. СТАТИСТИКА ОПЕРАТОРА ====================
   const totalTrips = filteredCompletedTrips.length;
@@ -294,6 +340,18 @@ export default function OperatorBSUPage() {
     const next = new Date(selectedDate);
     next.setDate(next.getDate() + 1);
     setSelectedDate(next);
+  };
+
+    // ==================== 1.4 РАСЧЁТ ВРЕМЕНИ ЗАГРУЗКИ ====================
+  const getLoadingDuration = (tripId: number) => {
+    const startTime = tripStartTimes[tripId];
+    if (!startTime) return '—';
+
+    const start = new Date(startTime).getTime();
+    const now = new Date().getTime();
+    const minutes = Math.floor((now - start) / 60000);
+
+    return minutes > 0 ? `${minutes} мин` : '1 мин';
   };
 
   return (
@@ -535,25 +593,35 @@ export default function OperatorBSUPage() {
                         {client}
                       </div>
 
-                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
                         <button 
-                          onClick={(e) => { e.stopPropagation(); startLoading(trip); }} 
-                          disabled={isLoading}
+                          onClick={(e) => { 
+                            e.stopPropagation(); 
+                            startLoading(trip); 
+                          }} 
+                          disabled={loadingTrips[trip.id]}
                           style={{ 
                             padding: '7px 14px', 
-                            background: isLoading ? '#475569' : '#10B981', 
+                            background: loadingTrips[trip.id] ? '#475569' : '#10B981', 
                             color: 'white', 
                             border: 'none', 
                             borderRadius: '9999px', 
                             fontSize: '13px', 
                             fontWeight: '600',
-                            cursor: isLoading ? 'not-allowed' : 'pointer'
+                            cursor: loadingTrips[trip.id] ? 'not-allowed' : 'pointer',
+                            minWidth: '110px'
                           }}
                         >
-                          {isLoading ? 'Загрузка...' : 'Начать'}
+                          {loadingTrips[trip.id] 
+                            ? `В работе • ${getLoadingDuration(trip.id)}` 
+                            : 'Начать'}
                         </button>
+                        
                         <button 
-                          onClick={(e) => { e.stopPropagation(); completeLoading(trip); }} 
+                          onClick={(e) => { 
+                            e.stopPropagation(); 
+                            completeLoading(trip); 
+                          }} 
                           style={{ 
                             padding: '7px 14px', 
                             background: '#3B82F6', 

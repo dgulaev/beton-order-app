@@ -37,6 +37,32 @@ export default function ReportsPage() {
     loadHistory();
   }, []);
 
+    // ==================== ОПРЕДЕЛЕНИЕ РОЛИ ====================
+  const [userRole, setUserRole] = useState<string>('manager');
+
+  useEffect(() => {
+    const savedRole = localStorage.getItem('userRole');
+    if (savedRole) {
+      setUserRole(savedRole);
+    } else {
+      // Запрос к серверу (как в layout и дашборде)
+      fetch('/api/user/role', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          userId: localStorage.getItem('userId') 
+        }),
+      })
+        .then(res => res.json())
+        .then(data => {
+          const role = data.role || 'manager';
+          setUserRole(role);
+          localStorage.setItem('userRole', role);
+        })
+        .catch(() => setUserRole('manager'));
+    }
+  }, []);
+
   // ==================== ФИЛЬТРАЦИЯ И ПАГИНАЦИЯ ====================
   const filteredHistory = useMemo(() => {
     return history.filter(report => {
@@ -65,10 +91,41 @@ export default function ReportsPage() {
 
   const totalPages = Math.ceil(filteredHistory.length / itemsPerPage);
 
+    // ==================== СОРТИРОВКА: ТЕКУЩИЙ МЕСЯЦ СНАЧАЛА ====================
   const sortedHistory = useMemo(() => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = String(now.getMonth() + 1).padStart(2, '0');
+
     return [...filteredHistory].sort((a, b) => {
       const dateA = a.raw_data?.[0]?.date || a.report_date || '';
       const dateB = b.raw_data?.[0]?.date || b.report_date || '';
+
+      // Получаем YYYY-MM для сравнения месяца
+      let monthA = '';
+      let monthB = '';
+
+      if (dateA.includes('.')) {
+        const [_, m, y] = dateA.split('.');
+        monthA = `${y}-${m.padStart(2, '0')}`;
+      } else {
+        monthA = dateA.substring(0, 7);
+      }
+
+      if (dateB.includes('.')) {
+        const [_, m, y] = dateB.split('.');
+        monthB = `${y}-${m.padStart(2, '0')}`;
+      } else {
+        monthB = dateB.substring(0, 7);
+      }
+
+      const currentMonthKey = `${currentYear}-${currentMonth}`;
+
+      // 1. Отчёты текущего месяца — всегда выше
+      if (monthA === currentMonthKey && monthB !== currentMonthKey) return -1;
+      if (monthB === currentMonthKey && monthA !== currentMonthKey) return 1;
+
+      // 2. Внутри одного месяца — по убыванию даты
       return dateB.localeCompare(dateA);
     });
   }, [filteredHistory]);
@@ -623,16 +680,28 @@ export default function ReportsPage() {
                   >
                     Скрыть
                   </button>
+                  {/* Кнопка Удалить — только для Админа */}
+                   {userRole === 'admin' && (
                   <button 
-                    style={{ backgroundColor: '#EF4444', color: 'white', border: 'none', padding: '6px 16px', borderRadius: '9999px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
-                    onClick={async () => {
-                      if (!confirm('Удалить этот отчёт?')) return;
-                      await fetch(`/api/adminCifra/meka-report?id=${report.id}`, { method: 'DELETE' });
-                      loadHistory();
-                    }}
-                  >
-                    Удалить
-                  </button>
+                      style={{ 
+                        backgroundColor: '#EF4444', 
+                        color: 'white', 
+                        border: 'none', 
+                        padding: '6px 16px', 
+                        borderRadius: '9999px', 
+                        fontSize: '13px', 
+                        fontWeight: '600', 
+                        cursor: 'pointer' 
+                   }}
+                        onClick={async () => {
+                        if (!confirm('Удалить этот отчёт?')) return;
+                        await fetch(`/api/adminCifra/meka-report?id=${report.id}`, { method: 'DELETE' });
+                        loadHistory();
+                   }}
+                      >
+                      Удалить
+                   </button>
+                   )}
                 </div>
               </div>
             )) : (

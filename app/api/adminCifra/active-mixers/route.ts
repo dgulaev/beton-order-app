@@ -24,6 +24,7 @@ export async function GET(request: NextRequest) {
         created_at,
         updated_at,
         sort_order,
+        loading_started_at,
         orders!inner (
           id,
           delivery_date,
@@ -50,6 +51,7 @@ export async function GET(request: NextRequest) {
       status: item.status,
       created_at: item.created_at,
       updated_at: item.updated_at,
+      loading_started_at: item.loading_started_at,
       // Новые поля для оператора
       delivery_date: item.orders?.delivery_date || null,
       delivery_time: item.orders?.delivery_time || null,

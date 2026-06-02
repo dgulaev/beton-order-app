@@ -547,33 +547,37 @@ useEffect(() => {
   )}
 </div>
 
-            {/* ЗАКОММЕНТИРОВАНО */}
-            {/* 
-            <Link href="/adminCifra/orders" style={navLinkStyle(isActive('/adminCifra/orders'), isCollapsed)}>
-              <Package size={22} /> {!isCollapsed && <span>Все заказы</span>}
-            </Link>
-            */}
-
-            <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
-              <FlaskConical size={22} /> {!isCollapsed && <span>Рецепты</span>}
-            </Link>
-
-            <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers'), isCollapsed)}>
-              <Truck size={22} /> {!isCollapsed && <span>Миксеры</span>}
-            </Link>
-
-            <Link href="/adminCifra/clients" style={navLinkStyle(isActive('/adminCifra/clients'), isCollapsed)}>
-              <Users size={22} /> {!isCollapsed && <span>Клиенты</span>}
-            </Link>
-
-            <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
-              <UserCog size={22} /> {!isCollapsed && <span>Оператор БСУ</span>}
-            </Link>
-
-            {(userRole === 'admin') && (
-              <Link href="/adminCifra/withdrawals" style={navLinkStyle(isActive('/adminCifra/withdrawals'), isCollapsed)}>
-                <DollarSign size={22} /> {!isCollapsed && <span>Выводы наличных</span>}
+            {/* ==================== БЛОК 9.1: ОГРАНИЧЕНИЕ МЕНЮ ДЛЯ OPERATOR ==================== */}
+            {userRole === 'operator' ? (
+              /* Только Оператор БСУ для роли operator */
+              <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
+                <UserCog size={22} /> {!isCollapsed && <span>Оператор БСУ</span>}
               </Link>
+            ) : (
+              /* Полное меню для всех остальных ролей */
+              <>
+                <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
+                  <FlaskConical size={22} /> {!isCollapsed && <span>Рецепты</span>}
+                </Link>
+
+                <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers'), isCollapsed)}>
+                  <Truck size={22} /> {!isCollapsed && <span>Миксеры</span>}
+                </Link>
+
+                <Link href="/adminCifra/clients" style={navLinkStyle(isActive('/adminCifra/clients'), isCollapsed)}>
+                  <Users size={22} /> {!isCollapsed && <span>Клиенты</span>}
+                </Link>
+
+                <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
+                  <UserCog size={22} /> {!isCollapsed && <span>Оператор БСУ</span>}
+                </Link>
+
+                {(userRole === 'admin') && (
+                  <Link href="/adminCifra/withdrawals" style={navLinkStyle(isActive('/adminCifra/withdrawals'), isCollapsed)}>
+                    <DollarSign size={22} /> {!isCollapsed && <span>Выводы наличных</span>}
+                  </Link>
+                )}
+              </>
             )}
           </nav>
         </div>

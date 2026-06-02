@@ -336,7 +336,7 @@ export default function RecipesPage() {
       )}
 
       {/* ==================== МОДАЛКА РЕДАКТИРОВАНИЯ ==================== */}
-  {editingRecipe && (
+{editingRecipe && (
   <div style={{ 
     position: 'fixed', 
     inset: 0, 
@@ -364,7 +364,7 @@ export default function RecipesPage() {
           <input 
             value={editingRecipe.code || ''} 
             onChange={e => setEditingRecipe({...editingRecipe, code: e.target.value})} 
-            style={{ width: '100%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} 
+            style={{ width: '90%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} 
           />
         </div>
 
@@ -386,7 +386,7 @@ export default function RecipesPage() {
         <input 
           value={editingRecipe.name || ''} 
           onChange={e => setEditingRecipe({...editingRecipe, name: e.target.value})} 
-          style={{ width: '100%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} 
+          style={{ width: '96%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} 
         />
       </div>
 
@@ -396,7 +396,7 @@ export default function RecipesPage() {
           type="number" 
           value={editingRecipe.price || 0} 
           onChange={e => setEditingRecipe({...editingRecipe, price: Number(e.target.value)})} 
-          style={{ width: '100%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} 
+          style={{ width: '96%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '8px', color: '#fff' }} 
         />
       </div>
 
@@ -405,23 +405,27 @@ export default function RecipesPage() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
         <div>
           <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Цемент (кг)</label>
-          <input type="number" value={editingRecipe.cement || 0} onChange={e => setEditingRecipe({...editingRecipe, cement: Number(e.target.value)})} style={inputStyle} />
+          <input type="number" value={editingRecipe.cement || 0} onChange={e => setEditingRecipe({...editingRecipe, cement: Number(e.target.value)})} style={{...inputStyle, width: '90%', }} />
         </div>
         <div>
           <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Песок (кг)</label>
-          <input type="number" value={editingRecipe.sand || 0} onChange={e => setEditingRecipe({...editingRecipe, sand: Number(e.target.value)})} style={inputStyle} />
+          <input type="number" value={editingRecipe.sand || 0} onChange={e => setEditingRecipe({...editingRecipe, sand: Number(e.target.value)})} style={{...inputStyle, width: '92%', }} />
         </div>
         <div>
           <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Щебень (кг)</label>
-          <input type="number" value={editingRecipe.gravel || 0} onChange={e => setEditingRecipe({...editingRecipe, gravel: Number(e.target.value)})} style={inputStyle} />
+          <input type="number" value={editingRecipe.gravel || 0} onChange={e => setEditingRecipe({...editingRecipe, gravel: Number(e.target.value)})} style={{...inputStyle, width: '90%', }} />
         </div>
         <div>
           <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Вода (кг)</label>
-          <input type="number" value={editingRecipe.water || 0} onChange={e => setEditingRecipe({...editingRecipe, water: Number(e.target.value)})} style={inputStyle} />
+          <input type="number" value={editingRecipe.water || 0} onChange={e => setEditingRecipe({...editingRecipe, water: Number(e.target.value)})} style={{...inputStyle, width: '92%', }} />
         </div>
         <div>
-          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Добавка (кг)</label>
-          <input type="number" value={editingRecipe.additive || 0} onChange={e => setEditingRecipe({...editingRecipe, additive: Number(e.target.value)})} style={inputStyle} />
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Добавка 1 (кг)</label>
+          <input type="number" value={editingRecipe.additive || 0} onChange={e => setEditingRecipe({...editingRecipe, additive: Number(e.target.value)})} style={{...inputStyle, width: '90%', }} />
+        </div>
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Добавка 2 (кг)</label>
+          <input type="number" value={editingRecipe.additive2 || 0} onChange={e => setEditingRecipe({...editingRecipe, additive2: Number(e.target.value)})} style={{...inputStyle, width: '92%', }} />
         </div>
         <div>
           <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8', fontSize: '14px' }}>Активен</label>
