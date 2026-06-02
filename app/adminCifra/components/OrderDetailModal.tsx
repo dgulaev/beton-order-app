@@ -492,116 +492,117 @@ const currentMixers = mixerAssignments
     gap: '4px'
   }}>
     {currentMixers.length > 0 ? (
-      currentMixers.map((mixer, index) => (
-        <div 
-          key={mixer.id || index}
-          draggable
-          onDragStart={(e) => e.dataTransfer.setData('text/plain', index.toString())}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
-            const toIndex = index;
-            if (fromIndex === toIndex) return;
+      [...currentMixers]
+        .sort((a: any, b: any) => (a.time || '00:00').localeCompare(b.time || '00:00'))
+        .map((mixer: any, index: number) => (
+          <div 
+            key={mixer.id || index}
+            draggable
+            onDragStart={(e) => e.dataTransfer.setData('text/plain', index.toString())}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+              const toIndex = index;
+              if (fromIndex === toIndex) return;
 
-            const newList = [...currentMixers];
-            const [movedItem] = newList.splice(fromIndex, 1);
-            newList.splice(toIndex, 0, movedItem);
+              const newList = [...currentMixers];
+              const [movedItem] = newList.splice(fromIndex, 1);
+              newList.splice(toIndex, 0, movedItem);
 
-            const updatedList = newList.map((item, i) => ({
-              ...item,
-              sortOrder: i
-            }));
+              const updatedList = newList.map((item, i) => ({
+                ...item,
+                sortOrder: i
+              }));
 
-            setMixerAssignments(prev => 
-              prev.map(item => 
-                item.orderId === order.id 
-                  ? updatedList.find(m => m.id === item.id) || item 
-                  : item
-              )
-            );
-          }}
-          style={{ 
-            background: '#1E2937', 
-            padding: '6px 12px',
-            borderRadius: '10px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
-            minHeight: '36px',
-            cursor: 'grab',
-            userSelect: 'none'
-          }}
-        >
-          {/* Порядковый номер */}
-          <div style={{
-            width: '22px',
-            height: '22px',
-            background: '#334155',
-            borderRadius: '9999px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontWeight: '700',
-            color: '#94A3B8',
-            fontSize: '13px',
-            flexShrink: 0
-          }}>
-            {index + 1}
-          </div>
-
-          {/* Номер миксера */}
-          <div style={{ fontWeight: '700', fontSize: '14.5px', minWidth: '120px' }}>
-            {mixer.mixerName || mixer.number}
-          </div>
-
-          {/* ==================== ВРЕМЯ + ОБЪЁМ (в одну строку справа) ==================== */}
-          {/* Здесь добавили отображение времени и объема как в боковом окне */}
-          <div style={{ 
-            color: '#94A3B8', 
-            fontSize: '13px',
-            flex: 1,
-            textAlign: 'left'
-          }}>
-            {mixer.time && mixer.time !== '—' ? mixer.time : '—'} • {mixer.volume} м³
-          </div>
-
-          {/* Статус */}
-          <select 
-            value={mixer.status || 'Загрузка'} 
-            onChange={(e) => handleStatusChangeLocal(mixer.id, e.target.value)} 
+              setMixerAssignments(prev => 
+                prev.map(item => 
+                  item.orderId === order.id 
+                    ? updatedList.find(m => m.id === item.id) || item 
+                    : item
+                )
+              );
+            }}
             style={{ 
-              padding: '4px 8px', 
-              borderRadius: '9999px', 
-              background: '#0F172A', 
-              color: 'white', 
-              border: 'none', 
-              fontSize: '13px', 
-              minWidth: '120px' 
+              background: '#1E2937', 
+              padding: '6px 12px',
+              borderRadius: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              minHeight: '36px',
+              cursor: 'grab',
+              userSelect: 'none'
             }}
           >
-            <option value="Загрузка">🟡 Загрузка</option>
-            <option value="В пути">🔵 В пути</option>
-            <option value="На объекте">📍 На объекте</option>
-            <option value="Разгружен">🟢 Разгружен</option>
-            <option value="Возврат">↩️ Возврат</option>
-            <option value="Проблема">🔴 Проблема</option>
-          </select>
+            {/* Порядковый номер */}
+            <div style={{
+              width: '22px',
+              height: '22px',
+              background: '#334155',
+              borderRadius: '9999px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: '700',
+              color: '#94A3B8',
+              fontSize: '13px',
+              flexShrink: 0
+            }}>
+              {index + 1}
+            </div>
 
-          <button 
-            onClick={() => deleteMixer(mixer.id, index)} 
-            style={{ 
-              color: '#EF4444', 
-              background: 'none', 
-              border: 'none', 
-              cursor: 'pointer', 
-              fontSize: '17px',
-              padding: '2px 6px'
-            }}
-          >
-            ✕
-          </button>
-        </div>
-      ))
+            {/* Номер миксера */}
+            <div style={{ fontWeight: '700', fontSize: '14.5px', minWidth: '120px' }}>
+              {mixer.mixerName || mixer.number}
+            </div>
+
+            {/* ВРЕМЯ + ОБЪЁМ */}
+            <div style={{ 
+              color: '#94A3B8', 
+              fontSize: '13px',
+              flex: 1,
+              textAlign: 'left'
+            }}>
+              {mixer.time && mixer.time !== '—' ? mixer.time : '—'} • {mixer.volume} м³
+            </div>
+
+            {/* Статус */}
+            <select 
+              value={mixer.status || 'Загрузка'} 
+              onChange={(e) => handleStatusChangeLocal(mixer.id, e.target.value)} 
+              style={{ 
+                padding: '4px 8px', 
+                borderRadius: '9999px', 
+                background: '#0F172A', 
+                color: 'white', 
+                border: 'none', 
+                fontSize: '13px', 
+                minWidth: '120px' 
+              }}
+            >
+              <option value="Загрузка">🟡 Загрузка</option>
+              <option value="В пути">🔵 В пути</option>
+              <option value="На объекте">📍 На объекте</option>
+              <option value="Разгружен">🟢 Разгружен</option>
+              <option value="Возврат">↩️ Возврат</option>
+              <option value="Проблема">🔴 Проблема</option>
+            </select>
+
+            <button 
+              onClick={() => deleteMixer(mixer.id, index)} 
+              style={{ 
+                color: '#EF4444', 
+                background: 'none', 
+                border: 'none', 
+                cursor: 'pointer', 
+                fontSize: '17px',
+                padding: '2px 6px'
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        ))
     ) : (
       <div style={{ color: '#64748B', textAlign: 'center', padding: '30px 0', fontStyle: 'italic' }}>
         Пока нет назначенных миксеров

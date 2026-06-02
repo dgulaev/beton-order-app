@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import Calendar from '../Calendar';
 import { Order } from '../hooks/useCalendarOrders';
 import { createClient } from '@supabase/supabase-js';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import OrderDetailModal from '../components/OrderDetailModal';
 import Image from 'next/image';
+
 
 
 // Создаём клиент Supabase (один раз на весь файл)
@@ -1342,6 +1343,49 @@ const isLogisticsReady = assignedVolume >= orderVolume && assignedVolume > 0;
 const isFullyAssigned = assignedVolume >= orderVolume && assignedVolume > 0;
 const isReadyInDB = (order as any).logistics_ready === true;
 
+// ==================== 32. ГЕНЕРАЦИЯ ОТЧЁТА ДЛЯ МЕССЕНДЖЕРА ====================
+const generateDailyReport = () => {
+  if (groupedMixers.length === 0) {
+    alert('На выбранный день нет активных заявок');
+    return;
+  }
+
+  let report = `📋 Планирование на ${selectedDate.toLocaleDateString('ru-RU', { 
+    weekday: 'long', 
+    day: 'numeric', 
+    month: 'long' 
+  })}\n\n`;
+
+  groupedMixers.forEach((group, index) => {
+    const totalVol = group.mixers.reduce((sum, m) => sum + Number(m.volume || 0), 0);
+    
+    report += `${index + 1}) Заявка #${group.orderId} — ${group.client || '—'}\n`;
+    report += `   Время: ${group.deliveryTime || '—'} • ${totalVol} м³\n`;
+
+    group.mixers.forEach((mixer, i) => {
+      report += `   ${i+1}) ${mixer.number || mixer.mixer_name} — ${mixer.time || '—'} • ${mixer.volume} м³\n`;
+    });
+    report += `\n`;
+  });
+
+  report += `Всего на линии: ${activeMixersToday.length} миксеров\n`;
+
+  const win = window.open('', '_blank', 'width=850,height=780');
+  if (win) {
+    win.document.write(`
+      <html><head><title>Отчёт</title>
+      <style>body{font-family:Arial,sans-serif;padding:30px;line-height:1.8;font-size:15.5px;} pre{white-space:pre-wrap;}</style>
+      </head><body>
+      <h2>Отчёт на ${selectedDate.toLocaleDateString('ru-RU')}</h2>
+      <pre>${report}</pre>
+      <button onclick="navigator.clipboard.writeText(document.body.innerText).then(()=>alert('Отчёт скопирован!'))">📋 Скопировать</button>
+      </body></html>
+    `);
+  } else {
+    navigator.clipboard.writeText(report).then(() => alert('✅ Отчёт скопирован!'));
+  }
+};
+
 
   return (
     <div 
@@ -1579,107 +1623,111 @@ const isReadyInDB = (order as any).logistics_ready === true;
           </div>
 
          {/* Строки миксеров внутри заказа */}
-<div style={{ padding: '8px' }}>
-  {group.mixers.map((mixer: any, index: number) => (
-    <div 
-      key={mixer.id}
-      draggable
-      onDragStart={(e) => e.dataTransfer.setData('text/plain', `${group.orderId}-${index}`)}
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.currentTarget.style.background = '#2A3A52';
-      }}
-      onDragLeave={(e) => {
-        e.currentTarget.style.background = '#1E2937';
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        e.currentTarget.style.background = '#1E2937';
-        handleMixerDrop(e, group.orderId);
-      }}
-      style={{ 
-        background: '#1E2937', 
-        padding: '6px 12px',
-        borderRadius: '10px',
-        marginBottom: '5px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
-        minHeight: '34px',
-        cursor: 'grab',
-        userSelect: 'none'
-      }}
-    >
-      {/* Порядковый номер */}
-      <div style={{
-        width: '24px',
-        height: '24px',
-        background: '#334155',
-        borderRadius: '9999px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontWeight: '700',
-        color: '#94A3B8',
-        fontSize: '13px',
-        flexShrink: 0
-      }}>
-        {index + 1}
-      </div>
+         <div style={{ padding: '8px' }}>
+           {/* === ИСПРАВЛЕНИЕ: СОРТИРОВКА МИКСЕРОВ ПО ВРЕМЕНИ (самый ранний сверху) === */}
+           {[...group.mixers]
+             .sort((a, b) => (a.time || '00:00').localeCompare(b.time || '00:00'))
+             .map((mixer: any, index: number) => (
+               <div 
+                 key={mixer.id}
+                 draggable
+                 onDragStart={(e) => e.dataTransfer.setData('text/plain', `${group.orderId}-${index}`)}
+                 onDragOver={(e) => {
+                   e.preventDefault();
+                   e.currentTarget.style.background = '#2A3A52';
+                 }}
+                 onDragLeave={(e) => {
+                   e.currentTarget.style.background = '#1E2937';
+                 }}
+                 onDrop={(e) => {
+                   e.preventDefault();
+                   e.currentTarget.style.background = '#1E2937';
+                   handleMixerDrop(e, group.orderId);
+                 }}
+                 style={{ 
+                   background: '#1E2937', 
+                   padding: '6px 12px',
+                   borderRadius: '10px',
+                   marginBottom: '5px',
+                   display: 'flex',
+                   alignItems: 'center',
+                   gap: '12px',
+                   minHeight: '34px',
+                   cursor: 'grab',
+                   userSelect: 'none'
+                 }}
+               >
+                 {/* Порядковый номер */}
+                 <div style={{
+                   width: '24px',
+                   height: '24px',
+                   background: '#334155',
+                   borderRadius: '9999px',
+                   display: 'flex',
+                   alignItems: 'center',
+                   justifyContent: 'center',
+                   fontWeight: '700',
+                   color: '#94A3B8',
+                   fontSize: '13px',
+                   flexShrink: 0
+                 }}>
+                   {index + 1}
+                 </div>
 
-      {/* Номер миксера */}
-      <div style={{ fontWeight: '700', fontSize: '14.5px', minWidth: '120px' }}>
-        {mixer.number || mixer.mixer_name}
-      </div>
+                 {/* Номер миксера */}
+                 <div style={{ fontWeight: '700', fontSize: '14.5px', minWidth: '120px' }}>
+                   {mixer.number || mixer.mixer_name}
+                 </div>
 
-      {/* ==================== ВРЕМЯ + ОБЪЁМ (в одну строку справа) ==================== */}
-      <div style={{ 
-        color: '#94A3B8', 
-        fontSize: '13px',
-        flex: 1,
-        textAlign: 'left'
-      }}>
-        {mixer.time && mixer.time !== '—' ? mixer.time : '—'} • {mixer.volume} м³
-      </div>
+                 {/* ==================== ВРЕМЯ + ОБЪЁМ (в одну строку справа) ==================== */}
+                 <div style={{ 
+                   color: '#94A3B8', 
+                   fontSize: '13px',
+                   flex: 1,
+                   textAlign: 'left'
+                 }}>
+                   {mixer.time && mixer.time !== '—' ? mixer.time : '—'} • {mixer.volume} м³
+                 </div>
 
-      {/* Статус */}
-      <select 
-        value={mixer.status || 'Загрузка'}
-        onChange={(e) => handleStatusChange(mixer.id, e.target.value)}
-        style={{
-          padding: '4px 8px',
-          borderRadius: '9999px',
-          background: '#0F172A',
-          color: 'white',
-          border: 'none',
-          fontSize: '13px',
-          minWidth: '125px'
-        }}
-      >
-        <option value="Загрузка">🟡 Загрузка</option>
-        <option value="В пути">🔵 В пути</option>
-        <option value="На объекте">📍 На объекте</option>
-        <option value="Разгружен">🟢 Разгружен</option>
-        <option value="Возврат">↩️ Возврат</option>
-        <option value="Проблема">🔴 Проблема</option>
-      </select>
+                 {/* Статус */}
+                 <select 
+                   value={mixer.status || 'Загрузка'}
+                   onChange={(e) => handleStatusChange(mixer.id, e.target.value)}
+                   style={{
+                     padding: '4px 8px',
+                     borderRadius: '9999px',
+                     background: '#0F172A',
+                     color: 'white',
+                     border: 'none',
+                     fontSize: '13px',
+                     minWidth: '125px'
+                   }}
+                 >
+                   <option value="Загрузка">🟡 Загрузка</option>
+                   <option value="В пути">🔵 В пути</option>
+                   <option value="На объекте">📍 На объекте</option>
+                   <option value="Разгружен">🟢 Разгружен</option>
+                   <option value="Возврат">↩️ Возврат</option>
+                   <option value="Проблема">🔴 Проблема</option>
+                 </select>
 
-      <button 
-        onClick={() => deleteMixer(mixer.id, index)}
-        style={{ 
-          color: '#EF4444', 
-          background: 'none', 
-          border: 'none', 
-          cursor: 'pointer', 
-          fontSize: '17px',
-          padding: '2px 6px'
-        }}
-      >
-        ✕
-      </button>
-    </div>
-  ))}
-</div>
+                 <button 
+                   onClick={() => deleteMixer(mixer.id, index)}
+                   style={{ 
+                     color: '#EF4444', 
+                     background: 'none', 
+                     border: 'none', 
+                     cursor: 'pointer', 
+                     fontSize: '17px',
+                     padding: '2px 6px'
+                   }}
+                 >
+                   ✕
+                 </button>
+               </div>
+             ))
+           }
+         </div>
         </div>
       ))
     ) : (
@@ -1694,7 +1742,110 @@ const isReadyInDB = (order as any).logistics_ready === true;
         На выбранный день нет активных миксеров
       </div>
     )}
+
   </div>
+
+{/* ==================== КНОПКА СФОРМИРОВАТЬ ОТЧЁТ ==================== */}
+<button 
+  onClick={() => {
+    if (groupedMixers.length === 0) {
+      alert('На выбранный день нет активных заявок');
+      return;
+    }
+
+    const sortedGroups = [...groupedMixers].sort((a, b) => 
+      (a.deliveryTime || '00:00').localeCompare(b.deliveryTime || '00:00')
+    );
+
+    let report = `📋 ПЛАНИРОВАНИЕ НА ${selectedDate.toLocaleDateString('ru-RU', { 
+      weekday: 'long', 
+      day: 'numeric', 
+      month: 'long' 
+    })}\n\n`;
+
+    sortedGroups.forEach((group, index) => {
+      const totalVol = group.mixers.reduce((sum, m) => sum + Number(m.volume || 0), 0);
+      
+      const concreteGrade = 
+        (group as any).grade || 
+        (group as any).concrete_grade || 
+        ((group as any).mixers?.[0]?.grade) || 
+        ((group as any).mixers?.[0]?.concrete_grade) || 
+        '—';
+
+      report += `${index + 1}) Заявка #${group.orderId} — ${group.client || '—'}\n`;
+      report += `   Бетон: ${concreteGrade} • Время: ${group.deliveryTime || '—'} • ${totalVol} м³\n`;
+
+      const sortedMixers = [...group.mixers].sort((a, b) => 
+        (a.time || '00:00').localeCompare(b.time || '00:00')
+      );
+
+      sortedMixers.forEach((mixer, i) => {
+        report += `   ${i+1}) ${mixer.number || mixer.mixer_name} — ${mixer.time || '—'} • ${mixer.volume} м³\n`;
+      });
+
+      report += `\n`;
+    });
+
+    report += `Всего на линии: ${activeMixersToday.length} миксеров\n`;
+
+    // Внутреннее модальное окно
+    const modal = document.createElement('div');
+    modal.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.92);z-index:10000;display:flex;align-items:center;justify-content:center;`;
+
+    modal.innerHTML = `
+      <div style="background:#1E2937;width:820px;max-width:80%;border-radius:16px;padding:25px; height:1400px;    max-height:100vh;overflow:auto;">
+        <h2 style="margin-top:0;color:#60A5FA;text-align:center;">Отчёт на ${selectedDate.toLocaleDateString('ru-RU')}</h2>
+        <textarea id="reportText" style="width:96%;height:1200px;font-size:15.2px;padding:15px;font-family:monospace;background:#0F172A;color:#E2E8F0;border:1px solid #475569;border-radius:8px;resize:vertical;">${report}</textarea>
+        
+        <div style="text-align:center;margin-top:20px;">
+          <button id="copyBtn" style="padding:14px 32px;background:#10B981;color:white;border:none;border-radius:12px;font-size:16px;cursor:pointer;">📋 Скопировать отчёт</button>
+          <button id="closeBtn" style="padding:14px 32px;background:#475569;color:white;border:none;border-radius:12px;font-size:16px;cursor:pointer;margin-left:12px;">Закрыть</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    // Копирование
+    setTimeout(() => {
+      const copyBtn = document.getElementById('copyBtn');
+      const closeBtn = document.getElementById('closeBtn');
+      const textArea = document.getElementById('reportText') as HTMLTextAreaElement;
+
+      if (copyBtn && textArea) {
+        copyBtn.addEventListener('click', () => {
+          textArea.select();
+          try {
+            document.execCommand('copy');
+            alert('✅ Отчёт успешно скопирован!');
+          } catch (e) {
+            alert('Выделите текст вручную (Ctrl + A → Ctrl + C)');
+          }
+        });
+      }
+
+      if (closeBtn) {
+        closeBtn.addEventListener('click', () => modal.remove());
+      }
+    }, 100);
+  }}
+  style={{
+    marginTop: '24px',
+    width: '100%',
+    padding: '16px',
+    background: '#6366F1',
+    color: 'white',
+    border: 'none',
+    borderRadius: '16px',
+    fontSize: '16px',
+    fontWeight: '600',
+    cursor: 'pointer'
+  }}
+>
+  📋 Сформировать отчёт за день
+</button>
+
 </div>
 </div>
 
