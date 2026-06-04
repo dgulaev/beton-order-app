@@ -490,7 +490,7 @@ useEffect(() => {
             </Link>
 
             {/* ==================== БЛОК 9: ПУНКТ МЕНЮ "ЗАЯВКИ" ==================== */}
-<div style={{ position: 'relative' }}>
+<div>
   <Link 
     href="/adminCifra/zayavki" 
     style={navLinkStyle(isActive('/adminCifra/zayavki'), isCollapsed)}
@@ -499,52 +499,6 @@ useEffect(() => {
     <Package size={22} /> 
     {!isCollapsed && <span>Заявки</span>}
   </Link>
-
-  {newOrdersCount > 0 && (
-    <>
-      {/* Бейдж */}
-      <div style={{
-        position: 'absolute',
-        top: isCollapsed ? '-9px' : '-6px',
-        right: isCollapsed ? '-6px' : '8px',
-        background: '#ef4444',
-        color: 'white',
-        fontSize: '11px',
-        fontWeight: '700',
-        minWidth: '20px',
-        height: '20px',
-        borderRadius: '9999px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '0 6px',
-        border: '2px solid #1E2937',
-        boxShadow: '0 0 0 3px rgba(239, 68, 68, 0.5)',
-        zIndex: 30,
-        cursor: 'pointer'
-      }}
-      onClick={(e) => {
-        e.stopPropagation();
-        setNewOrdersCount(0);
-      }}
-      >
-        {newOrdersCount > 9 ? '9+' : newOrdersCount}
-      </div>
-
-      {/* Колокольчик — улучшенное позиционирование */}
-      <Bell 
-        size={18} 
-        style={{ 
-          position: 'absolute',
-          top: isCollapsed ? '9px' : '13px',
-          right: isCollapsed ? '2px' : '12px',
-          color: '#fbbf24',
-          animation: isBellAnimating ? 'bellRing 0.7s ease 4' : 'none',
-          zIndex: 25
-        }} 
-      />
-    </>
-  )}
 </div>
 
             {/* ==================== БЛОК 9.1: ОГРАНИЧЕНИЕ МЕНЮ ДЛЯ OPERATOR ==================== */}

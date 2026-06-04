@@ -49,42 +49,45 @@ export default function ClientsPage() {
   // ==================== 2. ЗАГРУЗКА ВСЕХ ПОЛЬЗОВАТЕЛЕЙ + ГРУППИРОВКА КЛИЕНТОВ ====================
 useEffect(() => {
   const fetchAllUsers = async () => {
+    const startTime = Date.now();
     setLoading(true);
+
     try {
-      console.log('🔄 [Загрузка] Начинаем загрузку данных...');
+      console.log('🔄 [Загрузка] Начинаем...');
 
-      // 1. Загружаем группы клиентов
-      const clientGroupsRes = await fetch('/api/adminCifra/clients/grouped');
-      let clientGroups: any[] = [];
-      if (clientGroupsRes.ok) {
-        clientGroups = await clientGroupsRes.json();
-      }
+      // Параллельная загрузка
+      const [groupsRes, allRes] = await Promise.all([
+        fetch('/api/adminCifra/clients/grouped'),
+        fetch('/api/adminCifra/clients?all=true')
+      ]);
 
-      // 2. Загружаем всех пользователей (включая стафф)
-      const allRes = await fetch('/api/adminCifra/clients?all=true');
-      let allUsers: any[] = [];
-      if (allRes.ok) {
-        allUsers = await allRes.json();
-      }
+      const clientGroups = groupsRes.ok ? await groupsRes.json() : [];
+      const allUsers = allRes.ok ? await allRes.json() : [];
 
-      // 3. Отделяем стафф
       const staffList = allUsers.filter((u: any) => 
         ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase())
       );
 
-      console.log(`👔 Загружено сотрудников: ${staffList.length}`);
-      console.log(`👥 Загружено групп клиентов: ${clientGroups.length}`);
-
-      // 4. Объединяем стафф + группы клиентов
-      const combined = [
+      let combined = [
         ...staffList.map((s: any) => ({ ...s, isStaff: true })),
         ...clientGroups
       ];
 
+      // Удаляем дубликаты
+      const seen = new Set();
+      combined = combined.filter(item => {
+        const key = item.groupId || item.user_id || item.id;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
       setProfiles(combined);
-      console.log(`✅ Итого в profiles: ${combined.length} записей`);
+
+      console.log(`✅ Загрузка завершена за ${Date.now() - startTime} мс | Всего записей: ${combined.length}`);
+
     } catch (err) {
-      console.error('❌ Ошибка загрузки пользователей:', err);
+      console.error('❌ Ошибка загрузки:', err);
     } finally {
       setLoading(false);
     }
