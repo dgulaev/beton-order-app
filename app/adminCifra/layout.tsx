@@ -3,7 +3,10 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell } from 'lucide-react';
+
+// === ИСПРАВЛЕННЫЙ ИМПОРТ REACT ===
 import { useEffect, useState, useRef } from 'react';
+
 import { createClient } from '@/app/utils/supabase/client';
 import Image from 'next/image';
 
@@ -17,14 +20,44 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const [isCollapsed, setIsCollapsed] = useState(true);
 
   // ==================== 2. СОСТОЯНИЯ УВЕДОМЛЕНИЙ ====================
-  const [newOrdersCount, setNewOrdersCount] = useState(0);
-  const [lastNotificationId, setLastNotificationId] = useState<number | null>(null);
-  const [isBellAnimating, setIsBellAnimating] = useState(false);
+const [newOrdersCount, setNewOrdersCount] = useState(0);
+const [lastNotificationId, setLastNotificationId] = useState<number | null>(null);
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+// ==================== 2.1 СОСТОЯНИЕ УВЕДОМЛЕНИЙ ПО КЛИЕНТАМ ====================
+const [clientReminders, setClientReminders] = useState<any[]>([]);
 
-  // ==================== 2.1 СОСТОЯНИЕ УВЕДОМЛЕНИЙ ПО КЛИЕНТАМ ====================
-  const [clientReminders, setClientReminders] = useState<any[]>([]);
+const audioRef = useRef<HTMLAudioElement | null>(null);
+
+// Для удобного тестирования в консоли
+useEffect(() => {
+  (window as any).showVisualNotification = showVisualNotification;
+  console.log('✅ window.showVisualNotification доступна');
+}, []);
+
+// Для тестирования звука в консоли
+  useEffect(() => {
+    (window as any).playNotificationSound = playNotificationSound;
+    console.log('✅ playNotificationSound доступна в консоли');
+  }, []);
+
+// ==================== 2.2 ИНИЦИАЛИЗАЦИЯ ЗВУКА ====================
+useEffect(() => {
+  audioRef.current = new Audio('/sounds/new-order.mp3');
+  if (audioRef.current) {
+    audioRef.current.volume = 0.9;
+  }
+}, []);
+
+const playNotificationSound = () => {
+  const audio = audioRef.current;
+  if (!audio) return;
+
+  audio.currentTime = 0;
+  audio.play().catch((err) => {
+    console.log('Звук заблокирован браузером (нормально):', err.message);
+  });
+};
+  
 
   // ==================== 3. ПРОВЕРКА РОЛИ ====================
   useEffect(() => {
@@ -52,26 +85,6 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
    }
   }, []);
 
-  // ==================== 4. ИНИЦИАЛИЗАЦИЯ ЗВУКА ====================
-  useEffect(() => {
-    audioRef.current = new Audio('/sounds/new-order.mp3');
-    audioRef.current.volume = 0.75;
-  }, []);
-
-  const playNotificationSound = () => {
-  if (audioRef.current) {
-    audioRef.current.currentTime = 0;
-    audioRef.current.play().catch(err => {
-      console.log('Sound play error (ожидаемо в некоторых браузерах):', err.message);
-      // Не показываем ошибку пользователю
-    });
-  }
-};
-
-  const triggerBellAnimation = () => {
-    setIsBellAnimating(true);
-    setTimeout(() => setIsBellAnimating(false), 2500);
-  };
 
   // ==================== 4.2 УВЕДОМЛЕНИЕ ПО КЛИЕНТУ (НОВЫЙ БЛОК) ====================
   const showClientReminder = (client: any) => {
@@ -134,10 +147,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
     document.body.appendChild(notif);
     playNotificationSound();
-    triggerBellAnimation();
   };
-
- // ==================== БЛОК 4.1 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
+// ==================== БЛОК 4.1 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
 const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', orderData?: any, oldData?: any) => {
   const orderId = orderData?.id || '—';
 
@@ -145,18 +156,22 @@ const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', 
   let message = '';
   let emoji = '';
 
+  // Функция форматирования даты в ДД-ММ-ГГГГ
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}-${month}-${year}`;
+  };
+
   if (type === 'new') {
     emoji = '🆕';
     title = 'Новая заявка!';
-    // Добавляем дату доставки
-    const deliveryDate = orderData?.delivery_date 
-      ? new Date(orderData.delivery_date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) 
-      : '';
-    
+    const deliveryStr = formatDate(orderData?.delivery_date);
     message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} м³`;
-    if (deliveryDate) {
-      message += ` — на ${deliveryDate}`;
-    }
+    if (deliveryStr) message += ` — на ${deliveryStr}`;
   } 
   else if (type === 'status') {
     emoji = '🔄';
@@ -175,8 +190,16 @@ const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', 
   else if (type === 'datetime') {
     emoji = '🕒';
     title = 'Изменены дата и время';
-    message = `Заявка №${orderId} — ${orderData?.delivery_date} ${orderData?.delivery_time || ''}`;
+    const deliveryStr = formatDate(orderData?.delivery_date);
+    message = `Заявка №${orderId} — ${deliveryStr}`;
+    if (orderData?.delivery_time) {
+      message += ` ${orderData.delivery_time}`;
+    }
   }
+
+  // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
+  playNotificationSound();   // ← Звук для ВСЕХ типов уведомлений
+  // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
 
   const notif = document.createElement('div');
   notif.style.cssText = `
@@ -193,7 +216,7 @@ const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', 
     display: flex;
     align-items: center;
     gap: 14px;
-    min-width: 380px;   /* чуть шире из-за даты */
+    min-width: 390px;
     cursor: pointer;
   `;
 
@@ -210,11 +233,6 @@ const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', 
 
   const closeNotification = () => {
     notif.remove();
-    const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
-    if (!closed.includes(orderId)) {
-      closed.push(orderId);
-      localStorage.setItem('closedNotifications', JSON.stringify(closed));
-    }
     setNewOrdersCount(prev => Math.max(0, prev - 1));
   };
 
@@ -235,16 +253,17 @@ const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', 
   document.body.appendChild(notif);
 };
 
- // ==================== БЛОК 5. УЛУЧШЕННЫЙ POLLING (4 ТИПА УВЕДОМЛЕНИЙ) ====================
+ // ==================== БЛОК 5. УЛУЧШЕННЫЙ POLLING (ФИКС ПОВТОРНЫХ УВЕДОМЛЕНИЙ) ====================
 useEffect(() => {
   if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) {
     return;
   }
 
-  console.log(`✅ Polling (4 типа) запущен для роли: ${userRole}`);
+  console.log(`✅ Polling запущен для роли: ${userRole}`);
 
-  let lastOrderCount = 0;
-  let lastKnownData: Record<number, any> = {}; // сохраняем предыдущие данные заявки
+  // Восстанавливаем последний обработанный ID из localStorage
+  let lastMaxOrderId = parseInt(localStorage.getItem('lastMaxOrderId') || '0');
+  let lastKnownData: Record<number, any> = {};
 
   const checkOrders = async () => {
     try {
@@ -258,52 +277,49 @@ useEffect(() => {
       const data = await res.json();
       const orders = data.orders || data || [];
 
-      // === 1. Новые заявки ===
-      if (orders.length > lastOrderCount) {
-        const newCount = orders.length - lastOrderCount;
-        console.log(`🆕 Новых заявок: ${newCount}`);
+      const currentMaxId = orders.length > 0 ? Math.max(...orders.map((o: any) => o.id)) : 0;
 
-        setNewOrdersCount(prev => prev + newCount);
-        playNotificationSound();
-        showVisualNotification('new', orders[0]);
-        triggerBellAnimation();
+      // === НОВЫЕ ЗАЯВКИ ===
+      if (currentMaxId > lastMaxOrderId) {
+        const newOrders = orders.filter((o: any) => o.id > lastMaxOrderId);
+
+        console.log(`🆕 Найдено новых заявок: ${newOrders.length}`);
+
+        for (const newOrder of newOrders) {
+          setNewOrdersCount(prev => prev + 1);
+          playNotificationSound();
+          showVisualNotification('new', newOrder);
+        }
+
+        // Сохраняем прогресс
+        lastMaxOrderId = currentMaxId;
+        localStorage.setItem('lastMaxOrderId', currentMaxId.toString());
       }
 
-      // === 2,3,4. Изменения в существующих заявках ===
+      // === Изменения в существующих заявках ===
       orders.forEach((order: any) => {
         const prev = lastKnownData[order.id];
 
         if (prev) {
-          // Изменение статуса
           if (prev.status !== order.status) {
-            console.log(`🔄 Изменение статуса #${order.id}`);
             playNotificationSound();
             showVisualNotification('status', order);
-            triggerBellAnimation();
+            
           }
-
-          // Изменение объёма
           if (prev.volume !== order.volume) {
-            console.log(`📦 Изменение объёма #${order.id}`);
             playNotificationSound();
             showVisualNotification('volume', order, prev);
-            triggerBellAnimation();
+            
           }
-
-          // Изменение даты/времени
           if (prev.delivery_date !== order.delivery_date || prev.delivery_time !== order.delivery_time) {
-            console.log(`🕒 Изменение даты/времени #${order.id}`);
             playNotificationSound();
             showVisualNotification('datetime', order);
-            triggerBellAnimation();
+            
           }
         }
 
-        // Сохраняем текущие данные
         lastKnownData[order.id] = { ...order };
       });
-
-      lastOrderCount = orders.length;
 
     } catch (err) {
       console.warn('Polling error:', err);
@@ -396,6 +412,8 @@ useEffect(() => {
   };
 
   const scale = getGlobalScale();
+
+  
 
   return (
     <div style={{ 

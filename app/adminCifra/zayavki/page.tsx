@@ -356,13 +356,23 @@ ${order.customer_type?.includes('Юридическое')
     })
     .sort((a, b) => (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00'));
 
-  // KPI
-  const totalVolume = dayOrders.reduce((sum: number, o: Order) => sum + (Number(o.volume) || 0), 0);
-  const completedVolume = dayOrders
+  // ==================== KPI ====================
+  // Исключаем отменённые заявки из всех расчётов
+  const activeOrders = dayOrders.filter((o: Order) => o.status !== 'cancelled');
+
+  const totalVolume = activeOrders.reduce((sum: number, o: Order) => 
+    sum + (Number(o.volume) || 0), 0);
+
+  const completedVolume = activeOrders
     .filter((o: Order) => o.status === 'completed')
-    .reduce((sum: number, o: Order) => sum + (Number(o.volume) || 0), 0);
-  const deliveriesCount = dayOrders.length;
-  const pprz = totalVolume > 0 ? Math.round((completedVolume / totalVolume) * 100) : 0;
+    .reduce((sum: number, o: Order) => 
+      sum + (Number(o.volume) || 0), 0);
+
+  const deliveriesCount = activeOrders.length;   // количество активных заявок
+
+  const pprz = totalVolume > 0 
+    ? Math.round((completedVolume / totalVolume) * 100) 
+    : 0;
 
               // ==================== НЕДЕЛЯ (ПН - ВС) ====================
   const getWeekDays = () => {
@@ -447,15 +457,18 @@ ${order.customer_type?.includes('Юридическое')
     fetchRecipes();
   }, []);
 
-        // ==================== РАСЧЁТ ЦЕМЕНТА ====================
+         // ==================== РАСЧЁТ ЦЕМЕНТА ====================
   const calculateCementNeeded = (onlyCompleted: boolean) => {
-    const orders = onlyCompleted 
-      ? dayOrders.filter(o => o.status === 'completed')
-      : dayOrders;
+    // Исключаем отменённые заявки из расчётов
+    let orders = dayOrders.filter((o: Order) => o.status !== 'cancelled');
+
+    if (onlyCompleted) {
+      orders = orders.filter((o: Order) => o.status === 'completed');
+    }
 
     let totalKg = 0;
 
-    console.log(`📊 Расчёт цемента. Всего заказов на день: ${orders.length}`);
+    console.log(`📊 Расчёт цемента. Всего активных заказов на день: ${orders.length}`);
 
     orders.forEach((order: any, index: number) => {
       const grade = String(order.grade || '').trim();
@@ -463,7 +476,7 @@ ${order.customer_type?.includes('Юридическое')
 
       if (volume <= 0) return;
 
-      // Расширенный поиск
+      // Расширенный поиск рецепта
       let recipe = recipes.find(r => r.code === grade);
       if (!recipe) recipe = recipes.find(r => r.code === grade.replace('и', ''));
       if (!recipe) recipe = recipes.find(r => r.name?.includes(grade));
@@ -480,11 +493,14 @@ ${order.customer_type?.includes('Юридическое')
     return tons;
   };
 
-    // ==================== РАСЧЁТ ДОБАВОК (в кг) ====================
+  // ==================== РАСЧЁТ ДОБАВОК (в кг) ====================
   const calculateAdditiveNeeded = (onlyCompleted: boolean) => {
-    const orders = onlyCompleted 
-      ? dayOrders.filter(o => o.status === 'completed')
-      : dayOrders;
+    // Исключаем отменённые заявки из расчётов
+    let orders = dayOrders.filter((o: Order) => o.status !== 'cancelled');
+
+    if (onlyCompleted) {
+      orders = orders.filter((o: Order) => o.status === 'completed');
+    }
 
     let totalKg = 0;
 
@@ -503,7 +519,7 @@ ${order.customer_type?.includes('Юридическое')
       }
     });
 
-    return totalKg.toFixed(1);   // ← оставляем в кг, без /1000
+    return totalKg.toFixed(1);   // ← оставляем в кг
   };
 
 
@@ -675,63 +691,86 @@ ${order.customer_type?.includes('Юридическое')
             </div>
 
             {/* ==================== СПИСОК ДНЕЙ НЕДЕЛИ ==================== */}
-            <div style={{ 
-              flex: 1,
-              overflowY: 'hidden',
-              paddingRight: '8px',
-              minHeight: '0'
-            }}>
-              {weekDays.map((d) => {
-                const dateStr = getLocalDateString(d);
-                const count = getOrdersCountForDate(d);
-                const isSelected = dateStr === selectedDateStr;
-                const isToday = d.toDateString() === new Date().toDateString();
+<div style={{ 
+  flex: 1, 
+  overflowY: 'auto', 
+  paddingRight: '8px'
+}}>
+  {weekDays.map((d: Date) => {
+    const dateStr = d.toISOString().split('T')[0];
+    const count = getOrdersCountForDate(d);
+    const isSelected = dateStr === selectedDateStr;
+    const isToday = d.toDateString() === new Date().toDateString();
 
-                return (
-                  <div
-                    key={dateStr}
-                    onClick={() => setSelectedDate(d)}
-                    style={{
-                      padding: '16px 20px',
-                      marginBottom: '8px',
-                      background: isSelected ? '#3B82F620' : '#25334A',
-                      borderRadius: '16px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      border: isSelected ? '2px solid #3B82F6' : 'none',
-                      transition: 'all 0.2s ease',
-                      userSelect: 'none',
-                      WebkitUserSelect: 'none'
-                    }}
-                    onMouseDown={(e) => e.preventDefault()}
-                  >
-                    <div style={{ fontWeight: '600' }}>
-                      {d.toLocaleDateString('ru-RU', { 
-                        weekday: 'short', 
-                        day: 'numeric', 
-                        month: 'short' 
-                      })}
-                      {isToday && <span style={{ color: '#60A5FA', marginLeft: '6px' }}>●</span>}
-                    </div>
-                    
-                    <div style={{ 
-                      background: '#334155', 
-                      color: '#CBD5E1', 
-                      padding: '4px 12px', 
-                      borderRadius: '9999px',
-                      fontSize: '14px',
-                      fontWeight: '600',
-                      minWidth: '28px',
-                      textAlign: 'center'
-                    }}>
-                      {count}
-                    </div>
-                  </div>
-                );
-              })}
+    // Количество отменённых заявок в этот день
+    const cancelledCount = dayOrders.filter(o => {
+      const orderDate = typeof o.delivery_date === 'string' 
+        ? o.delivery_date.substring(0, 10) 
+        : new Date(o.delivery_date).toISOString().substring(0, 10);
+      return orderDate === dateStr && o.status === 'cancelled';
+    }).length;
+
+    return (
+      <div
+        key={dateStr}
+        onClick={() => setSelectedDate(d)}
+        style={{
+          padding: '16px 20px',
+          marginBottom: '8px',
+          background: isSelected ? '#3B82F620' : '#25334A',
+          borderRadius: '16px',
+          cursor: 'pointer',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          border: isSelected ? '2px solid #3B82F6' : 'none',
+          transition: 'all 0.2s ease',
+          userSelect: 'none'
+        }}
+      >
+        <div style={{ fontWeight: '600' }}>
+          {d.toLocaleDateString('ru-RU', { 
+            weekday: 'short', 
+            day: 'numeric', 
+            month: 'short' 
+          })}
+          {isToday && <span style={{ color: '#60A5FA', marginLeft: '6px' }}>●</span>}
+        </div>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* Бейдж отменённых заявок — теперь СЛЕВА */}
+          {cancelledCount > 0 && (
+            <div style={{
+              background: '#EF444420',
+              color: '#EF4444',
+              padding: '4px 10px',
+              borderRadius: '9999px',
+              fontSize: '13px',
+              fontWeight: '600',
+              border: '1px solid #EF444440'
+            }}>
+              -{cancelledCount}
             </div>
+          )}
+
+          {/* Основной счётчик активных заявок */}
+          <div style={{ 
+            background: '#334155', 
+            color: '#CBD5E1', 
+            padding: '4px 12px', 
+            borderRadius: '9999px',
+            fontSize: '14px',
+            fontWeight: '600',
+            minWidth: '28px',
+            textAlign: 'center'
+          }}>
+            {count}
+          </div>
+        </div>
+      </div>
+    );
+  })}
+</div>
 
                                     {/* ==================== РАЗДЕЛИТЕЛЬ + СВОДКА ЗА НЕДЕЛЮ ==================== */}
             <div style={{ marginTop: '12px', paddingTop: '16px', borderTop: '1px solid #334155' }}>
@@ -897,26 +936,28 @@ ${order.customer_type?.includes('Юридическое')
     overflowY: 'auto', 
     display: 'flex', 
     flexDirection: 'column', 
-    gap: '12px',
+    gap: '10px',
     paddingRight: '8px'
   }}>
     {loading ? (
       <div style={{ textAlign: 'center', padding: '100px', color: '#64748B' }}>Загрузка заявок...</div>
     ) : filteredOrders.length > 0 ? filteredOrders.map((order: Order, index: number) => (
       <div
-        key={order.id}
-        onClick={() => handleOpenOrder(order)}
-        style={{
-          background: '#25334A',
-          borderRadius: '16px',
-          padding: '20px',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '24px',
-          transition: 'all 0.2s'
-        }}
-      >
+  key={order.id}
+  onClick={() => handleOpenOrder(order)}
+  style={{
+    background: '#25334A',
+    borderRadius: '16px',
+    padding: '16px 20px',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '20px',
+    transition: 'all 0.2s',
+    minHeight: '14px',           // ← основная регулировка высоты строки
+    flexShrink: 0
+  }}
+>
         {/* Порядковый номер */}
         <div style={{ 
           width: '50px', 

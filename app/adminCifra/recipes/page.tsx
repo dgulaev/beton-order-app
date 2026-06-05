@@ -40,30 +40,32 @@ export default function RecipesPage() {
   };
 
   // ==================== СОХРАНЕНИЕ РЕЦЕПТА ====================
-  const saveRecipe = async (recipe: any) => {
-    const method = recipe.id ? 'PUT' : 'POST';
-    const url = recipe.id 
-      ? `/api/adminCifra/recipes/${recipe.id}` 
-      : '/api/adminCifra/recipes';
+ const saveRecipe = async (recipe: any) => {
+  const method = recipe.id ? 'PUT' : 'POST';
+  const url = recipe.id 
+    ? `/api/adminCifra/recipes/${recipe.id}` 
+    : '/api/adminCifra/recipes';
 
-    try {
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(recipe),
-      });
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(recipe),
+    });
 
-      if (res.ok) {
-        fetchRecipes();           // обновляем список
-        setEditingRecipe(null);
-        alert('✅ Рецепт успешно сохранён!');
-      } else {
-        alert('Ошибка сохранения');
-      }
-    } catch (e) {
-      alert('Ошибка соединения с сервером');
+    if (res.ok) {
+      fetchRecipes();
+      setEditingRecipe(null);
+      alert('✅ Рецепт успешно сохранён!');
+    } else {
+      const errText = await res.text();
+      alert(`Ошибка сохранения: ${res.status} ${errText}`);
     }
-  };
+  } catch (e) {
+    console.error(e);
+    alert('Ошибка соединения с сервером');
+  }
+};
 
   // ==================== УДАЛЕНИЕ РЕЦЕПТА ====================
   const deleteRecipe = async (id: number) => {

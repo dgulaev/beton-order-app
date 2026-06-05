@@ -44,7 +44,7 @@ export async function PUT(request: NextRequest) {
 
     console.log(`🔄 Сравнение полей. Роль: ${finalUserRole} | Имя: ${userName}`);
 
-    for (const field of fieldsToTrack) {
+        for (const field of fieldsToTrack) {
       const oldValue = currentOrder[field];
       const newValue = updateData[field];
 
@@ -54,7 +54,16 @@ export async function PUT(request: NextRequest) {
       const newStr = newValue !== null && newValue !== undefined ? String(newValue).trim() : '';
 
       if (oldStr !== newStr) {
-        const actionText = `Изменено поле ${field}`;
+        let actionText = `Изменено поле ${field}`;
+
+        // Специальная обработка для "Под вопросом"
+        if (field === 'is_questionable') {
+          if (newValue === true || newValue === 'true') {
+            actionText = 'Поставил метку "Под вопросом"';
+          } else {
+            actionText = 'Снял метку "Под вопросом"';
+          }
+        }
 
         console.log(`📝 ${actionText}: "${oldStr}" → "${newStr}"`);
 
