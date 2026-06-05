@@ -78,14 +78,14 @@ export default function NewOrderModal({
     loadRecipes();
   }, []);
 
-  // ==================== 5. ФОРМА ====================
+    // ==================== 5. ФОРМА ====================
   const [form, setForm] = useState({
     grade: 'М300',
     volume: '',
     deliveryDate: new Date().toISOString().split('T')[0],
     deliveryTime: '10:00',
     address: '',
-    customerType: 'physical' as 'physical' | 'legal',
+    customerType: 'legal' as 'physical' | 'legal',   // ← Изменено с 'physical' на 'legal'
     organizationName: '',
     fullName: '',
     phone: '',

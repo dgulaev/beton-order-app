@@ -37,86 +37,108 @@ export async function POST(request: NextRequest) {
     console.log(`📍 [Order API] Источник заявки: ${isFromAdmin ? 'АДМИНКА ЦИФРА' : 'МИНИ-ПРИЛОЖЕНИЕ МАКС'}`);
 
     // ================================================
-    // 3. ЛОГИКА СОЗДАНИЯ/ПОИСКА КЛИЕНТА ИЗ АДМИНКИ
-    // ================================================
-    let finalUserId = userId;
+// 3. ЛОГИКА СОЗДАНИЯ/ПОИСКА КЛИЕНТА ИЗ АДМИНКИ
+// ================================================
+let finalUserId = userId;
 
-    if (isFromAdmin) {
-      let phoneRaw = payload.phone?.trim() || payload.client_phone?.trim();
-      const fullName = payload.fullName?.trim() || payload.full_name?.trim() || payload.client_name?.trim() || null;
-      const organizationName = payload.organizationName?.trim() || payload.organization_name?.trim() || null;
-      const inn = payload.inn?.trim() || null;
+if (isFromAdmin) {
+  console.log('👮 Заявка из админки — ищем/создаём клиента...');
 
-      if (!phoneRaw) {
-        return NextResponse.json({ success: false, message: 'Телефон обязателен при создании заявки из админки' }, { status: 400 });
-      }
+  let phoneRaw = (payload.phone || payload.client_phone || payload.userPhone || '').trim();
+  const fullName = (payload.fullName || payload.full_name || payload.client_name || '').trim();
+  const organizationName = (payload.organizationName || payload.organization_name || payload.client_organization || '').trim();
+  const inn = (payload.inn || '').trim();
 
-      const phoneNormalized = phoneRaw.replace(/\D/g, '');
-      const phoneWithPlus = phoneNormalized.length === 11 && phoneNormalized.startsWith('7') 
-        ? '+' + phoneNormalized 
-        : phoneNormalized.length === 10 
-          ? '+7' + phoneNormalized 
-          : '+' + phoneNormalized;
+  if (!phoneRaw) {
+    return NextResponse.json({ success: false, message: 'Телефон обязателен при создании заявки из админки' }, { status: 400 });
+  }
 
-      const supabase = getSupabaseClient();
+  // Нормализация телефона
+  const phoneNormalized = phoneRaw.replace(/\D/g, '');
+  let phoneWithPlus = '';
+  
+  if (phoneNormalized.length === 11 && phoneNormalized.startsWith('7')) {
+    phoneWithPlus = '+' + phoneNormalized;
+  } else if (phoneNormalized.length === 10) {
+    phoneWithPlus = '+7' + phoneNormalized;
+  } else if (phoneNormalized.length === 11) {
+    phoneWithPlus = '+' + phoneNormalized;
+  } else {
+    phoneWithPlus = phoneRaw;
+  }
 
-      let existingClient = null;
+  const supabase = getSupabaseClient();
 
-      const { data: phoneClient } = await supabase
-        .from('users')
-        .select('user_id, phone, organization_name, full_name')
-        .or(`phone.eq.${phoneWithPlus},phone.eq.${phoneRaw}`)
-        .maybeSingle();
+  let existingClient = null;
 
-      if (phoneClient) {
-        existingClient = phoneClient;
-      } else if (organizationName) {
-        const { data: orgClient } = await supabase
-          .from('users')
-          .select('user_id, phone, organization_name, full_name')
-          .ilike('organization_name', `%${organizationName}%`)
-          .limit(1)
-          .maybeSingle();
+  // 1. Поиск по телефону (самый надёжный)
+  const { data: phoneClient } = await supabase
+    .from('users')
+    .select('user_id, phone, organization_name, full_name, role')
+    .or(`phone.eq.${phoneWithPlus},phone.eq.${phoneRaw},phone.ilike.%${phoneNormalized}%`)
+    .maybeSingle();
 
-        if (orgClient) existingClient = orgClient;
-      }
+  if (phoneClient && phoneClient.role === 'client') {
+    existingClient = phoneClient;
+    console.log(`✅ Найден клиент по телефону: ${phoneClient.user_id}`);
+  }
 
-      if (existingClient) {
-        finalUserId = existingClient.user_id;
-        console.log(`👤 Найден существующий клиент #${finalUserId}`);
-      } else {
-        const newUserId = Date.now() + Math.floor(Math.random() * 100000);
+  // 2. Поиск по ИНН
+  if (!existingClient && inn) {
+    const { data: innClient } = await supabase
+      .from('users')
+      .select('user_id, phone, organization_name, full_name')
+      .eq('inn', inn)
+      .maybeSingle();
 
-        const { data: newClient, error: createError } = await supabase
-          .from('users')
-          .insert({
-            user_id: newUserId,
-            role: 'client',
-            phone: phoneWithPlus,
-            full_name: organizationName ? null : fullName,
-            organization_name: organizationName || fullName,
-            inn: inn || null,
-            balance: 0,
-            referral_code: 'R' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-            created_at: new Date().toISOString()
-          })
-          .select('user_id')
-          .single();
+    if (innClient) existingClient = innClient;
+  }
 
-        if (createError) {
-          console.error('❌ Ошибка создания клиента:', createError);
-        } else if (newClient) {
-          finalUserId = newClient.user_id;
-          console.log(`✅ Создан новый клиент #${finalUserId}`);
-        }
-      }
-    } else {
-      finalUserId = userId;
+  // 3. Поиск по названию организации
+  if (!existingClient && organizationName) {
+    const { data: orgClient } = await supabase
+      .from('users')
+      .select('user_id, phone, organization_name, full_name')
+      .ilike('organization_name', `%${organizationName}%`)
+      .limit(1)
+      .maybeSingle();
+
+    if (orgClient) existingClient = orgClient;
+  }
+
+  if (existingClient) {
+    finalUserId = existingClient.user_id;
+    console.log(`👤 Используем существующего клиента: ${finalUserId}`);
+  } else {
+    // Создаём нового клиента
+    const newUserId = Date.now() + Math.floor(Math.random() * 1000000);
+
+    const { data: newClient, error: createError } = await supabase
+      .from('users')
+      .insert({
+        user_id: newUserId,
+        role: 'client',
+        phone: phoneWithPlus,
+        full_name: organizationName ? null : fullName,
+        organization_name: organizationName || fullName || null,
+        inn: inn || null,
+        balance: 0,
+        referral_code: 'R' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+        created_at: new Date().toISOString()
+      })
+      .select('user_id')
+      .single();
+
+    if (createError) {
+      console.error('❌ Ошибка создания клиента:', createError);
+    } else if (newClient) {
+      finalUserId = newClient.user_id;
+      console.log(`✅ Создан новый клиент: ${finalUserId}`);
     }
+  }
+}
 
-    if (!finalUserId) {
-      return NextResponse.json({ success: false, message: 'Не удалось определить userId клиента' }, { status: 400 });
-    }
+console.log(`🔑 Финальный user_id заказа: ${finalUserId} (изначально было ${userId})`);
 
     // ================================================
 // 3.1 АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ КОНТАКТОВ КЛИЕНТА (УЛУЧШЕННЫЙ)

@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import NewOrderModal from './NewOrderModal';
 import EfficiencyPage from '../efficiency/page';
+import NewOrderModal from './NewOrderModal';
 
 // ==================== 0.1 ГЛОБАЛЬНЫЕ ТИПЫ ДЛЯ WINDOW ===============
 declare global {
@@ -32,6 +32,7 @@ export default function ClientsPage() {
   const [isNewClientModalOpen, setIsNewClientModalOpen] = useState(false);
   const [currentRole, setCurrentRole] = useState<string>('admin');
   const [callHistory, setCallHistory] = useState<any[]>([]);
+ 
   
   const [activeTab, setActiveTab] = useState<'clients' | 'staff' | 'efficiency'>('clients');
   
@@ -53,27 +54,32 @@ useEffect(() => {
     setLoading(true);
 
     try {
-      console.log('🔄 [Загрузка] Начинаем...');
+      console.log('🚀 [Загрузка] Этап 1: Только карточки (очень быстро)...');
 
-      // Параллельная загрузка
-      const [groupsRes, allRes] = await Promise.all([
-        fetch('/api/adminCifra/clients/grouped'),
-        fetch('/api/adminCifra/clients?all=true')
-      ]);
+      // Только группы — минимум данных
+      const groupsRes = await fetch('/api/adminCifra/clients/grouped');
+      let clientGroups: any[] = [];
 
-      const clientGroups = groupsRes.ok ? await groupsRes.json() : [];
-      const allUsers = allRes.ok ? await allRes.json() : [];
+      if (groupsRes.ok) {
+        clientGroups = await groupsRes.json();
+      }
 
-      const staffList = allUsers.filter((u: any) => 
-        ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase())
-      );
+      // Стафф загружаем отдельно и быстро
+      const allRes = await fetch('/api/adminCifra/clients?all=true');
+      let staffList: any[] = [];
+      if (allRes.ok) {
+        const allUsers = await allRes.json();
+        staffList = allUsers.filter((u: any) => 
+          ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase())
+        );
+      }
 
       let combined = [
         ...staffList.map((s: any) => ({ ...s, isStaff: true })),
         ...clientGroups
       ];
 
-      // Удаляем дубликаты
+      // Быстрая дедупликация
       const seen = new Set();
       combined = combined.filter(item => {
         const key = item.groupId || item.user_id || item.id;
@@ -84,7 +90,30 @@ useEffect(() => {
 
       setProfiles(combined);
 
-      console.log(`✅ Загрузка завершена за ${Date.now() - startTime} мс | Всего записей: ${combined.length}`);
+      console.log(`✅ Этап 1 (карточки) завершён за ${Date.now() - startTime} мс | Показано: ${combined.length} записей`);
+
+      // ==================== ЭТАП 2: ФОНОВАЯ ЗАГРУЗКА ТЯЖЁЛЫХ ДАННЫХ ====================
+      setTimeout(async () => {
+        try {
+          console.log('📊 [Загрузка] Этап 2: Объёмы, статусы, прогнозы (в фоне)...');
+
+          const clientIds = clientGroups
+            .flatMap((g: any) => g.clients || [])
+            .map((c: any) => c.user_id)
+            .filter(Boolean);
+
+          if (clientIds.length > 0) {
+            await fetch('/api/adminCifra/client-volumes', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userIds: clientIds })
+            });
+            console.log(`📊 Этап 2 завершён для ${clientIds.length} клиентов`);
+          }
+        } catch (e) {
+          console.error('Ошибка этапа 2:', e);
+        }
+      }, 600); // даём карточкам время отобразиться
 
     } catch (err) {
       console.error('❌ Ошибка загрузки:', err);
@@ -544,6 +573,135 @@ const testClientReminder = () => {
   };
 
   showClientReminder(testReminder, true);   // ← важно: true = тест
+};
+
+// ==================== 3.5 ОТКРЫТИЕ МОДАЛКИ РЕДАКТИРОВАНИЯ ЗАКАЗА ====================
+const openOrderModal = (orderId: number | string) => {
+  if (!orderId) return;
+
+  fetch(`/api/adminCifra/orders/${orderId}`)
+    .then(res => res.ok ? res.json() : null)
+    .then(data => {
+      if (data) {
+        setSelectedOrder(data);
+      } else {
+        alert('Не удалось загрузить данные заказа');
+      }
+    })
+    .catch(err => {
+      console.error(err);
+      alert('Ошибка при открытии заказа');
+    });
+};
+
+// ==================== 3.6 СОСТОЯНИЯ И ФУНКЦИИ ДЛЯ МОДАЛКИ ЗАКАЗА ====================
+
+const [selectedOrder, setSelectedOrder] = useState<any>(null);
+const [orderHistory, setOrderHistory] = useState<any[]>([]);
+const [isSendingNotification, setIsSendingNotification] = useState(false);
+const [allOrders, setAllOrders] = useState<any[]>([]);
+const [newOrderData, setNewOrderData] = useState<any>(null);
+
+// ==================== ЗАГРУЗКА ИСТОРИИ ЗАКАЗА ====================
+const loadOrderHistory = async (orderId: number | string) => {
+  try {
+    const res = await fetch(`/api/adminCifra/orders/${orderId}/history`);
+    if (res.ok) {
+      const history = await res.json();
+      setOrderHistory(Array.isArray(history) ? history : []);
+    }
+  } catch (err) {
+    console.error(err);
+    setOrderHistory([]);
+  }
+};
+
+// ==================== КОНФИГУРАЦИЯ СТАТУСОВ ====================
+const getStatusConfig = (status: string) => {
+  switch (status) {
+    case 'new': return { label: '🟡 Новый', bg: '#FACC15', color: '#FACC15', final: false };
+    case 'processing': return { label: '🔵 В работе', bg: '#3B82F6', color: '#3B82F6', final: false };
+    case 'completed': return { label: '🟢 Выполнен', bg: '#10B981', color: '#10B981', final: true };
+    case 'cancelled': return { label: '🔴 Отменён', bg: '#EF4444', color: '#EF4444', final: true };
+    default: return { label: status, bg: '#64748B', color: '#94A3B8', final: false };
+  }
+};
+
+const getStatusColor = (status: string) => getStatusConfig(status).color;
+
+const hasManagerPermissions = (role: string) => ['admin', 'manager'].includes((role || '').toLowerCase());
+
+// ==================== ДЕЙСТВИЯ С ЗАКАЗОМ ====================
+const handleDeleteOrder = async (orderId: number | string) => {
+  if (!confirm(`Удалить заказ #${orderId}?`)) return;
+
+  try {
+    const res = await fetch(`/api/adminCifra/orders/${orderId}`, { method: 'DELETE' });
+    if (res.ok) {
+      alert('✅ Заказ успешно удалён');
+      setSelectedOrder(null);
+      window.location.reload();
+    } else {
+      alert('Не удалось удалить заказ');
+    }
+  } catch (err) {
+    console.error(err);
+    alert('Ошибка при удалении');
+  }
+};
+
+const sendNotification = async (orderId: number | string) => {
+  setIsSendingNotification(true);
+  try {
+    const res = await fetch('/api/adminCifra/orders/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order_id: orderId })
+    });
+    if (res.ok) {
+      alert('✅ Уведомление отправлено в Max');
+    }
+  } catch (err) {
+    alert('Ошибка отправки уведомления');
+  } finally {
+    setIsSendingNotification(false);
+  }
+};
+
+const shareOrder = (order: any) => {
+  const text = `Заказ #${order.id} — ${order.organization_name || order.full_name} — ${order.volume} м³`;
+  navigator.clipboard.writeText(text);
+  alert('✅ Ссылка скопирована');
+};
+
+// ==================== ДУБЛИРОВАНИЕ ЗАКАЗА ====================
+const duplicateOrder = (order: any) => {
+  if (!order) return alert('Нет данных заказа');
+
+  const clientData = selectedProfile?.clients?.[0] || selectedProfile;
+
+  const duplicated = {
+    ...order,
+    id: undefined,
+    created_at: undefined,
+    status: 'new',
+    customerType: 'legal',
+    organizationName: clientData?.organization_name || clientData?.organizationName || '',
+    fullName: clientData?.full_name || clientData?.fullName || '',
+    phone: clientData?.phone || order.phone || '',
+    address: clientData?.address || order.address || '',
+    inn: clientData?.inn || order.inn || '',
+    comment: order.comment 
+      ? `Копия заказа #${order.id}\n\n${order.comment}` 
+      : `Копия заказа #${order.id}`
+  };
+
+  setNewOrderData(duplicated);
+  setSelectedOrder(null);
+
+  setTimeout(() => {
+    setIsNewOrderModalOpen(true);
+  }, 30);
 };
 
      // ==================== 4. ФИЛЬТРАЦИЯ КЛИЕНТОВ И СОТРУДНИКОВ ====================
@@ -1273,11 +1431,26 @@ window.callClient = async (clientId: number | string) => {
           💬 Написать в Max
         </button>
         <button 
-          onClick={() => setIsNewOrderModalOpen(true)} 
-          style={{ flex: 1, padding: '14px', background: '#F59E0B', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
-        >
-          ➕ Новый заказ
-        </button>
+  onClick={() => {
+    // Создаём объект с данными текущего клиента
+    const clientData = selectedProfile?.clients?.[0] || selectedProfile;
+    
+    setNewOrderData({
+      user_id: clientData?.user_id || selectedProfile?.user_id || selectedProfile?.id,
+      organizationName: clientData?.organization_name || clientData?.organizationName || '',
+      fullName: clientData?.full_name || clientData?.fullName || '',
+      phone: clientData?.phone || '',
+      inn: clientData?.inn || '',
+      address: clientData?.address || '',
+      status: 'new'
+    });
+    
+    setIsNewOrderModalOpen(true);
+  }} 
+  style={{ flex: 1, padding: '14px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
+>
+  ➕ Новый заказ
+</button>
 
         <button 
           onClick={() => openEditModal(selectedProfile)} 
@@ -1410,41 +1583,6 @@ window.callClient = async (clientId: number | string) => {
         return 'Недостаточно данных';
       })()}
     </div>
-
-    {/* Компактные кнопки в стиле Цифра */}
-    <div style={{ marginTop: '14px', display: 'flex', gap: '8px' }}>
-      <button 
-        onClick={() => refreshClientData()}
-        style={{
-          padding: '6px 12px',
-          background: '#475569',
-          color: '#fff',
-          border: 'none',
-          borderRadius: '8px',
-          fontSize: '13px',
-          cursor: 'pointer',
-          flex: 1
-        }}
-      >
-        🔄 Обновить
-      </button>
-
-      <button 
-        onClick={() => testClientReminder()}
-        style={{
-          padding: '6px 12px',
-          background: '#10B981',
-          color: '#fff',
-          border: 'none',
-          borderRadius: '8px',
-          fontSize: '13px',
-          cursor: 'pointer',
-          flex: 1
-        }}
-      >
-        🧪 Тест
-      </button>
-    </div>
   </div>
 </div>
 
@@ -1526,19 +1664,69 @@ window.callClient = async (clientId: number | string) => {
   {ordersLoading ? (
     <div style={{ padding: '40px', textAlign: 'center', color: '#64748B' }}>Загрузка заказов...</div>
   ) : userOrders.length > 0 ? (
-    userOrders.map((o: any) => (
-      <div key={o.id} style={{ background: '#25334A', padding: '18px', borderRadius: '16px', marginBottom: '12px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <strong>Заказ #{o.id}</strong>
-          <span>{new Date(o.delivery_date).toLocaleDateString('ru-RU')}</span>
+    userOrders.map((o: any) => {
+      // Русские статусы
+      let statusText = 'Новый';
+      let statusColor = '#FACC15';
+
+      if (o.status === 'completed') {
+        statusText = 'Выполнен';
+        statusColor = '#10B981';
+      } else if (o.status === 'processing') {
+        statusText = 'В работе';
+        statusColor = '#3B82F6';
+      } else if (o.status === 'cancelled') {
+        statusText = 'Отменён';
+        statusColor = '#EF4444';
+      }
+
+      return (
+        <div 
+          key={o.id} 
+          onClick={() => openOrderModal(o.id)}
+          style={{ 
+            background: '#25334A', 
+            padding: '18px', 
+            borderRadius: '16px', 
+            marginBottom: '12px',
+            cursor: 'pointer',
+            transition: 'all 0.2s'
+          }}
+          onMouseOver={(e) => e.currentTarget.style.background = '#334155'}
+          onMouseOut={(e) => e.currentTarget.style.background = '#25334A'}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong 
+              style={{ 
+                color: '#60A5FA', 
+                fontSize: '17px',
+                textDecoration: 'underline',
+                textDecorationStyle: 'dotted',
+                cursor: 'pointer'
+              }}
+            >
+              Заказ #{o.id}
+            </strong>
+            <span>{new Date(o.delivery_date).toLocaleDateString('ru-RU')}</span>
+          </div>
+          
+          <div style={{ marginTop: '8px' }}>
+            {o.volume} м³ • {o.grade || '—'} • 
+            <span style={{ color: statusColor, fontWeight: '600' }}>
+              {statusText}
+            </span>
+          </div>
+
+          {o.address && <div style={{ marginTop: '8px', color: '#94A3B8' }}>📍 {o.address}</div>}
+          
+          {o.total_price && (
+            <div style={{ marginTop: '10px', fontSize: '18px', fontWeight: '700', color: '#60A5FA' }}>
+              {Number(o.total_price).toLocaleString('ru-RU')} ₽
+            </div>
+          )}
         </div>
-        <div style={{ marginTop: '8px' }}>
-          {o.volume} м³ • {o.grade || '—'} • <span style={{ color: o.status === 'completed' ? '#10B981' : o.status === 'cancelled' ? '#EF4444' : '#FACC15' }}>{o.status}</span>
-        </div>
-        {o.address && <div style={{ marginTop: '8px', color: '#94A3B8' }}>📍 {o.address}</div>}
-        {o.total_price && <div style={{ marginTop: '10px', fontSize: '18px', fontWeight: '700', color: '#60A5FA' }}>{Number(o.total_price).toLocaleString('ru-RU')} ₽</div>}
-      </div>
-    ))
+      );
+    })
   ) : (
     <div style={{ color: '#94A3B8', textAlign: 'center', padding: '40px 0' }}>Заказов пока нет</div>
   )}
@@ -1731,21 +1919,39 @@ window.callClient = async (clientId: number | string) => {
   </div>
 )}
 
-      {/* ==================== МОДАЛЬНОЕ ОКНО НОВОГО ЗАКАЗА ==================== */}
-      <NewOrderModal
-        isOpen={isNewOrderModalOpen}
-        onClose={() => setIsNewOrderModalOpen(false)}
-        userId={selectedProfile?.user_id || selectedProfile?.id}
-        userName={selectedProfile?.full_name || selectedProfile?.name || selectedProfile?.username || 'Клиент'}
-        userPhone={selectedProfile?.phone || ''}
-        currentRole={currentRole}
-        onOrderCreated={() => {
-          if (selectedProfile) {
-            const uid = selectedProfile.user_id || selectedProfile.id;
-            loadUserOrders(uid);
-          }
-        }}
-      />
+    {/* ==================== МОДАЛКА СОЗДАНИЯ / ДУБЛИРОВАНИЯ ЗАКАЗА ==================== */}
+{isNewOrderModalOpen && (
+  <NewOrderModal 
+    isOpen={isNewOrderModalOpen}
+    onClose={() => {
+      setIsNewOrderModalOpen(false);
+      setNewOrderData(null);
+      setSelectedOrder(null);
+    }}
+    initialData={newOrderData}
+    userId={newOrderData?.user_id || selectedProfile?.clients?.[0]?.user_id || selectedProfile?.user_id || selectedProfile?.id || ''}
+    userName={newOrderData?.organizationName || newOrderData?.fullName || 
+              selectedProfile?.organization_name || selectedProfile?.full_name || ''}
+    userPhone={newOrderData?.phone || selectedProfile?.phones?.[0] || selectedProfile?.phone || ''}
+    
+    // ←←← Добавляем сюда историю
+    orderHistory={userOrders}
+    callHistory={callHistory || []}
+    
+    onOrderCreated={() => {
+      setIsNewOrderModalOpen(false);
+      setNewOrderData(null);
+      setSelectedOrder(null);
+      alert('✅ Новая заявка успешно создана!');
+      
+      if (selectedProfile) {
+        const uid = selectedProfile.user_id || selectedProfile.id || selectedProfile?.clients?.[0]?.user_id;
+        if (uid) loadUserOrders(uid);
+      }
+    }}
+  />
+)}
+
 
              {/* ==================== МОДАЛЬНОЕ ОКНО ОБЪЕДИНЕНИЯ ДУБЛЕЙ ==================== */}
 {showMergeModal && clientsToMerge.length > 0 && (
@@ -1975,6 +2181,363 @@ window.callClient = async (clientId: number | string) => {
     </div>
   </div>
 )}
+
+
+{/* ==================== МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ ЗАКАЗА ==================== */}
+{selectedOrder && (
+  <div 
+    style={{ 
+      position: 'fixed', 
+      inset: 0, 
+      background: 'rgba(0,0,0,0.94)', 
+      zIndex: 9999, 
+      display: 'flex', 
+      alignItems: 'center', 
+      justifyContent: 'center' 
+    }} 
+    onClick={() => setSelectedOrder(null)}
+  >
+    <div 
+      style={{ 
+        background: '#1E2937', 
+        width: '1080px', 
+        borderRadius: '24px', 
+        padding: '32px', 
+        maxHeight: '94vh', 
+        overflow: 'auto',
+        boxShadow: '0 30px 80px rgba(0,0,0,0.7)'
+      }} 
+       onClick={e => e.stopPropagation()}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <h2 style={{ margin: 0, fontSize: '28px' }}>
+          Редактирование заявки #{selectedOrder.id}
+        </h2>
+        <button 
+          onClick={() => setSelectedOrder(null)} 
+          style={{ fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}
+        >
+          ×
+        </button>
+      </div>
+
+      {/* Статус */}
+      <div style={{ 
+        display: 'inline-block', 
+        padding: '8px 26px', 
+        borderRadius: '9999px', 
+        fontWeight: '600',
+        backgroundColor: getStatusColor(selectedOrder.status) + '20',
+        color: getStatusColor(selectedOrder.status),
+        marginBottom: '28px'
+      }}>
+        {selectedOrder.status === 'new' && '🟡 Новый заказ'}
+        {selectedOrder.status === 'processing' && '🔵 В работе'}
+        {selectedOrder.status === 'completed' && '🟢 Выполнен'}
+        {selectedOrder.status === 'cancelled' && '🔴 Отменён'}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
+        
+        {/* Левая колонка — Информация (с возможностью редактирования) */}
+        <div>
+          <h3 style={{ marginBottom: '18px', color: '#94A3B8' }}>Информация о заказе</h3>
+          
+          <div style={{ background: '#25334A', borderRadius: '16px', padding: '24px', lineHeight: '2' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '12px' }}>
+
+              <div style={{ color: '#94A3B8' }}>Клиент</div>
+              <input 
+                value={selectedOrder.organization_name || selectedOrder.full_name || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, organization_name: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+              {selectedOrder.inn !== undefined && (
+                <>
+                  <div style={{ color: '#94A3B8' }}>ИНН</div>
+                  <input 
+                    value={selectedOrder.inn || ''} 
+                    onChange={(e) => setSelectedOrder({ ...selectedOrder, inn: e.target.value })}
+                    style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+                  />
+                </>
+              )}
+
+              <div style={{ color: '#94A3B8' }}>Телефон</div>
+              <input 
+                value={selectedOrder.phone || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, phone: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+              <div style={{ color: '#94A3B8' }}>Марка бетона</div>
+              <input 
+                value={selectedOrder.grade || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, grade: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+              <div style={{ color: '#94A3B8' }}>Объём</div>
+              <input 
+                type="number" 
+                step="0.1"
+                min="0.1"
+                value={selectedOrder.volume || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, volume: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+              <div style={{ color: '#94A3B8' }}>Дата доставки</div>
+              <input 
+                type="date" 
+                value={selectedOrder.delivery_date ? selectedOrder.delivery_date.split('T')[0] : ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, delivery_date: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+              <div style={{ color: '#94A3B8' }}>Время доставки</div>
+              <input 
+                type="time" 
+                value={selectedOrder.delivery_time || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, delivery_time: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+              />
+
+                                <div style={{ color: '#94A3B8' }}>Статус заявки</div>
+                
+                {getStatusConfig(selectedOrder.status).final ? (
+                  // ==================== ФИНАЛЬНЫЕ СТАТУСЫ — ЗАЩИЩЕНЫ ====================
+                  <div style={{ 
+                    backgroundColor: getStatusConfig(selectedOrder.status).bg,
+                    color: getStatusConfig(selectedOrder.status).color,
+                    padding: '12px 20px',
+                    borderRadius: '16px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontWeight: '600',
+                    fontSize: '16px',
+                    width: '88%'
+                  }}>
+                    {getStatusConfig(selectedOrder.status).label} — конечный статус
+                  </div>
+                ) : (
+                  // Можно менять
+                  <select 
+                    value={selectedOrder.status || 'new'} 
+                    onChange={(e) => setSelectedOrder({ ...selectedOrder, status: e.target.value })}
+                    style={{ 
+                      background: '#334155', 
+                      border: 'none', 
+                      borderRadius: '8px', 
+                      padding: '10px 12px', 
+                      color: '#fff',
+                      fontSize: '16px',
+                      width: '100%'
+                    }}
+                  >
+                    <option value="new">🟡 Новый</option>
+                    <option value="processing">🔵 В работе</option>
+                    <option value="completed">🟢 Выполнен</option>
+                    <option value="cancelled">🔴 Отменён</option>
+                  </select>
+                )}
+
+              <div style={{ color: '#94A3B8' }}>Адрес доставки</div>
+              <textarea 
+                value={selectedOrder.address || ''} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, address: e.target.value })}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff', minHeight: '70px', gridColumn: '2' }}
+              />
+
+            </div>
+          </div>
+
+          {/* Комментарий */}
+          {selectedOrder.comment && (
+            <div style={{ marginTop: '24px' }}>
+              <h4 style={{ color: '#94A3B8', marginBottom: '8px' }}>Комментарий клиента</h4>
+              <textarea 
+                value={selectedOrder.comment} 
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, comment: e.target.value })}
+                style={{ width: '95%', background: '#25334A', border: 'none', borderRadius: '16px', padding: '16px', color: '#fff', minHeight: '80px' }}
+              />
+            </div>
+          )}
+        </div>          
+              
+                            {/* Правая колонка — Маршрут + История */}
+              <div>
+                <h3 style={{ marginBottom: '20px', color: '#94A3B8' }}>Маршрут доставки</h3>
+                
+                <div style={{ background: '#25334A', borderRadius: '16px', padding: '24px', marginBottom: '24px' }}>
+                  <div style={{ marginBottom: '20px' }}>
+                    <div style={{ color: '#94A3B8', fontSize: '14px' }}>От завода</div>
+                    <div style={{ fontWeight: '600' }}>Брянск, Орловский тупик, 6</div>
+                  </div>
+                  <div>
+                    <div style={{ color: '#94A3B8', fontSize: '14px' }}>До объекта</div>
+                    <div style={{ fontWeight: '600', fontSize: '18px' }}>{selectedOrder.address}</div>
+                  </div>
+                </div>
+
+                {/* Компактные кнопки маршрутов в одну строку */}
+                <div style={{ display: 'flex', gap: '10px', marginBottom: '32px' }}>
+                  <a 
+                    href={`https://2gis.ru/dir/534687/70000001000000000?from=534687%2C70000001000000000&to=${encodeURIComponent(selectedOrder.address || '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ 
+                      flex: 1,
+                      padding: '12px 16px', 
+                      background: '#10B981', 
+                      color: 'white', 
+                      textAlign: 'center', 
+                      borderRadius: '12px',
+                      textDecoration: 'none',
+                      fontSize: '15px',
+                      fontWeight: '600'
+                    }}
+                  >
+                    2ГИС
+                  </a>
+
+                  <a 
+                    href={`https://yandex.ru/maps/?ll=34.415968,53.254623&z=12&mode=route&rtext=Брянск,%20Орловский%20тупик,%206~${encodeURIComponent(selectedOrder.address || '')}&rtt=auto`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ 
+                      flex: 1,
+                      padding: '12px 16px', 
+                      background: '#3B82F6', 
+                      color: 'white', 
+                      textAlign: 'center', 
+                      borderRadius: '12px',
+                      textDecoration: 'none',
+                      fontSize: '15px',
+                      fontWeight: '600'
+                    }}
+                  >
+                    Яндекс
+                  </a>
+
+                  <a 
+                    href={`https://www.google.com/maps/dir/?api=1&origin=Брянск,+Орловский+тупик,+6&destination=${encodeURIComponent(selectedOrder.address || '')}&travelmode=driving`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ 
+                      flex: 1,
+                      padding: '12px 16px', 
+                      background: '#EF4444', 
+                      color: 'white', 
+                      textAlign: 'center', 
+                      borderRadius: '12px',
+                      textDecoration: 'none',
+                      fontSize: '15px',
+                      fontWeight: '600'
+                    }}
+                  >
+                    Google
+                  </a>
+                </div>
+
+                                               {/* ==================== ИСТОРИЯ ВЗАИМОДЕЙСТВИЯ ==================== */}
+<div>
+  <h3 style={{ marginBottom: '12px', color: '#94A3B8' }}>История взаимодействий</h3>
+  <div style={{ 
+    background: '#25334A', 
+    borderRadius: '16px', 
+    padding: '20px', 
+    height: '340px', 
+    overflowY: 'auto',
+    fontSize: '14px',
+    lineHeight: '1.6'
+  }}>
+    {userOrders.length > 0 ? (
+      userOrders.slice(0, 6).map((o: any) => (
+        <div key={o.id} style={{ 
+          padding: '14px', 
+          background: '#1E2937', 
+          borderRadius: '12px', 
+          marginBottom: '12px' 
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <strong>Заказ #{o.id}</strong>
+            <span>{new Date(o.delivery_date || o.created_at).toLocaleDateString('ru-RU')}</span>
+          </div>
+          <div style={{ marginTop: '6px' }}>
+            {o.volume} м³ • {o.grade} • 
+            <span style={{ 
+              color: o.status === 'completed' ? '#10B981' : 
+                     o.status === 'cancelled' ? '#EF4444' : '#FACC15' 
+            }}>
+              {o.status}
+            </span>
+          </div>
+          {o.comment && <div style={{ marginTop: '8px', color: '#94A3B8', fontSize: '13px' }}>{o.comment}</div>}
+        </div>
+      ))
+    ) : (
+      <div style={{ color: '#64748B', textAlign: 'center', padding: '80px 0' }}>
+        История взаимодействий пуста
+      </div>
+    )}
+  </div>
+</div>
+              </div>
+            </div>
+            
+        {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
+    <div style={{ marginTop: '40px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+
+      { hasManagerPermissions(currentRole) && (
+        <>
+          {/* Копировать заявку */}
+<button 
+  onClick={() => duplicateOrder(selectedOrder)}
+  style={{ 
+    padding: '10px 24px', 
+    background: '#6366F1', 
+    color: 'white', 
+    border: 'none', 
+    borderRadius: '9999px', 
+    fontWeight: '600',
+    fontSize: '15px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px'
+  }}
+>
+  📋 Дублировать заявку
+</button>
+        </>
+      )}
+
+      {/* Отмена */}
+      <button 
+        onClick={() => setSelectedOrder(null)}
+        style={{ 
+          padding: '10px 24px', 
+          background: '#475569', 
+          color: 'white', 
+          border: 'none', 
+          borderRadius: '9999px', 
+          fontWeight: '600',
+          fontSize: '15px'
+        }}
+      >
+        Отмена
+      </button>
+    </div>
+    </div>
+  </div>
+)}
+
+
+
+
+
     </div>
   );
 }

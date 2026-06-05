@@ -10,6 +10,9 @@ interface NewOrderModalProps {
   userPhone?: string;
   currentRole?: string;
   onOrderCreated?: () => void;
+  initialData?: any;
+  orderHistory?: any[];      // ← Добавь
+  callHistory?: any[];       // ← Добавь         // ← Добавь эту строку
 }
 
 export default function NewOrderModal({ 
@@ -19,24 +22,27 @@ export default function NewOrderModal({
   userName, 
   userPhone, 
   currentRole = 'admin',
-  onOrderCreated 
+  onOrderCreated,
+  initialData,
+  orderHistory = [],     // ← Добавь
+  callHistory = []       // ← Добавь
 }: NewOrderModalProps) {
 
   const [recipes, setRecipes] = useState<any[]>([]);   // ← Добавлено
 
   const [form, setForm] = useState({
-    grade: 'М300',
-    volume: '',
-    deliveryDate: new Date().toISOString().split('T')[0],
-    deliveryTime: '10:00',
-    address: '',
-    customerType: 'physical' as 'physical' | 'legal',
-    organizationName: '',
-    fullName: '',
-    phone: '',
-    inn: '',
-    comment: '',
-  });
+  grade: 'М300',
+  volume: '',
+  deliveryDate: new Date().toISOString().split('T')[0],
+  deliveryTime: '10:00',
+  address: '',
+  customerType: 'legal' as 'physical' | 'legal',   // ← По умолчанию Юрлицо
+  organizationName: '',
+  fullName: '',
+  phone: '',
+  inn: '',                                         // ← Новое поле
+  comment: '',
+});
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
@@ -62,16 +68,41 @@ export default function NewOrderModal({
     if (isOpen) loadRecipes();
   }, [isOpen]);
 
-  // ==================== АВТОЗАПОЛНЕНИЕ ====================
-  useEffect(() => {
-    if (isOpen) {
-      setForm(prev => ({
-        ...prev,
-        fullName: userName || prev.fullName || '',
-        phone: userPhone || prev.phone || '',
-      }));
-    }
-  }, [isOpen, userName, userPhone]);
+// ==================== АВТОЗАПОЛНЕНИЕ ====================
+useEffect(() => {
+  if (!isOpen) return;
+
+  if (initialData) {
+    const isLegal = !!( 
+      initialData.customerType === 'legal' || 
+      initialData.customer_type === 'Юридическое лицо' ||
+      initialData.organizationName || 
+      initialData.organization_name ||
+      initialData.inn 
+    );
+
+    setForm({
+      grade: initialData.grade || 'М300',
+      volume: initialData.volume || '',
+      deliveryDate: initialData.delivery_date || new Date().toISOString().split('T')[0],
+      deliveryTime: initialData.delivery_time || '10:00',
+      address: initialData.address || '',
+      customerType: isLegal ? 'legal' : 'physical',
+      organizationName: initialData.organizationName || initialData.organization_name || '',
+      fullName: initialData.fullName || initialData.full_name || '',
+      phone: initialData.phone || '',
+      inn: initialData.inn || '',                    // ← Добавлено
+      comment: initialData.comment || '',
+    });
+  } else if (isOpen) {
+    setForm(prev => ({
+      ...prev,
+      fullName: userName || prev.fullName || '',
+      phone: userPhone || prev.phone || '',
+      customerType: 'legal',   // По умолчанию юрлицо
+    }));
+  }
+}, [isOpen, initialData, userName, userPhone]);
 
   // ==================== РАСЧЁТ СТОИМОСТИ ====================
   const selectedRecipe = recipes.find(r => r.code === form.grade);
@@ -253,21 +284,67 @@ export default function NewOrderModal({
           </div>
 
           {/* ==================== КНОПКИ ВЫБОРА ТИПА КЛИЕНТА ==================== */}
-          <div>
-            <label style={{ display: 'block', marginBottom: '8px', color: '#94A3B8', fontSize: '14px' }}>Тип заказчика</label>
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <button type="button" onClick={() => setForm({...form, customerType: 'physical'})} style={{ 
-                flex: 1, padding: '14px', borderRadius: '12px',
-                background: form.customerType === 'physical' ? '#3B82F6' : '#25334A',
-                color: 'white', border: 'none', fontSize: '15px', fontWeight: '600'
-              }}>Физическое лицо</button>
-              <button type="button" onClick={() => setForm({...form, customerType: 'legal'})} style={{ 
-                flex: 1, padding: '14px', borderRadius: '12px',
-                background: form.customerType === 'legal' ? '#3B82F6' : '#25334A',
-                color: 'white', border: 'none', fontSize: '15px', fontWeight: '600'
-              }}>Юридическое лицо</button>
-            </div>
-          </div>
+<div>
+  <label style={{ display: 'block', marginBottom: '8px', color: '#94A3B8', fontSize: '14px' }}>Тип заказчика</label>
+  <div style={{ display: 'flex', gap: '12px' }}>
+    <button 
+      type="button" 
+      onClick={() => setForm({...form, customerType: 'physical'})} 
+      style={{ 
+        flex: 1, 
+        padding: '14px', 
+        borderRadius: '12px',
+        background: form.customerType === 'physical' ? '#3B82F6' : '#25334A',
+        color: 'white', 
+        border: 'none', 
+        fontSize: '15px', 
+        fontWeight: '600'
+      }}
+    >
+      Физическое лицо
+    </button>
+    <button 
+      type="button" 
+      onClick={() => setForm({...form, customerType: 'legal'})} 
+      style={{ 
+        flex: 1, 
+        padding: '14px', 
+        borderRadius: '12px',
+        background: form.customerType === 'legal' ? '#3B82F6' : '#25334A',
+        color: 'white', 
+        border: 'none', 
+        fontSize: '15px', 
+        fontWeight: '600'
+      }}
+    >
+      Юридическое лицо
+    </button>
+  </div>
+</div>
+
+{/* ==================== ИНН (только для юрлиц) ==================== */}
+{form.customerType === 'legal' && (
+  <div>
+    <label style={{ display: 'block', marginBottom: '8px', color: '#94A3B8', fontSize: '14px' }}>
+      ИНН организации
+    </label>
+    <input 
+      type="text" 
+      value={form.inn} 
+      onChange={e => setForm({...form, inn: e.target.value})} 
+      placeholder="123456789012" 
+      style={{ 
+        width: '95%', 
+        padding: '16px', 
+        background: '#25334A', 
+        border: 'none', 
+        borderRadius: '12px', 
+        color: '#fff', 
+        fontSize: '16px' 
+      }} 
+    />
+  </div>
+)}
 
           {/* ==================== ФИО ИЛИ ОРГАНИЗАЦИЯ ==================== */}
           {form.customerType === 'physical' ? (
@@ -293,6 +370,26 @@ export default function NewOrderModal({
               width: '95%', padding: '16px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '16px' 
             }} />
           </div>
+
+          {/* ==================== ИНН ==================== */}
+<div>
+  <label style={{ display: 'block', marginBottom: '8px', color: '#94A3B8', fontSize: '14px' }}>ИНН (для юрлиц)</label>
+  <input 
+    type="text" 
+    value={form.inn} 
+    onChange={e => setForm({...form, inn: e.target.value})} 
+    placeholder="123456789012" 
+    style={{ 
+      width: '95%', 
+      padding: '16px', 
+      background: '#25334A', 
+      border: 'none', 
+      borderRadius: '12px', 
+      color: '#fff', 
+      fontSize: '16px' 
+    }} 
+  />
+</div>
 
           {/* ==================== КОММЕНТАРИЙ ==================== */}
           <div>
