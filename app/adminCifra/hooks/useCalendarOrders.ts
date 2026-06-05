@@ -14,6 +14,7 @@ export interface Order {
   full_name?: string;
   phone?: string;
   comment?: string;
+  is_questionable?: boolean;
   
   // Новые поля
   inn?: string | null;           // ← Добавлено

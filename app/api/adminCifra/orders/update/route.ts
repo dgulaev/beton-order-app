@@ -33,14 +33,13 @@ export async function PUT(request: NextRequest) {
     // ==================== 3. ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
     const changes: any[] = [];
     
-    // === КРИТИЧНОЕ МЕСТО: ОПРЕДЕЛЕНИЕ РОЛИ ===
-    const finalUserRole = userRole || 'unknown';           // ← Главное исправление
+    const finalUserRole = userRole || 'unknown';
     const userName = body.userName || finalUserRole || 'Администратор';
 
     const fieldsToTrack = [
       'grade', 'volume', 'delivery_date', 'delivery_time',
       'address', 'phone', 'organization_name', 'full_name',
-      'inn', 'comment', 'status'
+      'inn', 'comment', 'status', 'is_questionable'   // ← Добавлено!
     ];
 
     console.log(`🔄 Сравнение полей. Роль: ${finalUserRole} | Имя: ${userName}`);
@@ -63,7 +62,7 @@ export async function PUT(request: NextRequest) {
           order_id: id,
           action: actionText,
           user_name: userName,
-          user_role: finalUserRole,          // ← Используем корректную роль
+          user_role: finalUserRole,
           field_name: field,
           old_value: oldStr || null,
           new_value: newStr || null
@@ -87,19 +86,7 @@ export async function PUT(request: NextRequest) {
     // ==================== 4. ОБНОВЛЕНИЕ ЗАЯВКИ ====================
     const { error: updateError } = await supabase
       .from('orders')
-      .update({
-        grade: updateData.grade,
-        volume: updateData.volume,
-        delivery_date: updateData.delivery_date,
-        delivery_time: updateData.delivery_time,
-        address: updateData.address,
-        phone: updateData.phone,
-        organization_name: updateData.organization_name,
-        full_name: updateData.full_name,
-        inn: updateData.inn,
-        comment: updateData.comment,
-        status: updateData.status,
-      })
+      .update(updateData)                    // ← Теперь обновляем всё, что пришло
       .eq('id', id);
 
     if (updateError) {

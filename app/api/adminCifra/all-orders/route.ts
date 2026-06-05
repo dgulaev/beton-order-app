@@ -11,15 +11,19 @@ export async function GET() {
 
     const { data, error } = await supabase
       .from('orders')
-      .select('*')
-      .order('created_at', { ascending: false });
+      .select(`
+        *,
+        is_questionable
+      `)
+      .order('delivery_date', { ascending: true })
+      .order('delivery_time', { ascending: true });
 
     if (error) {
-      console.error('Supabase error:', error);
+      console.error('Supabase error (all-orders):', error);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // console.log(`✅ all-orders: загружено ${data?.length || 0} заказов`);
+    console.log(`✅ all-orders: загружено ${data?.length || 0} заказов`);
 
     return NextResponse.json(data || []);
   } catch (error: any) {

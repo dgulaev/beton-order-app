@@ -807,6 +807,7 @@ ${order.customer_type?.includes('Юридическое')
               >
                 + Новый заказ
               </button>
+              
             </div>
 
           </div>
@@ -880,91 +881,109 @@ ${order.customer_type?.includes('Юридическое')
   </div>
 
     {/* ==================== СПИСОК ЗАЯВОК СО СКРОЛЛОМ ==================== */}
+<div style={{ 
+  flex: 1,
+  background: '#1E2937', 
+  borderRadius: '24px', 
+  padding: '24px 32px',
+  display: 'flex',
+  flexDirection: 'column',
+  minHeight: '620px',
+  overflow: 'hidden'
+}}>
+  
   <div style={{ 
-    flex: 1,
-    background: '#1E2937', 
-    borderRadius: '24px', 
-    padding: '24px 32px',
-    display: 'flex',
-    flexDirection: 'column',
-    minHeight: '620px',
-    overflow: 'hidden'
+    flex: 1, 
+    overflowY: 'auto', 
+    display: 'flex', 
+    flexDirection: 'column', 
+    gap: '12px',
+    paddingRight: '8px'
   }}>
-    
-    <div style={{ 
-      flex: 1, 
-      overflowY: 'auto', 
-      display: 'flex', 
-      flexDirection: 'column', 
-      gap: '12px',
-      paddingRight: '8px'
-    }}>
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '100px', color: '#64748B' }}>Загрузка заявок...</div>
-      ) : filteredOrders.length > 0 ? filteredOrders.map((order: Order, index: number) => (
-        <div
-          key={order.id}
-          onClick={() => handleOpenOrder(order)}   // ← Изменили на отдельную функцию
-          style={{
-            background: '#25334A',
-            borderRadius: '16px',
-            padding: '20px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '24px',
-            transition: 'all 0.2s'
-          }}
-        >
-          {/* Порядковый номер */}
-          <div style={{ 
-            width: '50px', 
-            textAlign: 'center',
-            color: '#64748B',
-            fontWeight: '700',
-            fontSize: '18px',
-            userSelect: 'none'
-          }}>
-            {index + 1}
-          </div>
+    {loading ? (
+      <div style={{ textAlign: 'center', padding: '100px', color: '#64748B' }}>Загрузка заявок...</div>
+    ) : filteredOrders.length > 0 ? filteredOrders.map((order: Order, index: number) => (
+      <div
+        key={order.id}
+        onClick={() => handleOpenOrder(order)}
+        style={{
+          background: '#25334A',
+          borderRadius: '16px',
+          padding: '20px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '24px',
+          transition: 'all 0.2s'
+        }}
+      >
+        {/* Порядковый номер */}
+        <div style={{ 
+          width: '50px', 
+          textAlign: 'center',
+          color: '#64748B',
+          fontWeight: '700',
+          fontSize: '18px',
+          userSelect: 'none'
+        }}>
+          {index + 1}
+        </div>
 
-          {/* Время */}
-          <div style={{ width: '90px', fontWeight: '700', fontSize: '17px' }}>
-            {order.delivery_time}
-          </div>
+        {/* Время */}
+        <div style={{ width: '90px', fontWeight: '700', fontSize: '17px' }}>
+          {order.delivery_time}
+        </div>
 
-          {/* Информация о заявке */}
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: '600', fontSize: '17px' }}>
-              #{order.id} — {order.organization_name || order.full_name || '—'}
-            </div>
-            <div style={{ color: '#94A3B8' }}>
-              {order.grade} • {order.volume} м³
-            </div>
+        {/* Информация о заявке */}
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: '600', fontSize: '17px' }}>
+            #{order.id} — {order.organization_name || order.full_name || '—'}
           </div>
-
-          {/* Статус */}
-          <div style={{ 
-            padding: '8px 20px', 
-            borderRadius: '9999px', 
-            background: getStatusColor(order.status) + '20', 
-            color: getStatusColor(order.status),
-            fontWeight: '600',
-            fontSize: '15px'
-          }}>
-            {order.status === 'new' && 'Новый'}
-            {order.status === 'processing' && 'В работе'}
-            {order.status === 'completed' && 'Выполнен'}
-            {order.status === 'cancelled' && 'Отменён'}
+          <div style={{ color: '#94A3B8' }}>
+            {order.grade} • {order.volume} м³
           </div>
         </div>
-      )) : (
-        <div style={{ textAlign: 'center', padding: '140px 0', color: '#64748B', fontSize: '18px' }}>
-          По выбранным фильтрам ничего не найдено
-        </div>
-      )}
-    </div>
+
+        {/* БЕЙДЖ "ПОД ВОПРОСОМ" */}
+{(order as any).is_questionable && (
+  <div style={{
+    padding: '6px 14px',
+    background: '#EF4444',
+    color: 'white',
+    fontSize: '13px',
+    fontWeight: '700',
+    borderRadius: '9999px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    boxShadow: '0 2px 6px rgba(239, 68, 68, 0.3)'
+  }}>
+    ⚠️ Под вопросом
   </div>
+)}
+
+        {/* Статус */}
+        <div style={{ 
+          padding: '8px 20px', 
+          borderRadius: '9999px', 
+          background: getStatusColor(order.status) + '20', 
+          color: getStatusColor(order.status),
+          fontWeight: '600',
+          fontSize: '15px'
+        }}>
+          {order.status === 'new' && 'Новый'}
+          {order.status === 'processing' && 'В работе'}
+          {order.status === 'completed' && 'Выполнен'}
+          {order.status === 'cancelled' && 'Отменён'}
+        </div>
+      </div>
+    )) : (
+      <div style={{ textAlign: 'center', padding: '140px 0', color: '#64748B', fontSize: '18px' }}>
+        По выбранным фильтрам ничего не найдено
+      </div>
+    )}
+  </div>
+</div>
 </div>
 
 
@@ -998,20 +1017,86 @@ ${order.customer_type?.includes('Юридическое')
         </button>
       </div>
 
-      {/* Статус */}
+            {/* ==================== СТАТУС + "ПОД ВОПРОСОМ" (в одну линию) ==================== */}
       <div style={{ 
-        display: 'inline-block', 
-        padding: '8px 26px', 
-        borderRadius: '9999px', 
-        fontWeight: '600',
-        backgroundColor: getStatusColor(selectedOrder.status) + '20',
-        color: getStatusColor(selectedOrder.status),
-        marginBottom: '28px'
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: '16px', 
+        marginBottom: '28px',
+        flexWrap: 'wrap'
       }}>
-        {selectedOrder.status === 'new' && '🟡 Новый заказ'}
-        {selectedOrder.status === 'processing' && '🔵 В работе'}
-        {selectedOrder.status === 'completed' && '🟢 Выполнен'}
-        {selectedOrder.status === 'cancelled' && '🔴 Отменён'}
+        
+        {/* Статус */}
+        <div style={{ 
+          display: 'inline-block', 
+          padding: '10px 26px', 
+          borderRadius: '9999px', 
+          fontWeight: '600',
+          backgroundColor: getStatusColor(selectedOrder.status) + '20',
+          color: getStatusColor(selectedOrder.status),
+        }}>
+          {selectedOrder.status === 'new' && '🟡 Новый заказ'}
+          {selectedOrder.status === 'processing' && '🔵 В работе'}
+          {selectedOrder.status === 'completed' && '🟢 Выполнен'}
+          {selectedOrder.status === 'cancelled' && '🔴 Отменён'}
+        </div>
+
+        {/* Чекбокс "Под вопросом" */}
+        {hasManagerPermissions(currentRole) && (
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '8px', 
+            background: '#25334A', 
+            padding: '10px 18px', 
+            borderRadius: '9999px',
+            fontSize: '15px'
+          }}>
+            <input 
+              type="checkbox" 
+              id="isQuestionable"
+              checked={selectedOrder?.is_questionable || false}
+              onChange={async (e) => {
+                const newValue = e.target.checked;
+                
+                const res = await fetch('/api/adminCifra/orders/update', {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    id: selectedOrder.id,
+                    is_questionable: newValue,
+                    userRole: currentRole
+                  })
+                });
+
+                if (res.ok) {
+                  setSelectedOrder((prev: any) => ({
+                    ...prev,
+                    is_questionable: newValue
+                  }));
+
+                  setAllOrders((prev: any[]) => prev.map((o: any) => 
+                    o.id === selectedOrder.id 
+                      ? { ...o, is_questionable: newValue } 
+                      : o
+                  ));
+                }
+              }}
+              style={{ width: '20px', height: '20px', accentColor: '#EF4444' }}
+            />
+            <label 
+              htmlFor="isQuestionable" 
+              style={{ 
+                color: '#F87171', 
+                fontWeight: '600', 
+                cursor: 'pointer',
+                userSelect: 'none'
+              }}
+            >
+              Под вопросом
+            </label>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
@@ -1455,10 +1540,13 @@ ${order.customer_type?.includes('Юридическое')
       >
         Отмена
       </button>
+      
     </div>
     </div>
   </div>
 )}
+
+
 
 
            {showNewOrderModal && (
