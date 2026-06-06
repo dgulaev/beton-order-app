@@ -92,6 +92,7 @@ useEffect(() => {
 
       console.log(`✅ Этап 1 (карточки) завершён за ${Date.now() - startTime} мс | Показано: ${combined.length} записей`);
 
+
       // ==================== ЭТАП 2: ФОНОВАЯ ЗАГРУЗКА ТЯЖЁЛЫХ ДАННЫХ ====================
       setTimeout(async () => {
         try {
@@ -153,6 +154,39 @@ useEffect(() => {
 
     loadRole();
   }, []);
+
+  // ==================== 2.1 АВТООТКРЫТИЕ КЛИЕНТА ИЗ УВЕДОМЛЕНИЯ ====================
+useEffect(() => {
+  const params = new URLSearchParams(window.location.search);
+  const openClientId = params.get('openClient');
+  const testCall = params.get('testCall') === 'true';
+
+  if (!openClientId) return;
+
+  // Ждём, пока profiles загрузятся
+  if (profiles.length === 0) return;
+
+  const clientToOpen = profiles.find((p: any) => 
+    p.groupId === openClientId || 
+    String(p.user_id) === openClientId || 
+    String(p.id) === openClientId
+  );
+
+  if (clientToOpen) {
+    console.log('🔗 Автооткрытие клиента:', clientToOpen.organization_name || clientToOpen.full_name);
+    
+    setSelectedProfile(clientToOpen);
+
+    // Показываем уведомление
+    if (testCall || (clientToOpen.next_contact && new Date(clientToOpen.next_contact) < new Date())) {
+      console.log('🔔 Показываем уведомление');
+      showClientReminder(clientToOpen, testCall);
+    }
+
+    // Очищаем URL
+    window.history.replaceState({}, '', '/adminCifra/clients');
+  }
+}, [profiles]);   // ← Важно: зависимость только от profiles
 
         // ==================== 3. ЗАГРУЗКА ЗАКАЗОВ ВЫБРАННОГО ПОЛЬЗОВАТЕЛЯ ====================
   const loadUserOrders = async (userId: number | string | undefined) => {
@@ -742,55 +776,47 @@ const filteredList = currentList.filter((item: any) => {
   }
 });
 
-  // ==================== 4.2 УВЕДОМЛЕНИЕ ПО КЛИЕНТУ ====================
+  // ==================== 4.1 ПОКАЗ УВЕДОМЛЕНИЯ О КЛИЕНТЕ ====================
 const showClientReminder = (client: any, isTest = false) => {
   const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
   const key = `client-reminder-${client.groupId || client.user_id}`;
 
-  if (!isTest && closed.includes(key)) {
-    console.log('Автоматическое уведомление уже было закрыто');
-    return;
-  }
+  if (!isTest && closed.includes(key)) return;
+
+  const isOverdue = client.isOverdue || (client.next_contact && new Date(client.next_contact) < new Date());
 
   const notif = document.createElement('div');
-
   Object.assign(notif.style, {
     position: 'fixed',
     top: '90px',
     right: '24px',
-    background: 'linear-gradient(135deg, #f59e0b, #fbbf24)',
+    background: isOverdue ? 'linear-gradient(135deg, #ef4444, #f87171)' : 'linear-gradient(135deg, #f59e0b, #fbbf24)',
     color: '#0f172a',
-    padding: '20px 24px',
+    padding: '18px 24px',
     borderRadius: '16px',
     zIndex: '10000',
-    boxShadow: '0 25px 50px rgba(0,0,0,0.5)',
+    boxShadow: '0 20px 40px rgba(239, 68, 68, 0.4)',
     display: 'flex',
     alignItems: 'center',
-    gap: '18px',
-    minWidth: '480px',
+    gap: '16px',
+    minWidth: '420px',
     cursor: 'pointer'
   });
 
   notif.innerHTML = `
-    <div style="font-size: 42px; line-height: 1;">📞</div>
+    <div style="font-size: 36px;">📞</div>
     <div style="flex: 1;">
-      <div style="font-size: 18px; font-weight: 700; margin-bottom: 4px;">
+      <div style="font-size: 17px; font-weight: 700;">
         Пора позвонить клиенту!
       </div>
-      <div style="font-size: 15.5px; font-weight: 600;">
+      <div style="font-size: 15px; margin-top: 4px;">
         ${client.organization_name || client.full_name || 'Клиент'}
       </div>
-      <div style="font-size: 14px; opacity: 0.95; margin-top: 2px;">
+      <div style="font-size: 14px; opacity: 0.9;">
         Следующий контакт: ${new Date(client.next_contact).toLocaleDateString('ru-RU')}
       </div>
     </div>
-    <div style="display: flex; flex-direction: column; gap: 8px;">
-      <button onclick="window.callClient(${client.user_id || client.clients?.[0]?.user_id || 'null'})" 
-        style="padding: 12px 22px; background: #10B981; color: white; border: none; border-radius: 10px; font-weight: 600; cursor: pointer; white-space: nowrap;">
-        📞 Позвонить
-      </button>
-      <div style="font-size: 26px; cursor: pointer; padding: 4px 8px; opacity: 0.7;" class="close-reminder">✕</div>
-    </div>
+    <div style="font-size: 28px; cursor: pointer; padding: 4px 10px;" class="close-reminder">✕</div>
   `;
 
   const closeBtn = notif.querySelector('.close-reminder') as HTMLElement;
@@ -799,36 +825,31 @@ const showClientReminder = (client: any, isTest = false) => {
     notif.remove();
     if (!isTest) {
       const closedList = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
-      if (!closedList.includes(key)) {
-        closedList.push(key);
-        localStorage.setItem('closedNotifications', JSON.stringify(closedList));
-      }
+      closedList.push(key);
+      localStorage.setItem('closedNotifications', JSON.stringify(closedList));
     }
   };
 
-  if (closeBtn) {
-    closeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeNotification();
-    });
-  }
-
-  notif.addEventListener('click', (e) => {
-    if (!(e.target as HTMLElement).closest('button')) {
-      window.location.href = '/adminCifra/clients';
-      closeNotification();
-    }
+  closeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeNotification();
   });
+
+  // Главное улучшение — открываем клиента
+  notif.addEventListener('click', () => {
+  closeNotification();
+  const groupId = client.groupId || client.user_id || client.id;
+  window.location.href = `/adminCifra/clients?openClient=${groupId}`;
+});
 
   document.body.appendChild(notif);
 
+  // Звук
   try {
     const audio = new Audio('/sounds/new-order.mp3');
-    audio.volume = 0.7;
+    audio.volume = 0.6;
     audio.play().catch(() => {});
   } catch (e) {}
-
-  console.log(`🔔 Уведомление показано (${isTest ? 'ТЕСТ' : 'автоматическое'})`);
 };
 
           // ==================== 5. ЗАГРУЗКА ЗАКАЗОВ ПРИ ВЫБОРЕ КЛИЕНТА ====================
@@ -878,56 +899,70 @@ const showClientReminder = (client: any, isTest = false) => {
   if (loading) return <div style={{ padding: '120px', textAlign: 'center', color: '#94A3B8' }}>Загрузка CRM...</div>;
 
   // ==================== 7. ГЛОБАЛЬНАЯ ФУНКЦИЯ ЗВОНКА ====================
-window.callClient = async (clientId: number | string) => {
+window.callClient = (clientId: number | string) => {
   if (!clientId) {
     alert('❌ Не удалось определить ID клиента');
     return;
   }
 
-  const phone = prompt("📞 Введите номер для звонка:", "+7");
+  const phone = prompt("📞 Подтвердите или введите номер для звонка:", "+7");
   if (!phone) return;
 
+  // Сразу открываем окно результата звонка
+  const resultInput = prompt(
+    "✅ Результат звонка:\n\n" +
+    "1 — Положительный (клиент заказал)\n" +
+    "2 — Нейтральный (скоро закажет)\n" +
+    "3 — Отрицательный (не нужен)\n\n" +
+    "Введите 1, 2 или 3:",
+    "1"
+  );
+
+  if (resultInput === null) {
+    // Пользователь отменил — просто звоним
+    window.open(`tel:${phone}`, '_self');
+    return;
+  }
+
+  let result = 'neutral';
+  let comment = '';
+
+  if (resultInput === '1') { 
+    result = 'positive'; 
+    comment = 'Клиент заказал бетон'; 
+  } else if (resultInput === '2') { 
+    result = 'neutral'; 
+    comment = 'Клиент сказал, что скоро закажет'; 
+  } else if (resultInput === '3') { 
+    result = 'negative'; 
+    comment = 'Клиент отказался'; 
+  }
+
+  // Запускаем звонок
   window.open(`tel:${phone}`, '_self');
 
-  // Ждём 800мс и спрашиваем результат
-  setTimeout(async () => {
-    const resultInput = prompt(
-      "✅ Результат звонка:\n\n" +
-      "1 — Положительный (клиент заказал)\n" +
-      "2 — Нейтральный (скоро закажет)\n" +
-      "3 — Отрицательный (не нужен)\n\n" +
-      "Введите 1, 2 или 3:",
-      "1"
-    );
-
-    if (!resultInput) return;
-
-    let result = 'neutral';
-    let comment = '';
-
-    if (resultInput === '1') { result = 'positive'; comment = 'Клиент заказал бетон'; }
-    else if (resultInput === '2') { result = 'neutral'; comment = 'Клиент сказал, что скоро закажет'; }
-    else if (resultInput === '3') { result = 'negative'; comment = 'Клиент отказался'; }
-
-    try {
-      const res = await fetch('/api/adminCifra/client-call', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: clientId, result, comment })
-      });
-
-      if (res.ok) {
-        alert('✅ Результат звонка сохранён');
-      } else {
-        alert('⚠️ Не удалось сохранить результат');
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Ошибка соединения');
+  // Сохраняем результат звонка
+  fetch('/api/adminCifra/client-call', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ 
+      client_id: clientId, 
+      result, 
+      comment 
+    })
+  })
+  .then(res => {
+    if (res.ok) {
+      alert('✅ Результат звонка успешно сохранён');
+    } else {
+      alert('⚠️ Звонок выполнен, но результат не сохранён');
     }
-  }, 800);
+  })
+  .catch(err => {
+    console.error(err);
+    alert('Ошибка сохранения результата звонка');
+  });
 };
-
   return (
     <div style={{ background: '#0F172A', minHeight: '100vh', color: '#fff', padding: '32px 40px' }}>
       <h1 style={{ fontSize: '32px', fontWeight: '700', marginBottom: '32px' }}>Клиенты CRM</h1>
@@ -1419,11 +1454,61 @@ window.callClient = async (clientId: number | string) => {
       {/* 9.3 Действия (кнопки) — ВСЕ КНОПКИ СОХРАНЕНЫ */}
       <div style={{ display: 'flex', gap: '12px', margin: '28px 0', flexWrap: 'wrap' }}>
         <button 
-          onClick={() => window.open(`tel:${selectedProfile.phone || selectedProfile.phones?.[0]}`, '_self')} 
-          style={{ flex: 1, padding: '14px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
-        >
-          📞 Позвонить
-        </button>
+  onClick={() => {
+    const client = selectedProfile;
+    if (!client) return alert('Клиент не выбран');
+
+    const phone = prompt("📞 Подтвердите номер для звонка:", 
+      client.phones?.[0] || client.phone || "+7");
+
+    if (!phone) return;
+
+    // Сразу показываем окно результата
+    const resultInput = prompt(
+      "✅ Результат звонка:\n\n" +
+      "1 — Положительный (клиент заказал)\n" +
+      "2 — Нейтральный (скоро закажет)\n" +
+      "3 — Отрицательный (не нужен)\n\n" +
+      "Введите 1, 2 или 3:",
+      "1"
+    );
+
+    if (resultInput === null) return;
+
+    let result = 'neutral';
+    let comment = '';
+
+    if (resultInput === '1') { 
+      result = 'positive'; 
+      comment = 'Клиент заказал бетон'; 
+    } else if (resultInput === '2') { 
+      result = 'neutral'; 
+      comment = 'Клиент сказал, что скоро закажет'; 
+    } else if (resultInput === '3') { 
+      result = 'negative'; 
+      comment = 'Клиент отказался'; 
+    }
+
+    // Запускаем звонок
+    window.open(`tel:${phone}`, '_self');
+
+    // Сохраняем результат
+    fetch('/api/adminCifra/client-call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        client_id: client.user_id || client.id || client.clients?.[0]?.user_id, 
+        result, 
+        comment 
+      })
+    })
+    .then(() => alert('✅ Результат звонка сохранён'))
+    .catch(() => alert('⚠️ Звонок выполнен, но результат не сохранён'));
+  }} 
+  style={{ flex: 1, padding: '14px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
+>
+  📞 Позвонить
+</button>
         <button 
           onClick={() => alert('Открывается чат с Max')} 
           style={{ flex: 1, padding: '14px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}

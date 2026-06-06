@@ -339,22 +339,39 @@ ${order.customer_type?.includes('Юридическое')
 
   const selectedDateStr = getLocalDateString(selectedDate);
 
-  // ==================== 2. ФИЛЬТРАЦИЯ ЗАЯВОК НА ВЫБРАННЫЙ ДЕНЬ ====================
+  // ==================== 2. ФИЛЬТРАЦИЯ ЗАЯВОК НА ВЫБРАННЫЙ ДЕНЬ (с часовым поясом) ====================
   const dayOrders = allOrders
     .filter((o: Order) => {
       if (!o?.delivery_date) return false;
-      
-      let orderDateStr: string;
-      
+
+      let orderDate: Date;
+
       if (typeof o.delivery_date === 'string') {
-        orderDateStr = o.delivery_date.substring(0, 10); // YYYY-MM-DD
+        // Если приходит строка — парсим как local дату
+        orderDate = new Date(o.delivery_date);
       } else {
-        orderDateStr = getLocalDateString(new Date(o.delivery_date));
+        orderDate = new Date(o.delivery_date);
       }
-      
-      return orderDateStr === selectedDateStr;
+
+      // Приводим к локальной дате (учитываем часовой пояс пользователя)
+      const orderDateStr = orderDate.toLocaleDateString('ru-RU', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).split('.').reverse().join('-'); // YYYY-MM-DD
+
+      const selectedStr = selectedDate.toLocaleDateString('ru-RU', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).split('.').reverse().join('-');
+
+      return orderDateStr === selectedStr;
     })
     .sort((a, b) => (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00'));
+
+    // Заявки на день
+    // console.log(`📅 Выбранная дата: ${selectedDateStr} | Найдено заявок: ${dayOrders.length}`);
 
   // ==================== KPI ====================
   // Исключаем отменённые заявки из всех расчётов
@@ -444,7 +461,7 @@ ${order.customer_type?.includes('Юридическое')
         const res = await fetch('/api/adminCifra/recipes');
         if (res.ok) {
           const data = await res.json();
-          console.log('✅ Загружено рецептов из adminCifra:', data.length, data);
+         // console.log('✅ Загружено рецептов из adminCifra:', data.length, data);
           setRecipes(data);
         } else {
           console.error('❌ Ошибка загрузки рецептов, статус:', res.status);
@@ -468,7 +485,7 @@ ${order.customer_type?.includes('Юридическое')
 
     let totalKg = 0;
 
-    console.log(`📊 Расчёт цемента. Всего активных заказов на день: ${orders.length}`);
+    // console.log(`📊 Расчёт цемента. Всего активных заказов на день: ${orders.length}`);
 
     orders.forEach((order: any, index: number) => {
       const grade = String(order.grade || '').trim();
@@ -481,7 +498,8 @@ ${order.customer_type?.includes('Юридическое')
       if (!recipe) recipe = recipes.find(r => r.code === grade.replace('и', ''));
       if (!recipe) recipe = recipes.find(r => r.name?.includes(grade));
 
-      console.log(`   [${index}] Марка: "${grade}" → рецепт найден:`, recipe ? recipe.code : 'НЕ НАЙДЕН');
+    // Лог для определения правильности рецептов в заявках
+    // console.log(`   [${index}] Марка: "${grade}" → рецепт найден:`, recipe ? recipe.code : 'НЕ НАЙДЕН');
 
       if (recipe && recipe.cement) {
         totalKg += volume * Number(recipe.cement);
@@ -489,37 +507,47 @@ ${order.customer_type?.includes('Юридическое')
     });
 
     const tons = (totalKg / 1000).toFixed(1);
-    console.log(`✅ Итого цемента: ${tons} т`);
+    // console.log(`✅ Итого цемента: ${tons} т`);
     return tons;
   };
 
-  // ==================== РАСЧЁТ ДОБАВОК (в кг) ====================
-  const calculateAdditiveNeeded = (onlyCompleted: boolean) => {
-    // Исключаем отменённые заявки из расчётов
-    let orders = dayOrders.filter((o: Order) => o.status !== 'cancelled');
-
+    // ==================== РАСЧЁТ ДОБАВОК (с поддержкой additive2 для растворов) ====================
+  const calculateAdditiveNeeded = (onlyCompleted: boolean = false) => {
+    let orders = dayOrders.filter((o: any) => o.status !== 'cancelled');
     if (onlyCompleted) {
-      orders = orders.filter((o: Order) => o.status === 'completed');
+      orders = orders.filter((o: any) => o.status === 'completed');
     }
 
     let totalKg = 0;
 
     orders.forEach((order: any) => {
-      const grade = String(order.grade || '').trim();
+      let grade = String(order.grade || '').trim();
       const volume = Number(order.volume || 0);
+      if (volume <= 0 || !grade) return;
 
-      if (volume <= 0) return;
+      // Поиск рецепта
+      let recipe = recipes.find((r: any) => r.code === grade);
+      if (!recipe) recipe = recipes.find((r: any) => r.code === grade.replace(/и$/, ''));
+      if (!recipe) recipe = recipes.find((r: any) => grade.includes(r.code));
+      if (!recipe) recipe = recipes.find((r: any) => r.name?.toLowerCase().includes(grade.toLowerCase()));
 
-      let recipe = recipes.find(r => r.code === grade);
-      if (!recipe) recipe = recipes.find(r => r.code === grade.replace('и', ''));
-      if (!recipe) recipe = recipes.find(r => r.name?.includes(grade));
+      if (!recipe) return;
 
-      if (recipe && recipe.additive) {
-        totalKg += volume * Number(recipe.additive);
+      let additiveValue = 0;
+
+      // Логика выбора колонки добавки
+      if (recipe.type === 'mortar' && recipe.additive2 !== null && recipe.additive2 !== undefined) {
+        additiveValue = Number(recipe.additive2);
+      } else if (recipe.additive !== null && recipe.additive !== undefined) {
+        additiveValue = Number(recipe.additive);
+      }
+
+      if (additiveValue > 0) {
+        totalKg += volume * additiveValue;
       }
     });
 
-    return totalKg.toFixed(1);   // ← оставляем в кг
+    return totalKg.toFixed(1);   // в кг
   };
 
 
@@ -612,7 +640,7 @@ ${order.customer_type?.includes('Юридическое')
             background: '#1E2937', 
             borderRadius: '20px', 
             padding: '24px',
-            minHeight: '880px',                    // минимальная комфортная высота для 1920
+            minHeight: '1100px',                    // минимальная комфортная высота для 1920
             height: 'calc(100vh - 180px)',         // основная высота
             maxHeight: 'calc(80vh - 120px)',      // ограничение сверху на 4K
             display: 'flex',
@@ -772,6 +800,115 @@ ${order.customer_type?.includes('Юридическое')
   })}
 </div>
 
+{/* ==================== ГРАФИК ЗА НЕДЕЛЮ ==================== */}
+<div style={{ 
+  background: '#1E2937', 
+  borderRadius: '16px', 
+  padding: '20px 24px',
+  marginBottom: '5px',
+  height: '200px',
+  position: 'relative'
+}}>
+  <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '12px', fontWeight: '600' }}>
+    Объём по дням недели (м³)
+  </div>
+
+  <svg width="100%" height="120" viewBox="0 0 280 110" style={{ overflow: 'visible' }}>
+    {/* Сетка */}
+    {[0, 30, 60, 90, 120].map(y => (
+      <line key={y} x1="0" y1={y} x2="280" y2={y} stroke="#334155" strokeWidth="1" />
+    ))}
+
+    {/* Линия графика */}
+    <polyline
+      points={weekDays.map((d, i) => {
+        const dateStr = d.toISOString().split('T')[0];
+        const dailyVolume = allOrders
+          .filter(o => {
+            if (!o?.delivery_date) return false;
+            const orderDate = typeof o.delivery_date === 'string' 
+              ? o.delivery_date.substring(0, 10) 
+              : new Date(o.delivery_date).toISOString().split('T')[0];
+            return orderDate === dateStr && o.status !== 'cancelled';
+          })
+          .reduce((sum, o) => sum + Number(o.volume || 0), 0);
+
+        const maxVolume = Math.max(...weekDays.map(dd => {
+          const ds = dd.toISOString().split('T')[0];
+          return allOrders
+            .filter(o => {
+              const od = typeof o.delivery_date === 'string' ? o.delivery_date.substring(0,10) : new Date(o.delivery_date).toISOString().split('T')[0];
+              return od === ds && o.status !== 'cancelled';
+            })
+            .reduce((s, o) => s + Number(o.volume || 0), 0);
+        })) || 100;
+
+        const x = 20 + i * 40;
+        const y = 100 - (dailyVolume / (maxVolume || 1)) * 80;
+        return `${x},${y}`;
+      }).join(' ')}
+      fill="none"
+      stroke="#60A5FA"
+      strokeWidth="3"
+      strokeLinejoin="round"
+      strokeLinecap="round"
+    />
+
+    {/* Точки на графике */}
+    {weekDays.map((d, i) => {
+      const dateStr = d.toISOString().split('T')[0];
+      const dailyVolume = allOrders
+        .filter(o => {
+          if (!o?.delivery_date) return false;
+          const orderDate = typeof o.delivery_date === 'string' 
+            ? o.delivery_date.substring(0, 10) 
+            : new Date(o.delivery_date).toISOString().split('T')[0];
+          return orderDate === dateStr && o.status !== 'cancelled';
+        })
+        .reduce((sum, o) => sum + Number(o.volume || 0), 0);
+
+      const maxVolume = Math.max(...weekDays.map(dd => {
+        const ds = dd.toISOString().split('T')[0];
+        return allOrders
+          .filter(o => {
+            const od = typeof o.delivery_date === 'string' ? o.delivery_date.substring(0,10) : new Date(o.delivery_date).toISOString().split('T')[0];
+            return od === ds && o.status !== 'cancelled';
+          })
+          .reduce((s, o) => s + Number(o.volume || 0), 0);
+      })) || 100;
+
+      const x = 20 + i * 40;
+      const y = 100 - (dailyVolume / (maxVolume || 1)) * 80;
+
+      return (
+        <g key={i}>
+          <circle cx={x} cy={y} r="4" fill="#60A5FA" />
+          <text x={x} y={y - 12} textAnchor="middle" fill="#94A3B8" fontSize="11">
+            {Math.round(dailyVolume)}
+          </text>
+        </g>
+      );
+    })}
+
+    {/* Подписи дней */}
+    {weekDays.map((d, i) => {
+      const x = 20 + i * 40;
+      return (
+        <text 
+          key={i} 
+          x={x} 
+          y="118" 
+          textAnchor="middle" 
+          fill="#64748B" 
+          fontSize="11"
+        >
+          {d.toLocaleDateString('ru-RU', { weekday: 'short' })}
+        </text>
+      );
+    })}
+  </svg>
+</div>
+
                                     {/* ==================== РАЗДЕЛИТЕЛЬ + СВОДКА ЗА НЕДЕЛЮ ==================== */}
             <div style={{ marginTop: '12px', paddingTop: '16px', borderTop: '1px solid #334155' }}>
               <div style={{ 
@@ -792,7 +929,7 @@ ${order.customer_type?.includes('Юридическое')
                 
                 {/* 2. Запланировано */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '15px' }}>Запланировано на неделю:</span>
+                  <span style={{ fontSize: '15px' }}>Запланировано:</span>
                   <strong style={{ fontSize: '17px' }}>
                     {Math.round(weekDays.reduce((sum, d) => {
                       const dateStr = getLocalDateString(d);

@@ -16,6 +16,7 @@ export default function ReportsPage() {
   const [dateTo, setDateTo] = useState('');
   const [viewMode, setViewMode] = useState<'month' | 'day'>('day');
   const [currentPage, setCurrentPage] = useState(1);
+    const [scaleMode, setScaleMode] = useState<'linear' | 'log'>('linear');
   const itemsPerPage = 10;
 
   const loadHistory = async () => {
@@ -136,77 +137,92 @@ export default function ReportsPage() {
   );
 
     // ==================== ГРАФИКИ ====================
+
+      // ==================== МЕСЯЧНЫЙ ГРАФИК ====================
       const monthlyVolume = useMemo(() => {
-    const groups: any = {};
+        const groups: any = {};
 
-    filteredHistory.forEach(report => {
-      // БЕРЁМ ДАТУ ИЗ ПЕРВОЙ СТРОКИ RAW_DATA — как в Excel
-      let dateStr = report.raw_data?.[0]?.date || report.report_date || '';
-      if (!dateStr) return;
+        filteredHistory.forEach(report => {
+          let dateStr = report.raw_data?.[0]?.date || report.report_date || '';
+          if (!dateStr) return;
 
-      // Приводим к ключу YYYY-MM
-      let monthKey = '';
-      if (dateStr.includes('.')) {
-        // Формат 13.05.2026
-        const [_, month, year] = dateStr.split('.');
-        monthKey = `${year}-${month.padStart(2, '0')}`;
-      } else {
-        // Формат YYYY-MM-DD
-        monthKey = dateStr.substring(0, 7);
-      }
+          let monthKey = '';
+          if (dateStr.includes('.')) {
+            const [_, month, year] = dateStr.split('.');
+            monthKey = `${year}-${month.padStart(2, '0')}`;
+          } else {
+            monthKey = dateStr.substring(0, 7);
+          }
 
-      groups[monthKey] = (groups[monthKey] || 0) + (report.total_volume || 0);
-    });
+          groups[monthKey] = (groups[monthKey] || 0) + (report.total_volume || 0);
+        });
 
-    return Object.entries(groups)
-      .map(([monthKey, volume]) => ({
-        label: monthKey.split('-')[1] + '.' + monthKey.split('-')[0].slice(2), // 05.26
-        value: Number(volume) || 0
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [filteredHistory]);
+        return Object.entries(groups)
+          .map(([monthKey, volume]) => ({
+            label: monthKey.split('-')[1] + '.' + monthKey.split('-')[0].slice(2),
+            value: Math.round(Number(volume) || 0)   // Округление
+          }))
+          .sort((a, b) => b.label.localeCompare(a.label));
+      }, [filteredHistory]);
 
+          // ==================== ДНЕВНОЙ ГРАФИК — С УЛУЧШЕННЫМ TOOLTIP ====================
     const dailyVolume = useMemo(() => {
-    const groups: any = {};
+      const groups: any = {};
 
-    filteredHistory.forEach(report => {
-      let dateStr = report.raw_data?.[0]?.date || report.report_date || '';
-      if (!dateStr) return;
+      filteredHistory.forEach(report => {
+        let dateStr = report.raw_data?.[0]?.date || report.report_date || '';
+        if (!dateStr) return;
 
-      // Формируем метку DD.MM
-      let label = '';
-      if (dateStr.includes('.')) {
-        const [day, month] = dateStr.split('.');
-        label = `${day.padStart(2, '0')}.${month.padStart(2, '0')}`;
-      } else {
-        const parts = dateStr.split('-');
-        label = `${parts[2]}.${parts[1]}`;
-      }
-
-      groups[dateStr] = (groups[dateStr] || 0) + (report.total_volume || 0);
-    });
-
-    return Object.entries(groups)
-      .map(([dateKey, volume]) => {
-        // Повторно формируем label для каждой записи
-        let label = '';
-        if (dateKey.includes('.')) {
-          const [day, month] = dateKey.split('.');
-          label = `${day.padStart(2, '0')}.${month.padStart(2, '0')}`;
+        let fullDateKey = '';
+        if (dateStr.includes('.')) {
+          const [day, month, year] = dateStr.split('.');
+          fullDateKey = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
         } else {
-          const parts = dateKey.split('-');
-          label = `${parts[2]}.${parts[1]}`;
+          fullDateKey = dateStr.substring(0, 10);
         }
 
-        return {
-          label,
-          value: Number(volume) || 0,
-          fullDate: dateKey
-        };
-      })
-      .sort((a, b) => b.fullDate.localeCompare(a.fullDate)) // новые дни сверху
-      .slice(0, 31);
-  }, [filteredHistory]);
+        groups[fullDateKey] = (groups[fullDateKey] || 0) + (report.total_volume || 0);
+      });
+
+      return Object.entries(groups)
+        .map(([fullDate, volume]) => {
+          const [year, month, day] = fullDate.split('-');
+          const label = `${day}.${month}`;
+
+          return {
+            label,
+            value: Math.round(Number(volume) || 0),   // ← Округляем до целого
+            fullDate,
+            dateObj: new Date(fullDate)
+          };
+        })
+        .sort((a, b) => b.dateObj.getTime() - a.dateObj.getTime())
+        .slice(0, 31);
+    }, [filteredHistory]);
+
+      // ==================== КАСТОМНЫЙ TOOLTIP ====================
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div style={{
+          background: '#1E2937',
+          padding: '12px 16px',
+          borderRadius: '12px',
+          border: '1px solid #475569',
+          color: '#fff',
+          fontSize: '14px'
+        }}>
+          <div style={{ marginBottom: '6px', color: '#94A3B8' }}>
+            {label} • {payload[0].payload.fullDate}
+          </div>
+          <div style={{ fontWeight: '700', color: '#10B981' }}>
+            {payload[0].value} м³
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
 
   // ==================== ТОП РЕЦЕПТОВ ====================
   const topRecipes = useMemo(() => {
@@ -229,7 +245,37 @@ export default function ReportsPage() {
       }));
   }, [filteredHistory]);
 
-  // ==================== РАСХОД МАТЕРИАЛОВ ====================
+    // ==================== КАСТОМНЫЙ TOOLTIP ДЛЯ PIE CHART ====================
+  const CustomPieTooltip = ({ active, payload }: any) => {
+    if (active && payload && payload.length) {
+      const data = payload[0].payload;
+      return (
+        <div style={{
+          backgroundColor: '#1E2937',
+          padding: '12px 18px',
+          borderRadius: '12px',
+          border: '1px solid #475569',
+          color: '#fff',
+          fontSize: '14px',
+          boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
+        }}>
+          <div style={{ 
+            fontWeight: '700', 
+            color: payload[0].fill,
+            marginBottom: '4px'
+          }}>
+            {data.name}
+          </div>
+          <div style={{ fontSize: '18px', fontWeight: '700', color: '#10B981' }}>
+            {Math.round(data.value)} м³
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
+    // ==================== РАСХОД МАТЕРИАЛОВ (ПЕРЕСТРОЕННЫЕ ДАННЫЕ) ====================
   const materialConsumption = useMemo(() => {
     let cement = 0, sand = 0, gravel = 0, water = 0, additive = 0;
 
@@ -242,15 +288,50 @@ export default function ReportsPage() {
       additive += data.reduce((sum: number, r: any) => sum + (r.additive || 0), 0);
     });
 
-    return [{
-      name: 'Материалы',
-      cement: Math.round(cement),
-      sand: Math.round(sand),
-      gravel: Math.round(gravel),
-      water: Math.round(water),
-      additive: Math.round(additive)
-    }];
+    return [
+      { name: "Цемент",   value: Math.round(cement),   fill: "#F59E0B" },
+      { name: "Песок",    value: Math.round(sand),     fill: "#3B82F6" },
+      { name: "Щебень",   value: Math.round(gravel),   fill: "#10B981" },
+      { name: "Вода",     value: Math.round(water),    fill: "#8B5CF6" },
+      { name: "Добавка",  value: Math.round(additive), fill: "#EF4444" }
+    ];
   }, [filteredHistory]);
+
+           // ==================== TOOLTIP ДЛЯ РАСХОДА МАТЕРИАЛОВ ====================
+  const MaterialTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length > 0) {
+      const entry = payload[0];
+
+      return (
+        <div style={{
+          backgroundColor: '#1E2937',
+          padding: '14px 20px',
+          borderRadius: '12px',
+          border: '1px solid #475569',
+          color: '#fff',
+          fontSize: '15px',
+          boxShadow: '0 10px 30px rgba(0,0,0,0.6)',
+          minWidth: '220px'
+        }}>
+          <div style={{ fontWeight: '700', color: '#94A3B8', marginBottom: '8px' }}>
+            {label}
+          </div>
+          <div style={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
+            color: entry.fill || '#10B981'
+          }}>
+            <span style={{ fontWeight: '600' }}>{entry.name}</span>
+            <span style={{ fontWeight: '700', fontSize: '17px' }}>
+              {Math.round(entry.value).toLocaleString('ru-RU')} кг
+            </span>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
 
   // ==================== СТАТИСТИКА ====================
     const stats = useMemo(() => {
@@ -267,13 +348,7 @@ export default function ReportsPage() {
   return (
     <div style={{ padding: '5px 40px 40px 40px' }}>
       
-      <h1 style={{ 
-        fontSize: '20px', 
-        fontWeight: '700', 
-        marginBottom: '8px' 
-      }}>
-        Отчеты производства MEKA
-      </h1>
+      
 
       {/* ====================== КНОПКА ЗАГРУЗКИ НОВОГО ОТЧЕТА ====================== */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '32px' }}>
@@ -499,95 +574,173 @@ export default function ReportsPage() {
 
               <ResponsiveContainer width="100%" height={340}>
                 <BarChart 
-                  data={viewMode === 'month' ? monthlyVolume : dailyVolume}
-                  barCategoryGap={viewMode === 'month' ? 80 : 18}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                  <XAxis 
-                    dataKey="label" 
-                    stroke="#94A3B8" 
-                    tickLine={false}
-                  />
-                  <YAxis stroke="#94A3B8" />
-                  <Tooltip />
-                  <Bar dataKey="value" fill="#10B981" radius={12} />
-                </BarChart>
+  data={viewMode === 'month' ? monthlyVolume : dailyVolume}
+  barCategoryGap={viewMode === 'month' ? 80 : 18}
+>
+  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+  <XAxis 
+    dataKey="label" 
+    stroke="#94A3B8" 
+    tickLine={false}
+  />
+  <YAxis stroke="#94A3B8" />
+  
+  <Tooltip 
+    content={<CustomTooltip />} 
+    cursor={false}           // ← Правильное место
+  />
+  
+  <Bar dataKey="value" fill="#10B981" radius={12} />
+</BarChart>
               </ResponsiveContainer>
             </div>
 
-            {/* 2. Топ рецептов */}
-            <div style={{ backgroundColor: '#1E2937', padding: '24px', borderRadius: '20px' }}>
-              <h3 style={{ marginBottom: '20px', color: '#E2E8F0' }}>Топ рецептов</h3>
-              <ResponsiveContainer width="100%" height={320}>
-                <PieChart>
-                  <Pie data={topRecipes} cx="50%" cy="50%" innerRadius={90} outerRadius={130} dataKey="value">
-                    {topRecipes.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.fill} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginTop: '20px' }}>
-                {topRecipes.map((item, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
-                    <div style={{ width: 14, height: 14, backgroundColor: item.fill, borderRadius: '4px' }}></div>
-                    <span>{item.name} — {item.value} м³</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+            {/* ТОП РЕЦЕПТОВ */}
+<div style={{ background: '#1E2937', borderRadius: '20px', padding: '28px' }}>
+  <h3 style={{ marginBottom: '20px', color: '#94A3B8' }}>Топ рецептов</h3>
+  
+  <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '30px' }}>
+    <PieChart width={340} height={340}>
+      <Pie
+        data={topRecipes}
+        cx="50%"
+        cy="50%"
+        innerRadius={110}
+        outerRadius={150}
+        dataKey="value"
+        nameKey="name"
+      >
+        {topRecipes.map((entry, index) => (
+          <Cell key={`cell-${index}`} fill={entry.fill} />
+        ))}
+      </Pie>
+      <Tooltip content={<CustomPieTooltip />} />
+    </PieChart>
+  </div>
 
-         {/* 3. Расход материалов — выделяется только одна колонка */}
-            <div style={{ backgroundColor: '#1E2937', padding: '24px', borderRadius: '20px' }}>
-              <h3 style={{ marginBottom: '20px', color: '#E2E8F0' }}>Расход материалов</h3>
-              <ResponsiveContainer width="100%" height={340}>
-                <BarChart 
-                  data={materialConsumption} 
-                  barCategoryGap={50}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                  <XAxis dataKey="name" stroke="#94A3B8" tickLine={false} />
-                  <YAxis stroke="#94A3B8" />
-                  
-                  <Tooltip 
-                    cursor={false}                    // ← главное исправление
-                    contentStyle={{ 
-                      backgroundColor: '#1E2937', 
-                      border: 'none', 
-                      borderRadius: '8px',
-                      padding: '12px 16px',
-                      color: '#fff'
-                    }}
-                    formatter={(value: any, name: any) => [
-                      `${Number(value).toLocaleString('ru-RU')} кг`,
-                      name
-                    ]}
-                  />
+    {/* Легенда в одну строку с переносом */}
+  <div style={{ 
+    display: 'flex', 
+    flexWrap: 'wrap', 
+    gap: '24px 40px', 
+    justifyContent: 'center',
+    marginTop: '20px'
+  }}>
+    {topRecipes.map((recipe, index) => (
+      <div key={index} style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: '10px',
+        whiteSpace: 'nowrap'
+      }}>
+        <div style={{ 
+          width: '18px', 
+          height: '18px', 
+          backgroundColor: recipe.fill, 
+          borderRadius: '4px',
+          flexShrink: 0
+        }} />
+        <div>
+          <span style={{ fontWeight: '600' }}>{recipe.name}</span>
+          <span style={{ color: '#10B981', marginLeft: '8px', fontWeight: '700' }}>
+            {Math.round(recipe.value)} м³
+          </span>
+        </div>
+      </div>
+    ))}
+  </div>
+</div>
 
-                  <Bar dataKey="cement"   fill="#F59E0B" name="Цемент" radius={8} />
-                  <Bar dataKey="sand"     fill="#60A5FA" name="Песок" radius={8} />
-                  <Bar dataKey="gravel"   fill="#34D399" name="Щебень" radius={8} />
-                  <Bar dataKey="water"    fill="#A78BFA" name="Вода" radius={8} />
-                  <Bar dataKey="additive" fill="#FB7185" name="Добавка" radius={8} />
-                </BarChart>
-              </ResponsiveContainer>
+         {/* ==================== РАСХОД МАТЕРИАЛОВ С ПЕРЕКЛЮЧАТЕЛЕМ ==================== */}
+<div style={{ background: '#1E2937', borderRadius: '20px', padding: '28px' }}>
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+    <h3 style={{ margin: 0, color: '#94A3B8' }}>Расход материалов</h3>
+    
+    {/* Красивый переключатель */}
+    <div style={{ 
+      background: '#25334A', 
+      borderRadius: '9999px', 
+      padding: '4px', 
+      display: 'flex' 
+    }}>
+      <button 
+        onClick={() => setScaleMode('linear')}
+        style={{
+          padding: '8px 20px',
+          borderRadius: '9999px',
+          background: scaleMode === 'linear' ? '#10B981' : 'transparent',
+          color: scaleMode === 'linear' ? '#fff' : '#94A3B8',
+          border: 'none',
+          fontWeight: '600',
+          fontSize: '14px',
+          cursor: 'pointer',
+          transition: 'all 0.2s'
+        }}
+      >
+        Линейный
+      </button>
+      <button 
+        onClick={() => setScaleMode('log')}
+        style={{
+          padding: '8px 20px',
+          borderRadius: '9999px',
+          background: scaleMode === 'log' ? '#10B981' : 'transparent',
+          color: scaleMode === 'log' ? '#fff' : '#94A3B8',
+          border: 'none',
+          fontWeight: '600',
+          fontSize: '14px',
+          cursor: 'pointer',
+          transition: 'all 0.2s'
+        }}
+      >
+        Логарифмический
+      </button>
+    </div>
+  </div>
+  
+  <ResponsiveContainer width="100%" height={380}>
+    <BarChart data={materialConsumption} barCategoryGap={40}>
+      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+      <XAxis 
+        dataKey="name" 
+        stroke="#94A3B8" 
+        tickLine={false}
+      />
+      <YAxis 
+        stroke="#94A3B8" 
+        scale={scaleMode === 'log' ? "log" : "linear"}
+        domain={scaleMode === 'log' ? [1, 'dataMax'] : [0, 'dataMax']}
+        tickFormatter={(value) => (value / 1000).toFixed(0) + 'k'}
+      />
+      
+      <Tooltip content={<MaterialTooltip />} cursor={false} />
 
-              {/* Легенда */}
-              <div style={{ 
-                display: 'flex', 
-                justifyContent: 'center', 
-                gap: '24px', 
-                marginTop: '24px',
-                flexWrap: 'wrap'
-              }}>
-                <div style={{display:'flex', alignItems:'center', gap:'8px'}}><div style={{width:16,height:16,backgroundColor:'#F59E0B',borderRadius:'4px'}}></div>Цемент</div>
-                <div style={{display:'flex', alignItems:'center', gap:'8px'}}><div style={{width:16,height:16,backgroundColor:'#60A5FA',borderRadius:'4px'}}></div>Песок</div>
-                <div style={{display:'flex', alignItems:'center', gap:'8px'}}><div style={{width:16,height:16,backgroundColor:'#34D399',borderRadius:'4px'}}></div>Щебень</div>
-                <div style={{display:'flex', alignItems:'center', gap:'8px'}}><div style={{width:16,height:16,backgroundColor:'#A78BFA',borderRadius:'4px'}}></div>Вода</div>
-                <div style={{display:'flex', alignItems:'center', gap:'8px'}}><div style={{width:16,height:16,backgroundColor:'#FB7185',borderRadius:'4px'}}></div>Добавка</div>
-              </div>
-            </div>
+      <Bar dataKey="value" fill="#10B981" radius={8} />
+    </BarChart>
+  </ResponsiveContainer>
+
+  {/* Легенда */}
+  <div style={{ 
+    display: 'flex', 
+    flexWrap: 'wrap', 
+    gap: '20px 40px', 
+    justifyContent: 'center',
+    marginTop: '20px'
+  }}>
+    {[
+      { color: '#F59E0B', label: 'Цемент' },
+      { color: '#3B82F6', label: 'Песок' },
+      { color: '#10B981', label: 'Щебень' },
+      { color: '#8B5CF6', label: 'Вода' },
+      { color: '#EF4444', label: 'Добавка' }
+    ].map((item, i) => (
+      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ width: '18px', height: '18px', backgroundColor: item.color, borderRadius: '4px' }} />
+        <span style={{ fontWeight: '500' }}>{item.label}</span>
+      </div>
+    ))}
+  </div>
+</div>
             </div>
 
                               {/* ====================== ИСТОРИЯ ====================== */}
