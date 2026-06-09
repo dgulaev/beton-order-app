@@ -981,7 +981,7 @@ ${order.customer_type?.includes('Юридическое')
                   fontSize: '16px'
                 }}
               >
-                + Новый заказ
+                + Новая заявка
               </button>
               
             </div>

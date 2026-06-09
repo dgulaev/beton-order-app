@@ -119,41 +119,41 @@ export default function Calendar({ onClose }: CalendarProps) {
             ))}
 
             {Array.from({ length: new Date(year, month + 1, 0).getDate() }, (_, i) => {
-              const day = i + 1;
-              const dateKey = `${currentMonthKey}-${String(day).padStart(2, '0')}`;
-              const volume = dailyVolumes[dateKey] || 0;
-              const isSelected = selectedDay === day;
-              const isToday = isCurrentMonth && day === currentDay;
+  const day = i + 1;
+  const dateKey = `${currentMonthKey}-${String(day).padStart(2, '0')}`;
+  const volume = dailyVolumes[dateKey] || 0;
+  const isSelected = selectedDay === day;
+  const isToday = isCurrentMonth && day === currentDay;
 
-              return (
-                <div
-                  key={day}
-                  onClick={() => handleDayClick(day)}
-                  style={{
-                    height: '78px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: '14px',
-                    backgroundColor: isSelected ? '#3B82F6' : '#334155',
-                    color: '#fff',
-                    cursor: 'pointer',
-                    fontSize: '19px',
-                    fontWeight: '600',
-                    position: 'relative',
-                    border: isToday ? '4px solid #EF4444' : 'none',
-                  }}
-                >
-                  <span>{day}</span>
-                  {volume > 0 && (
-                    <span style={{ fontSize: '13px', fontWeight: '700', color: '#10B981', marginTop: '4px' }}>
-                      {volume} м³
-                    </span>
-                  )}
-                </div>
-              );
-            })}
+  return (
+    <div
+      key={day}
+      onClick={() => handleDayClick(day)}
+      style={{
+        height: '78px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: '14px',
+        backgroundColor: isSelected ? '#3B82F6' : '#334155',
+        color: '#fff',
+        cursor: 'pointer',
+        fontSize: '19px',
+        fontWeight: '600',
+        position: 'relative',
+        border: isToday ? '4px solid #EF4444' : 'none',
+      }}
+    >
+      <span>{day}</span>
+      {volume > 0 && (
+        <span style={{ fontSize: '13px', fontWeight: '700', color: '#10B981', marginTop: '4px' }}>
+          {Number(volume).toFixed(1)} м³
+        </span>
+      )}
+    </div>
+  );
+})}
           </div>
         </div>
 

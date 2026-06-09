@@ -333,23 +333,35 @@ export default function ReportsPage() {
     return null;
   };
 
-  // ==================== СТАТИСТИКА ====================
-    const stats = useMemo(() => {
+    // ==================== СТАТИСТИКА ====================
+  const stats = useMemo(() => {
     const totalVolume = filteredHistory.reduce((sum, r) => sum + (r.total_volume || 0), 0);
     const totalCement = filteredHistory.reduce((sum, r) => sum + (r.total_cement || 0), 0);
+    
+    let additive1 = 0;
+    let additive2 = 0;
+
+    filteredHistory.forEach(report => {
+      const data = report.raw_data || [];
+      additive1 += data.reduce((sum: number, r: any) => sum + (r.additive || 0), 0);
+      additive2 += data.reduce((sum: number, r: any) => sum + (r.additive2 || 0), 0);
+    });
 
     return {
       reports: filteredHistory.length,
       volume: totalVolume.toFixed(1),
       cement: (totalCement / 1000).toFixed(1),
+      additive1: Math.round(additive1),
+      additive2: Math.round(additive2),
     };
   }, [filteredHistory]);
 
+
+
+
+
   return (
     <div style={{ padding: '5px 40px 40px 40px' }}>
-      
-      
-
       {/* ====================== КНОПКА ЗАГРУЗКИ НОВОГО ОТЧЕТА ====================== */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '32px' }}>
         <label style={{
@@ -368,7 +380,7 @@ export default function ReportsPage() {
    }}>
     Загрузить новый отчёт MEKA (.xls / .xlsx)
     
-    <input
+        <input
       type="file"
       accept=".xls,.xlsx"
       onChange={async (e) => {
@@ -398,12 +410,16 @@ export default function ReportsPage() {
             gravel:  Number(row['__EMPTY_7'] || 0),
             cement:  Number(row['__EMPTY_12'] || 0),
             water:   Number(row['__EMPTY_18'] || 0),
-            additive: Number(row['__EMPTY_20'] || 0),
-            additive2: Number(row['__EMPTY_21'] || row['__EMPTY_22'] || 0),
+            additive: Number(row['__EMPTY_20'] || 0),     // ПФМ-НЛК
+            additive2: Number(row['__EMPTY_21'] || row['__EMPTY_22'] || 0), // Линомикс
           })).filter(r => r.qty > 0 && r.qty < 1000 && r.recipe !== 'Неизвестно' && !r.recipe.includes('ИТОГО') && r.no !== '-');
 
           const totalVolume = processed.reduce((sum: number, r: any) => sum + r.qty, 0);
           const totalCement = processed.reduce((sum: number, r: any) => sum + r.cement, 0);
+
+          // === РАСЧЁТ РАСХОДА ДОБАВОК ===
+          const totalAdditive1 = processed.reduce((sum: number, r: any) => sum + (r.additive || 0), 0);
+          const totalAdditive2 = processed.reduce((sum: number, r: any) => sum + (r.additive2 || 0), 0);
 
           // === ИСПРАВЛЕНИЕ ДАТЫ ===
           let reportDate = processed[0]?.date || '';
@@ -426,6 +442,29 @@ export default function ReportsPage() {
 
           if (res.ok) {
             alert(`✅ Отчёт "${file.name}" успешно загружен!\nПартий: ${processed.length} • Объём: ${totalVolume} м³`);
+
+                        // === АВТОМАТИЧЕСКОЕ СПИСАНИЕ ДОБАВОК ===
+            if (totalAdditive1 > 0 || totalAdditive2 > 0) {
+              try {
+                const resSubtract = await fetch('/api/adminCifra/warehouse/subtract', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    pfmLiters: totalAdditive1,
+                    linomixLiters: totalAdditive2
+                  })
+                });
+
+                if (resSubtract.ok) {
+                  console.log(`✅ Автоматически списано: ПФМ-НЛК ${totalAdditive1.toFixed(1)} л, Линомикс ${totalAdditive2.toFixed(1)} л`);
+                } else {
+                  console.warn('Не удалось списать добавки автоматически');
+                }
+              } catch (err) {
+                console.error('Ошибка при автоматическом списании добавок:', err);
+              }
+            }
+
             loadHistory();
             setReportData(processed);
           } else {
@@ -443,21 +482,73 @@ export default function ReportsPage() {
   </label>
 </div>
 
-          {/* Ключевые показатели */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', marginBottom: '40px' }}>
-            <div style={{ backgroundColor: '#1E2937', padding: '24px', borderRadius: '20px' }}>
-              <div style={{ color: '#94A3B8' }}>Всего отчётов</div>
-              <div style={{ fontSize: '48px', fontWeight: '700', marginTop: '8px' }}>{stats.reports}</div>
-            </div>
-            <div style={{ backgroundColor: '#1E2937', padding: '24px', borderRadius: '20px' }}>
-              <div style={{ color: '#94A3B8' }}>Общий объём</div>
-              <div style={{ fontSize: '48px', fontWeight: '700', color: '#10B981', marginTop: '8px' }}>{stats.volume} м³</div>
-            </div>
-            <div style={{ backgroundColor: '#1E2937', padding: '24px', borderRadius: '20px' }}>
-              <div style={{ color: '#94A3B8' }}>Цемент израсходовано</div>
-              <div style={{ fontSize: '48px', fontWeight: '700', color: '#F59E0B', marginTop: '8px' }}>{stats.cement} т</div>
-            </div>
-          </div>
+          {/* ==================== СТАТИСТИКА СВЕРХУ ==================== */}
+<div style={{ 
+  display: 'grid', 
+  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', 
+  gap: '20px',
+  marginBottom: '32px'
+}}>
+  
+  {/* Всего отчётов */}
+  <div style={{ 
+    background: '#1E2937', 
+    borderRadius: '20px', 
+    padding: '24px 28px' 
+  }}>
+    <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>Всего отчётов</div>
+    <div style={{ fontSize: '48px', fontWeight: '700' }}>{stats.reports}</div>
+  </div>
+
+  {/* Общий объём */}
+  <div style={{ 
+    background: '#1E2937', 
+    borderRadius: '20px', 
+    padding: '24px 28px' 
+  }}>
+    <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>Общий объём</div>
+    <div style={{ fontSize: '48px', fontWeight: '700', color: '#10B981' }}>
+      {stats.volume} м³
+    </div>
+  </div>
+
+  {/* Цемент */}
+  <div style={{ 
+    background: '#1E2937', 
+    borderRadius: '20px', 
+    padding: '24px 28px' 
+  }}>
+    <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>Цемент израсходовано</div>
+    <div style={{ fontSize: '48px', fontWeight: '700', color: '#F59E0B' }}>
+      {stats.cement} т
+    </div>
+  </div>
+
+  {/* Добавка 1 */}
+  <div style={{ 
+    background: '#1E2937', 
+    borderRadius: '20px', 
+    padding: '24px 28px' 
+  }}>
+    <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>Добавка 1 (ПФМ-НЛК)</div>
+    <div style={{ fontSize: '48px', fontWeight: '700', color: '#8B5CF6' }}>
+      {stats.additive1} кг
+    </div>
+  </div>
+
+  {/* Добавка 2 */}
+  <div style={{ 
+    background: '#1E2937', 
+    borderRadius: '20px', 
+    padding: '24px 28px' 
+  }}>
+    <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>Добавка 2 (Линомикс)</div>
+    <div style={{ fontSize: '48px', fontWeight: '700', color: '#EC4899' }}>
+      {stats.additive2} кг
+    </div>
+  </div>
+
+</div>
 
           {/* Фильтры */}
           <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap', alignItems: 'end' }}>

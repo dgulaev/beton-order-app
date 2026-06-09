@@ -460,21 +460,21 @@ const currentMixers = mixerAssignments
               return (
                 <div style={{ background: '#25334A', borderRadius: '16px', padding: '24px' }}>
                   {/* Сумма по миксерам */}
-                  <div style={{ 
-                    background: '#1E2937', 
-                    borderRadius: '12px', 
-                    padding: '16px', 
-                    textAlign: 'center',
-                    marginBottom: '24px'
-                  }}>
-                    <div style={{ color: '#94A3B8', fontSize: '14px' }}>Назначено бетона</div>
-                    <div style={{ fontSize: '32px', fontWeight: '700', color: '#10B981', margin: '8px 0' }}>
-                      {assignedVolume} / {orderVolume} м³
-                    </div>
-                    <div style={{ fontSize: '14px', color: isFullyReady ? '#10B981' : '#F59E0B' }}>
-                      {isFullyReady ? '✅ Полностью укомплектовано' : `Осталось ${orderVolume - assignedVolume} м³`}
-                    </div>
-                  </div>
+<div style={{ 
+  background: '#1E2937', 
+  borderRadius: '12px', 
+  padding: '16px', 
+  textAlign: 'center',
+  marginBottom: '24px'
+}}>
+  <div style={{ color: '#94A3B8', fontSize: '14px' }}>Назначено бетона</div>
+  <div style={{ fontSize: '32px', fontWeight: '700', color: '#10B981', margin: '8px 0' }}>
+    {Number(assignedVolume).toFixed(1)} / {Number(orderVolume).toFixed(1)} м³
+  </div>
+  <div style={{ fontSize: '14px', color: isFullyReady ? '#10B981' : '#F59E0B' }}>
+    {isFullyReady ? '✅ Полностью укомплектовано' : `Осталось ${Number(orderVolume - assignedVolume).toFixed(1)} м³`}
+  </div>
+</div>
 
                   {/* ==================== СПИСОК НАЗНАЧЕННЫХ МИКСЕРОВ (максимально узкий) ==================== */}
 <div style={{ marginBottom: '24px' }}>
