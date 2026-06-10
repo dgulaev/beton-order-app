@@ -129,7 +129,7 @@ export default function OperatorBSUPage() {
     loadLoadingState();
   }, []);
 
-  // ==================== 1.1 НАЧАТЬ ЗАГРУЗКУ ====================
+    // ==================== 1.1 НАЧАТЬ ЗАГРУЗКУ ====================
   const startLoading = async (trip: any) => {
     const now = new Date().toISOString();
 
@@ -147,10 +147,10 @@ export default function OperatorBSUPage() {
       setLoadingTrips(prev => ({ ...prev, [trip.id]: true }));
       setTripStartTimes(prev => ({ ...prev, [trip.id]: now }));
 
-      alert(`🚛 Загрузка миксера ${trip.mixer_name || trip.number} начата`);
+      // alert удалён — тихое выполнение
     } catch (err) {
       console.error(err);
-      alert('Ошибка начала загрузки');
+      alert('Ошибка начала загрузки'); // оставляем только при ошибке
     }
   };
 
@@ -186,7 +186,8 @@ export default function OperatorBSUPage() {
         body: JSON.stringify({ id: trip.id, status: 'В пути' })
       });
 
-      alert(`✅ Миксер успешно загружен!\nДлительность: ${durationMinutes} минут`);
+      // alert удалён — тихое выполнение
+      // alert(`✅ Миксер успешно загружен!\nДлительность: ${durationMinutes} минут`);
 
       const res = await fetch('/api/adminCifra/production-log');
       if (res.ok) {
