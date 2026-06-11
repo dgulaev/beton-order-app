@@ -459,7 +459,7 @@ const completionPercent = planToday > 0
       } catch (err) {
         console.error('Ошибка автообновления заказов:', err);
       }
-    }, 5000); // каждые 5 секунд
+    }, 20000); // каждые 20 секунд
 
     return () => clearInterval(interval);
   }, []);

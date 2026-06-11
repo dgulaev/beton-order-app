@@ -8,15 +8,18 @@ const supabase = createClient(
 
 export async function POST(request: NextRequest) {
   try {
-    const { id, status, loading_started_at } = await request.json();
+    const { id, status, loading_started_at, podvizhnost } = await request.json();
 
-    if (!id || !status) {
-      return NextResponse.json({ success: false, message: 'id и status обязательны' }, { status: 400 });
+    console.log('📥 [API] Получены данные:', { id, status, podvizhnost, loading_started_at });
+
+    if (!id) {
+      return NextResponse.json({ success: false, message: 'id обязателен' }, { status: 400 });
     }
 
     const allowedStatuses = ['Загрузка', 'В пути', 'На объекте', 'Разгружен', 'Возврат', 'Проблема'];
 
-    if (!allowedStatuses.includes(status)) {
+    // Проверяем статус только если он передан
+    if (status && !allowedStatuses.includes(status)) {
       return NextResponse.json({ success: false, message: 'Недопустимый статус' }, { status: 400 });
     }
 
@@ -38,22 +41,39 @@ export async function POST(request: NextRequest) {
 
     // Подготовка данных для обновления
     const updateData: any = {
-      status,
       updated_at: new Date().toISOString()
     };
 
-    // Добавляем время начала загрузки (только если статус "Загрузка" и время передано)
+    // Добавляем статус, если передан
+    if (status) {
+      updateData.status = status;
+    }
+
+    // Добавляем время начала загрузки
     if (status === 'Загрузка' && loading_started_at) {
       updateData.loading_started_at = loading_started_at;
     }
 
+    // Добавляем подвижность (новое поле)
+    if (podvizhnost !== undefined && podvizhnost !== null) {
+      updateData.podvizhnost = podvizhnost;
+      console.log(`✅ [API] Будем сохранять podvizhnost = ${podvizhnost} для id=${id}`);
+    }
+
     // Обновляем статус миксера
-    const { error: updateError } = await supabase
+    const { data: updatedData, error: updateError } = await supabase
       .from('order_mixers')
       .update(updateData)
-      .eq('id', id);
+      .eq('id', id)
+      .select()
+      .maybeSingle();
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      console.error('❌ Supabase update error:', updateError);
+      throw updateError;
+    }
+
+    console.log('✅ [API] Успешно обновлено в базе:', updatedData);
 
     // === КРИТИЧНАЯ ЛОГИКА: ПРОВЕРКА ЗАВЕРШЕНИЯ ЗАКАЗА ===
     if (status === 'Разгружен') {
@@ -64,7 +84,6 @@ export async function POST(request: NextRequest) {
         .neq('status', 'Разгружен');
 
       if (remaining?.length === 0) {
-        // Все миксеры разгружены → закрываем заказ
         await supabase
           .from('orders')
           .update({ 
@@ -80,8 +99,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ 
       success: true, 
-      message: `Статус миксера обновлён на "${status}"`,
-      data: { mixerId: id, status, orderId }
+      message: `Статус миксера обновлён на "${status || '—'}"`,
+      data: { mixerId: id, status, orderId, podvizhnost }
     });
 
   } catch (error: any) {

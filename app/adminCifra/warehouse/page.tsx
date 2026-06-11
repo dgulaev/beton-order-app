@@ -5,16 +5,6 @@ import Image from 'next/image';
 
 export default function WarehousePage() {
 
-      // ==================== 0. ЗАГРУЗКА ДАННЫХ И ИНИЦИАЛИЗАЦИЯ ====================
-  useEffect(() => {
-    loadWarehouse();
-    loadTodayConsumption();
-    loadOperationHistory();   // ← важно
-
-    (window as any).subtractAdditivesFromReport = subtractAdditivesFromReport;
-
-    console.log('✅ WarehousePage загружен');
-  }, []);
 
     // ==================== 1. СОСТОЯНИЕ ====================
   const [silos, setSilos] = useState<any[]>([]);
@@ -26,9 +16,9 @@ export default function WarehousePage() {
   });
   const [operationHistory, setOperationHistory] = useState<any[]>([]);
 
-  const isProcessingRef = useRef(false);   // ← Добавьте эту строку
+  const isProcessingRef = useRef(false);
 
-    // ==================== 2. ЗАГРУЗКА ДАННЫХ ====================
+      // ==================== 2. ЗАГРУЗКА ДАННЫХ ====================
   const loadWarehouse = async () => {
     try {
       const res = await fetch('/api/adminCifra/warehouse', { 
@@ -48,26 +38,31 @@ export default function WarehousePage() {
   const loadTodayConsumption = async () => {
     try {
       const res = await fetch('/api/adminCifra/production-log?today=true', {
-        cache: 'no-store'
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
       });
+
       if (res.ok) {
         const data = await res.json();
-        let cementTotal = 0;
-        let pfmTotal = 0;
-        let linomixTotal = 0;
+        let totalVolume = 0;
 
-        (data.logs || data || []).forEach((log: any) => {
-          const volume = parseFloat(log.volume || 0);
-          cementTotal += volume * 350;
-          pfmTotal += volume * 1.16;      // ПФМ-НЛК
-          linomixTotal += volume * 1.18;  // Линомикс
+        const logs = data.logs || data || [];
+
+        logs.forEach((log: any) => {
+          const volume = parseFloat(log.volume || log.qty || 0);
+          totalVolume += volume;
         });
 
-        setTodayConsumption({
-          cement: Math.round(cementTotal / 1000),
-          pfm: Math.round(pfmTotal),
-          linomix: Math.round(linomixTotal)
-        });
+        const newConsumption = {
+          cement: Math.round(totalVolume * 350 / 1000),
+          pfm: Math.round(totalVolume * 1.16),
+          linomix: Math.round(totalVolume * 1.18)
+        };
+
+        setTodayConsumption(newConsumption);
+        console.log('✅ Расход обновлён:', newConsumption, ' | Объём сегодня:', totalVolume.toFixed(2), 'м³');
+      } else {
+        console.warn('Не удалось получить данные production-log');
       }
     } catch (err) {
       console.error('Ошибка загрузки расхода сегодня:', err);
@@ -83,12 +78,9 @@ export default function WarehousePage() {
       if (res.ok) {
         const data = await res.json();
         setOperationHistory(data || []);
-        console.log(`📋 Загружено ${data?.length || 0} записей истории из базы`);
-      } else {
-        console.warn('Не удалось загрузить историю');
       }
     } catch (err) {
-      console.error('Ошибка загрузки истории операций:', err);
+      console.error('Ошибка загрузки истории:', err);
     }
   };
 
@@ -116,12 +108,27 @@ export default function WarehousePage() {
       });
 
       if (response.ok) {
-        console.log('✅ Добавки успешно сохранены в базу');
+        console.log('✅ Данные успешно сохранены в базу');
       }
     } catch (err) {
-      console.error('💥 Ошибка сохранения добавок:', err);
+      console.error('💥 Ошибка сохранения:', err);
     }
   };
+
+     // ==================== 0. ЗАГРУЗКА ДАННЫХ И ИНИЦИАЛИЗАЦИЯ ====================
+  useEffect(() => {
+    loadWarehouse();
+    loadTodayConsumption();
+
+    (window as any).subtractAdditivesFromReport = subtractAdditivesFromReport;
+
+    console.log('✅ WarehousePage загружен');
+
+    // Обновление каждые 10 секунд
+    const interval = setInterval(loadTodayConsumption, 10000);
+
+    return () => clearInterval(interval);
+  }, []);
 
        // ==================== 4. ВНЕСТИ ЦЕМЕНТ ====================
   const handleAddCement = (id: number) => {

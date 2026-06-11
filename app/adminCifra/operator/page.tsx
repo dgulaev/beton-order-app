@@ -154,7 +154,7 @@ export default function OperatorBSUPage() {
     }
   };
 
-  // ==================== 1.2 ЗАВЕРШИТЬ ЗАГРУЗКУ ====================
+         // ==================== 1.2 ЗАВЕРШИТЬ ЗАГРУЗКУ ====================
   const completeLoading = async (trip: any) => {
     const startTime = tripStartTimes[trip.id] || trip.loading_started_at;
     if (!startTime) {
@@ -186,9 +186,6 @@ export default function OperatorBSUPage() {
         body: JSON.stringify({ id: trip.id, status: 'В пути' })
       });
 
-      // alert удалён — тихое выполнение
-      // alert(`✅ Миксер успешно загружен!\nДлительность: ${durationMinutes} минут`);
-
       const res = await fetch('/api/adminCifra/production-log');
       if (res.ok) {
         const updated = await res.json();
@@ -199,12 +196,17 @@ export default function OperatorBSUPage() {
       alert('Ошибка при сохранении производства');
     }
 
-    setLoadingTrips(prev => ({ ...prev, [trip.id]: false }));
-    setTripStartTimes(prev => {
-      const copy = { ...prev };
-      delete copy[trip.id];
-      return copy;
-    });
+    // Обе кнопки становятся серыми и неактивными
+    setLoadingTrips(prev => ({ ...prev, [trip.id]: true }));
+
+    // Строка исчезает через небольшую задержку
+    setTimeout(() => {
+      setLoadingTrips(prev => {
+        const copy = { ...prev };
+        delete copy[trip.id];
+        return copy;
+      });
+    }, 800);
   };
 
         // ==================== 1.2 ОТГРУЖЕНО СЕГОДНЯ (загрузка из базы) ====================
@@ -227,9 +229,11 @@ export default function OperatorBSUPage() {
     fetchCompletedTrips();
   }, []);
 
-  
+    // ==================== 1.3 ЛОКАЛЬНЫЕ ИЗМЕНЕНИЯ ПОДВИЖНОСТИ ====================
+ const [podvizhnostOverrides, setPodvizhnostOverrides] = useState<Record<number, string>>({});
 
-   // ==================== МАКСИМАЛЬНО СТРОГАЯ ФИЛЬТРАЦИЯ ====================
+
+  // ==================== МАКСИМАЛЬНО СТРОГАЯ ФИЛЬТРАЦИЯ ====================
   const filteredCompletedTrips = completedTrips
     .filter((trip: any) => {
       if (!trip) return false;
@@ -263,14 +267,16 @@ export default function OperatorBSUPage() {
       ...trip,
       time: trip.start_time 
         ? new Date(trip.start_time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) 
-        : '—',
+        : (trip.time || '—'),
       loadedTime: trip.duration_minutes 
         ? `${trip.duration_minutes} мин` 
         : '—',
-      order_id: trip.order_id,
-      mixer_name: trip.mixer_name,
-      concrete_grade: trip.concrete_grade,
-      volume: trip.volume
+      order_id: trip.order_id || trip.orderId,
+      mixer_name: trip.mixer_name || trip.number,
+      concrete_grade: trip.concrete_grade || trip.grade,
+      volume: trip.volume,
+      // ✅ БЕРЁМ ПОДВИЖНОСТЬ ИЗ order_mixers (приоритет)
+      podvizhnost: trip.podvizhnost || 'П3'
     }));
 
     // ==================== 2. СТАТИСТИКА ОПЕРАТОРА ====================
@@ -563,26 +569,46 @@ export default function OperatorBSUPage() {
                       <div style={{ fontWeight: '600' }}>{trip.volume} м³</div>
 
                       <select 
-                        defaultValue={trip.podvizhnost || "П3"}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => {
-                          trip.podvizhnost = e.target.value;
-                        }}
-                        style={{ 
-                          padding: '7px 10px', 
-                          background: '#1E2937', 
-                          border: 'none', 
-                          borderRadius: '6px', 
-                          color: '#fff', 
-                          fontSize: '14px' 
-                        }}
-                      >
-                        <option value="П1">П1</option>
-                        <option value="П2">П2</option>
-                        <option value="П3">П3</option>
-                        <option value="П4">П4</option>
-                        <option value="П5">П5</option>
-                      </select>
+  value={podvizhnostOverrides[trip.id] ?? trip.podvizhnost ?? 'П3'}
+  onChange={async (e) => {
+    const newPodvizhnost = e.target.value;
+    
+    try {
+      await fetch('/api/adminCifra/order-mixers/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          id: trip.id, 
+          podvizhnost: newPodvizhnost 
+        })
+      });
+
+      setPodvizhnostOverrides(prev => ({
+        ...prev,
+        [trip.id]: newPodvizhnost
+      }));
+
+    } catch (err) {
+      console.error('Ошибка сохранения подвижности:', err);
+      alert('Не удалось сохранить подвижность');
+    }
+  }}
+  onClick={(e) => e.stopPropagation()}
+  style={{ 
+    padding: '7px 10px', 
+    background: '#1E2937', 
+    border: 'none', 
+    borderRadius: '6px', 
+    color: '#fff', 
+    fontSize: '14px' 
+  }}
+>
+  <option value="П1">П1</option>
+  <option value="П2">П2</option>
+  <option value="П3">П3</option>
+  <option value="П4">П4</option>
+  <option value="П5">П5</option>
+</select>
 
                       <div style={{ 
                         fontSize: '14.5px', 
@@ -623,14 +649,16 @@ export default function OperatorBSUPage() {
                             e.stopPropagation(); 
                             completeLoading(trip); 
                           }} 
+                          disabled={!loadingTrips[trip.id]}   // ← Кнопка активна ТОЛЬКО когда начата загрузка
                           style={{ 
                             padding: '7px 14px', 
-                            background: '#3B82F6', 
+                            background: loadingTrips[trip.id] ? '#3B82F6' : '#475569', 
                             color: 'white', 
                             border: 'none', 
                             borderRadius: '9999px', 
                             fontSize: '13px', 
-                            fontWeight: '600' 
+                            fontWeight: '600',
+                            cursor: loadingTrips[trip.id] ? 'pointer' : 'not-allowed'
                           }}
                         >
                           Загружен
@@ -673,8 +701,22 @@ export default function OperatorBSUPage() {
                       <div style={{ fontWeight: '700', minWidth: '120px' }}>
                         {trip.mixer_name || trip.number || '—'}
                       </div>
+                      
+                      {/* ==================== ОТОБРАЖЕНИЕ ПОДВИЖНОСТИ ==================== */}
                       <div>
-                        {trip.concrete_grade || '—'} • {trip.volume} м³
+                        {trip.concrete_grade || '—'} 
+                        <span style={{ 
+                          color: '#10B981', 
+                          fontWeight: '600', 
+                          marginLeft: '8px' 
+                        }}>
+                          {podvizhnostOverrides[trip.id] || trip.podvizhnost || 'П3'}
+                        </span>
+                      </div>
+                      {/* ======================================================== */}
+
+                      <div style={{ fontWeight: '600' }}>
+                        {trip.volume} м³
                       </div>
                       <div style={{ color: '#10B981', fontWeight: '600' }}>
                         ✓ Загружен • {trip.loadedTime || '—'}

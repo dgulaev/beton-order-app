@@ -7,12 +7,18 @@ const supabase = createClient(
 );
 
 // ==================== GET — Получить список отгруженных рейсов ====================
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const { data, error } = await supabase
+    const { searchParams } = new URL(request.url);
+    const todayOnly = searchParams.get('today') === 'true';
+
+    let query = supabase
       .from('production_logs')
       .select(`
         *,
+        order_mixers!inner (
+          podvizhnost
+        ),
         orders!inner (
           delivery_date,
           delivery_time
@@ -20,12 +26,27 @@ export async function GET() {
       `)
       .order('created_at', { ascending: false });
 
+    // Если запрос с ?today=true — фильтруем только сегодняшний день
+    if (todayOnly) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      query = query.gte('created_at', todayStart.toISOString());
+    }
+
+    const { data, error } = await query;
+
     if (error) {
       console.error('Supabase GET error:', error);
       return NextResponse.json([], { status: 500 });
     }
 
-    return NextResponse.json(data || []);
+    // Добавляем podvizhnost в корень объекта
+    const formatted = (data || []).map((log: any) => ({
+      ...log,
+      podvizhnost: log.order_mixers?.podvizhnost || log.podvizhnost || 'П3'
+    }));
+
+    return NextResponse.json(formatted);
   } catch (error: any) {
     console.error('Production log GET error:', error);
     return NextResponse.json([], { status: 500 });
