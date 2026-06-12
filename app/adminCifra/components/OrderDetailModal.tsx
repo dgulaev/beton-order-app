@@ -43,41 +43,41 @@ export default function OrderDetailModal({
 
   if (!order) return null;
 
-  // ==================== 0. ЗАГРУЗКА МИКСЕРОВ ДЛЯ МОДАЛКИ (новые внизу) ====================
-useEffect(() => {
+    // ==================== 0. ЗАГРУЗКА МИКСЕРОВ ДЛЯ МОДАЛКИ ====================
+const loadData = async () => {
   if (!order?.id) {
     setMixerAssignments([]);
     setHistory([]);
     return;
   }
 
-  const loadData = async () => {
-    try {
-      const res = await fetch(`/api/adminCifra/order-mixers?orderId=${order.id}`);
-      if (res.ok) {
-        let data = await res.json();
-
-        // Сортировка: старые сверху, новые внизу
-        const sorted = [...data].sort((a, b) => {
-          const timeA = new Date(a.updated_at || a.created_at).getTime();
-          const timeB = new Date(b.updated_at || b.created_at).getTime();
-          return timeA - timeB;   // ← новые внизу
-        });
-
-        setMixerAssignments(sorted);
+  try {
+    const timestamp = Date.now();
+    const res = await fetch(`/api/adminCifra/order-mixers?orderId=${order.id}&_t=${timestamp}`, {
+      cache: 'no-store',
+      headers: { 
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
       }
+    });
 
-      const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}`);
-      if (histRes.ok) {
-        setHistory(await histRes.json());
-      }
-    } catch (err) {
-      console.error('Ошибка загрузки данных модалки:', err);
+    if (res.ok) {
+      let data = await res.json();
+      const sorted = [...data].sort((a, b) => 
+        (a.time || '00:00').localeCompare(b.time || '00:00')
+      );
+      setMixerAssignments(sorted);
     }
-  };
 
-  loadData();
-}, [order?.id]);
+    // История
+    const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${timestamp}`);
+    if (histRes.ok) {
+      setHistory(await histRes.json());
+    }
+  } catch (err) {
+    console.error('Ошибка загрузки данных модалки:', err);
+  }
+};
 
 // ==================== 0.5. ПРОВЕРКА СТАТУСА ЗАЯВКИ ПРИ ОТКРЫТИИ МОДАЛКИ ====================
 useEffect(() => {
@@ -275,6 +275,174 @@ const currentMixers = mixerAssignments
     return timeA - timeB;   // ← новые внизу
   });
 
+  // ==================== 7. ИЗМЕНЕНИЕ ВРЕМЕНИ ЗАГРУЗКИ ====================
+const handleMixerTimeChange = async (mixerId: number, newTime: string) => {
+  // Оптимистическое обновление
+  setMixerAssignments(prev =>
+    prev.map(item =>
+      item.id === mixerId ? { ...item, time: newTime } : item
+    )
+  );
+
+  try {
+    const res = await fetch('/api/adminCifra/order-mixers/time', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: mixerId, time: newTime })
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      // Небольшая задержка перед перезагрузкой данных
+      setTimeout(() => loadData(), 400);
+    }
+  } catch (err) {
+    console.error('Ошибка сохранения времени:', err);
+  }
+};
+
+  // ==================== ПЕЧАТЬ ТТН (ВОДИТЕЛЬ ИЗ СПИСКА МИКСЕРОВ) ====================
+const printTTN = (mixerId: number) => {
+  const currentMixer = mixerAssignments.find(m => m.id === mixerId);
+  if (!currentMixer || !order) {
+    alert('Не удалось найти данные для ТТН');
+    return;
+  }
+
+  // === ИЩЕМ ПОЛНЫЕ ДАННЫЕ МИКСЕРА ИЗ ГЛОБАЛЬНОГО СПИСКА ===
+  const fullMixerData = allMixers?.find(m => 
+    m.number === currentMixer.number || 
+    m.mixer_name === currentMixer.number || 
+    m.id === currentMixer.id
+  );
+
+  const driverName = fullMixerData?.driver || 
+                     fullMixerData?.driverName || 
+                     fullMixerData?.full_name || 
+                     fullMixerData?.FIO || 
+                     currentMixer.driver || 
+                     'Не указан';
+
+  const plate = fullMixerData?.plate || currentMixer.plate || '—';
+
+  const ttnNumber = `ТТН-${order.id}-${currentMixer.id}`;
+  const currentDate = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const currentDateTime = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+
+  const ttnHTML = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>ТТН № ${ttnNumber}</title>
+      <style>
+        @page { size: A4 portrait; margin: 8mm; }
+        body { font-family: Arial, sans-serif; font-size: 10.8px; line-height: 1.22; margin:0; }
+        .page { width: 100%; min-height: 100vh; page-break-after: always; padding: 12px; box-sizing: border-box; }
+        table { width: 100%; border-collapse: collapse; margin: 5px 0; }
+        td, th { border: 1px solid #000; padding: 4px 6px; vertical-align: top; }
+        .section { background: #f0f0f0; font-weight: bold; text-align: center; }
+      </style>
+    </head>
+    <body>
+
+      <!-- СТРАНИЦА 1 -->
+      <div class="page">
+        <div style="text-align:center;font-size:12px;margin-bottom:5px;">Приложение № 4 к Правилам перевозок грузов автомобильным транспортом</div>
+        <div style="text-align:center;font-size:11px;margin-bottom:12px;">(в редакции постановления Правительства Российской Федерации от 30 ноября 2021 г. № 2116)</div>
+        
+        <div style="text-align:center;font-size:16px;font-weight:bold;margin:15px 0;">Транспортная накладная</div>
+
+        <table>
+          <tr><td>Транспортная накладная</td><td>Заказ (заявка)</td></tr>
+          <tr><td>Дата: ${currentDate}<br>№ ${ttnNumber}</td><td>Дата: ${currentDate}<br>№ ${order.id}</td></tr>
+        </table>
+
+        <table>
+          <tr><td colspan="2" class="section">1. Грузоотправитель</td></tr>
+          <tr><td colspan="2">ООО "ТРЕЙДКОМ", ИНН 3257056152, 241022, Брянская область, г.о. город Брянск, г Брянск, туп Орловский, стр. 6А, помещ. 4, тел.: +7 (906) 500-21-55</td></tr>
+
+          <tr><td colspan="2" class="section">2. Грузополучатель</td></tr>
+          <tr><td colspan="2">${order.organization_name || order.full_name || '—'}</td></tr>
+          <tr><td colspan="2">${order.address || '—'}</td></tr>
+
+          <tr><td colspan="2" class="section">3. Груз</td></tr>
+          <tr><td>Наименование груза</td><td>Бетон ${order.grade || '—'}</td></tr>
+          <tr><td>Объём</td><td>${Number(currentMixer.volume).toFixed(1)} м³</td></tr>
+          <tr><td>Миксер</td><td>${currentMixer.number || currentMixer.mixer_name || '—'}</td></tr>
+        </table>
+
+        <table>
+          <tr><td colspan="2" class="section">6. Перевозчик</td></tr>
+          <tr><td colspan="2">ООО "ТРЕЙДКОМ", ИНН 3257056152, 241022, Брянская область, г.о. город Брянск, г Брянск, туп Орловский, стр. 6А, помещ. 4</td></tr>
+          <tr><td>Водитель</td><td>${driverName}</td></tr>
+        </table>
+
+        <table>
+          <tr><td colspan="2" class="section">7. Транспортное средство</td></tr>
+          <tr><td>Марка, модель</td><td>${currentMixer.number || currentMixer.mixer_name || '—'}</td></tr>
+          <tr><td>Гос. номер</td><td>${plate}</td></tr>
+        </table>
+      </div>
+
+      <!-- СТРАНИЦА 2 — ОБОРОТНАЯ -->
+      <div class="page">
+        <div class="header">Оборотная сторона</div>
+
+        <table>
+          <tr><td colspan="2" class="section">8. Прием груза</td></tr>
+          <tr><td>Наименование (ИНН) владельца пункта погрузки</td><td>ООО "ТРЕЙДКОМ" ИНН 3257056152</td></tr>
+          <tr><td>Адрес места погрузки</td><td>241022, Брянская область, г.о. город Брянск, г Брянск, туп Орловский, стр. 6А, помещ. 4</td></tr>
+          <tr><td>Фактические дата и время прибытия под погрузку</td><td>${currentDate} ${currentMixer.time || currentDateTime}</td></tr>
+          <tr><td>Фактические дата и время убытия</td><td>${currentDate} ${currentDateTime}</td></tr>
+          <tr><td>Масса груза</td><td>${Number(currentMixer.volume).toFixed(1)} м³</td></tr>
+        </table>
+
+        <table>
+          <tr><td colspan="2" class="section">9. Переадресовка (при наличии)</td></tr>
+          <tr><td colspan="2">—</td></tr>
+        </table>
+
+        <table>
+          <tr><td colspan="2" class="section">10. Выдача груза</td></tr>
+          <tr><td>Адрес места выгрузки</td><td>${order.address || '—'}</td></tr>
+          <tr><td>Фактические дата и время прибытия</td><td>${currentDate}</td></tr>
+          <tr><td>Фактические дата и время убытия</td><td>${currentDate}</td></tr>
+          <tr><td>Масса груза</td><td>${Number(currentMixer.volume).toFixed(1)} м³</td></tr>
+        </table>
+
+        <table>
+          <tr><td colspan="2" class="section">11. Отметки грузоотправителей, грузополучателей, перевозчиков</td></tr>
+          <tr><td colspan="2" style="height:85px;">—</td></tr>
+        </table>
+
+        <table>
+          <tr><td colspan="2" class="section">12. Стоимость перевозки груза</td></tr>
+          <tr><td>Стоимость перевозки без налога - всего</td><td>— ₽</td></tr>
+          <tr><td>Сумма налога</td><td>— ₽</td></tr>
+          <tr><td>Стоимость с налогом - всего</td><td>— ₽</td></tr>
+        </table>
+
+        <div style="margin-top:35px; text-align:center; font-size:11px;">
+          Подпись грузоотправителя _______________________ &nbsp;&nbsp;&nbsp;&nbsp;
+          Подпись водителя _______________________ &nbsp;&nbsp;&nbsp;&nbsp;
+          Подпись грузополучателя _______________________
+        </div>
+      </div>
+
+    </body>
+    </html>
+  `;
+
+  const win = window.open('', '_blank', 'width=1100,height=950');
+  if (win) {
+    win.document.write(ttnHTML);
+    win.document.close();
+    setTimeout(() => win.print(), 700);
+  }
+};
+
 
 
   return (
@@ -293,7 +461,7 @@ const currentMixers = mixerAssignments
       <div 
         style={{ 
           background: '#1E2937', 
-          width: '1100px', 
+          width: '1300px', 
           borderRadius: '24px', 
           padding: '32px', 
           maxHeight: '94vh', 
@@ -476,11 +644,11 @@ const currentMixers = mixerAssignments
   </div>
 </div>
 
-                  {/* ==================== СПИСОК НАЗНАЧЕННЫХ МИКСЕРОВ (максимально узкий) ==================== */}
+                  {/* ==================== СПИСОК НАЗНАЧЕННЫХ МИКСЕРОВ ==================== */}
 <div style={{ marginBottom: '24px' }}>
   <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between' }}>
     <span>Назначенные миксеры ({currentMixers.length})</span>
-    <span style={{ fontSize: '13px', color: '#64748B' }}>Перетаскивай мышкой</span>
+    <span style={{ fontSize: '13px', color: '#64748B' }}>Изменяй время — список пересортируется</span>
   </div>
   
   <div style={{ 
@@ -493,116 +661,136 @@ const currentMixers = mixerAssignments
   }}>
     {currentMixers.length > 0 ? (
       [...currentMixers]
-        .sort((a: any, b: any) => (a.time || '00:00').localeCompare(b.time || '00:00'))
-        .map((mixer: any, index: number) => (
-          <div 
-            key={mixer.id || index}
-            draggable
-            onDragStart={(e) => e.dataTransfer.setData('text/plain', index.toString())}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
-              const toIndex = index;
-              if (fromIndex === toIndex) return;
+        .sort((a, b) => (a.time || '00:00').localeCompare(b.time || '00:00'))
+        .map((mixer, index) => (
+        <div 
+          key={mixer.id || index}
+          style={{ 
+            background: '#1E2937', 
+            padding: '6px 12px',
+            borderRadius: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            minHeight: '36px',
+            userSelect: 'none'
+          }}
+        >
+          {/* Порядковый номер */}
+          <div style={{
+            width: '22px',
+            height: '22px',
+            background: '#334155',
+            borderRadius: '9999px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontWeight: '700',
+            color: '#94A3B8',
+            fontSize: '13px',
+            flexShrink: 0
+          }}>
+            {index + 1}
+          </div>
 
-              const newList = [...currentMixers];
-              const [movedItem] = newList.splice(fromIndex, 1);
-              newList.splice(toIndex, 0, movedItem);
+          {/* Номер миксера */}
+          <div style={{ fontWeight: '700', fontSize: '14.5px', minWidth: '120px' }}>
+            {mixer.mixerName || mixer.number}
+          </div>
 
-              const updatedList = newList.map((item, i) => ({
-                ...item,
-                sortOrder: i
-              }));
-
-              setMixerAssignments(prev => 
-                prev.map(item => 
-                  item.orderId === order.id 
-                    ? updatedList.find(m => m.id === item.id) || item 
-                    : item
-                )
-              );
-            }}
+          {/* Время загрузки — РЕДАКТИРУЕМОЕ */}
+          <input 
+            type="time" 
+            value={mixer.time || ''}
+            onChange={(e) => handleMixerTimeChange(mixer.id, e.target.value)}
             style={{ 
-              background: '#1E2937', 
-              padding: '6px 12px',
-              borderRadius: '10px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              minHeight: '36px',
-              cursor: 'grab',
-              userSelect: 'none'
+              background: '#0F172A', 
+              color: '#94A3B8', 
+              border: '1px solid #475569', 
+              borderRadius: '8px', 
+              padding: '4px 8px',
+              fontSize: '13px',
+              width: '92px'
+            }}
+          />
+
+          {/* Объём */}
+          <div style={{ 
+            color: '#94A3B8', 
+            fontSize: '13px',
+            minWidth: '70px'
+          }}>
+            {Number(mixer.volume).toFixed(1)} м³
+          </div>
+
+          {/* Статус */}
+          <select 
+            value={mixer.status || 'Загрузка'} 
+            onChange={(e) => handleStatusChangeLocal(mixer.id, e.target.value)} 
+            style={{ 
+              padding: '4px 8px', 
+              borderRadius: '9999px', 
+              background: '#0F172A', 
+              color: 'white', 
+              border: 'none', 
+              fontSize: '13px', 
+              minWidth: '120px' 
             }}
           >
-            {/* Порядковый номер */}
-            <div style={{
-              width: '22px',
-              height: '22px',
-              background: '#334155',
-              borderRadius: '9999px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontWeight: '700',
-              color: '#94A3B8',
-              fontSize: '13px',
-              flexShrink: 0
-            }}>
-              {index + 1}
-            </div>
+            <option value="Загрузка">🟡 Загрузка</option>
+            <option value="В пути">🔵 В пути</option>
+            <option value="На объекте">📍 На объекте</option>
+            <option value="Разгружен">🟢 Разгружен</option>
+            <option value="Возврат">↩️ Возврат</option>
+            <option value="Проблема">🔴 Проблема</option>
+          </select>
 
-            {/* Номер миксера */}
-            <div style={{ fontWeight: '700', fontSize: '14.5px', minWidth: '120px' }}>
-              {mixer.mixerName || mixer.number}
-            </div>
+          {/* Кнопка ТТН — уменьшенная */}
+<button 
+  onClick={() => printTTN(mixer.id)} 
+  style={{ 
+    padding: '3px 9px', 
+    background: 'rgba(148, 163, 184, 0.15)',   
+    color: '#94A3B8',                          
+    border: '1px solid rgba(148, 163, 184, 0.3)',
+    borderRadius: '6px', 
+    fontSize: '11.5px',        // уменьшено
+    fontWeight: '500',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    minWidth: 'auto',
+    height: '26px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center'
+  }}
+  onMouseEnter={(e) => {
+    e.currentTarget.style.background = 'rgba(148, 163, 184, 0.25)';
+    e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.5)';
+  }}
+  onMouseLeave={(e) => {
+    e.currentTarget.style.background = 'rgba(148, 163, 184, 0.15)';
+    e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.3)';
+  }}
+>
+  ТТН
+</button>
 
-            {/* ВРЕМЯ + ОБЪЁМ */}
-            <div style={{ 
-              color: '#94A3B8', 
-              fontSize: '13px',
-              flex: 1,
-              textAlign: 'left'
-            }}>
-              {mixer.time && mixer.time !== '—' ? mixer.time : '—'} • {mixer.volume} м³
-            </div>
-
-            {/* Статус */}
-            <select 
-              value={mixer.status || 'Загрузка'} 
-              onChange={(e) => handleStatusChangeLocal(mixer.id, e.target.value)} 
-              style={{ 
-                padding: '4px 8px', 
-                borderRadius: '9999px', 
-                background: '#0F172A', 
-                color: 'white', 
-                border: 'none', 
-                fontSize: '13px', 
-                minWidth: '120px' 
-              }}
-            >
-              <option value="Загрузка">🟡 Загрузка</option>
-              <option value="В пути">🔵 В пути</option>
-              <option value="На объекте">📍 На объекте</option>
-              <option value="Разгружен">🟢 Разгружен</option>
-              <option value="Возврат">↩️ Возврат</option>
-              <option value="Проблема">🔴 Проблема</option>
-            </select>
-
-            <button 
-              onClick={() => deleteMixer(mixer.id, index)} 
-              style={{ 
-                color: '#EF4444', 
-                background: 'none', 
-                border: 'none', 
-                cursor: 'pointer', 
-                fontSize: '17px',
-                padding: '2px 6px'
-              }}
-            >
-              ✕
-            </button>
-          </div>
-        ))
+          <button 
+            onClick={() => deleteMixer(mixer.id, index)} 
+            style={{ 
+              color: '#EF4444', 
+              background: 'none', 
+              border: 'none', 
+              cursor: 'pointer', 
+              fontSize: '17px',
+              padding: '2px 6px'
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      ))
     ) : (
       <div style={{ color: '#64748B', textAlign: 'center', padding: '30px 0', fontStyle: 'italic' }}>
         Пока нет назначенных миксеров
@@ -936,21 +1124,55 @@ const currentMixers = mixerAssignments
 </div>
 
         {/* ==================== КАРТЫ ==================== */}
-        <div style={{ marginTop: '32px' }}>
-          <h4 style={{ color: '#94A3B8', marginBottom: '16px' }}>Маршрут доставки</h4>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <a href={`https://www.google.com/maps/dir/?api=1&origin=Брянск,+Орловский+тупик,+6&destination=${encodeURIComponent(order.address || '')}&travelmode=driving`} 
-               target="_blank" rel="noopener noreferrer" 
-               style={{ padding: '16px', background: '#10B981', color: 'white', textAlign: 'center', borderRadius: '16px', textDecoration: 'none', fontWeight: '600' }}>
-              🗺️ Построить маршрут в Google Maps
-            </a>
-            <a href={`https://yandex.ru/maps/?ll=34.415968,53.254623&z=12&mode=route&rtext=Брянск,%20Орловский%20тупик,%206~${encodeURIComponent(order.address || '')}&rtt=auto`} 
-               target="_blank" rel="noopener noreferrer" 
-               style={{ padding: '16px', background: '#3B82F6', color: 'white', textAlign: 'center', borderRadius: '16px', textDecoration: 'none', fontWeight: '600' }}>
-              🗺️ Яндекс.Карты
-            </a>
-          </div>
-        </div>
+<div style={{ marginTop: '32px' }}>
+  <h4 style={{ color: '#94A3B8', marginBottom: '16px' }}>Маршрут доставки</h4>
+  
+  <div style={{ 
+    display: 'flex', 
+    flexDirection: 'row', 
+    gap: '12px' 
+  }}>
+    <a 
+      href={`https://www.google.com/maps/dir/?api=1&origin=Брянск,+Орловский+тупик,+6&destination=${encodeURIComponent(order.address || '')}&travelmode=driving`} 
+      target="_blank" 
+      rel="noopener noreferrer" 
+      style={{ 
+        flex: 1,
+        padding: '13px 18px', 
+        background: '#10B981', 
+        color: 'white', 
+        textAlign: 'center', 
+        borderRadius: '12px', 
+        textDecoration: 'none', 
+        fontWeight: '600',
+        fontSize: '15px',
+        transition: 'all 0.2s'
+      }}
+    >
+      🗺️ Google Maps
+    </a>
+
+    <a 
+      href={`https://yandex.ru/maps/?ll=34.415968,53.254623&z=12&mode=route&rtext=Брянск,%20Орловский%20тупик,%206~${encodeURIComponent(order.address || '')}&rtt=auto`} 
+      target="_blank" 
+      rel="noopener noreferrer" 
+      style={{ 
+        flex: 1,
+        padding: '13px 18px', 
+        background: '#3B82F6', 
+        color: 'white', 
+        textAlign: 'center', 
+        borderRadius: '12px', 
+        textDecoration: 'none', 
+        fontWeight: '600',
+        fontSize: '15px',
+        transition: 'all 0.2s'
+      }}
+    >
+      🗺️ Яндекс.Карты
+    </a>
+  </div>
+</div>
 
       </div>
     </div>
