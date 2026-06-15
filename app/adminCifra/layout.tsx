@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell } from 'lucide-react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell, CheckCircle } from 'lucide-react';
+
 
 // === ИСПРАВЛЕННЫЙ ИМПОРТ REACT ===
 import { useEffect, useState, useRef } from 'react';
@@ -501,33 +502,35 @@ useEffect(() => {
             )}
           </div>
 
-          <nav style={{ flex: 1 }}>
+                    <nav style={{ flex: 1 }}>
 
             <Link href="/adminCifra/dashboard" style={navLinkStyle(isActive('/adminCifra/dashboard'), isCollapsed)}>
               <Home size={22} /> {!isCollapsed && <span>Дашборд</span>}
             </Link>
 
             {/* ==================== БЛОК 9: ПУНКТ МЕНЮ "ЗАЯВКИ" ==================== */}
-<div>
-  <Link 
-    href="/adminCifra/zayavki" 
-    style={navLinkStyle(isActive('/adminCifra/zayavki'), isCollapsed)}
-    onClick={() => setNewOrdersCount(0)}
-  >
-    <Package size={22} /> 
-    {!isCollapsed && <span>Заявки</span>}
-  </Link>
-</div>
+            <div>
+              <Link 
+                href="/adminCifra/zayavki" 
+                style={navLinkStyle(isActive('/adminCifra/zayavki'), isCollapsed)}
+                onClick={() => setNewOrdersCount(0)}
+              >
+                <Package size={22} /> 
+                {!isCollapsed && <span>Заявки</span>}
+              </Link>
+            </div>
 
-            {/* ==================== БЛОК 9.1: ОГРАНИЧЕНИЕ МЕНЮ ДЛЯ OPERATOR ==================== */}
+            {/* ==================== БЛОК 9.1: ОГРАНИЧЕНИЕ МЕНЮ ==================== */}
             {userRole === 'operator' ? (
-              /* Только Оператор БСУ для роли operator */
               <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
                 <UserCog size={22} /> {!isCollapsed && <span>Оператор БСУ</span>}
               </Link>
             ) : (
-              /* Полное меню для всех остальных ролей */
               <>
+                <Link href="/adminCifra/tasks" style={navLinkStyle(isActive('/adminCifra/tasks'), isCollapsed)}>
+                  <CheckCircle size={22} /> {!isCollapsed && <span>Задачи</span>}
+                </Link>
+
                 <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
                   <FlaskConical size={22} /> {!isCollapsed && <span>Рецепты</span>}
                 </Link>
@@ -589,4 +592,4 @@ const navLinkStyle = (active: boolean, collapsed: boolean) => ({
   fontWeight: '500' as const,
   justifyContent: collapsed ? 'center' : 'flex-start',
   transition: 'all 0.2s',
-});
+} as React.CSSProperties);   // ← Добавили эту строку

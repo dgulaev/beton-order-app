@@ -3,8 +3,11 @@
 import { useState, useEffect, useRef } from 'react';
 import Image from 'next/image';
 
-export default function WarehousePage() {
+interface WarehousePageProps {
+  recipes?: any[];
+}
 
+export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
 
     // ==================== 1. СОСТОЯНИЕ ====================
   const [silos, setSilos] = useState<any[]>([]);
@@ -18,7 +21,7 @@ export default function WarehousePage() {
 
   const isProcessingRef = useRef(false);
 
-      // ==================== 2. ЗАГРУЗКА ДАННЫХ ====================
+           // ==================== 2. ЗАГРУЗКА ДАННЫХ ====================
   const loadWarehouse = async () => {
     try {
       const res = await fetch('/api/adminCifra/warehouse', { 
@@ -35,6 +38,7 @@ export default function WarehousePage() {
     }
   };
 
+    // ==================== 2.1 ЗАГРУЗКА РАСХОДА ЗА СЕГОДНЯ (УЧИТЫВАЕМ ТИП БЕТОНА) ====================
   const loadTodayConsumption = async () => {
     try {
       const res = await fetch('/api/adminCifra/production-log?today=true', {
@@ -42,33 +46,59 @@ export default function WarehousePage() {
         headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        let totalVolume = 0;
-
-        const logs = data.logs || data || [];
-
-        logs.forEach((log: any) => {
-          const volume = parseFloat(log.volume || log.qty || 0);
-          totalVolume += volume;
-        });
-
-        const newConsumption = {
-          cement: Math.round(totalVolume * 350 / 1000),
-          pfm: Math.round(totalVolume * 1.16),
-          linomix: Math.round(totalVolume * 1.18)
-        };
-
-        setTodayConsumption(newConsumption);
-        console.log('✅ Расход обновлён:', newConsumption, ' | Объём сегодня:', totalVolume.toFixed(2), 'м³');
-      } else {
-        console.warn('Не удалось получить данные production-log');
+      if (!res.ok) {
+        setTodayConsumption({ cement: 0, pfm: 0, linomix: 0 });
+        return;
       }
+
+      const data = await res.json();
+      const logs = data.logs || data || [];
+
+      let totalCement = 0;
+      let totalPFM = 0;
+      let totalLinomix = 0;
+
+      logs.forEach((log: any) => {
+        const volume = parseFloat(log.volume || log.qty || 0);
+        if (isNaN(volume) || volume <= 0) return;
+
+        const grade = (log.concrete_grade || '').toUpperCase().trim();
+
+        // Более точное определение растворов
+        const isSolution = grade.includes('ТР') || 
+                          grade.includes('РАСТВОР') || 
+                          grade.includes('М100') || 
+                          grade.includes('М150');
+
+        if (isSolution) {
+          // Для растворов — Линомикс
+          totalLinomix += volume * 1.18;
+        } else {
+          // Для всех остальных бетонов — ПФМ-НЛК
+          totalPFM += volume * 1.16;
+        }
+
+        // Цемент для всех
+        totalCement += volume * 350;
+      });
+
+      const newConsumption = {
+        cement: Math.round(totalCement / 1000),
+        pfm: Math.round(totalPFM),
+        linomix: Math.round(totalLinomix)
+      };
+
+      setTodayConsumption(newConsumption);
+
+      console.log(`✅ Расчёт: ${logs.length} записей | Цемент: ${newConsumption.cement}т | ПФМ: ${newConsumption.pfm}кг | Линомикс: ${newConsumption.linomix}кг`);
+
     } catch (err) {
       console.error('Ошибка загрузки расхода сегодня:', err);
+      setTodayConsumption({ cement: 0, pfm: 0, linomix: 0 });
     }
   };
 
+  // ==================== 2.2 ЗАГРУЗКА ИСТОРИИ ====================
   const loadOperationHistory = async () => {
     try {
       const res = await fetch('/api/adminCifra/warehouse/history', {
@@ -83,6 +113,21 @@ export default function WarehousePage() {
       console.error('Ошибка загрузки истории:', err);
     }
   };
+
+  // ==================== 2.3 ЗАГРУЗКА ДАННЫХ И ИНИЦИАЛИЗАЦИЯ ====================
+  useEffect(() => {
+    loadWarehouse();
+    loadTodayConsumption();
+    loadOperationHistory();
+
+    (window as any).subtractAdditivesFromReport = subtractAdditivesFromReport;
+
+    console.log('✅ WarehousePage загружен');
+
+    const interval = setInterval(loadTodayConsumption, 8000);
+
+    return () => clearInterval(interval);
+  }, []);
 
            // ==================== 3. СОХРАНЕНИЕ В БАЗУ ====================
   const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[]) => {
@@ -115,41 +160,29 @@ export default function WarehousePage() {
     }
   };
 
-     // ==================== 0. ЗАГРУЗКА ДАННЫХ И ИНИЦИАЛИЗАЦИЯ ====================
-  useEffect(() => {
-    loadWarehouse();
-    loadTodayConsumption();
 
-    (window as any).subtractAdditivesFromReport = subtractAdditivesFromReport;
-
-    console.log('✅ WarehousePage загружен');
-
-    // Обновление каждые 10 секунд
-    const interval = setInterval(loadTodayConsumption, 10000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-       // ==================== 4. ВНЕСТИ ЦЕМЕНТ ====================
+              // ==================== 4. ВНЕСТИ ЦЕМЕНТ ====================
   const handleAddCement = (id: number) => {
     const input = prompt(`Введите количество цемента (в килограммах) для силоса №${id}:`);
     if (input === null) return;
 
     const kg = parseFloat(input);
-    if (isNaN(kg) || kg <= 0) {
-      alert('Введите положительное число');
+    if (isNaN(kg)) {
+      alert('❌ Введите корректное число');
       return;
     }
 
+    // ✅ Разрешаем отрицательные значения для ВСЕХ силосов
     const tons = kg / 1000;
 
     setSilos(prev => {
       const updatedSilos = prev.map(s => {
         if (s.silo_id === id) {
           const oldCurrent = Number(s.current || 0);
-          const newCurrent = Math.max(-50, oldCurrent + tons);
+          const newCurrent = Math.max(-50, oldCurrent + tons); // минимальный порог -50 тонн
           
-          addToHistory('+ Внесено', s.name || `Силос №${id}`, kg, oldCurrent * 1000, newCurrent * 1000, 'кг');
+          const action = kg >= 0 ? '+ Внесено' : '− Списано';
+          addToHistory(action, s.name || `Силос №${id}`, kg, oldCurrent * 1000, newCurrent * 1000, 'кг');
           
           return { ...s, current: newCurrent };
         }
@@ -167,8 +200,8 @@ export default function WarehousePage() {
     if (input === null) return;
 
     const kg = parseFloat(input);
-    if (isNaN(kg) || kg <= 0) {
-      alert('Введите положительное число');
+    if (isNaN(kg)) {
+      alert('❌ Введите корректное число');
       return;
     }
 

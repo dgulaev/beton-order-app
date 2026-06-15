@@ -8,7 +8,7 @@ import RecipesPage from '../recipes/page';
 
 
 export default function OperatorBSUPage() {
-  const [currentShift] = useState('Дневная смена');
+  const [currentShift] = useState('Дневная');
   const [selectedTrip, setSelectedTrip] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'zayavki' | 'warehouse' | 'reports' | 'recipes'>('zayavki');
 
@@ -478,7 +478,7 @@ export default function OperatorBSUPage() {
 
         {/* ==================== 4. ОСНОВНОЙ КОНТЕНТ ==================== */}
         {activeTab === 'zayavki' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 700px', gap: '24px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 750px', gap: '24px' }}>
             
                                                 {/* ==================== 4.1 ОЧЕРЕДЬ НА ЗАГРУЗКУ ==================== */}
             <div style={{ backgroundColor: '#1E2937', borderRadius: '24px', padding: '24px' }}>
@@ -739,7 +739,7 @@ export default function OperatorBSUPage() {
           </div>
         )}
         {/* ==================== СКЛАД ==================== */}
-        {activeTab === 'warehouse' && <WarehousePage />}
+        {activeTab === 'warehouse' && <WarehousePage recipes={recipes} />}
         {/* ==================== ОТЧЕТЫ ==================== */}
         {activeTab === 'reports' && <ReportsPage />}
         {/* ==================== РЕЦЕПТЫ ==================== */}
