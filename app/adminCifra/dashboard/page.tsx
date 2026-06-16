@@ -125,6 +125,9 @@ export default function AdminCifraDashboard() {
     return () => window.removeEventListener('resize', updateScale);
   }, []);
 
+  // ==================== 5.1 СОХРАНЁННЫЙ ОТЧЁТ =====================================
+  const [savedReport, setSavedReport] = useState<string>('');
+
   // ==================== 6. УВЕДОМЛЕНИЯ О ВЫВОДЕ НАЛИЧНЫХ ==========================
   const fetchNotifications = async () => {
     if (!['admin', 'manager'].includes(userRole || '')) {
@@ -1748,16 +1751,16 @@ const generateDailyReport = () => {
 {/* ==================== КНОПКА СФОРМИРОВАТЬ ОТЧЁТ ==================== */}
 <button 
   onClick={() => {
-    if (groupedMixers.length === 0) {
-      alert('На выбранный день нет активных заявок');
-      return;
-    }
+    const dateKey = selectedDate.toISOString().split('T')[0];
+    const editedKey = `dailyReport_${dateKey}`;
+    const autoKey = `dailyReport_auto_${dateKey}`;
 
+    // Генерируем свежий отчёт
     const sortedGroups = [...groupedMixers].sort((a, b) => 
       (a.deliveryTime || '00:00').localeCompare(b.deliveryTime || '00:00')
     );
 
-    let report = `📋 ПЛАНИРОВАНИЕ НА ${selectedDate.toLocaleDateString('ru-RU', { 
+    let autoReport = `📋 ПЛАНИРОВАНИЕ НА ${selectedDate.toLocaleDateString('ru-RU', { 
       weekday: 'long', 
       day: 'numeric', 
       month: 'long' 
@@ -1773,32 +1776,36 @@ const generateDailyReport = () => {
         ((group as any).mixers?.[0]?.concrete_grade) || 
         '—';
 
-      report += `${index + 1}) Заявка #${group.orderId} — ${group.client || '—'}\n`;
-      report += `   Бетон: ${concreteGrade} • Время: ${group.deliveryTime || '—'} • ${totalVol} м³\n`;
+      autoReport += `${index + 1}) Заявка #${group.orderId} — ${group.client || '—'}\n`;
+      autoReport += `   Бетон: ${concreteGrade} • Время: ${group.deliveryTime || '—'} • ${totalVol} м³\n`;
 
       const sortedMixers = [...group.mixers].sort((a, b) => 
         (a.time || '00:00').localeCompare(b.time || '00:00')
       );
 
       sortedMixers.forEach((mixer, i) => {
-        report += `   ${i+1}) ${mixer.number || mixer.mixer_name} — ${mixer.time || '—'} • ${mixer.volume} м³\n`;
+        autoReport += `   ${i+1}) ${mixer.number || mixer.mixer_name} — ${mixer.time || '—'} • ${mixer.volume} м³\n`;
       });
-
-      report += `\n`;
+      autoReport += `\n`;
     });
 
-    report += `Всего на линии: ${activeMixersToday.length} миксеров\n`;
+    autoReport += `Всего на линии: ${activeMixersToday.length} миксеров\n`;
 
-    // Внутреннее модальное окно
+    localStorage.setItem(autoKey, autoReport);
+
+    let report = localStorage.getItem(editedKey) || autoReport;
+
+    // Модальное окно — твои размеры
     const modal = document.createElement('div');
     modal.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.92);z-index:10000;display:flex;align-items:center;justify-content:center;`;
 
     modal.innerHTML = `
-      <div style="background:#1E2937;width:820px;max-width:80%;border-radius:16px;padding:25px; height:1400px;    max-height:100vh;overflow:auto;">
+      <div style="background:#1E2937;width:820px;max-width:80%;border-radius:16px;padding:25px; height:1400px; max-height:100vh;overflow:auto;">
         <h2 style="margin-top:0;color:#60A5FA;text-align:center;">Отчёт на ${selectedDate.toLocaleDateString('ru-RU')}</h2>
         <textarea id="reportText" style="width:96%;height:1200px;font-size:15.2px;padding:15px;font-family:monospace;background:#0F172A;color:#E2E8F0;border:1px solid #475569;border-radius:8px;resize:vertical;">${report}</textarea>
         
         <div style="text-align:center;margin-top:20px;">
+          <button id="refreshBtn" style="padding:14px 32px;background:#475569;color:white;border:none;border-radius:12px;font-size:16px;cursor:pointer;margin-right:12px;">🔄 Обновить до свежих данных</button>
           <button id="copyBtn" style="padding:14px 32px;background:#10B981;color:white;border:none;border-radius:12px;font-size:16px;cursor:pointer;">📋 Скопировать отчёт</button>
           <button id="closeBtn" style="padding:14px 32px;background:#475569;color:white;border:none;border-radius:12px;font-size:16px;cursor:pointer;margin-left:12px;">Закрыть</button>
         </div>
@@ -1807,26 +1814,40 @@ const generateDailyReport = () => {
 
     document.body.appendChild(modal);
 
-    // Копирование
     setTimeout(() => {
+      const textArea = document.getElementById('reportText') as HTMLTextAreaElement;
+      const refreshBtn = document.getElementById('refreshBtn');
       const copyBtn = document.getElementById('copyBtn');
       const closeBtn = document.getElementById('closeBtn');
-      const textArea = document.getElementById('reportText') as HTMLTextAreaElement;
 
-      if (copyBtn && textArea) {
-        copyBtn.addEventListener('click', () => {
-          textArea.select();
-          try {
-            document.execCommand('copy');
-            alert('✅ Отчёт успешно скопирован!');
-          } catch (e) {
-            alert('Выделите текст вручную (Ctrl + A → Ctrl + C)');
+      if (textArea) {
+        textArea.addEventListener('input', () => {
+          localStorage.setItem(editedKey, textArea.value);
+        });
+      }
+
+      if (refreshBtn && textArea) {
+        refreshBtn.addEventListener('click', () => {
+          if (confirm('Загрузить свежие данные? Ваши правки будут потеряны.')) {
+            textArea.value = autoReport;
+            localStorage.setItem(editedKey, autoReport);
           }
         });
       }
 
-      if (closeBtn) {
-        closeBtn.addEventListener('click', () => modal.remove());
+      if (copyBtn && textArea) {
+        copyBtn.addEventListener('click', () => {
+          textArea.select();
+          document.execCommand('copy');
+          alert('✅ Отчёт скопирован!');
+        });
+      }
+
+      if (closeBtn && textArea) {
+        closeBtn.addEventListener('click', () => {
+          localStorage.setItem(editedKey, textArea.value);
+          modal.remove();
+        });
       }
     }, 100);
   }}

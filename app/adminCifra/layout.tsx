@@ -270,15 +270,27 @@ useEffect(() => {
     try {
       const res = await fetch('/api/adminCifra/all-orders', {
         cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' }
+        headers: { 'Cache-Control': 'no-cache' },
+        signal: AbortSignal.timeout(10000) // ← Защита от зависания (10 секунд)
       });
 
-      if (!res.ok) return;
+      if (!res.ok) {
+        console.warn(`Polling: HTTP ${res.status} — сервер вернул ошибку`);
+        return;
+      }
 
-      const data = await res.json();
-      const orders = data.orders || data || [];
+      const response = await res.json();
+      
+      // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
+      // Универсальная обработка ответа (массив или {orders: [...]})
+      const orders = Array.isArray(response) 
+        ? response 
+        : (response.orders || response || []);
+      // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
 
-      const currentMaxId = orders.length > 0 ? Math.max(...orders.map((o: any) => o.id)) : 0;
+      const currentMaxId = orders.length > 0 
+        ? Math.max(...orders.map((o: any) => o.id || 0)) 
+        : 0;
 
       // === НОВЫЕ ЗАЯВКИ ===
       if (currentMaxId > lastMaxOrderId) {
@@ -288,7 +300,7 @@ useEffect(() => {
 
         for (const newOrder of newOrders) {
           setNewOrdersCount(prev => prev + 1);
-          playNotificationSound();
+          if (typeof playNotificationSound === 'function') playNotificationSound();
           showVisualNotification('new', newOrder);
         }
 
@@ -303,27 +315,28 @@ useEffect(() => {
 
         if (prev) {
           if (prev.status !== order.status) {
-            playNotificationSound();
+            if (typeof playNotificationSound === 'function') playNotificationSound();
             showVisualNotification('status', order);
-            
           }
           if (prev.volume !== order.volume) {
-            playNotificationSound();
+            if (typeof playNotificationSound === 'function') playNotificationSound();
             showVisualNotification('volume', order, prev);
-            
           }
           if (prev.delivery_date !== order.delivery_date || prev.delivery_time !== order.delivery_time) {
-            playNotificationSound();
+            if (typeof playNotificationSound === 'function') playNotificationSound();
             showVisualNotification('datetime', order);
-            
           }
         }
 
         lastKnownData[order.id] = { ...order };
       });
 
-    } catch (err) {
-      console.warn('Polling error:', err);
+    } catch (err: any) {
+      if (err.name === 'TimeoutError') {
+        console.warn('Polling: запрос превысил таймаут (10 сек)');
+      } else {
+        console.warn('Polling error:', err.message || err);
+      }
     }
   };
 

@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from 'react';
 import Image from 'next/image';
 
+import { supabase } from '@/lib/supabaseClient';
+
 interface WarehousePageProps {
   recipes?: any[];
 }
@@ -12,6 +14,9 @@ export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
     // ==================== 1. СОСТОЯНИЕ ====================
   const [silos, setSilos] = useState<any[]>([]);
   const [additives, setAdditives] = useState<any[]>([]);
+  const [fbsBlocks, setFbsBlocks] = useState<any[]>([]);        // текущие остатки на складе
+  const [availableFBS, setAvailableFBS] = useState<any[]>([]); // все доступные типы ФБС из рецептов
+  const [selectedFBSId, setSelectedFBSId] = useState<number | null>(null);
   const [todayConsumption, setTodayConsumption] = useState({ 
     cement: 0, 
     pfm: 0, 
@@ -21,82 +26,159 @@ export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
 
   const isProcessingRef = useRef(false);
 
-           // ==================== 2. ЗАГРУЗКА ДАННЫХ ====================
-  const loadWarehouse = async () => {
+   // ==================== ЗАГРУЗКА ФБС ====================
+  const loadFBS = async () => {
     try {
-      const res = await fetch('/api/adminCifra/warehouse', { 
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSilos(data.silos || []);
-        setAdditives(data.additives || []);
-      }
-    } catch (err) {
-      console.error('Ошибка загрузки склада:', err);
-    }
-  };
+      console.log('🔍 Запрос к таблице fbs_blocks...');
 
-    // ==================== 2.1 ЗАГРУЗКА РАСХОДА ЗА СЕГОДНЯ (УЧИТЫВАЕМ ТИП БЕТОНА) ====================
-  const loadTodayConsumption = async () => {
-    try {
-      const res = await fetch('/api/adminCifra/production-log?today=true', {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
-      });
+      const { data: dbBlocks, error } = await supabase
+        .from('fbs_blocks')
+        .select('*')
+        .order('name');
 
-      if (!res.ok) {
-        setTodayConsumption({ cement: 0, pfm: 0, linomix: 0 });
+      if (error) {
+        console.error('❌ Supabase ошибка:', error);
         return;
       }
 
-      const data = await res.json();
-      const logs = data.logs || data || [];
+      console.log('📊 Данные из БД fbs_blocks:', dbBlocks);
 
-      let totalCement = 0;
-      let totalPFM = 0;
-      let totalLinomix = 0;
+      if (!dbBlocks || dbBlocks.length === 0) {
+        console.warn('⚠️ Таблица fbs_blocks пустая или нет прав на чтение');
+      }
 
-      logs.forEach((log: any) => {
-        const volume = parseFloat(log.volume || log.qty || 0);
-        if (isNaN(volume) || volume <= 0) return;
+      const merged = availableFBS.map((recipe: any) => {
+        const existing = dbBlocks?.find((b: any) => 
+          b.name === recipe.name || 
+          String(b.name).trim() === String(recipe.name || recipe.code).trim()
+        );
 
-        const grade = (log.concrete_grade || '').toUpperCase().trim();
+        const currentValue = existing ? Number(existing.current || 0) : 0;
 
-        // Более точное определение растворов
-        const isSolution = grade.includes('ТР') || 
-                          grade.includes('РАСТВОР') || 
-                          grade.includes('М100') || 
-                          grade.includes('М150');
-
-        if (isSolution) {
-          // Для растворов — Линомикс
-          totalLinomix += volume * 1.18;
-        } else {
-          // Для всех остальных бетонов — ПФМ-НЛК
-          totalPFM += volume * 1.16;
-        }
-
-        // Цемент для всех
-        totalCement += volume * 350;
+        return {
+          ...recipe,
+          id: existing?.id || recipe.id,
+          name: recipe.name || recipe.code,
+          current: currentValue
+        };
       });
 
-      const newConsumption = {
-        cement: Math.round(totalCement / 1000),
-        pfm: Math.round(totalPFM),
-        linomix: Math.round(totalLinomix)
-      };
+      console.log(`📦 ФИНАЛЬНЫЙ МЕРДЖ:`, 
+        merged.map(m => `${m.name} → ${m.current} шт`));
 
-      setTodayConsumption(newConsumption);
-
-      console.log(`✅ Расчёт: ${logs.length} записей | Цемент: ${newConsumption.cement}т | ПФМ: ${newConsumption.pfm}кг | Линомикс: ${newConsumption.linomix}кг`);
-
+      setFbsBlocks(merged);
     } catch (err) {
-      console.error('Ошибка загрузки расхода сегодня:', err);
-      setTodayConsumption({ cement: 0, pfm: 0, linomix: 0 });
+      console.error('💥 Критическая ошибка loadFBS:', err);
     }
   };
+
+   // ==================== 2. ЗАГРУЗКА ДАННЫХ ====================
+const loadWarehouse = async () => {
+  try {
+    const warehouseRes = await fetch('/api/adminCifra/warehouse', { 
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' }
+    });
+
+    if (warehouseRes.ok) {
+      const data = await warehouseRes.json();
+      
+      setSilos(data.silos || []);
+
+      const loadedAdditives = (data.additives || data.warehouse_additives || []).map((a: any) => ({
+        ...a,
+        id: a.id || a.additive_id,
+        current: Number(a.current || 0),
+        max: Number(a.max || 9000),
+        name: a.name
+      }));
+
+      setAdditives(loadedAdditives);
+      // console.log('📊 Загружены добавки из БД:', loadedAdditives); // убрали
+    }
+
+    // Рецепты ФБС
+    const recipesRes = await fetch('/api/adminCifra/recipes', { 
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' }
+    });
+
+    if (recipesRes.ok) {
+      const allData = await recipesRes.json();
+      const onlyFBS = allData.filter((r: any) => 
+        r.item_type === 'fbs' || (r.code && r.code.startsWith('24-'))
+      );
+      
+      setAvailableFBS(onlyFBS);
+      // console.log(`📦 Загружено ФБС рецептов: ${onlyFBS.length} шт`); // убрали
+    }
+  } catch (err) {
+    console.error('Ошибка загрузки склада:', err);
+  }
+};
+
+    // ==================== 2.1 ЗАГРУЗКА РАСХОДА ЗА СЕГОДНЯ (УЧИТЫВАЕМ ТИП БЕТОНА) ====================
+const loadTodayConsumption = async () => {
+  try {
+    const res = await fetch('/api/adminCifra/production-log?today=true', {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
+      // Добавили timeout, чтобы не висело вечно
+      signal: AbortSignal.timeout(3000)
+    });
+
+    if (!res.ok) {
+      // API пока не существует или возвращает ошибку — тихо ставим нули
+      setTodayConsumption({ cement: 0, pfm: 0, linomix: 0 });
+      return;
+    }
+
+    const data = await res.json();
+    const logs = data.logs || data || [];
+
+    let totalCement = 0;
+    let totalPFM = 0;
+    let totalLinomix = 0;
+
+    logs.forEach((log: any) => {
+      const volume = parseFloat(log.volume || log.qty || 0);
+      if (isNaN(volume) || volume <= 0) return;
+
+      const grade = (log.concrete_grade || '').toUpperCase().trim();
+
+      const isSolution = grade.includes('ТР') || 
+                        grade.includes('РАСТВОР') || 
+                        grade.includes('М100') || 
+                        grade.includes('М150');
+
+      if (isSolution) {
+        totalLinomix += volume * 1.18;
+      } else {
+        totalPFM += volume * 1.16;
+      }
+
+      totalCement += volume * 350;
+    });
+
+    const newConsumption = {
+      cement: Math.round(totalCement / 1000),
+      pfm: Math.round(totalPFM),
+      linomix: Math.round(totalLinomix)
+    };
+
+    setTodayConsumption(newConsumption);
+
+    // Оставили только один важный лог (можно закомментировать позже)
+    // console.log(`✅ Расчёт: ${logs.length} записей | Цемент: ${newConsumption.cement}т | ПФМ: ${newConsumption.pfm}кг | Линомикс: ${newConsumption.linomix}кг`);
+
+  } catch (err: any) {
+    // Тихая обработка — не спамим ошибкой при каждом обновлении
+    if (err.name !== 'AbortError' && err.name !== 'TypeError') {
+      console.error('Ошибка загрузки расхода сегодня:', err);
+    }
+    setTodayConsumption({ cement: 0, pfm: 0, linomix: 0 });
+  }
+};
 
   // ==================== 2.2 ЗАГРУЗКА ИСТОРИИ ====================
   const loadOperationHistory = async () => {
@@ -114,6 +196,80 @@ export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
     }
   };
 
+  // ==================== 2.2.1  СПИСАНИЕ ДОБАВОК ПО ОТЧЁТУ ====================
+  const subtractAdditivesFromReport = async (pfmLiters: number, linomixLiters: number) => {
+    if (pfmLiters <= 0 && linomixLiters <= 0) {
+      alert('Нет расхода добавок в отчёте');
+      return;
+    }
+
+    if (!confirm(`Списать по отчёту:\n` +
+                `ПФМ-НЛК: ${pfmLiters.toFixed(1)} л\n` +
+                `Линомикс ТипР: ${linomixLiters.toFixed(1)} л ?`)) {
+      return;
+    }
+
+    setAdditives(prev => {
+      const updated = [...prev];
+
+      // ПФМ-НЛК (index 0)
+      if (updated[0] && pfmLiters > 0) {
+        const old = Number(updated[0].current || 0);
+        updated[0].current = Math.max(0, old - pfmLiters);
+        console.log(`📉 Списано ${pfmLiters.toFixed(1)} л ПФМ-НЛК. Было: ${old.toFixed(1)} → Стало: ${updated[0].current.toFixed(1)}`);
+        addToHistory('− Списано по отчёту', 'ПФМ-НЛК', pfmLiters, old, updated[0].current, 'л');
+      }
+
+      // Линомикс (index 1)
+      if (updated[1] && linomixLiters > 0) {
+        const old = Number(updated[1].current || 0);
+        updated[1].current = Math.max(0, old - linomixLiters);
+        console.log(`📉 Списано ${linomixLiters.toFixed(1)} л Линомикс. Было: ${old.toFixed(1)} → Стало: ${updated[1].current.toFixed(1)}`);
+        addToHistory('− Списано по отчёту', 'Линомикс ТипР', linomixLiters, old, updated[1].current, 'л');
+      }
+
+      saveToDatabase(undefined, updated);
+      return updated;
+    });
+  };
+
+       // ==================== 2.2.2 ОТКАТ СПИСАНИЯ ДОБАВОК ПРИ УДАЛЕНИИ ОТЧЁТА ====================
+  const rollbackAdditivesFromReport = async (pfmLiters: number, linomixLiters: number) => {
+    if (pfmLiters <= 0 && linomixLiters <= 0) {
+      console.log('⚠️ Откат: нет данных для возврата');
+      return;
+    }
+
+    console.log(`🔄 Запуск отката: ПФМ +${pfmLiters.toFixed(1)}л | Линомикс +${linomixLiters.toFixed(1)}л`);
+
+    setAdditives(prev => {
+      const updated = [...prev];
+
+      // ПФМ-НЛК (index 0)
+      if (updated[0] && pfmLiters > 0) {
+        const old = Number(updated[0].current || 0);
+        updated[0].current = old + pfmLiters;
+        console.log(`📈 [ОТКАТ] ПФМ-НЛК: ${old.toFixed(1)} → ${updated[0].current.toFixed(1)}`);
+        addToHistory('+ Возврат по удалённому отчёту', 'ПФМ-НЛК', pfmLiters, old, updated[0].current, 'л');
+      }
+
+      // Линомикс ТипР (index 1)
+      if (updated[1] && linomixLiters > 0) {
+        const old = Number(updated[1].current || 0);
+        updated[1].current = old + linomixLiters;
+        console.log(`📈 [ОТКАТ] Линомикс: ${old.toFixed(1)} → ${updated[1].current.toFixed(1)}`);
+        addToHistory('+ Возврат по удалённому отчёту', 'Линомикс ТипР', linomixLiters, old, updated[1].current, 'л');
+      }
+
+      // Принудительно сохраняем в базу
+      setTimeout(() => {
+        saveToDatabase(undefined, updated);
+      }, 100);
+
+      return updated;
+    });
+  };
+
   // ==================== 2.3 ЗАГРУЗКА ДАННЫХ И ИНИЦИАЛИЗАЦИЯ ====================
   useEffect(() => {
     loadWarehouse();
@@ -121,6 +277,7 @@ export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
     loadOperationHistory();
 
     (window as any).subtractAdditivesFromReport = subtractAdditivesFromReport;
+    (window as any).rollbackAdditivesFromReport = rollbackAdditivesFromReport;
 
     console.log('✅ WarehousePage загружен');
 
@@ -129,39 +286,60 @@ export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
     return () => clearInterval(interval);
   }, []);
 
-           // ==================== 3. СОХРАНЕНИЕ В БАЗУ ====================
-  const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[]) => {
-    try {
-      const currentSilos = silosToSave || silos;
-      const currentAdditives = additivesToSave || additives;
-
-      const payload = {
-        silos: currentSilos.map((s: any) => ({
-          silo_id: Number(s.silo_id),
-          current: Number(s.current || 0)
-        })),
-        additives: currentAdditives.map((add: any, idx: number) => ({
-          additive_id: idx + 1,
-          current: Number(add?.current || 0)
-        }))
-      };
-
-      const response = await fetch('/api/adminCifra/warehouse', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (response.ok) {
-        console.log('✅ Данные успешно сохранены в базу');
-      }
-    } catch (err) {
-      console.error('💥 Ошибка сохранения:', err);
+    // ==================== АВТОМАТИЧЕСКАЯ ЗАГРУЗКА ФБС ====================
+  useEffect(() => {
+    if (availableFBS.length > 0) {
+      loadFBS();
     }
-  };
+  }, [availableFBS]);   // ← срабатывает каждый раз, когда availableFBS меняется
+
+  // ==================== 3. СОХРАНЕНИЕ В БАЗУ ====================
+const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsToSave?: any[]) => {
+  try {
+    const currentSilos = silosToSave || silos;
+    const currentAdditives = additivesToSave || additives;
+    const currentFBS = fbsToSave || fbsBlocks;
+
+    const payload = {
+      silos: currentSilos.map((s: any) => ({
+        silo_id: Number(s.silo_id),
+        current: Number(s.current || 0)
+      })),
+      additives: currentAdditives.map((add: any) => ({
+        additive_id: Number(add.additive_id || add.id || 1),
+        name: add.name,
+        current: Number(add.current || 0),
+        max: Number(add.max || 9000)        // ← ДОБАВИЛИ max!
+      })),
+      fbs: currentFBS.map((block: any) => ({
+        id: Number(block.id),
+        name: block.name || block.code || '',
+        current: Number(block.current || 0)
+      }))
+    };
+
+    // console.log('📤 Отправляем в warehouse (additives с max):', payload.additives);
+
+    const response = await fetch('/api/adminCifra/warehouse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await response.json();
+    console.log('📥 Ответ от API:', result);
+
+    if (response.ok) {
+      // console.log('✅ Данные успешно сохранены (включая ФБС)');
+      await loadFBS();
+    }
+  } catch (err) {
+    console.error('💥 Ошибка сохранения:', err);
+  }
+};
 
 
-              // ==================== 4. ВНЕСТИ ЦЕМЕНТ ====================
+  // ==================== 4. ВНЕСТИ ЦЕМЕНТ ====================
   const handleAddCement = (id: number) => {
     const input = prompt(`Введите количество цемента (в килограммах) для силоса №${id}:`);
     if (input === null) return;
@@ -249,7 +427,7 @@ export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
     return tons.toFixed(3) + ' т';
   };
 
-                           // ==================== 6.1 РАБОТА С ДОБАВКАМИ (ТОЧНО КАК ЦЕМЕНТ) ====================
+ // ==================== 6.1 РАБОТА С ДОБАВКАМИ (ТОЧНО КАК ЦЕМЕНТ) ====================
   const handleAddAdditive = (index: number) => {
     const name = index === 0 ? 'ПФМ-НЛК' : 'Линомикс ТипР';
     const input = prompt(`Сколько литров добавить в ${name}?`);
@@ -319,109 +497,161 @@ export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
     }
   };
 
-               // ==================== 6.2 ДОБАВИТЬ НОВЫЙ КУБИК ====================
-  const addNewCube = (index: number) => {
-    if (index !== 0) {
-      alert('Пока добавление кубиков работает только для ПФМ-НЛК');
-      return;
-    }
+ // ==================== 6.2 РАБОТА С БЛОКАМИ ФБС ====================
+  const handleAddFBS = () => {
+  if (!selectedFBSId) return alert('Выберите тип блока ФБС');
 
-    const now = Date.now();
-    if ((window as any).lastCubeActionTime && now - (window as any).lastCubeActionTime < 400) {
-      console.log('⛔ Слишком быстрое нажатие — игнорируем');
-      return;
-    }
-    (window as any).lastCubeActionTime = now;
+  const qty = parseInt(prompt('Сколько блоков внести?') || '0');
+  if (!qty || qty <= 0) return;
 
-    setAdditives(prev => {
-      const updated = [...prev];
+  setFbsBlocks(prev => {
+    let updated = [...prev];
 
-      if (!updated[index]) {
-        updated[index] = { current: 0, max: 9000, name: 'ПФМ-НЛК' };
-      } else {
-        updated[index].max = (updated[index].max || 9000) + 1000;
+    const existingIndex = updated.findIndex(b => b.id === selectedFBSId);
+
+    if (existingIndex !== -1) {
+      const oldCurrent = Number(updated[existingIndex].current || 0);
+      updated[existingIndex].current = oldCurrent + qty;
+      console.log(`✅ Добавлено ${qty} шт к существующему блоку`);
+    } else {
+      // Если блока ещё нет в fbsBlocks — добавляем
+      const recipe = availableFBS.find(r => r.id === selectedFBSId);
+      if (recipe) {
+        updated.push({
+          ...recipe,
+          id: recipe.id,
+          name: recipe.name,
+          current: qty
+        });
+        console.log(`✅ Добавлен новый тип блока: ${recipe.name}`);
       }
+    }
 
-      console.log(`✅ Добавлен новый кубик. Новый max = ${updated[index].max} л`);
+    saveToDatabase(undefined, undefined, updated);
+    return updated;
+  });
+};
 
-      setTimeout(() => {
-        saveToDatabase();
-      }, 100);
+  const handleSubtractFBS = (id: number) => {
+    const qty = parseInt(prompt('Сколько блоков списать?') || '0');
+    if (!qty || qty <= 0) return;
 
+    setFbsBlocks(prev => {
+      const updated = prev.map(block => {
+        if (block.id === id) {
+          const oldCurrent = Number(block.current || 0);
+          const newCurrent = Math.max(0, oldCurrent - qty);
+          return { ...block, current: newCurrent };
+        }
+        return block;
+      });
+
+      saveToDatabase(undefined, undefined, updated);
       return updated;
     });
   };
 
-  // ==================== 6.3 УДАЛИТЬ ПОСЛЕДНИЙ КУБИК ====================
-  const removeLastCube = (index: number) => {
-    if (index !== 0) return;
+// ==================== 6.3 ДОБАВЛЕНИЕ ОДНОГО ТИПА ФБС ====================
+const handleAddFBSBlock = (id: number) => {
+  const qty = parseInt(prompt('Сколько блоков добавить?') || '0');
+  if (!qty || qty <= 0) return;
 
-    const now = Date.now();
-    if ((window as any).lastCubeActionTime && now - (window as any).lastCubeActionTime < 400) {
-      console.log('⛔ Слишком быстрое нажатие — игнорируем');
-      return;
-    }
-    (window as any).lastCubeActionTime = now;
-
-    setAdditives(prev => {
-      const updated = [...prev];
-      if (!updated[index]) return prev;
-
-      const currentMax = updated[index].max || 9000;
-      if (currentMax <= 9000) {
-        alert('Нельзя удалить кубик — уже минимальное количество (9)');
-        return prev;
+  setFbsBlocks(prev => {
+    const updated = prev.map(block => {
+      if (block.id === id) {
+        const old = Number(block.current || 0);
+        return { ...block, current: old + qty };
       }
-
-      updated[index].max = currentMax - 1000;
-      
-      console.log(`🗑 Удалён последний кубик. Новый max = ${updated[index].max} л`);
-      
-      setTimeout(() => {
-        saveToDatabase();
-      }, 100);
-
-      return updated;
+      return block;
     });
-  };
 
-      // ==================== 6.4 СПИСАНИЕ ДОБАВОК ПО ОТЧЁТУ ====================
-  const subtractAdditivesFromReport = async (pfmLiters: number, linomixLiters: number) => {
-    if (pfmLiters <= 0 && linomixLiters <= 0) {
-      alert('Нет расхода добавок в отчёте');
-      return;
-    }
+    saveToDatabase(undefined, undefined, updated);
+    return updated;
+  });
+};
 
-    if (!confirm(`Списать по отчёту:\n` +
-                `ПФМ-НЛК: ${pfmLiters.toFixed(1)} л\n` +
-                `Линомикс ТипР: ${linomixLiters.toFixed(1)} л ?`)) {
-      return;
-    }
 
-    setAdditives(prev => {
-      const updated = [...prev];
+ // ==================== 6.4 ДОБАВИТЬ НОВЫЙ ПУСТОЙ КУБИК ====================
+const addNewCube = (index: number) => {
+  if (index !== 0) {
+    alert('Пока добавление кубиков работает только для ПФМ-НЛК');
+    return;
+  }
 
-      // ПФМ-НЛК (index 0)
-      if (updated[0] && pfmLiters > 0) {
-        const old = Number(updated[0].current || 0);
-        updated[0].current = Math.max(0, old - pfmLiters);
-        console.log(`📉 Списано ${pfmLiters.toFixed(1)} л ПФМ-НЛК. Было: ${old.toFixed(1)} → Стало: ${updated[0].current.toFixed(1)}`);
-      }
+  const additive = additives[index];
+  if (!additive) return;
 
-      // Линомикс (index 1)
-      if (updated[1] && linomixLiters > 0) {
-        const old = Number(updated[1].current || 0);
-        updated[1].current = Math.max(0, old - linomixLiters);
-        console.log(`📉 Списано ${linomixLiters.toFixed(1)} л Линомикс. Было: ${old.toFixed(1)} → Стало: ${updated[1].current.toFixed(1)}`);
-      }
+  const oldMax = Number(additive.max || 9000);
+  const newMax = oldMax + 1000;
+  const current = Number(additive.current || 0);
 
-      // Сохраняем изменения
-      saveToDatabase();
-      return updated;
-    });
-  };
+  // Защита от двойного клика
+  const now = Date.now();
+  if ((window as any).lastCubeActionTime && now - (window as any).lastCubeActionTime < 500) {
+    console.log('⛔ Слишком быстрое нажатие — игнорируем');
+    return;
+  }
+  (window as any).lastCubeActionTime = now;
 
-                                  // ==================== 7. ЛОГИРОВАНИЕ ОПЕРАЦИЙ ====================
+  setAdditives(prev => {
+    const updated = prev.map((add, i) =>
+      i === index 
+        ? { ...add, max: newMax, current: current } 
+        : add
+    );
+
+    console.log(`✅ +1 пустой кубик → max = ${newMax} л (current = ${current} л)`);
+
+    saveToDatabase(undefined, updated);
+    addToHistory('+ Кубик', 'ПФМ-НЛК', 1000, oldMax, newMax, 'л (ёмкость)');
+
+    return updated;
+  });
+};
+
+// ==================== 6.5 УДАЛИТЬ ПОСЛЕДНИЙ КУБИК ====================
+const removeLastCube = (index: number) => {
+  if (index !== 0) return;
+
+  const additive = additives[index];
+  if (!additive) return;
+
+  const oldMax = Number(additive.max || 9000);
+  const current = Number(additive.current || 0);
+
+  if (oldMax <= 9000) {
+    alert('Нельзя удалить кубик — уже минимальное количество (9 кубиков)');
+    return;
+  }
+
+  const newMax = oldMax - 1000;
+
+  // Защита от двойного клика
+  const now = Date.now();
+  if ((window as any).lastCubeActionTime && now - (window as any).lastCubeActionTime < 500) {
+    console.log('⛔ Слишком быстрое нажатие — игнорируем');
+    return;
+  }
+  (window as any).lastCubeActionTime = now;
+
+  setAdditives(prev => {
+    const updated = prev.map((add, i) =>
+      i === index 
+        ? { ...add, max: newMax } 
+        : add
+    );
+
+    console.log(`🗑 -1 кубик → max = ${newMax} л`);
+
+    saveToDatabase(undefined, updated);
+    addToHistory('− Кубик', 'ПФМ-НЛК', 1000, oldMax, newMax, 'л (ёмкость)');
+
+    return updated;
+  });
+};
+
+
+  // ==================== 6.6 ЛОГИРОВАНИЕ ОПЕРАЦИЙ ====================
   const addToHistory = (action: string, item: string, amount: number, oldValue: number, newValue: number, unit: string = 'л') => {
     const now = Date.now();
     const key = `history_${item}_${action}`;
@@ -754,7 +984,9 @@ export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
         </div>
       </div>
 
-                                                               {/* ==================== 10. ИСТОРИЯ ИЗМЕНЕНИЙ (закомментировано) ==================== */}
+      
+
+     {/* ==================== 10. ИСТОРИЯ ИЗМЕНЕНИЙ (закомментировано) ==================== */}
       {/* 
       <div style={{ marginTop: '60px' }}>
         <h2 style={{ fontSize: '24px', marginBottom: '20px', color: '#CBD5E1' }}>
@@ -840,6 +1072,148 @@ export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
 
       {/* Пустое место вместо истории */}
       <div style={{ marginTop: '60px' }}></div>
+
+   {/* ==================== БЛОКИ ФБС НА СКЛАДЕ ==================== */}
+<div className="mt-10">
+  <h2 className="text-2xl font-semibold text-white mb-6">Блоки ФБС на складе</h2>
+
+  {/* Кнопка Добавить выше с нормальным отступом */}
+  <div style={{ marginBottom: '40px' }}>
+    <select 
+      value={selectedFBSId || ''} 
+      onChange={(e) => setSelectedFBSId(Number(e.target.value))}
+      style={{
+        backgroundColor: '#1F2937',
+        color: 'white',
+        border: '1px solid #374151',
+        borderRadius: '8px',
+        padding: '12px 16px',
+        marginRight: '12px',
+        minWidth: '280px'
+      }}
+    >
+      <option value="">Выберите тип ФБС...</option>
+      {availableFBS.map((r: any) => (
+        <option key={r.id} value={r.id}>
+          {r.name}
+        </option>
+      ))}
+    </select>
+
+    <button
+      onClick={handleAddFBS}
+      style={{
+        backgroundColor: '#10B981',
+        color: 'white',
+        padding: '12px 24px',
+        borderRadius: '8px',
+        fontWeight: '600',
+        border: 'none',
+        cursor: 'pointer'
+      }}
+    >
+      + Добавить на склад
+    </button>
+  </div>
+
+  {/* Карточки в одну линию */}
+<div style={{ 
+  display: 'flex', 
+  gap: '20px', 
+  overflowX: 'auto', 
+  paddingBottom: '20px' 
+}}>
+  {fbsBlocks.map((block: any) => {
+    const qty = Number(block.current || 0);
+
+    return (
+      <div 
+        key={block.id} 
+        style={{
+          backgroundColor: '#1F2937',
+          border: '1px solid #374151',
+          borderRadius: '12px',
+          padding: '20px',
+          width: '260px',
+          minWidth: '260px',
+          boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)',
+          transition: 'all 0.2s ease',
+        }}
+        onMouseOver={(e) => {
+          e.currentTarget.style.borderColor = '#60A5FA';
+          e.currentTarget.style.transform = 'translateY(-4px)';
+        }}
+        onMouseOut={(e) => {
+          e.currentTarget.style.borderColor = '#374151';
+          e.currentTarget.style.transform = 'translateY(0)';
+        }}
+      >
+        <div style={{ fontSize: '17px', fontWeight: '600', color: 'white', marginBottom: '6px' }}>
+          {block.name}
+        </div>
+        
+        <div style={{ fontSize: '13px', color: '#9CA3AF', marginBottom: '16px' }}>
+          {block.dimensions || '240 × 40 × 60 см'}
+        </div>
+
+        {/* Количество */}
+        <div style={{ 
+          fontSize: '42px', 
+          fontWeight: '700', 
+          color: qty > 0 ? '#3B82F6' : '#6B7280',
+          lineHeight: '1',
+          marginBottom: '20px'
+        }}>
+          {qty} <span style={{ fontSize: '18px', fontWeight: '500' }}>шт</span>
+        </div>
+
+        {/* Кнопки действий */}
+        <div style={{ display: 'flex', gap: '10px' }}>
+          {/* Кнопка + Добавить */}
+          <button
+            onClick={() => handleAddFBSBlock(block.id)}
+            style={{
+              flex: 1,
+              backgroundColor: '#10B981',
+              color: 'white',
+              padding: '12px',
+              borderRadius: '8px',
+              fontWeight: '600',
+              border: 'none',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease'
+            }}
+            onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#34D399'}
+            onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#10B981'}
+          >
+            + Добавить
+          </button>
+
+          {/* Кнопка − Списать */}
+          <button
+            onClick={() => handleSubtractFBS(block.id)}
+            disabled={qty <= 0}
+            style={{
+              flex: 1,
+              backgroundColor: qty > 0 ? '#EF4444' : '#4B5563',
+              color: 'white',
+              padding: '12px',
+              borderRadius: '8px',
+              fontWeight: '600',
+              border: 'none',
+              cursor: qty > 0 ? 'pointer' : 'not-allowed',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            − Списать
+          </button>
+        </div>
+      </div>
+    );
+  })}
+</div>
+</div>
+      
 
     </div>
   );

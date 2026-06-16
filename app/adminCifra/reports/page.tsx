@@ -924,28 +924,45 @@ export default function ReportsPage() {
                   >
                     Скрыть
                   </button>
-                  {/* Кнопка Удалить — только для Админа */}
-                   {userRole === 'admin' && (
-                  <button 
-                      style={{ 
-                        backgroundColor: '#EF4444', 
-                        color: 'white', 
-                        border: 'none', 
-                        padding: '6px 16px', 
-                        borderRadius: '9999px', 
-                        fontSize: '13px', 
-                        fontWeight: '600', 
-                        cursor: 'pointer' 
-                   }}
-                        onClick={async () => {
-                        if (!confirm('Удалить этот отчёт?')) return;
-                        await fetch(`/api/adminCifra/meka-report?id=${report.id}`, { method: 'DELETE' });
-                        loadHistory();
-                   }}
-                      >
-                      Удалить
-                   </button>
-                   )}
+                {/* Кнопка Удалить — только для Админа */}
+{userRole === 'admin' && (
+  <button 
+    style={{ 
+      backgroundColor: '#EF4444', 
+      color: 'white', 
+      border: 'none', 
+      padding: '6px 16px', 
+      borderRadius: '9999px', 
+      fontSize: '13px', 
+      fontWeight: '600', 
+      cursor: 'pointer' 
+    }}
+    onClick={async () => {
+      if (!confirm('Удалить этот отчёт?')) return;
+
+      try {
+        console.log(`🗑 Удаляем отчёт #${report.id}`);
+
+        const deleteRes = await fetch(`/api/adminCifra/meka-report?id=${report.id}`, { 
+          method: 'DELETE' 
+        });
+
+        if (deleteRes.ok) {
+          console.log('✅ Отчёт успешно удалён');
+          loadHistory();
+          alert('✅ Отчёт успешно удалён');
+        } else {
+          alert('❌ Ошибка при удалении отчёта');
+        }
+      } catch (err) {
+        console.error('❌ Ошибка при удалении:', err);
+        alert('Произошла ошибка при удалении');
+      }
+    }}
+  >
+    Удалить
+  </button>
+)}
                 </div>
               </div>
             )) : (
