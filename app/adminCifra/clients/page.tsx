@@ -728,30 +728,49 @@ const shareOrder = (order: any) => {
 const duplicateOrder = (order: any) => {
   if (!order) return alert('Нет данных заказа');
 
-  const clientData = selectedProfile?.clients?.[0] || selectedProfile;
+  const clientData = selectedProfile?.clients?.[0] || selectedProfile || {};
+
+  const today = new Date().toISOString().split('T')[0]; // ← сегодняшняя дата
 
   const duplicated = {
-    ...order,
     id: undefined,
     created_at: undefined,
     status: 'new',
-    customerType: 'legal',
-    organizationName: clientData?.organization_name || clientData?.organizationName || '',
-    fullName: clientData?.full_name || clientData?.fullName || '',
-    phone: clientData?.phone || order.phone || '',
-    address: clientData?.address || order.address || '',
-    inn: clientData?.inn || order.inn || '',
+
+    // Данные клиента
+    user_id: order.user_id || clientData.user_id || clientData.id,
+    organizationName: order.organization_name || order.organizationName || 
+                     clientData.organization_name || clientData.organizationName || '',
+    fullName: order.full_name || order.fullName || 
+              clientData.full_name || clientData.fullName || '',
+    phone: order.phone || clientData.phone || '',
+    inn: order.inn || clientData.inn || '',
+
+    // === ДАННЫЕ ЗАКАЗА ===
+    grade: order.grade || 'М300',
+    volume: order.volume || '',
+    
+    // ←←← ИСПРАВЛЕНИЕ: всегда сегодняшняя дата при дублировании
+    delivery_date: today,
+    delivery_time: order.delivery_time || order.deliveryTime || '10:00',
+    
+    address: order.address || clientData.address || '',
+    
     comment: order.comment 
       ? `Копия заказа #${order.id}\n\n${order.comment}` 
-      : `Копия заказа #${order.id}`
+      : `Копия заказа #${order.id}`,
+
+    customerType: order.customer_type?.includes('Юрид') || order.customerType === 'legal' ? 'legal' : 'physical',
   };
+
+  console.log('📋 Дублируем заказ → Дата доставки установлена на сегодня:', today);
 
   setNewOrderData(duplicated);
   setSelectedOrder(null);
 
   setTimeout(() => {
     setIsNewOrderModalOpen(true);
-  }, 30);
+  }, 80);
 };
 
      // ==================== 4. ФИЛЬТРАЦИЯ КЛИЕНТОВ И СОТРУДНИКОВ ====================

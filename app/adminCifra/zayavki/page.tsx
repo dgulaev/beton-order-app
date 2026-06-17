@@ -1727,6 +1727,7 @@ ${order.customer_type?.includes('Юридическое')
 
            {showNewOrderModal && (
   <NewOrderModal 
+  isOpen={showNewOrderModal}
     onClose={() => {
       setShowNewOrderModal(false);
       setNewOrderInitialData(null);

@@ -38,17 +38,34 @@ export async function PUT(request: NextRequest) {
       console.log('⚠️ Попытка изменить статус финальной заявки — отклонено');
     }
 
-    // ==================== 3. ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
+        // ==================== 3. ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
     const changes: any[] = [];
     
-    const finalUserRole = userRole || 'unknown';
+    const finalUserRole = userRole || 'admin';
     const finalUserName = userName || 'Сотрудник';
 
     const fieldsToTrack = [
       'grade', 'volume', 'delivery_date', 'delivery_time',
       'address', 'phone', 'organization_name', 'full_name',
-      'inn', 'comment', 'status', 'is_questionable'
+      'inn', 'comment', 'status', 'is_questionable', 'logistics_ready'
     ];
+
+    // Русские названия полей
+    const fieldNames: Record<string, string> = {
+      grade: 'марку бетона',
+      volume: 'объём',
+      delivery_date: 'дату доставки',
+      delivery_time: 'время доставки',
+      address: 'адрес доставки',
+      phone: 'телефон',
+      organization_name: 'название организации',
+      full_name: 'ФИО',
+      inn: 'ИНН',
+      comment: 'комментарий',
+      status: 'статус',
+      is_questionable: 'метку "Под вопросом"',
+      logistics_ready: 'готовность логистики'
+    };
 
     for (const field of fieldsToTrack) {
       const oldValue = currentOrder[field];
@@ -60,12 +77,18 @@ export async function PUT(request: NextRequest) {
       const newStr = newValue !== null && newValue !== undefined ? String(newValue).trim() : '';
 
       if (oldStr !== newStr) {
-        let actionText = `Изменено поле ${field}`;
+        let actionText = `Изменил ${fieldNames[field] || field}`;
 
         if (field === 'is_questionable') {
           actionText = newValue ? 'Поставил метку "Под вопросом"' : 'Снял метку "Под вопросом"';
         } else if (field === 'status') {
-          actionText = `Изменил статус на "${newStr}"`;
+          actionText = `Изменил статус заявки на "${newStr}"`;
+        } else if (field === 'volume') {
+          actionText = `Изменил объём с ${oldStr} на ${newStr} м³`;
+        } else if (field === 'delivery_time') {
+          actionText = `Изменил время доставки с ${oldStr} на ${newStr}`;
+        } else if (field === 'delivery_date') {
+          actionText = `Изменил дату доставки`;
         }
 
         changes.push({
@@ -86,7 +109,11 @@ export async function PUT(request: NextRequest) {
         .from('order_history')
         .insert(changes);
 
-      if (historyError) console.error('❌ Ошибка записи истории:', historyError);
+      if (historyError) {
+        console.error('❌ Ошибка записи истории:', historyError);
+      } else {
+        console.log(`📜 Записано ${changes.length} изменений в историю`);
+      }
     }
 
     // ==================== 4. ОБНОВЛЕНИЕ ЗАЯВКИ ====================

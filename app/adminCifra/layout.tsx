@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell, CheckCircle } from 'lucide-react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell, CheckCircle, LogOut } from 'lucide-react';
 
 import { useEffect, useState, useRef } from 'react';
 
@@ -331,6 +331,33 @@ const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', 
 
   document.body.appendChild(notif);
 };
+
+// ==================== 4.3.1 HEARTBEAT — ОБНОВЛЕНИЕ АКТИВНОСТИ (каждые 5 минут) ====================
+useEffect(() => {
+  const savedUserId = localStorage.getItem('userId');
+  if (!savedUserId || userRole === 'guest') return;
+
+  const sendHeartbeat = async () => {
+    try {
+      const res = await fetch('/api/adminCifra/heartbeat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: parseInt(savedUserId) })
+      });
+
+      console.log('❤️ Heartbeat sent, status:', res.status);
+    } catch (e) {
+      console.warn('Heartbeat failed:', e);
+    }
+  };
+
+  sendHeartbeat(); // сразу
+
+  // Интервал — 10 минут
+  const interval = setInterval(sendHeartbeat, 10 * 60 * 1000);
+
+  return () => clearInterval(interval);
+}, [userRole]);
 
 // ==================== 4.4 ПРИСВОЕНИЕ ФУНКЦИЙ В WINDOW (ВАЖНО!) ====================
 useEffect(() => {
@@ -770,33 +797,31 @@ if (!userRole || !allowedRoles.includes(userRole)) {
                     <DollarSign size={22} /> {!isCollapsed && <span>Выводы наличных</span>}
                   </Link>
                 )}
-                {/* ==================== БЛОК 9.2: КНОПКА "ВЫКИНУТЬ ВСЕХ" ==================== */}
+
+                {/* ==================== БЛОК 9.2 ССЫЛКА "КТО В ОНЛАЙН" ==================== */}
 {(userRole === 'admin') && (
-  <button 
-    onClick={forceLogoutAll}
-    style={{
-      width: isCollapsed ? '25px' : '100%',
-      height: isCollapsed ? '25px' : 'auto',
-      padding: isCollapsed ? '0' : '16px 16px',
-      background: '#22c55e',
-      color: '#fff',
-      border: 'none',
-      borderRadius: isCollapsed ? '9999px' : '12px',
-      fontSize: isCollapsed ? '20px' : '15px',
-      fontWeight: '600',
-      cursor: 'pointer',
-      marginTop: '8px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginLeft: isCollapsed ? 'auto' : '0',
-      marginRight: isCollapsed ? 'auto' : '0',
-      transition: 'all 0.2s',
-    }}
-    title="Разлогинуть всех"
+  <Link 
+    href="/adminCifra/online" 
+    style={navLinkStyle(isActive('/adminCifra/online'), isCollapsed)}
   >
-    {isCollapsed ? '' : 'Разлогинуть всех'}
-  </button>
+    <Users size={22} /> 
+    {!isCollapsed && <span>Кто в онлайн</span>}
+  </Link>
+)}
+
+                {/* ==================== БЛОК 9.3 ССЫЛКА "ВЫКИНУТЬ ВСЕХ" ==================== */}
+{(userRole === 'admin') && (
+  <Link 
+    href="#" 
+    onClick={(e) => {
+      e.preventDefault();
+      forceLogoutAll();
+    }}
+    style={navLinkStyle(false, isCollapsed)}
+  >
+    <LogOut size={22} /> 
+    {!isCollapsed && <span>Разлогинить всех</span>}
+  </Link>
 )}
               </>
             )}

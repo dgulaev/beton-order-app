@@ -304,30 +304,23 @@ console.log(`✅ next_contact сохранён: ${nextContact}`);
     const orderId = orderData.id;
     console.log(`✅ Заказ #${orderId} успешно создан для клиента ${finalUserId}`);
 
-    // ================================================
+        // ================================================
     // 8. ЗАПИСЬ В ИСТОРИЮ СОЗДАНИЯ ЗАЯВКИ
     // ================================================
     if (orderId) {
-      let creatorRole = 'client';
-      
-      if (payload.userRole) {
-        creatorRole = payload.userRole;
-      } else if (isFromAdmin) {
-        creatorRole = 'admin';
-      }
+      // ←←← ИСПРАВЛЕНИЕ: используем реальное имя из фронта
+      const creatorName = payload.userName && payload.userName !== 'Сотрудник' 
+        ? payload.userName 
+        : (isFromAdmin ? 'Администратор' : 'Клиент');
 
-      const creatorName = 
-        creatorRole === 'admin' ? 'Администратор' :
-        creatorRole === 'manager' ? 'Менеджер' :
-        creatorRole === 'dispatcher' ? 'Диспетчер' :
-        creatorRole === 'logist' ? 'Логист' : 'Клиент';
+      const creatorRole = payload.userRole || (isFromAdmin ? 'admin' : 'client');
 
       const historyEntry = {
         order_id: orderId,
         action: 'Создал заявку',
-        user_name: creatorName,
+        user_name: creatorName,           // ← Теперь будет реальное имя
         user_role: creatorRole,
-        field_name: null,          // важно
+        field_name: null,
         old_value: null,
         new_value: null,
         created_at: new Date().toISOString()
@@ -338,7 +331,7 @@ console.log(`✅ next_contact сохранён: ${nextContact}`);
           .from('order_history')
           .insert([historyEntry]);
 
-        console.log(`📜 УСПЕШНО ЗАПИСАНА ИСТОРИЯ: "${creatorName}" создал заявку #${orderId}`);
+        console.log(`📜 ИСТОРИЯ СОЗДАНИЯ: "${creatorName}" (${creatorRole}) создал заявку #${orderId}`);
       } catch (err: any) {
         console.error('Ошибка записи истории создания заявки:', err);
       }

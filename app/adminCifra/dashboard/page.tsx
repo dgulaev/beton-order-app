@@ -55,24 +55,72 @@ export default function AdminCifraDashboard() {
  const [history, setHistory] = useState<any[]>([]);
  const [currentUser, setCurrentUser] = useState<{ id: number; name?: string; role: string } | null>(null);
 
-      // ==================== ДОБАВЛЕНИЕ В ИСТОРИЮ (реальное имя) ====================
-const addToHistory = async (action: string) => {
+     // ==================== ДОБАВЛЕНИЕ В ИСТОРИЮ (финальная версия) ====================
+const addToHistory = async (action: string, details?: any) => {
   if (!selectedOrder?.id) return;
 
+  const userName = userFullName || localStorage.getItem('userName') || 'Сотрудник';
+  const userRole = localStorage.getItem('userRole') || 'admin';
+
+  let finalAction = action.trim();
+
+  const lower = finalAction.toLowerCase();
+
+  // === ПРИОРИТЕТНАЯ ОБРАБОТКА СПЕЦИАЛЬНЫХ ДЕЙСТВИЙ ===
+  if (
+    lower.includes('миксера') || 
+    lower.includes('удалил миксер') ||
+    (lower.includes('удалил') && lower.includes('миксер'))
+  ) {
+    // Ничего не меняем — оставляем оригинальный текст про миксер
+    finalAction = action;
+  } 
+  else if (lower.includes('завершил логистику') || lower.includes('частичной логистику')) {
+    finalAction = action;
+  } 
+  // === ОБЫЧНЫЕ ИЗМЕНЕНИЯ ЗАЯВКИ ===
+  else if (lower.includes('delivery_time') || lower.includes('время доставки')) {
+    finalAction = 'Изменил время доставки';
+  } 
+  else if (lower.includes('volume') || lower.includes('объём')) {
+    finalAction = 'Изменил объём';
+  } 
+  else if (lower.includes('status') || lower.includes('статус')) {
+    finalAction = 'Изменил статус заявки';
+  } 
+  else if (lower.includes('address') || lower.includes('адрес')) {
+    finalAction = 'Изменил адрес доставки';
+  } 
+  else if (lower.includes('изменено поле') || lower.includes('changed field')) {
+    if (lower.includes('delivery_time')) {
+      finalAction = 'Изменил время доставки';
+    } else if (lower.includes('volume')) {
+      finalAction = 'Изменил объём';
+    } else if (lower.includes('status')) {
+      finalAction = 'Изменил статус заявки';
+    } else {
+      finalAction = 'Изменил данные заявки';
+    }
+  }
+
   try {
+    const payload = {
+      order_id: selectedOrder.id,
+      action: finalAction,
+      user_name: userName,
+      user_role: userRole,
+      ...(details && { details })
+    };
+
+    console.log('📝 [addToHistory] →', payload);
+
     const res = await fetch('/api/adminCifra/order-history', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        order_id: selectedOrder.id,
-        action: action,
-        user_name: userFullName || 'Сотрудник',     // ← реальное имя
-        user_role: userRole || 'admin'
-      })
+      body: JSON.stringify(payload)
     });
 
     if (res.ok) {
-      // Обновляем историю сразу
       const histRes = await fetch(`/api/adminCifra/order-history?orderId=${selectedOrder.id}`);
       if (histRes.ok) {
         const data = await histRes.json();
@@ -80,7 +128,7 @@ const addToHistory = async (action: string) => {
       }
     }
   } catch (err) {
-    console.error('Не удалось добавить в историю:', err);
+    console.error('❌ Не удалось добавить в историю:', err);
   }
 };
 
@@ -510,7 +558,7 @@ useEffect(() => {
     };
 
     refreshData();                    // сразу при загрузке
-    const interval = setInterval(refreshData, 30000); // ← каждые 12 секунд
+    const interval = setInterval(refreshData, 15000); // ← каждые 12 секунд
 
     return () => clearInterval(interval);
   }, []);

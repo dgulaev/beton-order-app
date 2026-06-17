@@ -3,21 +3,33 @@
 import { useState, useMemo, useEffect } from 'react';
 
 interface NewOrderModalProps {
+  isOpen: boolean;                    // ← обязательно
   onClose: () => void;
-  onSuccess: (newOrder?: any) => void;
+  onSuccess?: (newOrder?: any) => void; // ← если используешь onSuccess
+  userId?: any;                       // ID клиента
+  userName?: string;                  // Имя клиента (для отображения)
+  userPhone?: string;
+  currentRole?: string;               // Роль сотрудника
+  currentUserName?: string;           // ← Имя сотрудника (для истории) — главное
   initialData?: any;
   defaultDeliveryDate?: string;
-  currentRole?: string;
-  currentUserName?: string;        // ← должно быть
+  orderHistory?: any[];
+  callHistory?: any[];
 }
 
 export default function NewOrderModal({ 
+  isOpen,
   onClose, 
-  onSuccess, 
+  onSuccess,
+  userId,
+  userName = '',                      // имя клиента
+  userPhone = '',
+  currentRole = 'admin',
+  currentUserName = 'Сотрудник',      // ← имя сотрудника, создающего заказ
   initialData = null,
   defaultDeliveryDate,
-  currentRole = 'admin',
-  currentUserName = 'Сотрудник'     // ← должно быть
+  orderHistory = [],
+  callHistory = [],
 }: NewOrderModalProps) {
 
   // ==================== 1. СОСТОЯНИЯ ====================
@@ -153,118 +165,129 @@ export default function NewOrderModal({
     }
   };
 
-    // ==================== 9. СОЗДАНИЕ ЗАЯВКИ ====================
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
+   // ==================== 9. СОЗДАНИЕ ЗАЯВКИ ====================
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  setIsSubmitting(true);
 
-    // ================================================
-    // 1. ВАЛИДАЦИЯ ВВОДА
-    // ================================================
-    if (!form.volume || parseFloat(form.volume) <= 0) {
-      alert('Укажите объём бетона больше 0 м³');
-      setIsSubmitting(false);
-      return;
-    }
+  // ================================================
+  // 1. ВАЛИДАЦИЯ ВВОДА
+  // ================================================
+  if (!form.volume || parseFloat(form.volume) <= 0) {
+    alert('Укажите объём бетона больше 0 м³');
+    setIsSubmitting(false);
+    return;
+  }
 
-    if (!form.address || form.address.trim().length < 5) {
-      alert('Укажите полный адрес доставки');
-      setIsSubmitting(false);
-      return;
-    }
+  if (!form.address || form.address.trim().length < 5) {
+    alert('Укажите полный адрес доставки');
+    setIsSubmitting(false);
+    return;
+  }
 
-    const currentPhone = form.phone || '';
-    if (!currentPhone || currentPhone.replace(/\D/g, '').length < 10) {
-      alert('Укажите корректный номер телефона');
-      setIsSubmitting(false);
-      return;
-    }
+  const currentPhone = form.phone || '';
+  if (!currentPhone || currentPhone.replace(/\D/g, '').length < 10) {
+    alert('Укажите корректный номер телефона');
+    setIsSubmitting(false);
+    return;
+  }
 
-    if (form.customerType === 'legal' && (!form.organizationName || form.organizationName.trim().length < 3)) {
-      alert('Укажите название организации');
-      setIsSubmitting(false);
-      return;
-    }
+  if (form.customerType === 'legal' && (!form.organizationName || form.organizationName.trim().length < 3)) {
+    alert('Укажите название организации');
+    setIsSubmitting(false);
+    return;
+  }
 
-    if (form.customerType === 'physical' && (!form.fullName || form.fullName.trim().length < 5)) {
-      alert('Укажите ФИО полностью');
-      setIsSubmitting(false);
-      return;
-    }
+  if (form.customerType === 'physical' && (!form.fullName || form.fullName.trim().length < 5)) {
+    alert('Укажите ФИО полностью');
+    setIsSubmitting(false);
+    return;
+  }
 
-    // ================================================
-    // 2. ПОДГОТОВКА PAYLOAD
-    // ================================================
-    const payload = {
-      userId: adminUserId,
-      grade: form.grade,
-      volume: parseFloat(form.volume),
-      delivery_date: form.deliveryDate,
-      delivery_time: form.deliveryTime,
-      address: form.address.trim(),
-      phone: currentPhone,
-      customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
-      organization_name: form.organizationName?.trim() || null,
-      full_name: form.fullName?.trim() || null,
-      inn: form.inn?.trim() || null,
-      concreteCost: concreteCost || 0,
-      deliveryCost: deliveryCost || 0,
-      totalPrice: totalPrice || 0,
-      comment: form.comment?.trim() || null,
+  // ================================================
+  // 2. ПОДГОТОВКА PAYLOAD
+  // ================================================
+  const payload = {
+    userId: adminUserId,
+    grade: form.grade,
+    volume: parseFloat(form.volume),
+    delivery_date: form.deliveryDate,
+    delivery_time: form.deliveryTime,
+    address: form.address.trim(),
+    phone: currentPhone,
+    customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
+    organization_name: form.organizationName?.trim() || null,
+    full_name: form.fullName?.trim() || null,
+    inn: form.inn?.trim() || null,
+    concreteCost: concreteCost || 0,
+    deliveryCost: deliveryCost || 0,
+    totalPrice: totalPrice || 0,
+    comment: form.comment?.trim() || null,
 
-      // ==================== ДЛЯ ИСТОРИИ ====================
-      isFromAdmin: true,
-      source: 'admin',
-      userRole: currentRole || 'admin',
-      userName: currentUserName,
-    };
-
-    try {
-      const response = await fetch('/api/order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        // ================================================
-        // 3. ПОЛНЫЙ ОБЪЕКТ ДЛЯ ОПТИМИСТИЧЕСКОГО ОБНОВЛЕНИЯ
-        // ================================================
-        const createdOrder = {
-          id: data.orderId,
-          grade: form.grade,
-          volume: parseFloat(form.volume),
-          delivery_date: form.deliveryDate,
-          delivery_time: form.deliveryTime,
-          address: form.address,
-          phone: currentPhone,
-          status: 'new',
-
-          // ← Эти поля добавлены, чтобы не было прочерков при добавлении в список
-          customer_type: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
-          full_name: form.fullName?.trim() || null,
-          organization_name: form.organizationName?.trim() || null,
-          inn: form.inn?.trim() || null,
-          comment: form.comment?.trim() || null,
-        };
-
-        setOrderCreated(createdOrder);
-        setNotificationSent(false);
-
-        alert(`✅ Заявка #${data.orderId} успешно создана!`);
-        onSuccess(createdOrder);   // ← Передаём полный объект
-      } else {
-        alert(data.message || 'Ошибка создания заявки');
-      }
-    } catch (error) {
-      console.error(error);
-      alert('Ошибка соединения с сервером');
-    } finally {
-      setIsSubmitting(false);
-    }
+    // ==================== ДАННЫЕ ДЛЯ ИСТОРИИ ====================
+    isFromAdmin: true,
+    source: 'admin',
+    userRole: currentRole || 'admin',
+    userName: currentUserName || localStorage.getItem('userName') || 'Сотрудник',  // ← Надёжный fallback
   };
+
+  try {
+    console.log('📤 Создание заявки от:', payload.userName, '(', payload.userRole, ')');
+
+    const response = await fetch('/api/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+
+        if (data.success) {
+      // ================================================
+      // 3. ПОЛНЫЙ ОБЪЕКТ ДЛЯ ОПТИМИСТИЧЕСКОГО ОБНОВЛЕНИЯ
+      // ================================================
+      const createdOrder = {
+        id: data.orderId,
+        grade: form.grade,
+        volume: parseFloat(form.volume),
+        delivery_date: form.deliveryDate,
+        delivery_time: form.deliveryTime,
+        address: form.address,
+        phone: currentPhone,
+        status: 'new',
+
+        customer_type: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
+        full_name: form.fullName?.trim() || null,
+        organization_name: form.organizationName?.trim() || null,
+        inn: form.inn?.trim() || null,
+        comment: form.comment?.trim() || null,
+      };
+
+      setOrderCreated(createdOrder);
+      setNotificationSent(false);
+
+      alert(`✅ Заявка #${data.orderId} успешно создана!`);
+      
+      // Безопасный вызов onSuccess
+      if (typeof onSuccess === 'function') {
+        onSuccess(createdOrder);
+      }
+
+      // Закрываем модалку
+      setTimeout(() => {
+        onClose();
+      }, 800);
+
+    } else {
+      alert(data.message || 'Ошибка создания заявки');
+    }
+  } catch (error) {
+    console.error('❌ Ошибка создания заявки:', error);
+    alert('Ошибка соединения с сервером');
+  } finally {
+    setIsSubmitting(false);
+  }
+};
 
   // ==================== 10. РУЧНАЯ ОТПРАВКА УВЕДОМЛЕНИЯ ====================
   const sendNotification = async () => {

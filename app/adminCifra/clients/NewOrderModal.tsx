@@ -2,6 +2,13 @@
 
 import { useState, useMemo, useEffect } from 'react';
 
+// ==================== ГЛОБАЛЬНАЯ ФУНКЦИЯ ДЛЯ ИСТОРИИ ====================
+declare global {
+  interface Window {
+    addToHistoryGlobal?: (action: string) => void;
+  }
+}
+
 interface NewOrderModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -50,25 +57,22 @@ export default function NewOrderModal({
   const [showSuccess, setShowSuccess] = useState(false);
 
   // ==================== ЗАГРУЗКА РЕЦЕПТОВ ИЗ БАЗЫ ====================
-  useEffect(() => {
-    const loadRecipes = async () => {
-      try {
-        const res = await fetch('/api/adminCifra/recipes');
-        if (res.ok) {
-          const data = await res.json();
-          setRecipes(data);
-          // Устанавливаем первую активную марку по умолчанию
-          if (data.length > 0) {
-            setForm(prev => ({ ...prev, grade: data[0].code }));
-          }
-        }
-      } catch (e) {
-        console.error('Ошибка загрузки рецептов:', e);
+useEffect(() => {
+  const loadRecipes = async () => {
+    try {
+      const res = await fetch('/api/adminCifra/recipes');
+      if (res.ok) {
+        const data = await res.json();
+        setRecipes(data);
+        // ← УБРАЛИ автоматическую установку первой марки
       }
-    };
+    } catch (e) {
+      console.error('Ошибка загрузки рецептов:', e);
+    }
+  };
 
-    if (isOpen) loadRecipes();
-  }, [isOpen]);
+  if (isOpen) loadRecipes();
+}, [isOpen]);
 
 // ==================== АВТОЗАПОЛНЕНИЕ ====================
 useEffect(() => {
@@ -84,16 +88,16 @@ useEffect(() => {
     );
 
     setForm({
-      grade: initialData.grade || 'М300',
+      grade: initialData.grade || initialData.grade_code || 'М300',   // ← усиленная приоритетность
       volume: initialData.volume || '',
-      deliveryDate: initialData.delivery_date || new Date().toISOString().split('T')[0],
-      deliveryTime: initialData.delivery_time || '10:00',
+      deliveryDate: initialData.delivery_date || initialData.deliveryDate || new Date().toISOString().split('T')[0],
+      deliveryTime: initialData.delivery_time || initialData.deliveryTime || '10:00',
       address: initialData.address || '',
       customerType: isLegal ? 'legal' : 'physical',
       organizationName: initialData.organizationName || initialData.organization_name || '',
       fullName: initialData.fullName || initialData.full_name || '',
       phone: initialData.phone || '',
-      inn: initialData.inn || '',                    // ← Добавлено
+      inn: initialData.inn || '',
       comment: initialData.comment || '',
     });
   } else if (isOpen) {
@@ -101,7 +105,7 @@ useEffect(() => {
       ...prev,
       fullName: userName || prev.fullName || '',
       phone: userPhone || prev.phone || '',
-      customerType: 'legal',   // По умолчанию юрлицо
+      customerType: 'legal',
     }));
   }
 }, [isOpen, initialData, userName, userPhone]);
@@ -133,6 +137,9 @@ const handleSubmit = async (e: React.FormEvent) => {
 
   setIsSubmitting(true);
 
+  // ==================== ОПРЕДЕЛЕНИЕ ИМЕНИ СОЗДАТЕЛЯ ====================
+  const creatorName = currentUserName || 'Сотрудник';
+
   const payload = {
     userId,
     grade: form.grade,
@@ -142,7 +149,6 @@ const handleSubmit = async (e: React.FormEvent) => {
     address: form.address,
     customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
     fullName: form.fullName,
-    
     phone: form.phone,
     organizationName: form.organizationName,
     inn: form.inn,
@@ -155,11 +161,12 @@ const handleSubmit = async (e: React.FormEvent) => {
     isFromAdmin: true,
     source: 'admin',
     userRole: currentRole || 'admin',
-    userName: userName || 'Сотрудник',        // ← Теперь берём реальное имя из пропсов
+    createdByName: creatorName,      // ← Имя того, кто создал заявку
+    userName: creatorName,           // ← для совместимости с бэкендом
   };
 
   try {
-    console.log('📤 Создание заказа. userName =', payload.userName);
+    console.log('📤 Создание заказа от имени:', creatorName);
 
     const res = await fetch('/api/order', {
       method: 'POST',
@@ -170,6 +177,16 @@ const handleSubmit = async (e: React.FormEvent) => {
     const data = await res.json();
 
     if (data.success) {
+      const orderId = data.order?.id || data.id || '???';
+
+      // ==================== ЗАПИСЬ В ИСТОРИЮ ====================
+      const historyText = `Создал новую заявку #${orderId}`;
+      console.log('📝 Записываем в историю:', historyText);
+
+      if (typeof (window as any).addToHistoryGlobal === 'function') {
+        (window as any).addToHistoryGlobal(historyText);
+      }
+
       setShowSuccess(true);
       onOrderCreated?.();
 
