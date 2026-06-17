@@ -7,6 +7,7 @@ interface NewOrderModalProps {
   onClose: () => void;
   userId?: any;
   userName?: string;
+  currentUserName?: string;
   userPhone?: string;
   currentRole?: string;
   onOrderCreated?: () => void;
@@ -20,6 +21,7 @@ export default function NewOrderModal({
   onClose, 
   userId, 
   userName, 
+  currentUserName = 'Сотрудник',
   userPhone, 
   currentRole = 'admin',
   onOrderCreated,
@@ -125,71 +127,66 @@ useEffect(() => {
   const totalPrice = concreteCost + deliveryCost;
 
     // ==================== ОБРАБОТКА ОТПРАВКИ ЗАКАЗА ====================
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userId) return alert('Клиент не выбран');
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!userId) return alert('Клиент не выбран');
 
-    setIsSubmitting(true);
+  setIsSubmitting(true);
 
-    // ================================================
-    // ПОДГОТОВКА PAYLOAD ДЛЯ API
-    // ================================================
-    const payload = {
-      userId,                                      // ID клиента (очень важно!)
-      grade: form.grade,
-      volume: Number(form.volume),
-      deliveryDate: form.deliveryDate,
-      deliveryTime: form.deliveryTime,
-      address: form.address,
-      customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
-      fullName: form.fullName,
-      phone: form.phone,
-      organizationName: form.organizationName,
-      inn: form.inn,
-      totalPrice,
-      concreteCost,
-      deliveryCost,
-      comment: form.comment,
+  const payload = {
+    userId,
+    grade: form.grade,
+    volume: Number(form.volume),
+    deliveryDate: form.deliveryDate,
+    deliveryTime: form.deliveryTime,
+    address: form.address,
+    customerType: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
+    fullName: form.fullName,
+    
+    phone: form.phone,
+    organizationName: form.organizationName,
+    inn: form.inn,
+    totalPrice,
+    concreteCost,
+    deliveryCost,
+    comment: form.comment,
 
-      // ==================== КРИТИЧНЫЕ ФЛАГИ ДЛЯ API ====================
-      isFromAdmin: true,           // ← Сообщаем, что заявка создана менеджером
-      source: 'admin',             // ← Дополнительный идентификатор источника
-      userRole: currentRole || 'admin',
-      userName: currentRole === 'admin' ? 'Администратор' :
-                currentRole === 'manager' ? 'Менеджер' :
-                currentRole === 'dispatcher' ? 'Диспетчер' :
-                currentRole === 'logist' ? 'Логист' : 'Сотрудник',
-    };
-
-    try {
-      console.log('📤 Отправка заявки в API:', payload);
-
-      const res = await fetch('/api/order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-
-      if (data.success) {
-        setShowSuccess(true);
-        onOrderCreated?.();
-
-        setTimeout(() => {
-          setShowSuccess(false);
-          onClose();
-        }, 1400);
-      } else {
-        alert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
-      }
-    } catch (err) {
-      console.error('❌ Ошибка при создании заказа:', err);
-      alert('Ошибка соединения с сервером');
-    } finally {
-      setIsSubmitting(false);
-    }
+    // ==================== КРИТИЧНЫЕ ДАННЫЕ ДЛЯ ИСТОРИИ ====================
+    isFromAdmin: true,
+    source: 'admin',
+    userRole: currentRole || 'admin',
+    userName: userName || 'Сотрудник',        // ← Теперь берём реальное имя из пропсов
   };
+
+  try {
+    console.log('📤 Создание заказа. userName =', payload.userName);
+
+    const res = await fetch('/api/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      setShowSuccess(true);
+      onOrderCreated?.();
+
+      setTimeout(() => {
+        setShowSuccess(false);
+        onClose();
+      }, 1400);
+    } else {
+      alert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
+    }
+  } catch (err) {
+    console.error('❌ Ошибка при создании заказа:', err);
+    alert('Ошибка соединения с сервером');
+  } finally {
+    setIsSubmitting(false);
+  }
+};
 
   if (!isOpen) return null;
 

@@ -12,18 +12,22 @@ export async function POST(request: NextRequest) {
     console.log('🔍 [Role API] Received userId:', userId);
 
     if (!userId) {
-      return NextResponse.json({ success: true, role: 'client' });
+      return NextResponse.json({ 
+        success: true, 
+        role: 'client',
+        full_name: 'Сотрудник' 
+      });
     }
 
     const parsedUserId = parseInt(userId.toString(), 10);
 
-    // Устанавливаем контекст
+    // Устанавливаем контекст пользователя
     await supabase.rpc('set_current_user_id', { p_user_id: parsedUserId });
 
-    // Прямой запрос
+    // Получаем роль + имя + версию логаута
     const { data, error } = await supabase
       .from('users')
-      .select('role')
+      .select('role, full_name, username, force_logout_version')
       .eq('user_id', parsedUserId)
       .maybeSingle();
 
@@ -35,12 +39,25 @@ export async function POST(request: NextRequest) {
     }
 
     const role = data?.role || 'client';
-    console.log(`✅ [Role API] Final role for ${parsedUserId}: ${role}`);
+    const full_name = data?.full_name || data?.username || 'Сотрудник';
+    const forceLogoutVersion = data?.force_logout_version || 0;
 
-    return NextResponse.json({ success: true, role });
+    console.log(`✅ [Role API] Final role for ${parsedUserId}: ${role} | name: ${full_name}`);
+
+    return NextResponse.json({ 
+      success: true, 
+      role,
+      full_name,
+      forceLogoutVersion 
+    });
 
   } catch (e: any) {
     console.error('💥 Role API crash:', e);
-    return NextResponse.json({ success: true, role: 'client' });
+    return NextResponse.json({ 
+      success: true, 
+      role: 'client', 
+      full_name: 'Сотрудник',
+      forceLogoutVersion: 0 
+    });
   }
 }

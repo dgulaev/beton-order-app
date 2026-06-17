@@ -10,16 +10,15 @@ const supabase = createClient(
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { id, userRole, ...updateData } = body;
+    const { id, userRole, userName, ...updateData } = body;
 
-    // ==================== 1. ПРОВЕРКА ВХОДНЫХ ДАННЫХ ====================
     if (!id) {
       return NextResponse.json({ success: false, message: 'ID заявки обязателен' }, { status: 400 });
     }
 
     console.log('🔄 [Update API] Получена роль от фронта:', userRole);
 
-    // ==================== 2. ПОЛУЧЕНИЕ ТЕКУЩЕЙ ЗАЯВКИ ====================
+    // ==================== 1. ПОЛУЧЕНИЕ ТЕКУЩЕЙ ЗАЯВКИ ====================
     const { data: currentOrder, error: fetchError } = await supabase
       .from('orders')
       .select('*')
@@ -30,21 +29,28 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'Заявка не найдена' }, { status: 404 });
     }
 
+    // ==================== 2. ЗАПРЕТ ИЗМЕНЕНИЯ СТАТУСА ДЛЯ ФИНАЛЬНЫХ ЗАЯВОК ====================
+    const finalStatuses = ['completed', 'cancelled'];
+
+    if (finalStatuses.includes(currentOrder.status) && updateData.status !== undefined) {
+      // Если пытаются изменить статус — запрещаем
+      delete updateData.status; // удаляем статус из обновления
+      console.log('⚠️ Попытка изменить статус финальной заявки — отклонено');
+    }
+
     // ==================== 3. ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
     const changes: any[] = [];
     
     const finalUserRole = userRole || 'unknown';
-    const userName = body.userName || finalUserRole || 'Администратор';
+    const finalUserName = userName || 'Сотрудник';
 
     const fieldsToTrack = [
       'grade', 'volume', 'delivery_date', 'delivery_time',
       'address', 'phone', 'organization_name', 'full_name',
-      'inn', 'comment', 'status', 'is_questionable'   // ← Добавлено!
+      'inn', 'comment', 'status', 'is_questionable'
     ];
 
-    console.log(`🔄 Сравнение полей. Роль: ${finalUserRole} | Имя: ${userName}`);
-
-        for (const field of fieldsToTrack) {
+    for (const field of fieldsToTrack) {
       const oldValue = currentOrder[field];
       const newValue = updateData[field];
 
@@ -56,21 +62,16 @@ export async function PUT(request: NextRequest) {
       if (oldStr !== newStr) {
         let actionText = `Изменено поле ${field}`;
 
-        // Специальная обработка для "Под вопросом"
         if (field === 'is_questionable') {
-          if (newValue === true || newValue === 'true') {
-            actionText = 'Поставил метку "Под вопросом"';
-          } else {
-            actionText = 'Снял метку "Под вопросом"';
-          }
+          actionText = newValue ? 'Поставил метку "Под вопросом"' : 'Снял метку "Под вопросом"';
+        } else if (field === 'status') {
+          actionText = `Изменил статус на "${newStr}"`;
         }
-
-        console.log(`📝 ${actionText}: "${oldStr}" → "${newStr}"`);
 
         changes.push({
           order_id: id,
           action: actionText,
-          user_name: userName,
+          user_name: finalUserName,
           user_role: finalUserRole,
           field_name: field,
           old_value: oldStr || null,
@@ -85,17 +86,13 @@ export async function PUT(request: NextRequest) {
         .from('order_history')
         .insert(changes);
 
-      if (historyError) {
-        console.error('❌ Ошибка записи истории:', historyError);
-      } else {
-        console.log(`✅ Успешно записано ${changes.length} изменений от роли: ${finalUserRole}`);
-      }
+      if (historyError) console.error('❌ Ошибка записи истории:', historyError);
     }
 
     // ==================== 4. ОБНОВЛЕНИЕ ЗАЯВКИ ====================
     const { error: updateError } = await supabase
       .from('orders')
-      .update(updateData)                    // ← Теперь обновляем всё, что пришло
+      .update(updateData)
       .eq('id', id);
 
     if (updateError) {

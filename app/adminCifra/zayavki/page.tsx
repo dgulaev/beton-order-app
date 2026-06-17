@@ -15,6 +15,9 @@ export default function ZayavkiPage() {
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
   const [newOrderInitialData, setNewOrderInitialData] = useState<any>(null);
   const [orderHistory, setOrderHistory] = useState<any[]>([]);
+  const [userFullName, setUserFullName] = useState<string>('');
+  const [currentRole, setCurrentRole] = useState<string>('');
+ 
   
   const [notificationSent, setNotificationSent] = useState(false);
   const [isSendingNotification, setIsSendingNotification] = useState(false);
@@ -76,56 +79,49 @@ const getStatusConfig = (status: string) => {
     }
   }, [loadOrderHistory]);
 
-                  // ==================== ЗАГРУЗКА РОЛИ И ИМЕНИ (ИСПРАВЛЕННЫЙ ВАРИАНТ) ====================
-  const [currentRole, setCurrentRole] = useState<string>('');
-  const [currentUserName, setCurrentUserName] = useState<string>('');
+                  // ==================== ЗАГРУЗКА РОЛИ И РЕАЛЬНОГО ИМЕНИ ====================
+useEffect(() => {
+  const loadRoleAndName = async () => {
+    const savedUserId = localStorage.getItem('userId');
+    if (!savedUserId) {
+      setCurrentRole('admin');
+      setUserFullName('Сотрудник');
+      return;
+    }
 
-  useEffect(() => {
-    const loadRole = async () => {
-      console.log('🔄 [Role Loader] Запуск загрузки роли...');
+    try {
+      const res = await fetch('/api/user/role', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: savedUserId }),
+        cache: 'no-store'
+      });
 
-      // 1. Очистка старых данных (на всякий случай)
-      const savedUserId = localStorage.getItem('userId');
-      const savedRole = localStorage.getItem('userRole');
-      const savedName = localStorage.getItem('userName');
+      if (res.ok) {
+        const data = await res.json();
+        const role = (data.role || 'admin').toLowerCase();
+        const name = data.full_name || data.username || data.name || 'Сотрудник';
 
-      console.log('📦 Из localStorage:', { userId: savedUserId, role: savedRole, name: savedName });
+        setCurrentRole(role);
+        setUserFullName(name);
 
-      // 2. Запрос к серверу (самое надёжное)
-      try {
-        const res = await fetch('/api/user/role', { 
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: savedUserId }),
-          cache: 'no-store',
-          credentials: 'include'
-        });
+        localStorage.setItem('userRole', role);
+        localStorage.setItem('userName', name);
 
-        if (res.ok) {
-          const data = await res.json();
-          const role = (data.role || 'client').toLowerCase();
-          const name = data.full_name || data.username || data.name || 'Пользователь';
-
-          setCurrentRole(role);
-          setCurrentUserName(name);
-
-          // Сохраняем в localStorage
-          localStorage.setItem('userRole', role);
-          localStorage.setItem('userName', name);
-
-          console.log('✅ Роль успешно загружена:', role, '| Имя:', name);
-        } else {
-          console.warn('⚠️ API /api/user/role вернул ошибку');
-          setCurrentRole('client');
-        }
-      } catch (err) {
-        console.error('❌ Ошибка запроса роли:', err);
-        setCurrentRole('client');
+        console.log(`✅ Загружено: ${name} (${role})`);
+      } else {
+        setCurrentRole('admin');
+        setUserFullName('Сотрудник');
       }
-    };
+    } catch (err) {
+      console.error('❌ Ошибка загрузки роли/имени:', err);
+      setCurrentRole('admin');
+      setUserFullName('Сотрудник');
+    }
+  };
 
-    loadRole();
-  }, []);
+  loadRoleAndName();
+}, []);
 
   // ==================== УДАЛЕНИЕ ЗАЯВКИ ====================
   const handleDeleteOrder = async (orderId: number) => {
@@ -1575,54 +1571,56 @@ ${order.customer_type?.includes('Юридическое')
       { hasManagerPermissions(currentRole) && (
         <>
                               {/* Сохранить изменения */}
-          <button 
-            onClick={async () => {
-              const updatedOrder = { ...selectedOrder };
+<button 
+  onClick={async () => {
+    console.log('🟡 Сохраняем. userFullName =', userFullName);   // ← Добавили
 
-              try {
-                const res = await fetch('/api/adminCifra/orders/update', {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    ...selectedOrder,
-                   userRole: currentRole || 'admin',
-                   
-                  })
-                });
+    const updatedOrder = { ...selectedOrder };
 
-                if (res.ok) {
-                  alert('✅ Изменения успешно сохранены!');
-                  
-                  setAllOrders(prev => 
-                    prev.map(order => 
-                      String(order.id) === String(selectedOrder.id) ? updatedOrder : order
-                    )
-                  );
+    try {
+      const payload = {
+        id: selectedOrder.id,
+        ...selectedOrder,
+        userRole: currentRole || 'admin',
+        userName: userFullName || 'Сотрудник'
+      };
 
-                  loadOrderHistory(selectedOrder.id);
-                } else {
-                  alert('Ошибка сохранения изменений');
-                }
-              } catch (err) {
-                console.error(err);
-                alert('Ошибка соединения с сервером');
-              }
-            }}
-            style={{ 
-              padding: '10px 24px', 
-              background: '#10B981', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '9999px', 
-              fontWeight: '600',
-              fontSize: '15px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            💾 Сохранить
-          </button>
+      console.log('📤 Отправляем в API payload.userName =', payload.userName);   // ← Добавили
+
+      const res = await fetch('/api/adminCifra/orders/update', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        alert('✅ Изменения успешно сохранены!');
+        setAllOrders(prev => prev.map(order => String(order.id) === String(selectedOrder.id) ? updatedOrder : order));
+        if (typeof loadOrderHistory === 'function') loadOrderHistory(selectedOrder.id);
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        alert(errorData.message || 'Ошибка сохранения');
+      }
+    } catch (err) {
+      console.error('Ошибка сохранения:', err);
+      alert('Ошибка соединения с сервером');
+    }
+  }}
+  style={{ 
+    padding: '10px 24px', 
+    background: '#10B981', 
+    color: 'white', 
+    border: 'none', 
+    borderRadius: '9999px', 
+    fontWeight: '600',
+    fontSize: '15px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px'
+  }}
+>
+  💾 Сохранить
+</button>
 
           {/* Удалить заявку */}
           <button 
@@ -1728,21 +1726,22 @@ ${order.customer_type?.includes('Юридическое')
 
 
            {showNewOrderModal && (
-        <NewOrderModal 
-          onClose={() => {
-            setShowNewOrderModal(false);
-            setNewOrderInitialData(null);
-          }} 
-          onSuccess={(newOrder) => {
-            if (newOrder) {
-              setAllOrders(prev => [newOrder, ...prev]);
-            }
-          }} 
-          initialData={newOrderInitialData}
-          defaultDeliveryDate={selectedDateStr}
-          currentRole={currentRole}           // ← Добавлено для правильной записи в историю
-        />
-      )}
+  <NewOrderModal 
+    onClose={() => {
+      setShowNewOrderModal(false);
+      setNewOrderInitialData(null);
+    }} 
+    onSuccess={(newOrder) => {
+      if (newOrder) {
+        setAllOrders(prev => [newOrder, ...prev]);
+      }
+    }} 
+    initialData={newOrderInitialData}
+    defaultDeliveryDate={selectedDateStr}
+    currentRole={currentRole}
+    currentUserName={userFullName || 'Сотрудник'}   // ← Реальное имя
+  />
+)}
     </div>
     </div>
   );

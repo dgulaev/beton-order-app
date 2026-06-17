@@ -4,11 +4,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell, CheckCircle } from 'lucide-react';
 
-
-// === ИСПРАВЛЕННЫЙ ИМПОРТ REACT ===
 import { useEffect, useState, useRef } from 'react';
 
-import { createClient } from '@/app/utils/supabase/client';
 import Image from 'next/image';
 
 export default function AdminCifraLayout({ children }: { children: React.ReactNode }) {
@@ -20,71 +17,152 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const [loading, setLoading] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(true);
 
+  // ==================== 1.1 НОВОЕ: СОСТОЯНИЕ АВТОРИЗАЦИИ ====================
+const [isLoggedIn, setIsLoggedIn] = useState(false);
+const [phone, setPhone] = useState('');
+const [password, setPassword] = useState('');
+const [loginLoading, setLoginLoading] = useState(false);
+const [loginError, setLoginError] = useState('');
+
+// ==================== 1.2 РОЛЬ GUEST ====================
+const isGuest = userRole === 'guest';
+
   // ==================== 2. СОСТОЯНИЯ УВЕДОМЛЕНИЙ ====================
-const [newOrdersCount, setNewOrdersCount] = useState(0);
-const [lastNotificationId, setLastNotificationId] = useState<number | null>(null);
+  const [newOrdersCount, setNewOrdersCount] = useState(0);
+  const [lastNotificationId, setLastNotificationId] = useState<number | null>(null);
 
-// ==================== 2.1 СОСТОЯНИЕ УВЕДОМЛЕНИЙ ПО КЛИЕНТАМ ====================
-const [clientReminders, setClientReminders] = useState<any[]>([]);
+  // ==================== 2.1 СОСТОЯНИЕ УВЕДОМЛЕНИЙ ПО КЛИЕНТАМ ====================
+  const [clientReminders, setClientReminders] = useState<any[]>([]);
 
-const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-// Для удобного тестирования в консоли
-useEffect(() => {
-  (window as any).showVisualNotification = showVisualNotification;
-  console.log('✅ window.showVisualNotification доступна');
-}, []);
-
-// Для тестирования звука в консоли
+  // ==================== 2.2 ИНИЦИАЛИЗАЦИЯ ЗВУКА ====================
   useEffect(() => {
-    (window as any).playNotificationSound = playNotificationSound;
-    console.log('✅ playNotificationSound доступна в консоли');
+    audioRef.current = new Audio('/sounds/new-order.mp3');
+    if (audioRef.current) {
+      audioRef.current.volume = 0.9;
+    }
   }, []);
 
-// ==================== 2.2 ИНИЦИАЛИЗАЦИЯ ЗВУКА ====================
+  const playNotificationSound = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = 0;
+    audio.play().catch((err) => {
+      console.log('Звук заблокирован браузером (нормально):', err.message);
+    });
+  };
+
+  // ==================== 3. ПРОВЕРКА АВТОРИЗАЦИИ И FORCE LOGOUT ====================
 useEffect(() => {
-  audioRef.current = new Audio('/sounds/new-order.mp3');
-  if (audioRef.current) {
-    audioRef.current.volume = 0.9;
+  const savedUserId = localStorage.getItem('userId');
+  
+  if (!savedUserId) {
+    setIsLoggedIn(false);
+    setLoading(false);
+    return;
   }
+
+  setIsLoggedIn(true);
+  checkUserRole(savedUserId);
+
+  // === ПОЛИНГ ПРИНУДИТЕЛЬНОГО ВЫХОДА ===
+  // Для продакшена делаем проверку раз в 30 минут, чтобы не создавать лишнюю нагрузку на базу
+  const forceCheckInterval = setInterval(() => {
+    const currentUserId = localStorage.getItem('userId');
+    if (currentUserId) {
+      checkUserRole(currentUserId);
+    }
+  }, 1800000); // 30 минут = 1 800 000 миллисекунд
+
+  return () => clearInterval(forceCheckInterval);
 }, []);
 
-const playNotificationSound = () => {
-  const audio = audioRef.current;
-  if (!audio) return;
-
-  audio.currentTime = 0;
-  audio.play().catch((err) => {
-    console.log('Звук заблокирован браузером (нормально):', err.message);
-  });
-};
-  
-
-  // ==================== 3. ПРОВЕРКА РОЛИ ====================
-  useEffect(() => {
-    const savedUserId = localStorage.getItem('userId');
-    if (!savedUserId) {
-      setLoading(false);
-      return;
-    }
-
-    fetch('/api/user/role', {
+const checkUserRole = async (savedUserId: string) => {
+  try {
+    const res = await fetch('/api/user/role', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId: parseInt(savedUserId) }),
-    })
-      .then(res => res.json())
-      .then(data => setUserRole(data.role || 'client'))
-      .catch(() => setUserRole('client'))
-      .finally(() => setLoading(false));
-  }, []);
+    });
+
+    const data = await res.json();
+
+    // === ПРИНУДИТЕЛЬНЫЙ ВЫХОД ===
+    if (data.forceLogoutVersion && data.forceLogoutVersion >= 9999) {
+      
+      // Главный Админ (user_id = 1777619517739) может входить всегда
+      if (parseInt(savedUserId) === 1777619517739) {
+        console.log('✅ Главный Админ — разрешаем вход несмотря на force_logout_version');
+        setUserRole(data.role || 'admin');
+        return;
+      } 
+      
+      // Все остальные сотрудники выкидываются автоматически
+      console.log(`🔴 Принудительный выход для пользователя ${savedUserId}`);
+      localStorage.removeItem('userId');
+      setIsLoggedIn(false);
+      setUserRole(null);
+      window.location.reload();
+      return;
+    }
+
+    setUserRole(data.role || 'client');
+
+  } catch (e) {
+    console.error('Role check error:', e);
+    setUserRole('client');
+  } finally {
+    setLoading(false);
+  }
+};
+
   // ==================== 3.1 ОЧИСТКА СТАРЫХ ЗАКРЫТЫХ УВЕДОМЛЕНИЙ ====================
   useEffect(() => {
-  const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
-  if (closed.length > 50) {
-    localStorage.setItem('closedNotifications', JSON.stringify(closed.slice(-30)));
-   }
+    const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
+    if (closed.length > 50) {
+      localStorage.setItem('closedNotifications', JSON.stringify(closed.slice(-30)));
+    }
   }, []);
+
+  // ==================== 4. ВХОД ====================
+const handleLogin = async (e: React.FormEvent) => {
+  e.preventDefault();
+  setLoginLoading(true);
+  setLoginError('');
+
+  try {
+    const res = await fetch('/api/auth/admin-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, password }),
+    });
+
+    const data = await res.json();
+
+    if (data.success && data.userId) {
+      localStorage.setItem('userId', data.userId.toString());
+      
+      console.log('✅ Логин успешен, обновляем состояние');
+      
+      setIsLoggedIn(true);
+      setUserRole(data.role);
+      setPhone('');
+      setPassword('');
+      
+      // Жёсткая перезагрузка страницы
+      window.location.reload();
+      
+    } else {
+      setLoginError(data.message || 'Неверный телефон или пароль');
+    }
+  } catch (err) {
+    console.error('Login error:', err);
+    setLoginError('Ошибка соединения с сервером');
+  } finally {
+    setLoginLoading(false);
+  }
+};
 
 
   // ==================== 4.2 УВЕДОМЛЕНИЕ ПО КЛИЕНТУ (НОВЫЙ БЛОК) ====================
@@ -149,7 +227,7 @@ const playNotificationSound = () => {
     document.body.appendChild(notif);
     playNotificationSound();
   };
-// ==================== БЛОК 4.1 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
+// ==================== БЛОК 4.3 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
 const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', orderData?: any, oldData?: any) => {
   const orderId = orderData?.id || '—';
 
@@ -254,6 +332,14 @@ const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', 
   document.body.appendChild(notif);
 };
 
+// ==================== 4.4 ПРИСВОЕНИЕ ФУНКЦИЙ В WINDOW (ВАЖНО!) ====================
+useEffect(() => {
+  (window as any).showVisualNotification = showVisualNotification;
+  (window as any).playNotificationSound = playNotificationSound;
+  
+  console.log('✅ window.showVisualNotification и playNotificationSound доступны');
+}, []); // пустой массив — выполняется один раз
+
  // ==================== БЛОК 5. УЛУЧШЕННЫЙ POLLING (ФИКС ПОВТОРНЫХ УВЕДОМЛЕНИЙ) ====================
 useEffect(() => {
   if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) {
@@ -341,7 +427,7 @@ useEffect(() => {
   };
 
   const initialTimer = setTimeout(checkOrders, 1500);
-  const interval = setInterval(checkOrders, 5000);
+  const interval = setInterval(checkOrders, 10000);
 
   return () => {
     clearTimeout(initialTimer);
@@ -399,6 +485,7 @@ useEffect(() => {
 
 }, [userRole]);
 
+
   // ==================== 6. СБРОС СЧЁТЧИКА ====================
   useEffect(() => {
     if (pathname === '/adminCifra/zayavki') {
@@ -410,10 +497,128 @@ useEffect(() => {
     return <div style={{ padding: '100px', textAlign: 'center', background: '#0F172A', color: '#94A3B8', minHeight: '100vh' }}>Загрузка...</div>;
   }
 
-  const allowedRoles = ['admin', 'manager', 'dispatcher', 'operator'];
-  if (!userRole || !allowedRoles.includes(userRole)) {
-    return <div style={{ padding: '100px', textAlign: 'center', background: '#0F172A', color: '#94A3B8' }}>Доступ запрещён</div>;
+
+  // ==================== ФОРМА ВХОДА (если не авторизован) ====================
+  if (!isLoggedIn) {
+    return (
+      <div style={{
+        minHeight: '100vh',
+        backgroundColor: '#0F172A',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#fff',
+        padding: '20px'
+      }}>
+        <div style={{
+          background: '#1E2937',
+          padding: '40px 30px',
+          borderRadius: '20px',
+          width: '100%',
+          maxWidth: '420px',
+          boxShadow: '0 10px 30px rgba(0,0,0,0.3)'
+        }}>
+          <h1 style={{ textAlign: 'center', marginBottom: '8px' }}>ТрейдКом • Вход</h1>
+          <p style={{ textAlign: 'center', color: '#94A3B8', marginBottom: '30px' }}>
+            Войдите в систему
+          </p>
+
+          <form onSubmit={handleLogin}>
+            <input
+              type="tel"
+              placeholder="+7 (___) ___-__-__"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              style={{
+                width: '90%',
+                padding: '16px',
+                marginBottom: '16px',
+                borderRadius: '12px',
+                border: '1px solid #334155',
+                background: '#0F172A',
+                color: '#fff',
+                fontSize: '17px'
+              }}
+              required
+            />
+            <input
+              type="password"
+              placeholder="Пароль"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={{
+                width: '90%',
+                padding: '16px',
+                marginBottom: '24px',
+                borderRadius: '12px',
+                border: '1px solid #334155',
+                background: '#0F172A',
+                color: '#fff',
+                fontSize: '17px'
+              }}
+              required
+            />
+
+            {loginError && (
+              <p style={{ color: '#ef4444', textAlign: 'center', marginBottom: '16px' }}>{loginError}</p>
+            )}
+
+            <button
+              type="submit"
+              disabled={loginLoading}
+              style={{
+                width: '98%',
+                padding: '16px',
+                background: loginLoading ? '#475569' : '#22c55e',
+                color: 'white',
+                border: 'none',
+                borderRadius: '12px',
+                fontSize: '17px',
+                fontWeight: '600',
+                cursor: loginLoading ? 'not-allowed' : 'pointer'
+              }}
+            >
+              {loginLoading ? 'Вход...' : 'Войти'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
   }
+
+  // ==================== 4.1 КНОПКА "ВЫКИНУТЬ ВСЕХ" ====================
+const forceLogoutAll = async () => {
+  if (!confirm('Вы уверены, что хотите выкинуть ВСЕХ сотрудников?\n\nОни будут вынуждены заново ввести пароль.')) {
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/adminCifra/force-logout-all', { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: 1777619517739 }) // твой user_id
+    });
+
+    const data = await res.json();
+
+    if (data.success) {
+      alert('✅ Все сотрудники успешно выкинуты из системы!');
+      window.location.reload();
+    } else {
+      alert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
+    }
+  } catch (err) {
+    alert('Ошибка соединения с сервером');
+  }
+};
+
+
+  // ==================== ПРОВЕРКА РОЛЕЙ ====================
+const allowedRoles = ['admin', 'manager', 'dispatcher', 'operator', 'guest'];
+
+if (!userRole || !allowedRoles.includes(userRole)) {
+  return <div style={{ padding: '100px', textAlign: 'center', background: '#0F172A', color: '#94A3B8' }}>Доступ запрещён</div>;
+}
 
   // ==================== 7. ГЛОБАЛЬНЫЙ МАСШТАБ ====================
   const getGlobalScale = () => {
@@ -565,6 +770,34 @@ useEffect(() => {
                     <DollarSign size={22} /> {!isCollapsed && <span>Выводы наличных</span>}
                   </Link>
                 )}
+                {/* ==================== БЛОК 9.2: КНОПКА "ВЫКИНУТЬ ВСЕХ" ==================== */}
+{(userRole === 'admin') && (
+  <button 
+    onClick={forceLogoutAll}
+    style={{
+      width: isCollapsed ? '25px' : '100%',
+      height: isCollapsed ? '25px' : 'auto',
+      padding: isCollapsed ? '0' : '16px 16px',
+      background: '#22c55e',
+      color: '#fff',
+      border: 'none',
+      borderRadius: isCollapsed ? '9999px' : '12px',
+      fontSize: isCollapsed ? '20px' : '15px',
+      fontWeight: '600',
+      cursor: 'pointer',
+      marginTop: '8px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginLeft: isCollapsed ? 'auto' : '0',
+      marginRight: isCollapsed ? 'auto' : '0',
+      transition: 'all 0.2s',
+    }}
+    title="Разлогинуть всех"
+  >
+    {isCollapsed ? '' : 'Разлогинуть всех'}
+  </button>
+)}
               </>
             )}
           </nav>

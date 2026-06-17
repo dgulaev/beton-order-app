@@ -31,6 +31,7 @@ export default function ClientsPage() {
   const [isLoadingDadata, setIsLoadingDadata] = useState(false);
   const [isNewClientModalOpen, setIsNewClientModalOpen] = useState(false);
   const [currentRole, setCurrentRole] = useState<string>('admin');
+  const [userFullName, setUserFullName] = useState<string>('');
   const [callHistory, setCallHistory] = useState<any[]>([]);
  
   
@@ -126,34 +127,49 @@ useEffect(() => {
   fetchAllUsers();
 }, []);
 
-    // ==================== ЗАГРУЗКА РОЛИ ====================
-  useEffect(() => {
-    const loadRole = async () => {
-      const savedRole = localStorage.getItem('userRole');
-      if (savedRole) {
-        setCurrentRole(savedRole.toLowerCase());
-        return;
+    // ==================== ЗАГРУЗКА РОЛИ + РЕАЛЬНОГО ИМЕНИ ====================
+useEffect(() => {
+  const loadRoleAndName = async () => {
+    const savedUserId = localStorage.getItem('userId');
+    if (!savedUserId) {
+      setCurrentRole('admin');
+      setUserFullName('Сотрудник');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/user/role', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: savedUserId }),
+        cache: 'no-store'
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const role = (data.role || 'admin').toLowerCase();
+        const name = data.full_name || data.username || data.name || 'Сотрудник';
+
+        setCurrentRole(role);
+        setUserFullName(name);
+
+        localStorage.setItem('userRole', role);
+        localStorage.setItem('userName', name);
+
+        console.log(`✅ Загружено в ClientsPage: ${name} (${role})`);
+      } else {
+        setCurrentRole('admin');
+        setUserFullName('Сотрудник');
       }
+    } catch (err) {
+      console.error('❌ Ошибка загрузки роли/имени:', err);
+      setCurrentRole('admin');
+      setUserFullName('Сотрудник');
+    }
+  };
 
-      try {
-        const res = await fetch('/api/user/role', { 
-          method: 'POST',
-          cache: 'no-store'
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          const role = (data.role || 'admin').toLowerCase();
-          setCurrentRole(role);
-          localStorage.setItem('userRole', role);
-        }
-      } catch (err) {
-        console.error('Ошибка загрузки роли:', err);
-      }
-    };
-
-    loadRole();
-  }, []);
+  loadRoleAndName();
+}, []);
 
   // ==================== 2.1 АВТООТКРЫТИЕ КЛИЕНТА ИЗ УВЕДОМЛЕНИЯ ====================
 useEffect(() => {
@@ -1903,7 +1919,7 @@ window.callClient = (clientId: number | string) => {
                   setEditingClient(newClients);
                   if (value.length === 10 || value.length === 12) fetchByInn(value, index);
                 }}
-                style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }}
+                style={{ width: '96%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }}
               />
             </div>
 
@@ -1912,14 +1928,14 @@ window.callClient = (clientId: number | string) => {
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Название организации</label>
               <input value={client.organization_name || ''} onChange={(e) => {
                 const newClients = [...editingClient]; newClients[index].organization_name = e.target.value; setEditingClient(newClients);
-              }} style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+              }} style={{ width: '96%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
             </div>
 
             <div style={{ gridColumn: '1 / -1' }}>
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>ФИО</label>
               <input value={client.full_name || ''} onChange={(e) => {
                 const newClients = [...editingClient]; newClients[index].full_name = e.target.value; setEditingClient(newClients);
-              }} style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+              }} style={{ width: '96%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
             </div>
 
             {/* Телефон и Адрес */}
@@ -1927,14 +1943,14 @@ window.callClient = (clientId: number | string) => {
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Телефон</label>
               <input value={client.phone || ''} onChange={(e) => {
                 const newClients = [...editingClient]; newClients[index].phone = e.target.value; setEditingClient(newClients);
-              }} style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+              }} style={{ width: '90%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
             </div>
 
             <div>
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Адрес</label>
               <input value={client.address || ''} onChange={(e) => {
                 const newClients = [...editingClient]; newClients[index].address = e.target.value; setEditingClient(newClients);
-              }} style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+              }} style={{ width: '92%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
             </div>
 
             {/* Новые поля из презентации Цифра */}
@@ -1963,7 +1979,7 @@ window.callClient = (clientId: number | string) => {
                   newClients[index].last_contact = e.target.value ? e.target.value + 'T00:00:00Z' : null;
                   setEditingClient(newClients);
                 }}
-                style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+                style={{ width: '90%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
             </div>
 
             <div>
@@ -1974,7 +1990,7 @@ window.callClient = (clientId: number | string) => {
                   newClients[index].next_contact = e.target.value ? e.target.value + 'T00:00:00Z' : null;
                   setEditingClient(newClients);
                 }}
-                style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+                style={{ width: '92%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
             </div>
 
             <div>
@@ -2015,14 +2031,18 @@ window.callClient = (clientId: number | string) => {
     }}
     initialData={newOrderData}
     userId={newOrderData?.user_id || selectedProfile?.clients?.[0]?.user_id || selectedProfile?.user_id || selectedProfile?.id || ''}
+    
+    
     userName={newOrderData?.organizationName || newOrderData?.fullName || 
               selectedProfile?.organization_name || selectedProfile?.full_name || ''}
+    
     userPhone={newOrderData?.phone || selectedProfile?.phones?.[0] || selectedProfile?.phone || ''}
     
-    // ←←← Добавляем сюда историю
-    orderHistory={userOrders}
-    callHistory={callHistory || []}
+    currentRole={currentRole}
     
+    
+    currentUserName={userFullName || 'Сотрудник'}     // ← Изменили название пропса!
+
     onOrderCreated={() => {
       setIsNewOrderModalOpen(false);
       setNewOrderData(null);
@@ -2172,7 +2192,7 @@ window.callClient = (clientId: number | string) => {
               border: 'none', 
               borderRadius: '12px', 
               color: '#fff',
-              width: '100%'
+              width: '95%'
             }}
           />
 

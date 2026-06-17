@@ -22,6 +22,7 @@ export default function AdminCifraDashboard() {
   const [userId, setUserId] = useState<number | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [loadingRole, setLoadingRole] = useState(true);
+  const [userFullName, setUserFullName] = useState<string>('');
 
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
@@ -54,35 +55,34 @@ export default function AdminCifraDashboard() {
  const [history, setHistory] = useState<any[]>([]);
  const [currentUser, setCurrentUser] = useState<{ id: number; name?: string; role: string } | null>(null);
 
-      // ==================== 3. ДОБАВЛЕНИЕ В ИСТОРИЮ (с красивым названием роли) ====================
-  const addToHistory = async (action: string) => {
-    if (!selectedOrder) return;
+      // ==================== ДОБАВЛЕНИЕ В ИСТОРИЮ (реальное имя) ====================
+const addToHistory = async (action: string) => {
+  if (!selectedOrder?.id) return;
 
-    const displayRole = getRoleDisplayName(userRole);        // ← красивое название
-    const displayName = displayRole;                         // используем роль как имя
+  try {
+    const res = await fetch('/api/adminCifra/order-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        order_id: selectedOrder.id,
+        action: action,
+        user_name: userFullName || 'Сотрудник',     // ← реальное имя
+        user_role: userRole || 'admin'
+      })
+    });
 
-    try {
-      await fetch('/api/adminCifra/order-history', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          order_id: selectedOrder.id,
-          action: action,
-          user_name: displayName,           // ← теперь всегда красивое название
-          user_role: userRole || 'admin'
-        })
-      });
-
-      // Обновляем историю
-      const res = await fetch(`/api/adminCifra/order-history?orderId=${selectedOrder.id}`);
-      if (res.ok) {
-        const data = await res.json();
+    if (res.ok) {
+      // Обновляем историю сразу
+      const histRes = await fetch(`/api/adminCifra/order-history?orderId=${selectedOrder.id}`);
+      if (histRes.ok) {
+        const data = await histRes.json();
         setHistory(data);
       }
-    } catch (err) {
-      console.error('Не удалось добавить в историю:', err);
     }
-  };
+  } catch (err) {
+    console.error('Не удалось добавить в историю:', err);
+  }
+};
 
     // ==================== 4. ЗАГРУЗКА НАЗНАЧЕННЫХ МИКСЕРОВ ====================
   useEffect(() => {
@@ -331,23 +331,40 @@ const completionPercent = planToday > 0
     if (saved) setUserId(parseInt(saved, 10));
   }, []);
 
-  // ==================== ЗАГРУЗКА РОЛИ ====================
-  useEffect(() => {
-    if (!userId) {
-      setLoadingRole(false);
-      return;
-    }
+ // ==================== ЗАГРУЗКА РОЛИ + ИМЕНИ ====================
+useEffect(() => {
+  if (!userId) {
+    setLoadingRole(false);
+    return;
+  }
 
-    fetch('/api/user/role', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId }),
+  fetch('/api/user/role', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId }),
+  })
+    .then(r => r.json())
+    .then(data => {
+      console.log('📥 Данные от /api/user/role:', data); // ← для отладки
+
+      setUserRole(data.role || 'client');
+      
+      // Берём имя из full_name
+      if (data.full_name) {
+        setUserFullName(data.full_name);
+      } else if (data.username) {
+        setUserFullName(data.username);
+      } else {
+        setUserFullName('Сотрудник');
+      }
     })
-      .then(r => r.json())
-      .then(data => setUserRole(data.role || 'client'))
-      .catch(() => setUserRole('client'))
-      .finally(() => setLoadingRole(false));
-  }, [userId]);
+    .catch((err) => {
+      console.error('Ошибка загрузки роли:', err);
+      setUserRole('client');
+      setUserFullName('Сотрудник');
+    })
+    .finally(() => setLoadingRole(false));
+}, [userId]);
 
   // ==================== ЗАГРУЗКА CURRENT USER ====================
   useEffect(() => {
@@ -493,7 +510,7 @@ const completionPercent = planToday > 0
     };
 
     refreshData();                    // сразу при загрузке
-    const interval = setInterval(refreshData, 12000); // ← каждые 12 секунд
+    const interval = setInterval(refreshData, 30000); // ← каждые 12 секунд
 
     return () => clearInterval(interval);
   }, []);
@@ -844,29 +861,39 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
     </div>
   </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-            {(userRole === 'admin' || userRole === 'manager') && notifications.length > 0 && (
-              <div 
-                style={{ 
-                  background: '#EF4444', 
-                  color: 'white', 
-                  padding: '12px 20px', 
-                  borderRadius: '9999px',
-                  fontWeight: '700',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  animation: 'pulse 2s infinite',
-                  cursor: 'pointer'
-                }}
-                onClick={() => window.location.href = '/adminCifra/withdrawals'}
-              >
-                ⚠️ {notifications.length} активных запросов на вывод наличных
-              </div>
-            )}
-            <div style={{ color: '#60A5FA', fontWeight: '500' }}>Роль: {userRole}</div>
-          </div>
-        </div>
+         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+  {(userRole === 'admin' || userRole === 'manager') && notifications.length > 0 && (
+    <div 
+      style={{ 
+        background: '#EF4444', 
+        color: 'white', 
+        padding: '12px 20px', 
+        borderRadius: '9999px',
+        fontWeight: '700',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        animation: 'pulse 2s infinite',
+        cursor: 'pointer'
+      }}
+      onClick={() => window.location.href = '/adminCifra/withdrawals'}
+    >
+      ⚠️ {notifications.length} активных запросов на вывод наличных
+    </div>
+  )}
+
+  {/* Имя сотрудника из full_name */}
+  <div style={{ 
+    color: '#60A5FA', 
+    fontWeight: '500',
+    background: 'rgba(96, 165, 250, 0.1)',
+    padding: '8px 16px',
+    borderRadius: '9999px'
+  }}>
+    👤 {userFullName || 'Сотрудник'}
+  </div>
+</div>
+</div>
 
        {/* ==================== KPI — РЕАЛЬНЫЕ ДАННЫЕ ==================== */}
         <div style={{ 

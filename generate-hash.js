@@ -1,7 +1,7 @@
 // generate-hash.js
 const bcrypt = require('bcryptjs');
 
-const password = "dag197126";   // ←←← ИЗМЕНИ НА СВОЙ ПАРОЛЬ
+const password = "guest2026";   // ←←← ИЗМЕНИ НА СВОЙ ПАРОЛЬ
 
 async function generateHash() {
   const saltRounds = 12;

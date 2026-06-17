@@ -1105,12 +1105,14 @@ const printTTN = (mixerId: number) => {
               {time}
             </div>
             
-            {/* Основная запись */}
+            {/* Основная запись — только имя */}
             <div style={{ flex: 1 }}>
-              <strong style={{ color: '#CBD5E1' }}>{entry.user_name}</strong>
-              <span style={{ color: '#94A3B8', marginLeft: '6px' }}>
+              <strong style={{ color: '#CBD5E1' }}>
+                {entry.user_name || 'Сотрудник'}
+              </strong>
+              <div style={{ marginTop: '4px', color: '#E2E8F0' }}>
                 {entry.action}
-              </span>
+              </div>
             </div>
           </div>
         );

@@ -7,7 +7,8 @@ interface NewOrderModalProps {
   onSuccess: (newOrder?: any) => void;
   initialData?: any;
   defaultDeliveryDate?: string;
-  currentRole?: string;           // ← Добавлено для правильной истории
+  currentRole?: string;
+  currentUserName?: string;        // ← должно быть
 }
 
 export default function NewOrderModal({ 
@@ -15,7 +16,8 @@ export default function NewOrderModal({
   onSuccess, 
   initialData = null,
   defaultDeliveryDate,
-  currentRole = 'admin'           // ← Добавлено с дефолтом
+  currentRole = 'admin',
+  currentUserName = 'Сотрудник'     // ← должно быть
 }: NewOrderModalProps) {
 
   // ==================== 1. СОСТОЯНИЯ ====================
@@ -214,10 +216,7 @@ export default function NewOrderModal({
       isFromAdmin: true,
       source: 'admin',
       userRole: currentRole || 'admin',
-      userName: currentRole === 'admin' ? 'Администратор' :
-                currentRole === 'manager' ? 'Менеджер' :
-                currentRole === 'dispatcher' ? 'Диспетчер' :
-                currentRole === 'logist' ? 'Логист' : 'Администратор',
+      userName: currentUserName,
     };
 
     try {

@@ -1,7 +1,7 @@
 // app/api/auth/admin-login/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import bcrypt from 'bcryptjs';   // ← нужно будет установить: npm install bcryptjs
+import bcrypt from 'bcryptjs';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -10,52 +10,75 @@ const supabase = createClient(
 
 export async function POST(request: NextRequest) {
   try {
-    const { username, password } = await request.json();
+    const { phone, password } = await request.json();
 
-    console.log('🔑 [Admin Login] Попытка входа по логину:', username);
-
-    if (!username || !password) {
-      return NextResponse.json({ success: false, message: 'Логин и пароль обязательны' }, { status: 400 });
+    if (!phone || !password) {
+      return NextResponse.json({ 
+        success: false, 
+        message: 'Телефон и пароль обязательны' 
+      }, { status: 400 });
     }
 
-    // Ищем пользователя по username
+    // Ищем пользователя по телефону
     const { data: user, error } = await supabase
       .from('users')
-      .select('user_id, role, username, password_hash, full_name, phone')
-      .eq('username', username.toLowerCase().trim())
+      .select('user_id, role, phone, password_hash, full_name, organization_name, force_logout_version')
+      .eq('phone', phone.trim())
       .single();
 
     if (error || !user) {
-      console.warn(`❌ Пользователь не найден: ${username}`);
-      return NextResponse.json({ success: false, message: 'Неверный логин или пароль' }, { status: 401 });
+      console.warn(`❌ Пользователь не найден по телефону: ${phone}`);
+      return NextResponse.json({ 
+        success: false, 
+        message: 'Неверный телефон или пароль' 
+      }, { status: 401 });
     }
 
     // Проверяем пароль
     const isPasswordValid = await bcrypt.compare(password, user.password_hash || '');
     if (!isPasswordValid) {
-      console.warn(`❌ Неверный пароль для: ${username}`);
-      return NextResponse.json({ success: false, message: 'Неверный логин или пароль' }, { status: 401 });
+      console.warn(`❌ Неверный пароль для телефона: ${phone}`);
+      return NextResponse.json({ 
+        success: false, 
+        message: 'Неверный телефон или пароль' 
+      }, { status: 401 });
     }
 
     // Проверка роли
-    const allowedRoles = ['admin', 'manager', 'dispatcher'];
+    const allowedRoles = ['admin', 'manager', 'dispatcher', 'operator', 'guest'];
     if (!user.role || !allowedRoles.includes(user.role)) {
-      return NextResponse.json({ success: false, message: 'Доступ запрещён' }, { status: 403 });
+      return NextResponse.json({ 
+        success: false, 
+        message: 'Доступ запрещён' 
+      }, { status: 403 });
     }
 
-    console.log(`✅ Успешный вход: ${username} (${user.role})`);
+    // === АВТОМАТИЧЕСКИЙ СБРОС force_logout_version ===
+    if (user.force_logout_version && user.force_logout_version >= 9999) {
+      await supabase
+        .from('users')
+        .update({ force_logout_version: 0 })
+        .eq('user_id', user.user_id);
+      
+      console.log(`🔄 Сброшен force_logout_version для пользователя ${user.user_id}`);
+    }
+
+    console.log(`✅ Успешный вход: ${user.full_name || user.organization_name} (${user.role})`);
 
     return NextResponse.json({
       success: true,
       userId: user.user_id,
       role: user.role,
-      name: user.full_name || user.phone || username,
-      username: user.username,
+      name: user.full_name || user.organization_name || user.phone,
+      phone: user.phone,
       message: 'Вход выполнен успешно'
     });
 
   } catch (error: any) {
     console.error('Admin login error:', error);
-    return NextResponse.json({ success: false, message: 'Ошибка сервера' }, { status: 500 });
+    return NextResponse.json({ 
+      success: false, 
+      message: 'Ошибка сервера' 
+    }, { status: 500 });
   }
 }
