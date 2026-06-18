@@ -227,7 +227,7 @@ const handleLogin = async (e: React.FormEvent) => {
     document.body.appendChild(notif);
     playNotificationSound();
   };
-// ==================== БЛОК 4.3 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
+// ==================== 4.3 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
 const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', orderData?: any, oldData?: any) => {
   const orderId = orderData?.id || '—';
 
@@ -235,7 +235,7 @@ const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', 
   let message = '';
   let emoji = '';
 
-  // Функция форматирования даты в ДД-ММ-ГГГГ
+  // Функция форматирования даты
   const formatDate = (dateStr: string) => {
     if (!dateStr) return '';
     const date = new Date(dateStr);
@@ -253,14 +253,23 @@ const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', 
     if (deliveryStr) message += ` — на ${deliveryStr}`;
   } 
   else if (type === 'status') {
-    emoji = '🔄';
-    title = 'Статус изменён';
-    const statusText = 
-      orderData?.status === 'processing' ? 'В работе' :
-      orderData?.status === 'completed' ? 'Выполнена' :
-      orderData?.status === 'cancelled' ? 'Отменена' : orderData?.status || '—';
-    message = `Заявка №${orderId} → ${statusText}`;
-  } 
+  emoji = '🔄';
+  title = 'Статус изменён';
+
+  // Надёжный перевод статусов (независимо от регистра)
+  const statusMap: Record<string, string> = {
+    'new': 'Новая',
+    'NEW': 'Новая',
+    'processing': 'В работе',
+    'completed': 'Выполнена',
+    'cancelled': 'Отменена'
+  };
+
+  const rawStatus = (orderData?.status || '').toString().toLowerCase();
+  const statusText = statusMap[rawStatus] || orderData?.status || '—';
+  
+  message = `Заявка №${orderId} → ${statusText}`;
+}
   else if (type === 'volume') {
     emoji = '📦';
     title = 'Изменён объём';
@@ -276,9 +285,7 @@ const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', 
     }
   }
 
-  // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
-  playNotificationSound();   // ← Звук для ВСЕХ типов уведомлений
-  // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
+  playNotificationSound();
 
   const notif = document.createElement('div');
   notif.style.cssText = `
@@ -293,7 +300,7 @@ const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', 
     font-weight: 600;
     box-shadow: 0 20px 40px rgba(34, 197, 94, 0.45);
     display: flex;
-    align-items: center;
+    alignItems: center;
     gap: 14px;
     min-width: 390px;
     cursor: pointer;
