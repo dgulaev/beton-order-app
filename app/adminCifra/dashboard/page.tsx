@@ -55,7 +55,7 @@ export default function AdminCifraDashboard() {
  const [history, setHistory] = useState<any[]>([]);
  const [currentUser, setCurrentUser] = useState<{ id: number; name?: string; role: string } | null>(null);
 
-     // ==================== ДОБАВЛЕНИЕ В ИСТОРИЮ (финальная улучшенная версия) ====================
+    // ==================== ДОБАВЛЕНИЕ В ИСТОРИЮ (финальная улучшенная версия) ====================
 const addToHistory = async (action: string, details?: any) => {
   if (!selectedOrder?.id) return;
 
@@ -64,19 +64,32 @@ const addToHistory = async (action: string, details?: any) => {
 
   let finalAction = action.trim();
 
-  // === СПЕЦИАЛЬНАЯ ОБРАБОТКА СМЕНЫ СТАТУСА ===
-  if (details?.oldStatus || details?.newStatus || finalAction.toLowerCase().includes('status')) {
+  // === СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ ДЕТАЛЬНЫХ ИЗМЕНЕНИЙ ===
+  if (details?.fieldName || details?.field_name) {
+    const field = details.fieldName || details.field_name;
+    const oldVal = details.oldValue || details.old_value || '—';
+    const newVal = details.newValue || details.new_value || '—';
+
+    if (field === 'organization_name') {
+      finalAction = `Изменил название организации с "${oldVal}" на "${newVal}"`;
+    } else if (field === 'status') {
+      const oldRus = getStatusRussian(oldVal);
+      const newRus = getStatusRussian(newVal);
+      finalAction = `Изменил статус заявки с "${oldRus}" на "${newRus}"`;
+    }
+  }
+  // === СПЕЦИАЛЬНАЯ ОБРАБОТКА СМЕНЫ СТАТУСА (если details не передан) ===
+  else if (details?.oldStatus || details?.newStatus || finalAction.toLowerCase().includes('status')) {
     const oldStatus = details?.oldStatus || '—';
     const newStatus = details?.newStatus || '—';
     
     const oldRus = getStatusRussian(oldStatus);
     const newRus = getStatusRussian(newStatus);
-
     finalAction = `Изменил статус заявки с "${oldRus}" на "${newRus}"`;
   } 
   // === ДРУГИЕ СПЕЦИАЛЬНЫЕ ДЕЙСТВИЯ ===
   else if (finalAction.toLowerCase().includes('логистик')) {
-    finalAction = finalAction.replace('логистики', 'логистику'); // мелкие правки
+    finalAction = finalAction.replace('логистики', 'логистику');
   } 
   else if (finalAction.toLowerCase().includes('delivery_time') || finalAction.toLowerCase().includes('время')) {
     finalAction = 'Изменил время доставки';
@@ -94,7 +107,11 @@ const addToHistory = async (action: string, details?: any) => {
       action: finalAction,
       user_name: userName,
       user_role: userRole,
-      details: details || {}   // сохраняем полные детали
+      details: details || {},
+      // Дополнительно сохраняем для детального отображения в истории
+      field_name: details?.fieldName || details?.field_name || null,
+      old_value: details?.oldValue || details?.old_value || null,
+      new_value: details?.newValue || details?.new_value || null
     };
 
     console.log('📝 [addToHistory] →', payload);

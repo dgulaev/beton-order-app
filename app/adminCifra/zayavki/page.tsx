@@ -1301,11 +1301,39 @@ ${order.customer_type?.includes('Юридическое')
             <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '12px' }}>
 
               <div style={{ color: '#94A3B8' }}>Клиент</div>
-              <input 
-                value={selectedOrder.organization_name || selectedOrder.full_name || ''} 
-                onChange={(e) => setSelectedOrder({ ...selectedOrder, organization_name: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
-              />
+<input 
+  value={selectedOrder.organization_name || selectedOrder.full_name || ''} 
+  onChange={(e) => {
+    const oldValue = selectedOrder.organization_name || selectedOrder.full_name || '';
+    const newValue = e.target.value;
+    
+    setSelectedOrder({ 
+      ...selectedOrder, 
+      organization_name: newValue 
+    });
+
+    // Запись в историю
+    if (newValue !== oldValue && selectedOrder.id) {
+      const actionText = `Изменил название организации с "${oldValue}" на "${newValue}"`;
+      
+      // Прямой запрос в API истории
+      fetch(`/api/adminCifra/orders/${selectedOrder.id}/history`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: actionText,
+          user_name: userFullName || 'Сотрудник'
+        })
+      }).catch(err => console.error('Ошибка записи в историю:', err));
+
+      // Обновляем историю в модалке
+      if (typeof loadOrderHistory === 'function') {
+        setTimeout(() => loadOrderHistory(selectedOrder.id), 500);
+      }
+    }
+  }}
+  style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+/>
 
               {selectedOrder.inn !== undefined && (
                 <>

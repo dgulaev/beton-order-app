@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell, CheckCircle, LogOut } from 'lucide-react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell, CheckCircle, LogOut, Globe } from 'lucide-react';
 
 import { useEffect, useState, useRef } from 'react';
 
@@ -809,9 +809,9 @@ if (!userRole || !allowedRoles.includes(userRole)) {
 {(userRole === 'admin') && (
   <Link 
     href="/adminCifra/online" 
-    style={navLinkStyle(isActive('/adminCifra/online'), isCollapsed)}
+    style={navLinkStyle(false, isCollapsed)}   // ← точно как у разлогина
   >
-    <Users size={22} /> 
+    <Globe size={22} /> 
     {!isCollapsed && <span>Кто в онлайн</span>}
   </Link>
 )}

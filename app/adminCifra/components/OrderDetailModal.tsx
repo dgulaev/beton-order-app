@@ -1131,7 +1131,7 @@ if (typeof window !== 'undefined') {
           </div>
         </div>
 
-        {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ ==================== */}
+        {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ (ПОЛНАЯ + МИКСЕРЫ) ==================== */}
 <div style={{ marginTop: '15px', borderTop: '1px solid #334155', paddingTop: '10px' }}>
   <h4 style={{ color: '#94A3B8', marginBottom: '16px' }}>История изменений</h4>
   
@@ -1140,55 +1140,84 @@ if (typeof window !== 'undefined') {
     borderRadius: '16px', 
     padding: '20px', 
     fontSize: '15px',
-    maxHeight: '150px',
+    maxHeight: '280px',
     overflowY: 'auto'
   }}>
     {history.length > 0 ? (
       history.map((entry: any, index: number) => {
-        const time = new Date(entry.created_at).toLocaleTimeString('ru-RU', { 
+        const time = new Date(entry.created_at).toLocaleString('ru-RU', { 
           hour: '2-digit', 
-          minute: '2-digit' 
+          minute: '2-digit',
+          day: '2-digit',
+          month: '2-digit'
         });
 
-        // Очищаем текст от служебного флага [SYSTEM]
-        const cleanAction = entry.action ? entry.action.replace(' [SYSTEM]', '') : '';
+        const cleanAction = (entry.action || '').replace(' [SYSTEM]', '');
+
+        // Определение цвета изменения
+        let highlightColor = '#CBD5E1';
+        if (entry.field_name === 'organization_name' || cleanAction.toLowerCase().includes('организации')) highlightColor = '#60A5FA';
+        if (entry.field_name === 'status') highlightColor = '#10B981';
+        if (entry.field_name === 'volume') highlightColor = '#F59E0B';
+        if (entry.field_name === 'address') highlightColor = '#A78BFA';
 
         return (
           <div key={index} style={{ 
             display: 'flex', 
             gap: '12px', 
-            marginBottom: '10px', 
-            paddingBottom: '10px',
+            marginBottom: '14px', 
+            paddingBottom: '12px',
             borderBottom: index !== history.length - 1 ? '1px solid #334155' : 'none',
             alignItems: 'flex-start'
           }}>
             {/* Время */}
             <div style={{ 
-              width: '52px', 
+              width: '68px', 
               color: '#64748B', 
-              fontSize: '13.5px', 
+              fontSize: '13px', 
               flexShrink: 0,
-              textAlign: 'right'
+              textAlign: 'right',
+              paddingTop: '2px'
             }}>
               {time}
             </div>
             
-            {/* Основная запись */}
+            {/* Контент */}
             <div style={{ flex: 1 }}>
               <strong style={{ color: '#CBD5E1' }}>
-                {entry.user_name?.includes('SYSTEM') || entry.action?.includes('[SYSTEM]') 
+                {entry.user_name?.includes('SYSTEM') || cleanAction.includes('[SYSTEM]') 
                   ? '🤖 Система' 
                   : (entry.user_name || 'Сотрудник')}
+                {entry.user_role && ` (${entry.user_role})`}
               </strong>
-              <div style={{ marginTop: '4px', color: '#E2E8F0' }}>
+
+              <div style={{ marginTop: '4px', color: '#E2E8F0', lineHeight: '1.4' }}>
                 {cleanAction}
               </div>
+
+              {/* Детальная информация об изменении (как в странице Заявки) */}
+              {(entry.field_name || entry.old_value || entry.new_value) && (
+                <div style={{ 
+                  marginTop: '6px', 
+                  padding: '6px 10px', 
+                  background: '#1E2937', 
+                  borderRadius: '8px',
+                  fontSize: '14px'
+                }}>
+                  <span style={{ color: '#94A3B8' }}>{entry.field_name || 'Поле'}:</span>{' '}
+                  <span style={{ color: '#EF4444' }}>{entry.old_value || '—'}</span>
+                  {' → '}
+                  <span style={{ color: highlightColor, fontWeight: '600' }}>
+                    {entry.new_value || '—'}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         );
       })
     ) : (
-      <div style={{ color: '#64748B', textAlign: 'center', padding: '40px 0', fontStyle: 'italic' }}>
+      <div style={{ color: '#64748B', textAlign: 'center', padding: '60px 0', fontStyle: 'italic' }}>
         История изменений пуста
       </div>
     )}
