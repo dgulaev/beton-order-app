@@ -55,7 +55,7 @@ export default function AdminCifraDashboard() {
  const [history, setHistory] = useState<any[]>([]);
  const [currentUser, setCurrentUser] = useState<{ id: number; name?: string; role: string } | null>(null);
 
-     // ==================== ДОБАВЛЕНИЕ В ИСТОРИЮ (финальная версия) ====================
+     // ==================== ДОБАВЛЕНИЕ В ИСТОРИЮ (финальная улучшенная версия) ====================
 const addToHistory = async (action: string, details?: any) => {
   if (!selectedOrder?.id) return;
 
@@ -64,43 +64,28 @@ const addToHistory = async (action: string, details?: any) => {
 
   let finalAction = action.trim();
 
-  const lower = finalAction.toLowerCase();
+  // === СПЕЦИАЛЬНАЯ ОБРАБОТКА СМЕНЫ СТАТУСА ===
+  if (details?.oldStatus || details?.newStatus || finalAction.toLowerCase().includes('status')) {
+    const oldStatus = details?.oldStatus || '—';
+    const newStatus = details?.newStatus || '—';
+    
+    const oldRus = getStatusRussian(oldStatus);
+    const newRus = getStatusRussian(newStatus);
 
-  // === ПРИОРИТЕТНАЯ ОБРАБОТКА СПЕЦИАЛЬНЫХ ДЕЙСТВИЙ ===
-  if (
-    lower.includes('миксера') || 
-    lower.includes('удалил миксер') ||
-    (lower.includes('удалил') && lower.includes('миксер'))
-  ) {
-    // Ничего не меняем — оставляем оригинальный текст про миксер
-    finalAction = action;
+    finalAction = `Изменил статус заявки с "${oldRus}" на "${newRus}"`;
   } 
-  else if (lower.includes('завершил логистику') || lower.includes('частичной логистику')) {
-    finalAction = action;
+  // === ДРУГИЕ СПЕЦИАЛЬНЫЕ ДЕЙСТВИЯ ===
+  else if (finalAction.toLowerCase().includes('логистик')) {
+    finalAction = finalAction.replace('логистики', 'логистику'); // мелкие правки
   } 
-  // === ОБЫЧНЫЕ ИЗМЕНЕНИЯ ЗАЯВКИ ===
-  else if (lower.includes('delivery_time') || lower.includes('время доставки')) {
+  else if (finalAction.toLowerCase().includes('delivery_time') || finalAction.toLowerCase().includes('время')) {
     finalAction = 'Изменил время доставки';
   } 
-  else if (lower.includes('volume') || lower.includes('объём')) {
+  else if (finalAction.toLowerCase().includes('volume') || finalAction.toLowerCase().includes('объём')) {
     finalAction = 'Изменил объём';
   } 
-  else if (lower.includes('status') || lower.includes('статус')) {
-    finalAction = 'Изменил статус заявки';
-  } 
-  else if (lower.includes('address') || lower.includes('адрес')) {
+  else if (finalAction.toLowerCase().includes('address') || finalAction.toLowerCase().includes('адрес')) {
     finalAction = 'Изменил адрес доставки';
-  } 
-  else if (lower.includes('изменено поле') || lower.includes('changed field')) {
-    if (lower.includes('delivery_time')) {
-      finalAction = 'Изменил время доставки';
-    } else if (lower.includes('volume')) {
-      finalAction = 'Изменил объём';
-    } else if (lower.includes('status')) {
-      finalAction = 'Изменил статус заявки';
-    } else {
-      finalAction = 'Изменил данные заявки';
-    }
   }
 
   try {
@@ -109,7 +94,7 @@ const addToHistory = async (action: string, details?: any) => {
       action: finalAction,
       user_name: userName,
       user_role: userRole,
-      ...(details && { details })
+      details: details || {}   // сохраняем полные детали
     };
 
     console.log('📝 [addToHistory] →', payload);
@@ -121,6 +106,7 @@ const addToHistory = async (action: string, details?: any) => {
     });
 
     if (res.ok) {
+      // Обновляем историю сразу
       const histRes = await fetch(`/api/adminCifra/order-history?orderId=${selectedOrder.id}`);
       if (histRes.ok) {
         const data = await histRes.json();
@@ -130,6 +116,21 @@ const addToHistory = async (action: string, details?: any) => {
   } catch (err) {
     console.error('❌ Не удалось добавить в историю:', err);
   }
+};
+
+// ==================== ПЕРЕВОД СТАТУСОВ ====================
+const getStatusRussian = (status: string): string => {
+  const map: Record<string, string> = {
+    'new': 'Новый',
+    'processing': 'В работе',
+    'completed': 'Выполнен',
+    'cancelled': 'Отменён',
+    'loading': 'Загрузка',
+    'on_way': 'В пути',
+    'ready': 'Готов',
+    '': '—'
+  };
+  return map[status?.toLowerCase()] || status || '—';
 };
 
     // ==================== 4. ЗАГРУЗКА НАЗНАЧЕННЫХ МИКСЕРОВ ====================

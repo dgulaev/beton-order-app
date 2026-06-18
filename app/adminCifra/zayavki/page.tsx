@@ -324,6 +324,23 @@ ${order.customer_type?.includes('Юридическое')
     return () => clearInterval(interval);
   }, []);
 
+  // ==================== Синхронизация статуса после изменений в модалке логистики ====================
+  useEffect(() => {
+    if (selectedOrder === null) {
+      const refresh = async () => {
+        try {
+          const res = await fetch('/api/adminCifra/all-orders', { cache: 'no-store' });
+          if (res.ok) {
+            setAllOrders(await res.json());
+          }
+        } catch (e) {
+          console.error('Ошибка синхронизации списка заявок', e);
+        }
+      };
+      refresh();
+    }
+  }, [selectedOrder]);
+
   // ==================== 1. РАБОТА С ДАТАМИ (ИСПРАВЛЕНО) ====================
   // Новая функция — надёжно получает дату в локальном часовом поясе
   const getLocalDateString = (date: Date): string => {
@@ -449,6 +466,7 @@ ${order.customer_type?.includes('Юридическое')
 
     return matchesSearch && matchesStatus;
   });
+  
 
        // ==================== ЗАГРУЗКА РЕЦЕПТОВ ====================
   useEffect(() => {

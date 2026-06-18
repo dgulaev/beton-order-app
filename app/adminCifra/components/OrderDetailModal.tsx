@@ -22,6 +22,19 @@ interface OrderDetailModalProps {
   setSelectedOrder: React.Dispatch<React.SetStateAction<Order | null>>;
 }
 
+// ==================== ПЕРЕВОД СТАТУСОВ ====================
+const getStatusRussian = (status: string): string => {
+  const map: Record<string, string> = {
+    'new': 'Новый',
+    'processing': 'В работе',
+    'completed': 'Выполнен',
+    'cancelled': 'Отменён',
+    'loading': 'Загрузка',
+    'on_way': 'В пути',
+  };
+  return map[status?.toLowerCase()] || status || '—';
+};
+
 export default function OrderDetailModal({
   order,
   onClose,
@@ -261,13 +274,35 @@ const checkAndUpdateOrderStatus = async () => {
       o.id === order.id ? { ...o, status: newStatus, logistics_ready: true } : o
     ));
 
-    // Обновляем текущую модалку
-    setSelectedOrder(prev => prev ? { ...prev, status: newStatus, logistics_ready: true } : null);
+    // Обновляем локальное состояние в модалке
+    setLocalOrder(prev => prev ? { 
+      ...prev, 
+      status: newStatus, 
+      logistics_ready: true 
+    } as any : null);
 
-    // ==================== ЗАПИСЬ В ИСТОРИЮ ====================
+    // Обновляем выбранную заявку в родительском компоненте
+    if (typeof setSelectedOrder === 'function') {
+      setSelectedOrder((prev: any) => prev ? { 
+        ...prev, 
+        status: newStatus, 
+        logistics_ready: true 
+      } : null);
+    }
+
+    // ==================== ЗАПИСЬ В ИСТОРИЮ (СИСТЕМА) ====================
     if (typeof addToHistory === 'function') {
-      const statusText = newStatus === 'completed' ? 'Выполнена' : 'В работе';
-      await addToHistory(`Автоматически изменил статус заявки на "${statusText}"`);
+      let actionText = '';
+
+      if (newStatus === 'completed') {
+        actionText = `Автоматически изменил статус заявки на "Выполнена" (все миксеры разгружены) [SYSTEM]`;
+      } else if (newStatus === 'processing') {
+        actionText = `Автоматически изменил статус заявки на "В работе" (полностью укомплектован миксерами) [SYSTEM]`;
+      }
+
+      if (actionText) {
+        await addToHistory(actionText);
+      }
     }
   }
 };
@@ -513,69 +548,70 @@ const printTTN = (mixerId: number) => {
   ) : (
     // Можно менять (только если не финальный статус)
     <select 
-      value={localOrder.status || 'new'}
-      onChange={async (e) => {
-        const newStatus = e.target.value;
-        if (newStatus === localOrder.status) return;
+  value={localOrder.status || 'new'}
+  onChange={async (e) => {
+    const newStatus = e.target.value;
+    if (newStatus === localOrder.status) return;
 
-        const oldStatus = localOrder.status;
+    const oldStatus = localOrder.status;
 
-        // Локальное обновление в модалке
-        setLocalOrder(prev => ({ ...prev, status: newStatus }));
+    // Локальное обновление
+    setLocalOrder(prev => ({ ...prev, status: newStatus }));
+    setAllOrders(prev => prev.map(o => 
+      o.id === order.id ? { ...o, status: newStatus } : o
+    ));
 
-        // Optimistic в главном дашборде
-        setAllOrders(prev => prev.map(o => 
-          o.id === order.id ? { ...o, status: newStatus } : o
-        ));
+    try {
+      const res = await fetch('/api/adminCifra/order-logistics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: order.id,
+          status: newStatus
+        })
+      });
 
-        try {
-          const res = await fetch('/api/adminCifra/order-logistics', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              orderId: order.id,
-              status: newStatus
-            })
-          });
+      const data = await res.json();
 
-          const data = await res.json();
-
-          if (!data.success) {
-            // Откат при ошибке
-            setLocalOrder(prev => ({ ...prev, status: oldStatus }));
-            setAllOrders(prev => prev.map(o => 
-              o.id === order.id ? { ...o, status: oldStatus } : o
-            ));
-            alert('Ошибка сохранения: ' + (data.message || ''));
-          } else {
-            if (typeof addToHistory === 'function') {
-              await addToHistory(`изменил статус на "${getStatusConfig(newStatus).label}"`);
-            }
-          }
-        } catch (err) {
-          console.error(err);
-          setLocalOrder(prev => ({ ...prev, status: oldStatus }));
-          setAllOrders(prev => prev.map(o => 
-            o.id === order.id ? { ...o, status: oldStatus } : o
-          ));
-          alert('Не удалось связаться с сервером');
+      if (data.success) {
+        // ←←← ГЛАВНОЕ ИСПРАВЛЕНИЕ
+                if (typeof addToHistory === 'function') {
+          const statusText = `Изменил статус заявки с "${getStatusRussian(oldStatus)}" на "${getStatusRussian(newStatus)}"`;
+          await addToHistory(statusText);
         }
-      }}
-      style={{
-        background: '#1E2937',
-        color: 'white',
-        border: '2px solid #475569',
-        borderRadius: '12px',
-        padding: '12px 16px',
-        fontSize: '16px',
-        width: '100%'
-      }}
-    >
-      <option value="new">Новая</option>
-      <option value="processing">В работе</option>
-      <option value="completed">Выполнена</option>
-      <option value="cancelled">Отменена</option>
-    </select>
+      } else {
+        // Откат
+        setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+        setAllOrders(prev => prev.map(o => 
+          o.id === order.id ? { ...o, status: oldStatus } : o
+        ));
+        alert('Ошибка сохранения: ' + (data.message || ''));
+      }
+    } catch (err) {
+      console.error(err);
+      // Откат
+      setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+      setAllOrders(prev => prev.map(o => 
+        o.id === order.id ? { ...o, status: oldStatus } : o
+      ));
+      alert('Не удалось связаться с сервером');
+    }
+  }}
+  style={{
+    background: '#1E2937',
+    color: 'white',
+    border: '2px solid #475569',
+    borderRadius: '12px',
+    padding: '12px 16px',
+    fontSize: '16px',
+    width: '100%'
+  }}
+>
+  <option value="new">Новая</option>
+  <option value="processing">В работе</option>
+  <option value="completed">Выполнена</option>
+  <option value="cancelled">Отменена</option>
+</select>
   )}
 </div>
 
@@ -1114,6 +1150,9 @@ if (typeof window !== 'undefined') {
           minute: '2-digit' 
         });
 
+        // Очищаем текст от служебного флага [SYSTEM]
+        const cleanAction = entry.action ? entry.action.replace(' [SYSTEM]', '') : '';
+
         return (
           <div key={index} style={{ 
             display: 'flex', 
@@ -1134,13 +1173,15 @@ if (typeof window !== 'undefined') {
               {time}
             </div>
             
-            {/* Основная запись — только имя */}
+            {/* Основная запись */}
             <div style={{ flex: 1 }}>
               <strong style={{ color: '#CBD5E1' }}>
-                {entry.user_name || 'Сотрудник'}
+                {entry.user_name?.includes('SYSTEM') || entry.action?.includes('[SYSTEM]') 
+                  ? '🤖 Система' 
+                  : (entry.user_name || 'Сотрудник')}
               </strong>
               <div style={{ marginTop: '4px', color: '#E2E8F0' }}>
-                {entry.action}
+                {cleanAction}
               </div>
             </div>
           </div>
