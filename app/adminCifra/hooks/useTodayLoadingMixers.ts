@@ -59,7 +59,7 @@ export const useTodayLoadingMixers = () => {
     // Обновление каждые 10 секунд
     const interval = setInterval(() => {
       fetchMixers();
-    }, 60000);
+    }, 8000);
 
     return () => {
       clearTimeout(initialTimeout);

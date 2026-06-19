@@ -799,37 +799,39 @@ if (!userRole || !allowedRoles.includes(userRole)) {
                   <UserCog size={22} /> {!isCollapsed && <span>Оператор БСУ</span>}
                 </Link>
 
+                
+
+                {/* ==================== БЛОК 9.2 ССЫЛКА "КТО В ОНЛАЙН" ==================== */}
+                 {(userRole === 'admin') && (
+                 <Link 
+                    href="/adminCifra/online" 
+                    style={navLinkStyle(false, isCollapsed)}   // ← точно как у разлогина
+                 >
+                <Globe size={22} /> 
+                   {!isCollapsed && <span>Кто в онлайн</span>}
+                </Link>
+                )}
+
                 {(userRole === 'admin') && (
                   <Link href="/adminCifra/withdrawals" style={navLinkStyle(isActive('/adminCifra/withdrawals'), isCollapsed)}>
                     <DollarSign size={22} /> {!isCollapsed && <span>Выводы наличных</span>}
                   </Link>
                 )}
 
-                {/* ==================== БЛОК 9.2 ССЫЛКА "КТО В ОНЛАЙН" ==================== */}
-{(userRole === 'admin') && (
-  <Link 
-    href="/adminCifra/online" 
-    style={navLinkStyle(false, isCollapsed)}   // ← точно как у разлогина
-  >
-    <Globe size={22} /> 
-    {!isCollapsed && <span>Кто в онлайн</span>}
-  </Link>
-)}
-
                 {/* ==================== БЛОК 9.3 ССЫЛКА "ВЫКИНУТЬ ВСЕХ" ==================== */}
-{(userRole === 'admin') && (
-  <Link 
-    href="#" 
-    onClick={(e) => {
-      e.preventDefault();
-      forceLogoutAll();
-    }}
-    style={navLinkStyle(false, isCollapsed)}
-  >
-    <LogOut size={22} /> 
-    {!isCollapsed && <span>Разлогинить всех</span>}
-  </Link>
-)}
+                {(userRole === 'admin') && (
+                <Link 
+                    href="#" 
+                    onClick={(e) => {
+                    e.preventDefault();
+                    forceLogoutAll();
+                }}
+                    style={navLinkStyle(false, isCollapsed)}
+                 >
+               <LogOut size={22} /> 
+                   {!isCollapsed && <span>Разлогинить всех</span>}
+               </Link>
+               )}
               </>
             )}
           </nav>

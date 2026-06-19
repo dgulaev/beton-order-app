@@ -237,7 +237,7 @@ const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
   }
 };
 
-// ==================== 6. АВТОМАТИЧЕСКАЯ СМЕНА СТАТУСА ЗАЯВКИ (ФИНАЛЬНАЯ) ====================
+// ==================== 6. АВТОМАТИЧЕСКАЯ СМЕНА СТАТУСА ЗАЯВКИ (СТРОГАЯ ВЕРСИЯ 2) ====================
 const checkAndUpdateOrderStatus = async () => {
   if (!order?.id) return;
 
@@ -252,58 +252,56 @@ const checkAndUpdateOrderStatus = async () => {
 
   let newStatus = order.status;
 
-  // ==================== СТРОГИЙ ПРИОРИТЕТ ====================
-  if (allUnloaded) {
-    newStatus = 'completed';                    // Высший приоритет
+  console.log(`🔍 [СТАТУС] Заявка #${order.id} | Объём: ${totalAssignedVolume.toFixed(1)} / ${orderVolume.toFixed(1)} | Все разгружены: ${allUnloaded}`);
+
+  // ==================== СТРОГОЕ УСЛОВИЕ ====================
+  if (allUnloaded && totalAssignedVolume >= orderVolume * 0.95) { 
+    // Только если почти полный объём + все разгружены
+    newStatus = 'completed';
+    console.log(`✅ ПОЛНОСТЬЮ ВЫПОЛНЕНА (${totalAssignedVolume.toFixed(1)} м³)`);
   } 
-  else if (totalAssignedVolume >= orderVolume && order.status === 'new') {
+  else if (totalAssignedVolume > 0) {
     newStatus = 'processing';
+    console.log(`🔄 В работе (объём ${totalAssignedVolume.toFixed(1)} м³)`);
   }
 
-  // ==================== ЗАЩИТА ФИНАЛЬНЫХ СТАТУСОВ ====================
+  // Защита от изменения финальных статусов
   if (order.status === 'completed' || order.status === 'cancelled') {
     newStatus = order.status;
   }
 
-  // Меняем только если статус действительно другой
   if (newStatus !== order.status) {
-    console.log(`🔄 Автосмена #${order.id}: ${order.status} → ${newStatus}`);
+    console.log(`🔄 Автосмена статуса: ${order.status} → ${newStatus}`);
 
-    // Обновляем глобальный список
+    // Обновляем состояния
     setAllOrders(prev => prev.map(o => 
-      o.id === order.id ? { ...o, status: newStatus, logistics_ready: true } : o
+      o.id === order.id ? { ...o, status: newStatus, logistics_ready: newStatus === 'completed' } : o
     ));
 
-    // Обновляем локальное состояние в модалке
     setLocalOrder(prev => prev ? { 
       ...prev, 
       status: newStatus, 
-      logistics_ready: true 
+      logistics_ready: newStatus === 'completed' 
     } as any : null);
 
-    // Обновляем выбранную заявку в родительском компоненте
     if (typeof setSelectedOrder === 'function') {
       setSelectedOrder((prev: any) => prev ? { 
         ...prev, 
         status: newStatus, 
-        logistics_ready: true 
+        logistics_ready: newStatus === 'completed' 
       } : null);
     }
 
-    // ==================== ЗАПИСЬ В ИСТОРИЮ (СИСТЕМА) ====================
+    // История
     if (typeof addToHistory === 'function') {
-      let actionText = '';
-
-      if (newStatus === 'completed') {
-        actionText = `Автоматически изменил статус заявки на "Выполнена" (все миксеры разгружены) [SYSTEM]`;
-      } else if (newStatus === 'processing') {
-        actionText = `Автоматически изменил статус заявки на "В работе" (полностью укомплектован миксерами) [SYSTEM]`;
-      }
-
-      if (actionText) {
-        await addToHistory(actionText);
-      }
+      const actionText = newStatus === 'completed' 
+        ? `Автоматически изменил статус заявки на "Выполнена" (${totalAssignedVolume.toFixed(1)} м³) [SYSTEM]` 
+        : `Автоматически изменил статус заявки на "В работе" (${totalAssignedVolume.toFixed(1)} м³) [SYSTEM]`;
+      
+      await addToHistory(actionText);
     }
+  } else {
+    console.log('✅ Статус не меняем');
   }
 };
 

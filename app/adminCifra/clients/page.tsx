@@ -33,8 +33,14 @@ export default function ClientsPage() {
   const [currentRole, setCurrentRole] = useState<string>('admin');
   const [userFullName, setUserFullName] = useState<string>('');
   const [callHistory, setCallHistory] = useState<any[]>([]);
- 
-  
+  const [searchQuery, setSearchQuery] = useState(''); // для debounce
+
+  // ==================== ПАГИНАЦИЯ ====================
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalClients, setTotalClients] = useState(0);
+  const itemsPerPage = 18;
+
   const [activeTab, setActiveTab] = useState<'clients' | 'staff' | 'efficiency'>('clients');
   
   // Новое состояние для формы создания клиента
@@ -46,130 +52,112 @@ export default function ClientsPage() {
     inn: '',
     address: '',
   });
-  
 
-  // ==================== 2. ЗАГРУЗКА ВСЕХ ПОЛЬЗОВАТЕЛЕЙ + ГРУППИРОВКА КЛИЕНТОВ ====================
-useEffect(() => {
-  const fetchAllUsers = async () => {
-    const startTime = Date.now();
-    setLoading(true);
-
-    try {
-      console.log('🚀 [Загрузка] Этап 1: Только карточки (очень быстро)...');
-
-      // Только группы — минимум данных
-      const groupsRes = await fetch('/api/adminCifra/clients/grouped');
-      let clientGroups: any[] = [];
-
-      if (groupsRes.ok) {
-        clientGroups = await groupsRes.json();
+    // Поиск с задержкой (debounce)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearchQuery(search.trim());
+      if (search.trim() !== searchQuery) {   // чтобы не сбрасывать лишний раз
+        setCurrentPage(1);
       }
+    }, 500); // увеличил до 500мс
 
-      // Стафф загружаем отдельно и быстро
-      const allRes = await fetch('/api/adminCifra/clients?all=true');
-      let staffList: any[] = [];
-      if (allRes.ok) {
-        const allUsers = await allRes.json();
-        staffList = allUsers.filter((u: any) => 
-          ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase())
-        );
-      }
+    return () => clearTimeout(timer);
+  }, [search]);
 
-      let combined = [
-        ...staffList.map((s: any) => ({ ...s, isStaff: true })),
-        ...clientGroups
-      ];
+    // ==================== 2. ЗАГРУЗКА КЛИЕНТОВ С ПАГИНАЦИЕЙ ====================
+  const fetchClientsPage = async (page: number = 1) => {
+  const startTime = Date.now();
+  setLoading(true);
 
-      // Быстрая дедупликация
-      const seen = new Set();
-      combined = combined.filter(item => {
-        const key = item.groupId || item.user_id || item.id;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
+  try {
+    let url = `/api/adminCifra/clients/grouped?page=${page}&limit=${itemsPerPage}`;
+    
+    if (searchQuery) {
+      url += `&search=${encodeURIComponent(searchQuery)}`;
+    }
 
-      setProfiles(combined);
+    console.log(`🚀 [Загрузка] Страница ${page} | Поиск: "${searchQuery}" | Tab: ${activeTab}`);
 
-      console.log(`✅ Этап 1 (карточки) завершён за ${Date.now() - startTime} мс | Показано: ${combined.length} записей`);
+    const res = await fetch(url);
+    
+    if (res.ok) {
+      const data = await res.json();
+      
+      let result = data.clients || data.groups || data;
 
-
-      // ==================== ЭТАП 2: ФОНОВАЯ ЗАГРУЗКА ТЯЖЁЛЫХ ДАННЫХ ====================
-      setTimeout(async () => {
-        try {
-          console.log('📊 [Загрузка] Этап 2: Объёмы, статусы, прогнозы (в фоне)...');
-
-          const clientIds = clientGroups
-            .flatMap((g: any) => g.clients || [])
-            .map((c: any) => c.user_id)
-            .filter(Boolean);
-
-          if (clientIds.length > 0) {
-            await fetch('/api/adminCifra/client-volumes', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userIds: clientIds })
-            });
-            console.log(`📊 Этап 2 завершён для ${clientIds.length} клиентов`);
-          }
-        } catch (e) {
-          console.error('Ошибка этапа 2:', e);
+      // Если открыта вкладка Staff — загружаем сотрудников отдельно
+      if (activeTab === 'staff') {
+        const staffRes = await fetch('/api/adminCifra/clients?all=true');
+        if (staffRes.ok) {
+          const allUsers = await staffRes.json();
+          result = allUsers
+            .filter((u: any) => ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase()))
+            .map((s: any) => ({ ...s, isStaff: true }));
         }
-      }, 600); // даём карточкам время отобразиться
+      }
 
-    } catch (err) {
-      console.error('❌ Ошибка загрузки:', err);
-    } finally {
-      setLoading(false);
+      setProfiles(result);
+      setTotalPages(data.totalPages || 1);
+      setTotalClients(data.total || 0);
+
+      console.log(`✅ Загружено ${result.length} записей`);
     }
-  };
+  } catch (err) {
+    console.error('❌ Ошибка загрузки:', err);
+  } finally {
+    setLoading(false);
+  }
+};
 
-  fetchAllUsers();
-}, []);
+  // Первая загрузка и смена страницы + поиск
+  useEffect(() => {
+    fetchClientsPage(currentPage);
+  }, [currentPage, searchQuery, activeTab]);  // ← Добавили searchQuery
 
-    // ==================== ЗАГРУЗКА РОЛИ + РЕАЛЬНОГО ИМЕНИ ====================
-useEffect(() => {
-  const loadRoleAndName = async () => {
-    const savedUserId = localStorage.getItem('userId');
-    if (!savedUserId) {
-      setCurrentRole('admin');
-      setUserFullName('Сотрудник');
-      return;
-    }
+  // ==================== ЗАГРУЗКА РОЛИ + РЕАЛЬНОГО ИМЕНИ ====================
+  useEffect(() => {
+    const loadRoleAndName = async () => {
+      const savedUserId = localStorage.getItem('userId');
+      if (!savedUserId) {
+        setCurrentRole('admin');
+        setUserFullName('Сотрудник');
+        return;
+      }
 
-    try {
-      const res = await fetch('/api/user/role', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: savedUserId }),
-        cache: 'no-store'
-      });
+      try {
+        const res = await fetch('/api/user/role', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: savedUserId }),
+          cache: 'no-store'
+        });
 
-      if (res.ok) {
-        const data = await res.json();
-        const role = (data.role || 'admin').toLowerCase();
-        const name = data.full_name || data.username || data.name || 'Сотрудник';
+        if (res.ok) {
+          const data = await res.json();
+          const role = (data.role || 'admin').toLowerCase();
+          const name = data.full_name || data.username || data.name || 'Сотрудник';
 
-        setCurrentRole(role);
-        setUserFullName(name);
+          setCurrentRole(role);
+          setUserFullName(name);
 
-        localStorage.setItem('userRole', role);
-        localStorage.setItem('userName', name);
+          localStorage.setItem('userRole', role);
+          localStorage.setItem('userName', name);
 
-        console.log(`✅ Загружено в ClientsPage: ${name} (${role})`);
-      } else {
+          console.log(`✅ Загружено в ClientsPage: ${name} (${role})`);
+        } else {
+          setCurrentRole('admin');
+          setUserFullName('Сотрудник');
+        }
+      } catch (err) {
+        console.error('❌ Ошибка загрузки роли/имени:', err);
         setCurrentRole('admin');
         setUserFullName('Сотрудник');
       }
-    } catch (err) {
-      console.error('❌ Ошибка загрузки роли/имени:', err);
-      setCurrentRole('admin');
-      setUserFullName('Сотрудник');
-    }
-  };
+    };
 
-  loadRoleAndName();
-}, []);
+    loadRoleAndName();
+  }, []);
 
   // ==================== 2.1 АВТООТКРЫТИЕ КЛИЕНТА ИЗ УВЕДОМЛЕНИЯ ====================
 useEffect(() => {
@@ -811,6 +799,10 @@ const filteredList = currentList.filter((item: any) => {
   }
 });
 
+// ==================== 4.2 ПАГИНАЦИЯ ====================
+const startIndex = (currentPage - 1) * itemsPerPage;
+const displayedClients = filteredList.slice(startIndex, startIndex + itemsPerPage);
+
   // ==================== 4.1 ПОКАЗ УВЕДОМЛЕНИЯ О КЛИЕНТЕ ====================
 const showClientReminder = (client: any, isTest = false) => {
   const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
@@ -1246,207 +1238,240 @@ window.callClient = (clientId: number | string) => {
       fontSize: '20px',
       pointerEvents: 'none'
     }}>
-      🔍
+      
     </div>
     
-    <input 
-      type="text" 
-      placeholder="Поиск по имени, организации или телефону..." 
-      value={search}
-      onChange={(e) => setSearch(e.target.value)}
-      style={{ 
-        width: '100%', 
-        padding: '16px 20px 16px 56px', 
-        background: '#1E2937', 
-        border: 'none', 
-        borderRadius: '9999px', 
-        color: '#fff', 
-        fontSize: '16px',
-        boxShadow: '0 4px 15px rgba(0, 0, 0, 0.15)'
-      }}
-    />
+    <input
+  type="text"
+  placeholder="Поиск по имени, организации, телефону, ИНН..."
+  value={search}
+  onChange={(e) => setSearch(e.target.value)}
+  style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', background: '#1E2937', border: '1px solid #334155', color: '#fff' }}
+/>
   </div>
 )}
 
-    {/* ==================== 10. ОТОБРАЖЕНИЕ КЛИЕНТОВ (СПИСОК) — ТОЛЬКО НА КЛИЕНТАХ И СТАФФЕ ==================== */}
-{(activeTab === 'clients' || activeTab === 'staff') && viewMode === 'table' && (
-  <div style={{ background: '#1E2937', borderRadius: '16px', overflow: 'hidden' }}>
-    
-    {/* ==================== ШАПКА ТАБЛИЦЫ ==================== */}
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: '2fr 1fr 140px 140px 120px',
-      padding: '18px 28px',
-      background: '#25334A',
-      borderBottom: '2px solid #334155',
-      fontSize: '15px',
-      fontWeight: '600',
-      color: '#94A3B8',
-      textTransform: 'uppercase',
-      letterSpacing: '0.5px'
-    }}>
-      <div>Клиент / Организация</div>
-      <div>ИНН</div>
-      <div>Статус</div>
-      <div>Объём бетона</div>
-      <div>Заказы</div>
-    </div>
+   {/* ==================== 8. ОТОБРАЖЕНИЕ (КАРТОЧКИ + ТАБЛИЦА) ==================== */}
+{(activeTab === 'clients' || activeTab === 'staff') && (
+  <>
+    {viewMode === 'cards' ? (
+      /* ==================== КАРТОЧКИ ==================== */
+      <div style={{ 
+        display: 'grid', 
+        gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', 
+        gap: '16px'
+      }}>
+                {profiles
+          .filter((item: any) => {
+            const isStaffItem = item.isStaff || 
+                               ['admin', 'manager', 'dispatcher', 'operator'].includes((item.role || '').toLowerCase());
+            return activeTab === 'staff' ? isStaffItem : !isStaffItem;
+          })
+          .map((client: any) => {
+            const isStaff = client.isStaff || ['admin','manager','dispatcher','operator'].includes((client.role || '').toLowerCase());
+            const vol = client.total_volume || client.totalVolume || 0;
+            const ordersCount = client.total_orders || client.totalOrders || 0;
 
-    {/* ==================== СТРОКИ ТАБЛИЦЫ ==================== */}
-    {filteredList.map((client: any) => {
-      const vol = client.total_volume || client.totalVolume || 0;
-      const ordersCount = client.total_orders || client.totalOrders || 0;
+            return (
+              <div 
+                key={client.groupId || client.user_id || client.id} 
+                onClick={() => setSelectedProfile(client)} 
+                style={{ 
+                  background: '#1E2937', 
+                  borderRadius: '16px', 
+                  padding: '16px 18px',
+                  cursor: 'pointer',
+                  border: selectedProfile?.groupId === client.groupId || 
+                          selectedProfile?.user_id === client.user_id 
+                    ? '2px solid #10B981' 
+                    : '1px solid #334155',
+                  minHeight: '148px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between'
+                }}
+              >
+                {/* Верхняя часть — Имя и телефон */}
+                <div>
+                  <div style={{ fontSize: '17px', fontWeight: '700', marginBottom: '4px', lineHeight: 1.3 }}>
+                    {client.organization_name || client.full_name || client.name || 'Без названия'}
+                    {isStaff && <span style={{ marginLeft: '8px', color: '#10B981', fontSize: '13px' }}>• Сотрудник</span>}
+                  </div>
+                  <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '12px' }}>
+                    {client.phones ? client.phones.join(' • ') : client.phone || '—'}
+                  </div>
+                </div>
 
-      let statusText = '❄️ Холодный';
-      let statusColor = '#64748B';
+                {/* Нижняя часть — разная для клиентов и сотрудников */}
+                {isStaff ? (
+                  <div style={{ 
+                    padding: '10px 14px', 
+                    background: '#334155', 
+                    borderRadius: '10px',
+                    textAlign: 'center',
+                    fontSize: '15px',
+                    color: '#CBD5E1',
+                    fontWeight: '600'
+                  }}>
+                    {client.role ? client.role.toUpperCase() : 'СОТРУДНИК'}
+                  </div>
+                ) : (
+                  <>
+                    {/* Статус для клиентов */}
+                    <div style={{ 
+                      display: 'inline-block',
+                      padding: '4px 12px',
+                      background: '#334155',
+                      color: '#94A3B8',
+                      borderRadius: '9999px',
+                      fontSize: '13.5px',
+                      fontWeight: '600',
+                      marginBottom: '12px'
+                    }}>
+                      Клиент
+                    </div>
 
-      if (vol >= 30 || ordersCount >= 5) {
-        statusText = '🔥 Горячий';
-        statusColor = '#EF4444';
-      } else if (vol >= 8 || ordersCount >= 2) {
-        statusText = '🌡️ Тёплый';
-        statusColor = '#F59E0B';
-      }
+                    {/* Статистика */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                      <div>
+                        <div style={{ color: '#60A5FA', fontSize: '26px', fontWeight: '700', lineHeight: 1 }}>
+                          {vol.toFixed(1)}
+                        </div>
+                        <div style={{ color: '#94A3B8', fontSize: '13px' }}>м³ заказано</div>
+                      </div>
 
-      return (
-        <div
-          key={client.groupId || client.user_id || client.id}
-          onClick={() => setSelectedProfile(client)}
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '2fr 1fr 140px 140px 120px',
-            padding: '12px 12px',           // ← увеличил вертикальные отступы
-            borderBottom: '1px solid #334155',
-            cursor: 'pointer',
-            alignItems: 'center',
-            transition: 'background 0.2s',
-            minHeight: '10px'               // ← ВЫСОТА СТРОКИ (здесь регулируй)
-          }}
-          onMouseOver={(e) => e.currentTarget.style.background = '#25334A'}
-          onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
-        >
-          <div>
-            <div style={{ fontWeight: '600', fontSize: '17px' }}>
-              {client.organization_name || client.full_name || 'Без названия'}
-            </div>
-            <div style={{ color: '#94A3B8', fontSize: '14px' }}>
-              {client.phones ? client.phones.join(' • ') : client.phone || '—'}
-            </div>
-          </div>
-
-          <div style={{ color: '#94A3B8' }}>{client.inn || '—'}</div>
-
-          <div style={{ color: statusColor, fontWeight: '600' }}>
-            {statusText}
-          </div>
-
-          <div style={{ fontSize: '18px', fontWeight: '700', color: '#60A5FA' }}>
-            {vol.toFixed(1)} м³
-          </div>
-
-          <div style={{ color: '#94A3B8', fontWeight: '500' }}>
-            {ordersCount} шт.
-          </div>
-        </div>
-      );
-    })}
-  </div>
-)}
-
-{/* ==================== 8. ОТОБРАЖЕНИЕ КЛИЕНТОВ (КАРТОЧКИ) — ТОЛЬКО НА КЛИЕНТАХ И СТАФФЕ ==================== */}
-{(activeTab === 'clients' || activeTab === 'staff') && viewMode === 'cards' && (
-  <div style={{ 
-    display: 'grid', 
-    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', 
-    gap: '16px'
-  }}>
-    {filteredList.map((client: any) => {
-      const vol = client.total_volume || client.totalVolume || 0;
-      const ordersCount = client.total_orders || client.totalOrders || 0;
-
-      let statusText = '❄️ Холодный';
-      let statusColor = '#64748B';
-      let statusBg = '#334155';
-
-      if (vol >= 30 || ordersCount >= 5) {
-        statusText = '🔥 Горячий';
-        statusColor = '#EF4444';
-        statusBg = '#EF444420';
-      } else if (vol >= 8 || ordersCount >= 2) {
-        statusText = '🌡️ Тёплый';
-        statusColor = '#F59E0B';
-        statusBg = '#F59E0B20';
-      }
-
-      return (
-        <div 
-          key={client.groupId || client.user_id || client.id} 
-          onClick={() => setSelectedProfile(client)} 
-          style={{ 
-            background: '#1E2937', 
-            borderRadius: '16px', 
-            padding: '16px 18px',     // ← уменьшил отступы внутри
-            cursor: 'pointer',
-            border: selectedProfile?.groupId === client.groupId || 
-                    selectedProfile?.user_id === client.user_id 
-              ? '2px solid #10B981' 
-              : '1px solid #334155',
-            transition: 'all 0.2s',
-            minHeight: '148px',        // ← ОСНОВНАЯ ВЫСОТА КАРТОЧКИ (здесь регулируй)
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between'
-          }}
-        >
-          {/* Заголовок и телефон */}
-          <div>
-            <div style={{ fontSize: '17px', fontWeight: '700', marginBottom: '4px', lineHeight: 1.3 }}>
-              {client.organization_name || client.full_name || client.name || 'Без названия'}
-            </div>
-            
-            <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '10px' }}>
-              {client.phones ? client.phones.join(' • ') : client.phone || '—'}
-            </div>
-          </div>
-
-          {/* Статус */}
-          <div style={{ 
-            display: 'inline-block',
-            padding: '4px 12px',
-            background: statusBg,
-            color: statusColor,
-            borderRadius: '9999px',
-            fontSize: '13.5px',
-            fontWeight: '600',
-            marginBottom: '12px'
-          }}>
-            {statusText}
-          </div>
-
-          {/* Объём и Заказы */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-            <div>
-              <div style={{ color: '#60A5FA', fontSize: '26px', fontWeight: '700', lineHeight: 1 }}>
-                {vol.toFixed(1)}
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: '24px', fontWeight: '700', color: '#94A3B8' }}>
+                          {ordersCount}
+                        </div>
+                        <div style={{ color: '#94A3B8', fontSize: '13px' }}>заказов</div>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
-              <div style={{ color: '#94A3B8', fontSize: '13px' }}>м³ заказано</div>
-            </div>
-
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: '24px', fontWeight: '700', color: '#94A3B8' }}>
-                {ordersCount}
-              </div>
-              <div style={{ color: '#94A3B8', fontSize: '13px' }}>заказов</div>
-            </div>
-          </div>
+            );
+          })}
+      </div>
+    ) : (
+      /* ==================== РЕЖИМ ТАБЛИЦЫ ==================== */
+      <div style={{ background: '#1E2937', borderRadius: '16px', overflow: 'hidden' }}>
+        {/* Шапка таблицы */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '2fr 1fr 140px 140px 120px',
+          padding: '18px 28px',
+          background: '#25334A',
+          borderBottom: '2px solid #334155',
+          fontSize: '15px',
+          fontWeight: '600',
+          color: '#94A3B8',
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px'
+        }}>
+          <div>Клиент / Организация</div>
+          <div>ИНН</div>
+          <div>Статус</div>
+          <div>Объём бетона</div>
+          <div>Заказы</div>
         </div>
-        
-      );
-    })}
-    
-  </div>
-  
+
+        {/* Строки таблицы */}
+        {profiles.map((client: any) => {   // ← profiles вместо filteredList
+          const isStaff = client.isStaff || ['admin','manager','dispatcher','operator'].includes((client.role || '').toLowerCase());
+          const vol = client.total_volume || client.totalVolume || 0;
+          const ordersCount = client.total_orders || client.totalOrders || 0;
+
+          let statusText = '❄️ Холодный';
+          let statusColor = '#64748B';
+
+          if (!isStaff) {
+            if (vol >= 30 || ordersCount >= 5) {
+              statusText = '🔥 Горячий';
+              statusColor = '#EF4444';
+            } else if (vol >= 8 || ordersCount >= 2) {
+              statusText = '🌡️ Тёплый';
+              statusColor = '#F59E0B';
+            }
+          }
+
+          return (
+            <div
+              key={client.groupId || client.user_id || client.id}
+              onClick={() => setSelectedProfile(client)}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '2fr 1fr 140px 140px 120px',
+                padding: '14px 28px',
+                borderBottom: '1px solid #334155',
+                cursor: 'pointer',
+                alignItems: 'center',
+                transition: 'background 0.2s',
+              }}
+              onMouseOver={(e) => e.currentTarget.style.background = '#25334A'}
+              onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+            >
+              <div>
+                <div style={{ fontWeight: '600', fontSize: '17px' }}>
+                  {client.organization_name || client.full_name || client.name || 'Без названия'}
+                </div>
+                <div style={{ color: '#94A3B8', fontSize: '14px' }}>
+                  {client.phones ? client.phones.join(' • ') : client.phone || '—'}
+                </div>
+              </div>
+
+              <div style={{ color: '#94A3B8' }}>{client.inn || '—'}</div>
+
+              <div style={{ color: statusColor, fontWeight: '600' }}>
+                {isStaff ? 'Сотрудник' : statusText}
+              </div>
+
+              <div style={{ fontSize: '18px', fontWeight: '700', color: '#60A5FA' }}>
+                {vol.toFixed(1)} м³
+              </div>
+
+              <div style={{ color: '#94A3B8', fontWeight: '500' }}>
+                {ordersCount} шт.
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    )}
+
+    {/* ==================== ПАГИНАЦИЯ ==================== */}
+    {totalPages > 1 && (
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'center', 
+        alignItems: 'center', 
+        gap: '16px', 
+        marginTop: '40px' 
+      }}>
+        <button 
+          onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+          disabled={currentPage === 1}
+          style={{ padding: '12px 24px', background: currentPage === 1 ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
+        >
+          ← Назад
+        </button>
+
+        <div style={{ fontSize: '17px', fontWeight: '600' }}>
+          Страница <span style={{ color: '#10B981' }}>{currentPage}</span> из {totalPages}
+        </div>
+
+        <button 
+          onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+          disabled={currentPage === totalPages}
+          style={{ padding: '12px 24px', background: currentPage === totalPages ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === totalPages ? 'not-allowed' : 'pointer' }}
+        >
+          Вперед →
+        </button>
+      </div>
+    )}
+  </>
 )}
+
      {/* ==================== ВКЛАДКА ЭФФЕКТИВНОСТЬ ================================ */}
              {activeTab === 'efficiency' && <EfficiencyPage />}
 

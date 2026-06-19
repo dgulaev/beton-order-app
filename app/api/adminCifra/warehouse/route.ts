@@ -62,31 +62,63 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ФБС (оставляем как было)
-    if (fbs && Array.isArray(fbs)) {
-      for (const b of fbs) {
-        const blockName = b.name?.trim();
+    // === ФБС — устойчивая версия к двойным вызовам ===
+if (fbs && Array.isArray(fbs)) {
+  for (const b of fbs) {
+    const blockName = String(b.name || b.code || '').trim();
+    const blockCode = String(b.code || b.name || '').trim();
 
-        const { data: existing } = await supabase
-          .from('fbs_blocks')
-          .select('id, name, current')
-          .eq('name', blockName)
-          .single();
+    if (!blockName) continue;
 
-        if (!existing) {
-          console.error(`❌ Не найдена запись с name = "${blockName}"`);
-          continue;
+    console.log(`🔍 Обработка ФБС: "${blockName}" (code: ${blockCode}) → ${b.current} шт`);
+
+    // Проверяем существование
+    const { data: existing } = await supabase
+      .from('fbs_blocks')
+      .select('id, current')
+      .eq('name', blockName)
+      .maybeSingle();
+
+    if (existing) {
+      // Обновляем
+      await supabase
+        .from('fbs_blocks')
+        .update({ 
+          current: Number(b.current || 0),
+          updated_at: new Date().toISOString() 
+        })
+        .eq('name', blockName);
+      
+      console.log(`✅ Обновлено: "${blockName}" → ${b.current} шт`);
+    } else {
+      // Создаём только если точно нет
+      const { data, error } = await supabase
+        .from('fbs_blocks')
+        .insert({
+          name: blockName,
+          code: blockCode,
+          unit: 'шт',
+          price: 0,
+          is_active: true,
+          current: Number(b.current || 0),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+
+      if (error) {
+        if (error.code === '23505') { // duplicate key
+          console.log(`⚠️ Тип "${blockName}" уже существует (дубликат вызова)`);
+        } else {
+          console.error(`❌ Ошибка создания "${blockName}":`, error);
         }
-
-        await supabase
-          .from('fbs_blocks')
-          .update({ 
-            current: Number(b.current),
-            updated_at: new Date().toISOString() 
-          })
-          .eq('name', blockName);
+      } else {
+        console.log(`✅ Создан новый тип: "${blockName}" (id=${data.id}) → ${b.current} шт`);
       }
     }
+  }
+}
 
     return NextResponse.json({ success: true, message: 'Склад сохранён' });
   } catch (error: any) {

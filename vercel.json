@@ -8,5 +8,19 @@
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
       ]
     }
+  ],
+  "cache": [
+    {
+      "source": "/api/adminCifra/(.*)",
+      "headers": {
+        "Cache-Control": "public, max-age=0, s-maxage=15, must-revalidate"
+      }
+    },
+    {
+      "source": "/api/user/role",
+      "headers": {
+        "Cache-Control": "public, max-age=0, s-maxage=60, must-revalidate"
+      }
+    }
   ]
 }

@@ -303,25 +303,40 @@ ${order.customer_type?.includes('Юридическое')
     fetchAllOrders();
   }, []);
 
-  // ==================== АВТООБНОВЛЕНИЕ РАЗ В МИНУТУ ====================
+    // ==================== АВТООБНОВЛЕНИЕ (устойчивое) ====================
   useEffect(() => {
-    const interval = setInterval(async () => {
+    let isMounted = true;
+
+    const fetchOrders = async () => {
       try {
         const res = await fetch('/api/adminCifra/all-orders', { 
-          cache: 'no-store' 
+          cache: 'no-store',
+          headers: { 
+            'Cache-Control': 'no-cache, no-store, must-revalidate' 
+          }
         });
-       
-        if (res.ok) {
+
+        if (res.ok && isMounted) {
           const data = await res.json();
           setAllOrders(data);
-          console.log(`🔄 Автообновление заявок (${new Date().toLocaleTimeString('ru-RU')})`);
+          // console.log(`🔄 Автообновление заявок (${new Date().toLocaleTimeString('ru-RU')})`);
         }
-      } catch (err) {
-        console.error('Ошибка автообновления заявок:', err);
+      } catch (err: any) {
+        // Только предупреждение, без ошибки в консоли при временных проблемах
+        console.warn('⚠️ Ошибка автообновления (временная, игнорируем):', err.message || err);
       }
-    }, 60000);
+    };
 
-    return () => clearInterval(interval);
+    // Первое обновление сразу после загрузки
+    fetchOrders();
+
+    // Интервал
+    const interval = setInterval(fetchOrders, 45000); // 45 секунд вместо 60
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, []);
 
   // ==================== Синхронизация статуса после изменений в модалке логистики ====================

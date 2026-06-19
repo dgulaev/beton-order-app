@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useTodayLoadingMixers } from '../hooks/useTodayLoadingMixers';
 import WarehousePage from '../warehouse/page';
 import ReportsPage from '../reports/page';
 import RecipesPage from '../recipes/page';
+
 
 
 export default function OperatorBSUPage() {
@@ -19,60 +20,63 @@ export default function OperatorBSUPage() {
     return new Date(now.getFullYear(), now.getMonth(), now.getDate());
   });
 
-  // ==================== 0.1 РЕАЛЬНЫЕ ДАННЫЕ ====================
-  const { allMixers } = useTodayLoadingMixers();
+   // ==================== 0.1 РЕАЛЬНЫЕ ДАННЫЕ ====================
+  const { allMixers: rawMixers } = useTodayLoadingMixers();
 
-    // ==================== 0.2 ФИЛЬТРАЦИЯ ПО ВЫБРАННОЙ ДАТЕ (максимально строго) ====================
-  const queueTrips = allMixers
-    .filter((trip: any) => {
-      if (!trip || trip.status !== 'Загрузка') return false;
+  // ==================== 0.2 ФИЛЬТРАЦИЯ + ЛОКАЛЬНОЕ УПРАВЛЕНИЕ ====================
+  const [localQueueTrips, setLocalQueueTrips] = useState<any[]>([]);
 
-      let tripDateStr = '';
+  const queueTrips = useMemo(() => {
+    return rawMixers
+      .filter((trip: any) => {
+        if (!trip || trip.status !== 'Загрузка') return false;
 
-      if (trip.delivery_date) {
-        // Самое надёжное преобразование
-        tripDateStr = String(trip.delivery_date).split('T')[0].substring(0, 10).trim();
-      } else if (trip.created_at) {
-        tripDateStr = String(trip.created_at).split('T')[0].substring(0, 10).trim();
-      } else if (trip.updated_at) {
-        tripDateStr = String(trip.updated_at).split('T')[0].substring(0, 10).trim();
-      } else {
-        tripDateStr = new Date().toISOString().split('T')[0];
+        let tripDateStr = '';
+
+        if (trip.delivery_date) {
+          tripDateStr = String(trip.delivery_date).split('T')[0].substring(0, 10).trim();
+        } else if (trip.created_at) {
+          tripDateStr = String(trip.created_at).split('T')[0].substring(0, 10).trim();
+        } else if (trip.updated_at) {
+          tripDateStr = String(trip.updated_at).split('T')[0].substring(0, 10).trim();
+        } else {
+          tripDateStr = new Date().toISOString().split('T')[0];
+        }
+
+        const year = selectedDate.getFullYear();
+        const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
+        const day = String(selectedDate.getDate()).padStart(2, '0');
+        const selectedDateStr = `${year}-${month}-${day}`;
+
+        return tripDateStr === selectedDateStr;
+      })
+      .sort((a: any, b: any) => {
+        const timeA = a.time || '00:00';
+        const timeB = b.time || '00:00';
+        return timeA.localeCompare(timeB);
+      });
+  }, [rawMixers, selectedDate]);
+
+  // Синхронизация локального состояния
+  useEffect(() => {
+    setLocalQueueTrips(prev => {
+      if (JSON.stringify(prev) !== JSON.stringify(queueTrips)) {
+        return queueTrips;
       }
-
-      // Локальная выбранная дата без времени
-      const year = selectedDate.getFullYear();
-      const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
-      const day = String(selectedDate.getDate()).padStart(2, '0');
-      const selectedDateStr = `${year}-${month}-${day}`;
-
-      const shouldShow = tripDateStr === selectedDateStr;
-
-      // Отладка
-      //if (trip.order_id === 161 || trip.orderId === 161) {
-      //  console.log(`[ФИЛЬТР 161] delivery_date="${tripDateStr}" | selected="${selectedDateStr}" → ${shouldShow ? '✅ ПОКАЗЫВАЕМ' : '❌ СКРЫВАЕМ'}`);
-      // }
-
-      return shouldShow;
-    })
-    .sort((a: any, b: any) => {
-      const timeA = a.time || '00:00';
-      const timeB = b.time || '00:00';
-      return timeA.localeCompare(timeB);
+      return prev;
     });
+  }, [queueTrips]);
 
   // ==================== 0.3 РЕАЛТАЙМ ОБНОВЛЕНИЕ ====================
   useEffect(() => {
     const interval = setInterval(() => {
-      // Принудительно вызываем обновление данных через хук
-      // (хуки уже имеют встроенный polling, но это дополнительный триггер)
       console.log(`[Realtime] Принудительное обновление данных — ${new Date().toLocaleTimeString('ru-RU')}`);
-    }, 4000); // каждые 4 секунды
+    }, 4000);
 
     return () => clearInterval(interval);
   }, []);
 
-      // ==================== 0.4 ЗАГРУЗКА РЕЦЕПТОВ ИЗ БАЗЫ ====================
+  // ==================== 0.4 ЗАГРУЗКА РЕЦЕПТОВ ИЗ БАЗЫ ====================
   const [recipes, setRecipes] = useState<any[]>([]);
 
   useEffect(() => {
@@ -154,7 +158,7 @@ export default function OperatorBSUPage() {
     }
   };
 
-         // ==================== 1.2 ЗАВЕРШИТЬ ЗАГРУЗКУ ====================
+       // ==================== 1.2 ЗАВЕРШИТЬ ЗАГРУЗКУ ====================
   const completeLoading = async (trip: any) => {
     const startTime = tripStartTimes[trip.id] || trip.loading_started_at;
     if (!startTime) {
@@ -186,27 +190,28 @@ export default function OperatorBSUPage() {
         body: JSON.stringify({ id: trip.id, status: 'В пути' })
       });
 
+      // ✅ МГНОВЕННОЕ УДАЛЕНИЕ ИЗ ОЧЕРЕДИ
+      setLocalQueueTrips(prev => prev.filter(t => String(t.id) !== String(trip.id)));
+
+      // Обновляем отгруженные
       const res = await fetch('/api/adminCifra/production-log');
       if (res.ok) {
         const updated = await res.json();
         setCompletedTrips(Array.isArray(updated) ? updated : []);
       }
+
+      setTimeout(() => {
+        setLoadingTrips(prev => {
+          const copy = { ...prev };
+          delete copy[trip.id];
+          return copy;
+        });
+      }, 600);
+
     } catch (err) {
       console.error(err);
       alert('Ошибка при сохранении производства');
     }
-
-    // Обе кнопки становятся серыми и неактивными
-    setLoadingTrips(prev => ({ ...prev, [trip.id]: true }));
-
-    // Строка исчезает через небольшую задержку
-    setTimeout(() => {
-      setLoadingTrips(prev => {
-        const copy = { ...prev };
-        delete copy[trip.id];
-        return copy;
-      });
-    }, 800);
   };
 
         // ==================== 1.2 ОТГРУЖЕНО СЕГОДНЯ (загрузка из базы) ====================
@@ -520,7 +525,7 @@ export default function OperatorBSUPage() {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
-                {queueTrips.map((trip) => {
+                {(localQueueTrips.length > 0 ? localQueueTrips : queueTrips).map((trip) => {
                   const client = trip.organization_name || trip.client_name || '—';
                   const isLoading = loadingTrips[trip.id];
 

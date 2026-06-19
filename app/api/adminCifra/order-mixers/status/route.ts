@@ -6,6 +6,10 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+
+
+
+
 export async function POST(request: NextRequest) {
   try {
     const { id, status, loading_started_at, podvizhnost } = await request.json();
@@ -18,7 +22,6 @@ export async function POST(request: NextRequest) {
 
     const allowedStatuses = ['Загрузка', 'В пути', 'На объекте', 'Разгружен', 'Возврат', 'Проблема'];
 
-    // Проверяем статус только если он передан
     if (status && !allowedStatuses.includes(status)) {
       return NextResponse.json({ success: false, message: 'Недопустимый статус' }, { status: 400 });
     }
@@ -28,7 +31,7 @@ export async function POST(request: NextRequest) {
       .from('order_mixers')
       .select(`
         *,
-        orders!inner(id, status)
+        orders!inner(id, status, volume)
       `)
       .eq('id', id)
       .single();
@@ -38,29 +41,22 @@ export async function POST(request: NextRequest) {
     }
 
     const orderId = mixer.order_id;
+    const orderVolume = Number(mixer.orders?.volume || 0);
 
     // Подготовка данных для обновления
     const updateData: any = {
       updated_at: new Date().toISOString()
     };
 
-    // Добавляем статус, если передан
-    if (status) {
-      updateData.status = status;
-    }
-
-    // Добавляем время начала загрузки
+    if (status) updateData.status = status;
     if (status === 'Загрузка' && loading_started_at) {
       updateData.loading_started_at = loading_started_at;
     }
-
-    // Добавляем подвижность (новое поле)
     if (podvizhnost !== undefined && podvizhnost !== null) {
       updateData.podvizhnost = podvizhnost;
-      console.log(`✅ [API] Будем сохранять podvizhnost = ${podvizhnost} для id=${id}`);
     }
 
-    // Обновляем статус миксера
+    // Обновляем миксер
     const { data: updatedData, error: updateError } = await supabase
       .from('order_mixers')
       .update(updateData)
@@ -68,22 +64,33 @@ export async function POST(request: NextRequest) {
       .select()
       .maybeSingle();
 
-    if (updateError) {
-      console.error('❌ Supabase update error:', updateError);
-      throw updateError;
-    }
+    if (updateError) throw updateError;
 
-    console.log('✅ [API] Успешно обновлено в базе:', updatedData);
+    console.log('✅ [API] Миксер обновлён');
 
-    // === КРИТИЧНАЯ ЛОГИКА: ПРОВЕРКА ЗАВЕРШЕНИЯ ЗАКАЗА ===
+        // === ИСПРАВЛЕННАЯ ЛОГИКА ЗАВЕРШЕНИЯ ЗАКАЗА ===
     if (status === 'Разгружен') {
-      const { data: remaining } = await supabase
+      const { data: allMixersData, error: fetchMixersError } = await supabase
         .from('order_mixers')
-        .select('id')
-        .eq('order_id', orderId)
-        .neq('status', 'Разгружен');
+        .select('volume, status')
+        .eq('order_id', orderId);
 
-      if (remaining?.length === 0) {
+      const allMixers = allMixersData || [];
+
+      if (fetchMixersError) {
+        console.error('Ошибка получения миксеров:', fetchMixersError);
+      }
+
+      const totalDelivered = allMixers.reduce((sum: number, m: any) => {
+        return sum + Number(m?.volume || 0);
+      }, 0);
+
+      const allUnloaded = allMixers.length > 0 && 
+                         allMixers.every((m: any) => m?.status === 'Разгружен');
+
+      console.log(`📊 Проверка завершения: ${totalDelivered.toFixed(1)} / ${orderVolume.toFixed(1)} | Все разгружены: ${allUnloaded}`);
+
+      if (allUnloaded && totalDelivered >= orderVolume * 0.98) {
         await supabase
           .from('orders')
           .update({ 
@@ -93,14 +100,16 @@ export async function POST(request: NextRequest) {
           })
           .eq('id', orderId);
 
-        console.log(`🎉 Заказ #${orderId} полностью выполнен`);
+        console.log(`🎉 Заказ #${orderId} полностью выполнен (${totalDelivered.toFixed(1)} м³)`);
+      } else if (allUnloaded) {
+        console.log(`⚠️ Все миксеры разгружены, но объём неполный (${totalDelivered.toFixed(1)} / ${orderVolume.toFixed(1)})`);
       }
     }
 
     return NextResponse.json({ 
       success: true, 
       message: `Статус миксера обновлён на "${status || '—'}"`,
-      data: { mixerId: id, status, orderId, podvizhnost }
+      data: { mixerId: id, status, orderId }
     });
 
   } catch (error: any) {

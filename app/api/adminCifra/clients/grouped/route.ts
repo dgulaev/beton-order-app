@@ -7,22 +7,36 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    console.log('🚀 Запрос grouped clients...');
+    const { searchParams } = new URL(request.url);
+    const page = parseInt(searchParams.get('page') || '1');
+    const limit = parseInt(searchParams.get('limit') || '18');
+    const search = searchParams.get('search')?.trim();
 
-    // Загружаем всех клиентов
-    const { data: clients, error } = await supabase
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+
+    console.log(`🚀 Запрос grouped clients... Страница ${page}, limit ${limit}, search: "${search}"`);
+
+    let query = supabase
       .from('users')
-      .select('*')
+      .select('*', { count: 'exact' })
       .eq('role', 'client')
       .order('created_at', { ascending: false });
+
+    // Применяем поиск
+    if (search) {
+      query = query.or(`full_name.ilike.%${search}%,organization_name.ilike.%${search}%,phone.ilike.%${search}%,inn.ilike.%${search}%`);
+    }
+
+    const { data: clients, error, count } = await query.range(from, to);
 
     if (error) throw error;
 
     const grouped = new Map();
 
-    for (const client of clients) {
+    for (const client of clients || []) {
       const key = client.inn 
         ? `${client.inn}_${(client.organization_name || '').toLowerCase().replace(/[^a-zа-я0-9]/g, '')}`
         : `no-inn_${client.user_id}`;
@@ -47,7 +61,6 @@ export async function GET() {
 
       if (client.phone) group.phones.push(client.phone);
 
-      // === КРИТИЧНО: Суммируем объём из orders таблицы ===
       if (client.user_id) {
         const { data: orders } = await supabase
           .from('orders')
@@ -66,9 +79,14 @@ export async function GET() {
 
     const result = Array.from(grouped.values());
 
-    console.log(`✅ Сформировано ${result.length} групп. Пример объёма:`, result[0]?.total_volume || 0);
+    console.log(`✅ Сформировано ${result.length} групп (страница ${page}). Всего: ${count}`);
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      clients: result,
+      totalPages: Math.ceil((count || 0) / limit),
+      total: count || 0,
+      currentPage: page
+    });
 
   } catch (error: any) {
     console.error('Grouped clients API error:', error);
