@@ -16,7 +16,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'ID заявки обязателен' }, { status: 400 });
     }
 
-    console.log('🔄 [Update API] Получена роль от фронта:', userRole);
+    console.log('🔄 [Update API] Обновление заявки #', id, 'от', userName || 'Система');
 
     // ==================== 1. ПОЛУЧЕНИЕ ТЕКУЩЕЙ ЗАЯВКИ ====================
     const { data: currentOrder, error: fetchError } = await supabase
@@ -33,16 +33,15 @@ export async function PUT(request: NextRequest) {
     const finalStatuses = ['completed', 'cancelled'];
 
     if (finalStatuses.includes(currentOrder.status) && updateData.status !== undefined) {
-      // Если пытаются изменить статус — запрещаем
-      delete updateData.status; // удаляем статус из обновления
+      delete updateData.status;
       console.log('⚠️ Попытка изменить статус финальной заявки — отклонено');
     }
 
-        // ==================== 3. ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
+    // ==================== 3. ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
     const changes: any[] = [];
     
     const finalUserRole = userRole || 'admin';
-    const finalUserName = userName || 'Сотрудник';
+    const finalUserName = userName || 'Система (авто)';
 
     const fieldsToTrack = [
       'grade', 'volume', 'delivery_date', 'delivery_time',
@@ -50,7 +49,6 @@ export async function PUT(request: NextRequest) {
       'inn', 'comment', 'status', 'is_questionable', 'logistics_ready'
     ];
 
-    // Русские названия полей
     const fieldNames: Record<string, string> = {
       grade: 'марку бетона',
       volume: 'объём',
@@ -126,6 +124,8 @@ export async function PUT(request: NextRequest) {
       console.error('Update error:', updateError);
       return NextResponse.json({ success: false, message: updateError.message }, { status: 500 });
     }
+
+    console.log(`✅ Заявка #${id} успешно обновлена. Новый статус: ${updateData.status || currentOrder.status}`);
 
     return NextResponse.json({ 
       success: true, 

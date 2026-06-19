@@ -194,29 +194,40 @@ const getStatusRussian = (status: string): string => {
   // ==================== 5.1 СОХРАНЁННЫЙ ОТЧЁТ =====================================
   const [savedReport, setSavedReport] = useState<string>('');
 
-  // ==================== 6. УВЕДОМЛЕНИЯ О ВЫВОДЕ НАЛИЧНЫХ ==========================
-  const fetchNotifications = async () => {
-    if (!['admin', 'manager'].includes(userRole || '')) {
+ // ==================== 6. УВЕДОМЛЕНИЯ О ВЫВОДЕ НАЛИЧНЫХ ==========================
+const fetchNotifications = async () => {
+  if (!['admin', 'manager'].includes(userRole || '')) {
+    setNotifications([]);
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/adminCifra/withdrawals?userId=${userId}`, {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
+      signal: AbortSignal.timeout(15000) // 15 секунд таймаут
+    });
+
+    if (!res.ok) {
+      console.warn(`Withdrawals API: HTTP ${res.status}`);
       setNotifications([]);
       return;
     }
 
-    try {
-      // Запрашиваем активные (непогашенные) выводы
-      const res = await fetch(`/api/adminCifra/withdrawals?userId=${userId}`);
-      if (res.ok) {
-        const data = await res.json();
-        // Оставляем только pending
-        const pending = data.withdrawals?.filter((w: any) => w.status !== 'completed') || [];
-        setNotifications(pending);
-        console.log(`🔔 Активных запросов на вывод: ${pending.length}`);
-      }
-    } catch (err) {
-      console.error('Ошибка загрузки уведомлений:', err);
-    }
-  };
+    const data = await res.json();
 
-  const getMixerStatusStyle = (status: string) => {
+    // Оставляем только pending
+    const pending = (data.withdrawals || data || []).filter((w: any) => w.status !== 'completed');
+    
+    setNotifications(pending);
+    console.log(`🔔 Активных запросов на вывод: ${pending.length}`);
+  } catch (err: any) {
+    console.warn('Ошибка загрузки уведомлений о выводах:', err.message || err);
+    setNotifications([]); // ← важно, чтобы не ломало дашборд
+  }
+};
+
+const getMixerStatusStyle = (status: string) => {
   switch (status) {
     case 'Загрузка':
       return { color: '#FACC15', bg: '#FACC1520' };
@@ -231,17 +242,17 @@ const getStatusRussian = (status: string): string => {
   }
 };
 
-  // Только ручное обновление (без автотаймера)
-  useEffect(() => {
-    fetchNotifications(); // первая загрузка
+// ==================== ЗАГРУЗКА УВЕДОМЛЕНИЙ ====================
+useEffect(() => {
+  fetchNotifications(); // первая загрузка
 
-    const handleRefresh = () => fetchNotifications();
-    window.addEventListener('refreshNotifications', handleRefresh);
+  const handleRefresh = () => fetchNotifications();
+  window.addEventListener('refreshNotifications', handleRefresh);
 
-    return () => {
-      window.removeEventListener('refreshNotifications', handleRefresh);
-    };
-  }, [userRole, userId]);
+  return () => {
+    window.removeEventListener('refreshNotifications', handleRefresh);
+  };
+}, [userRole, userId]);
 
   // ==================== 7. ЗАГРУЗКА ВСЕХ ЗАКАЗОВ ====================
   useEffect(() => {
@@ -554,32 +565,49 @@ useEffect(() => {
   useRealtimeOrders(setAllOrders);
 
       // ==================== 21. АВТО-ОБНОВЛЕНИЕ ДАННЫХ ================================
-  useEffect(() => {
-    const refreshData = async () => {
-      try {
-        const [ordersRes, mixersRes] = await Promise.all([
-          fetch('/api/adminCifra/all-orders'),
-          fetch('/api/adminCifra/active-mixers')
-        ]);
+useEffect(() => {
+  const refreshData = async () => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 секунд таймаут
 
-        if (ordersRes.ok) {
-          const freshOrders = await ordersRes.json();
-          setAllOrders(freshOrders);
-        }
-        if (mixersRes.ok) {
-          const freshMixers = await mixersRes.json();
-          setActiveMixers(freshMixers);
-        }
-      } catch (err) {
+      const [ordersRes, mixersRes] = await Promise.all([
+        fetch('/api/adminCifra/all-orders', { 
+          signal: controller.signal,
+          cache: 'no-store' 
+        }),
+        fetch('/api/adminCifra/active-mixers', { 
+          signal: controller.signal,
+          cache: 'no-store' 
+        })
+      ]);
+
+      clearTimeout(timeoutId);
+
+      if (ordersRes.ok) {
+        const freshOrders = await ordersRes.json();
+        setAllOrders(Array.isArray(freshOrders) ? freshOrders : freshOrders.orders || freshOrders || []);
+      }
+
+      if (mixersRes.ok) {
+        const freshMixers = await mixersRes.json();
+        setActiveMixers(freshMixers);
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        console.warn('Auto-refresh: запрос превысил таймаут (25 сек)');
+      } else {
         console.error('Ошибка автообновления:', err);
       }
-    };
+    }
+  };
 
-    refreshData();                    // сразу при загрузке
-    const interval = setInterval(refreshData, 15000); // ← каждые 12 секунд
+  refreshData();                    // сразу при загрузке
 
-    return () => clearInterval(interval);
-  }, []);
+  const interval = setInterval(refreshData, 20000); // каждые 20 секунд
+
+  return () => clearInterval(interval);
+}, []);
 
     // ==================== 22. ГЛОБАЛЬНАЯ ЗАГРУЗКА ВСЕХ НАЗНАЧЕННЫХ МИКСЕРОВ ===============
   useEffect(() => {

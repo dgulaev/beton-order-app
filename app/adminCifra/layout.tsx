@@ -374,7 +374,7 @@ useEffect(() => {
   console.log('✅ window.showVisualNotification и playNotificationSound доступны');
 }, []); // пустой массив — выполняется один раз
 
- // ==================== БЛОК 5. УЛУЧШЕННЫЙ POLLING (ФИКС ПОВТОРНЫХ УВЕДОМЛЕНИЙ) ====================
+ // ==================== БЛОК 5. УЛУЧШЕННЫЙ POLLING ====================
 useEffect(() => {
   if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) {
     return;
@@ -382,40 +382,31 @@ useEffect(() => {
 
   console.log(`✅ Polling запущен для роли: ${userRole}`);
 
-  // Восстанавливаем последний обработанный ID из localStorage
   let lastMaxOrderId = parseInt(localStorage.getItem('lastMaxOrderId') || '0');
   let lastKnownData: Record<number, any> = {};
 
   const checkOrders = async () => {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 секунд
+
       const res = await fetch('/api/adminCifra/all-orders', {
+        signal: controller.signal,
         cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' },
-        signal: AbortSignal.timeout(10000) // ← Защита от зависания (10 секунд)
+        headers: { 'Cache-Control': 'no-cache' }
       });
 
-      if (!res.ok) {
-        console.warn(`Polling: HTTP ${res.status} — сервер вернул ошибку`);
-        return;
-      }
+      clearTimeout(timeoutId);
+
+      if (!res.ok) return;
 
       const response = await res.json();
-      
-      // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
-      // Универсальная обработка ответа (массив или {orders: [...]})
-      const orders = Array.isArray(response) 
-        ? response 
-        : (response.orders || response || []);
-      // ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
+      const orders = Array.isArray(response) ? response : (response.orders || response || []);
 
-      const currentMaxId = orders.length > 0 
-        ? Math.max(...orders.map((o: any) => o.id || 0)) 
-        : 0;
+      const currentMaxId = orders.length > 0 ? Math.max(...orders.map((o: any) => o.id || 0)) : 0;
 
-      // === НОВЫЕ ЗАЯВКИ ===
       if (currentMaxId > lastMaxOrderId) {
         const newOrders = orders.filter((o: any) => o.id > lastMaxOrderId);
-
         console.log(`🆕 Найдено новых заявок: ${newOrders.length}`);
 
         for (const newOrder of newOrders) {
@@ -424,15 +415,12 @@ useEffect(() => {
           showVisualNotification('new', newOrder);
         }
 
-        // Сохраняем прогресс
         lastMaxOrderId = currentMaxId;
         localStorage.setItem('lastMaxOrderId', currentMaxId.toString());
       }
 
-      // === Изменения в существующих заявках ===
       orders.forEach((order: any) => {
         const prev = lastKnownData[order.id];
-
         if (prev) {
           if (prev.status !== order.status) {
             if (typeof playNotificationSound === 'function') playNotificationSound();
@@ -447,21 +435,20 @@ useEffect(() => {
             showVisualNotification('datetime', order);
           }
         }
-
         lastKnownData[order.id] = { ...order };
       });
 
     } catch (err: any) {
-      if (err.name === 'TimeoutError') {
-        console.warn('Polling: запрос превысил таймаут (10 сек)');
+      if (err.name === 'AbortError') {
+        console.warn('Polling: запрос превысил таймаут (30 сек)');
       } else {
-        console.warn('Polling error:', err.message || err);
+        console.warn('Polling error:', err);
       }
     }
   };
 
-  const initialTimer = setTimeout(checkOrders, 1500);
-  const interval = setInterval(checkOrders, 10000);
+  const initialTimer = setTimeout(checkOrders, 2000);
+  const interval = setInterval(checkOrders, 20000); // 20 секунд
 
   return () => {
     clearTimeout(initialTimer);

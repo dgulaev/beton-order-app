@@ -237,7 +237,7 @@ const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
   }
 };
 
-// ==================== 6. АВТОМАТИЧЕСКАЯ СМЕНА СТАТУСА ЗАЯВКИ (СТРОГАЯ ВЕРСИЯ 2) ====================
+// ==================== 6. АВТОМАТИЧЕСКАЯ СМЕНА СТАТУСА ЗАЯВКИ (СТРОГАЯ ВЕРСИЯ 2 + СОХРАНЕНИЕ В БД) ====================
 const checkAndUpdateOrderStatus = async () => {
   if (!order?.id) return;
 
@@ -255,12 +255,12 @@ const checkAndUpdateOrderStatus = async () => {
   console.log(`🔍 [СТАТУС] Заявка #${order.id} | Объём: ${totalAssignedVolume.toFixed(1)} / ${orderVolume.toFixed(1)} | Все разгружены: ${allUnloaded}`);
 
   // ==================== СТРОГОЕ УСЛОВИЕ ====================
-  if (allUnloaded && totalAssignedVolume >= orderVolume * 0.95) { 
+  if (allUnloaded && totalAssignedVolume >= orderVolume * 0.98) { 
     // Только если почти полный объём + все разгружены
     newStatus = 'completed';
     console.log(`✅ ПОЛНОСТЬЮ ВЫПОЛНЕНА (${totalAssignedVolume.toFixed(1)} м³)`);
   } 
-  else if (totalAssignedVolume > 0) {
+  else if (totalAssignedVolume > 0 && order.status === 'new') {
     newStatus = 'processing';
     console.log(`🔄 В работе (объём ${totalAssignedVolume.toFixed(1)} м³)`);
   }
@@ -273,7 +273,29 @@ const checkAndUpdateOrderStatus = async () => {
   if (newStatus !== order.status) {
     console.log(`🔄 Автосмена статуса: ${order.status} → ${newStatus}`);
 
-    // Обновляем состояния
+    // ==================== СОХРАНЕНИЕ В БАЗУ ДАННЫХ ====================
+    try {
+      const response = await fetch('/api/adminCifra/orders/update', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: order.id,
+          status: newStatus,
+          userRole: 'admin',
+          userName: 'Система (авто)'
+        })
+      });
+
+      if (!response.ok) {
+        console.warn('⚠️ API вернул ошибку при обновлении статуса');
+      } else {
+        console.log(`💾 Статус успешно сохранён в базу: ${newStatus}`);
+      }
+    } catch (err) {
+      console.error('❌ Не удалось сохранить статус в базу:', err);
+    }
+
+    // Обновляем состояния UI
     setAllOrders(prev => prev.map(o => 
       o.id === order.id ? { ...o, status: newStatus, logistics_ready: newStatus === 'completed' } : o
     ));
