@@ -33,11 +33,11 @@ export async function GET(request: NextRequest) {
 
     // Если ?all=true — возвращаем всех пользователей (клиенты + стафф)
     if (all === 'true') {
-      console.log('📋 [Clients API] Возвращаем ВСЕХ пользователей (all=true)');
+     // console.log('📋 [Clients API] Возвращаем ВСЕХ пользователей (all=true)');
     } else {
       // По умолчанию — только клиенты (как было раньше)
       query = query.eq('role', 'client');
-      console.log('📋 [Clients API] Возвращаем только клиентов (role = client)');
+    //  console.log('📋 [Clients API] Возвращаем только клиентов (role = client)');
     }
 
     const { data: usersRaw, error } = await query;
@@ -127,7 +127,7 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    console.log(`📊 [Clients API] Возвращено записей: ${enrichedUsers.length}`);
+  //  console.log(`📊 [Clients API] Возвращено записей: ${enrichedUsers.length}`);
     return NextResponse.json(enrichedUsers);
   } catch (error: any) {
     console.error('Clients API error:', error);

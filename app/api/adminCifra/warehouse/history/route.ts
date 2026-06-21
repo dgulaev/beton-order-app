@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    console.log('✅ История успешно сохранена в базу');
+   // console.log('✅ История успешно сохранена в базу');
     return NextResponse.json({ success: true });
 
   } catch (error: any) {

@@ -9,7 +9,7 @@ const supabase = createClient(
 export async function GET(request: NextRequest) {
   try {
     const userIdParam = request.nextUrl.searchParams.get('userId');
-    console.log('📡 [Withdrawals] Запрос от userId:', userIdParam);
+   // console.log('📡 [Withdrawals] Запрос от userId:', userIdParam);
 
     if (!userIdParam) {
       return NextResponse.json({ success: true, withdrawals: [] }); // мягкий ответ
@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, withdrawals: [] });
     }
 
-    console.log(`✅ Успешно загружено ${withdrawals?.length || 0} запросов на вывод`);
+   // console.log(`✅ Успешно загружено ${withdrawals?.length || 0} запросов на вывод`);
 
     return NextResponse.json({
       success: true,

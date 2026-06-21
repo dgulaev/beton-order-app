@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    console.log(`📞 Загружено ${data?.length || 0} звонков для клиента ${clientId}`);
+   // console.log(`📞 Загружено ${data?.length || 0} звонков для клиента ${clientId}`);
     return NextResponse.json(data || []);
   } catch (err: any) {
     console.error('❌ Ошибка в client-calls API:', err);

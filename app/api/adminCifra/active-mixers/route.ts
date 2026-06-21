@@ -61,7 +61,7 @@ export async function GET(request: NextRequest) {
       client: item.orders?.organization_name || item.orders?.full_name || item.orders?.client_name || '—'
     }));
 
-    console.log(`✅ Загружено ${formatted.length} активных миксеров (withOrders=${withOrders})`);
+   // console.log(`✅ Загружено ${formatted.length} активных миксеров (withOrders=${withOrders})`);
 
     return NextResponse.json(formatted);
   } catch (error: any) {

@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
     if (error) {
       console.error('Heartbeat error:', error);
     } else {
-      console.log(`✅ Heartbeat обновлён для user ${userId}`);
+     // console.log(`✅ Heartbeat обновлён для user ${userId}`);
     }
 
     return NextResponse.json({ success: true });

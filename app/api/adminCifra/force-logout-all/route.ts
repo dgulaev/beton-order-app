@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
       }, { status: 500 });
     }
 
-    console.log(`🔴 Главный Админ ${userId} выполнил принудительный logout всех сотрудников`);
+   // console.log(`🔴 Главный Админ ${userId} выполнил принудительный logout всех сотрудников`);
 
     return NextResponse.json({ 
       success: true, 

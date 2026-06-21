@@ -23,7 +23,7 @@ export async function GET() {
       return NextResponse.json([]); // Возвращаем пустой массив, чтобы ничего не падало
     }
 
-    console.log(`✅ all-orders: загружено ${data?.length || 0} заказов`);
+    // console.log(`✅ all-orders: загружено ${data?.length || 0} заказов`);
 
     return NextResponse.json(data || []); // Возвращаем массив напрямую
 

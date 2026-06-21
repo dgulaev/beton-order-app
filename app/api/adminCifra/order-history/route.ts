@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
 
     if (error) throw error;
 
-    console.log(`📝 Добавлена запись в историю заказа #${order_id}`);
+   // console.log(`📝 Добавлена запись в историю заказа #${order_id}`);
 
     return NextResponse.json({ success: true, data });
 

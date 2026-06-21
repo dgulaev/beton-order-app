@@ -3,18 +3,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import Calendar from '../Calendar';
 import { Order } from '../hooks/useCalendarOrders';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import OrderDetailModal from '../components/OrderDetailModal';
 import Image from 'next/image';
 
-
-
-// Создаём клиент Supabase (один раз на весь файл)
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
 
 export default function AdminCifraDashboard() {
 
@@ -114,7 +107,7 @@ const addToHistory = async (action: string, details?: any) => {
       new_value: details?.newValue || details?.new_value || null
     };
 
-    console.log('📝 [addToHistory] →', payload);
+   // console.log('📝 [addToHistory] →', payload);
 
     const res = await fetch('/api/adminCifra/order-history', {
       method: 'POST',
@@ -220,7 +213,7 @@ const fetchNotifications = async () => {
     const pending = (data.withdrawals || data || []).filter((w: any) => w.status !== 'completed');
     
     setNotifications(pending);
-    console.log(`🔔 Активных запросов на вывод: ${pending.length}`);
+   // console.log(`🔔 Активных запросов на вывод: ${pending.length}`);
   } catch (err: any) {
     console.warn('Ошибка загрузки уведомлений о выводах:', err.message || err);
     setNotifications([]); // ← важно, чтобы не ломало дашборд
@@ -422,7 +415,7 @@ useEffect(() => {
   })
     .then(r => r.json())
     .then(data => {
-      console.log('📥 Данные от /api/user/role:', data); // ← для отладки
+    //  console.log('📥 Данные от /api/user/role:', data); // ← для отладки
 
       setUserRole(data.role || 'client');
       
@@ -462,7 +455,7 @@ useEffect(() => {
         if (res.ok) {
           const data = await res.json();
           setAllMixers(data);
-          console.log(`✅ Загружено ${data.length} миксеров для выбора`);
+        //  console.log(`✅ Загружено ${data.length} миксеров для выбора`);
         }
       } catch (err) {
         console.error('Ошибка загрузки миксеров:', err);
@@ -476,13 +469,13 @@ useEffect(() => {
   useEffect(() => {
     const fetchActiveMixers = async () => {
       try {
-        console.log('🔄 Запрашиваем активные миксеры...');
+      //  console.log('🔄 Запрашиваем активные миксеры...');
         const res = await fetch('/api/adminCifra/active-mixers');
-        console.log('📡 Статус ответа:', res.status);
+       // console.log('📡 Статус ответа:', res.status);
         
         if (res.ok) {
           const data = await res.json();
-          console.log('✅ Получены миксеры:', data);
+       //   console.log('✅ Получены миксеры:', data);
           setActiveMixers(data);
         } else {
           console.error('❌ Ошибка API:', res.status);
@@ -497,7 +490,7 @@ useEffect(() => {
 
       // ==================== 17. СМЕНА СТАТУСА МИКСЕРА ====================
   const handleStatusChange = async (mixerId: number | string, newStatus: string) => {
-    console.log(`🔄 Меняем статус миксера ${mixerId} → ${newStatus}`);
+  //  console.log(`🔄 Меняем статус миксера ${mixerId} → ${newStatus}`);
 
     try {
       const res = await fetch('/api/adminCifra/order-mixers/status', {
@@ -509,7 +502,7 @@ useEffect(() => {
       const data = await res.json();
 
       if (res.ok && data.success) {
-        console.log('✅ Статус успешно обновлён в базе');
+      //  console.log('✅ Статус успешно обновлён в базе');
 
         // Обновляем статус в списке
         setActiveMixers(prev => 
@@ -518,7 +511,7 @@ useEffect(() => {
 
         // Если статус завершающий — убираем миксер из списка
         if (['Разгружен', 'Возврат'].includes(newStatus)) {
-          console.log(`🗑️ Убираем миксер ${mixerId} из активных`);
+       //   console.log(`🗑️ Убираем миксер ${mixerId} из активных`);
           setTimeout(() => {
             setActiveMixers(prev => prev.filter(m => String(m.id) !== String(mixerId)));
           }, 600);
@@ -617,7 +610,7 @@ useEffect(() => {
         if (res.ok) {
           const data = await res.json();
           setMixerAssignments(data);
-          console.log(`[MixerAssignments] Загружено ${data.length} записей`);
+         // console.log(`[MixerAssignments] Загружено ${data.length} записей`);
         }
       } catch (err) {
         console.error('Ошибка загрузки mixerAssignments:', err);
@@ -657,7 +650,7 @@ useEffect(() => {
         if (res.ok) {
           const data = await res.json();
           setMixerAssignments(data); 
-          console.log(`📥 Загружено ${data.length} миксеров для заказа #${selectedOrder.id}`);
+        //  console.log(`📥 Загружено ${data.length} миксеров для заказа #${selectedOrder.id}`);
         }
       } catch (err) {
         console.error('Ошибка загрузки миксеров заказа:', err);
@@ -680,7 +673,7 @@ useEffect(() => {
         if (res.ok) {
           const data = await res.json();
           setHistory(data);
-          console.log(`📜 Загружена история для заказа #${selectedOrder.id}: ${data.length} записей`);
+         // console.log(`📜 Загружена история для заказа #${selectedOrder.id}: ${data.length} записей`);
         }
       } catch (err) {
         console.error('Ошибка загрузки истории:', err);
@@ -693,7 +686,7 @@ useEffect(() => {
   // ==================== 26. СЛУШАТЕЛЬ ДЛЯ ОБНОВЛЕНИЯ ПОСЛЕ ДОБАВЛЕНИЯ МИКСЕРА ====================
   useEffect(() => {
     const handleMixerAdded = () => {
-      console.log('🔄 Миксер добавлен из модалки, обновляем данные...');
+    //  console.log('🔄 Миксер добавлен из модалки, обновляем данные...');
       
       // Можно добавить принудительную перезагрузку назначенных миксеров
       const reloadMixers = async () => {
@@ -766,7 +759,7 @@ const deleteMixer = async (mixerId: number | string, index: number) => {
     const data = await res.json();
 
     if (res.ok && (data.success || !data.error)) {
-      console.log(`🗑️ Миксер ${mixerName} успешно удалён`);
+     // console.log(`🗑️ Миксер ${mixerName} успешно удалён`);
 
       if (typeof addToHistory === 'function') {
         await addToHistory(`Удалил миксер ${mixerName} (статус: ${currentStatus})`);

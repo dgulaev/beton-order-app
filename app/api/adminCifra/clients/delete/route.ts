@@ -17,7 +17,7 @@ export async function DELETE(request: NextRequest) {
 
     const parsedId = parseInt(userId);
 
-    console.log(`🗑 Попытка удаления клиента ID: ${parsedId}`);
+   // console.log(`🗑 Попытка удаления клиента ID: ${parsedId}`);
 
     // Проверяем, есть ли у клиента заказы
     const { count } = await supabase
@@ -42,7 +42,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    console.log(`✅ Клиент ${parsedId} успешно удалён`);
+   // console.log(`✅ Клиент ${parsedId} успешно удалён`);
     return NextResponse.json({ success: true, message: 'Клиент удалён' });
 
   } catch (error: any) {

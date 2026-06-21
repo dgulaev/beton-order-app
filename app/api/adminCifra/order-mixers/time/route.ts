@@ -5,7 +5,7 @@ export async function POST(request: NextRequest) {
   try {
     const { id, time } = await request.json();
 
-    console.log(`🔄 Получен запрос на обновление времени: id=${id}, time=${time}`);
+   // console.log(`🔄 Получен запрос на обновление времени: id=${id}, time=${time}`);
 
     if (!id || time === undefined) {
       return NextResponse.json({ success: false, error: 'Missing id or time' }, { status: 400 });
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
-    console.log(`✅ Успешно обновлено в базе:`, data);
+   // console.log(`✅ Успешно обновлено в базе:`, data);
 
     return NextResponse.json({ success: true, data });
   } catch (error: any) {

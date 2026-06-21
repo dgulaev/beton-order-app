@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    console.log(`🚀 Запрос grouped clients... Страница ${page}, limit ${limit}, search: "${search}"`);
+   // console.log(`🚀 Запрос grouped clients... Страница ${page}, limit ${limit}, search: "${search}"`);
 
     let query = supabase
       .from('users')
@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
 
     const result = Array.from(grouped.values());
 
-    console.log(`✅ Сформировано ${result.length} групп (страница ${page}). Всего: ${count}`);
+   // console.log(`✅ Сформировано ${result.length} групп (страница ${page}). Всего: ${count}`);
 
     return NextResponse.json({
       clients: result,

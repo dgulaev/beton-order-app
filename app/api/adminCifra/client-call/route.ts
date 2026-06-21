@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
   try {
     const { client_id, result, comment } = await request.json();
 
-    console.log('📞 [Client Call] Получен результат:', { client_id, result, comment });
+   // console.log('📞 [Client Call] Получен результат:', { client_id, result, comment });
 
     if (!client_id || !result) {
       return NextResponse.json({ error: 'client_id и result обязательны' }, { status: 400 });
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    console.log('✅ Результат звонка успешно сохранён');
+   // console.log('✅ Результат звонка успешно сохранён');
     return NextResponse.json({ success: true, message: 'Результат звонка сохранён' });
 
   } catch (err: any) {

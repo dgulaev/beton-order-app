@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
       client: item.orders?.organization_name || item.orders?.full_name || '—'
     }));
 
-    console.log(`✅ Загружено ${formatted.length} записей order_mixers`);
+   // console.log(`✅ Загружено ${formatted.length} записей order_mixers`);
     return NextResponse.json(formatted);
 
   } catch (error: any) {
@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
 
     if (error) throw error;
 
-    console.log(`✅ Добавлен миксер ${mixerName} со статусом ${status || 'Загрузка'}`);
+   // console.log(`✅ Добавлен миксер ${mixerName} со статусом ${status || 'Загрузка'}`);
 
     return NextResponse.json({ success: true, data });
 

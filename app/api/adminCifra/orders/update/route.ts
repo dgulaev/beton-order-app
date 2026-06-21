@@ -16,7 +16,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'ID заявки обязателен' }, { status: 400 });
     }
 
-    console.log('🔄 [Update API] Обновление заявки #', id, 'от', userName || 'Система');
+   // console.log('🔄 [Update API] Обновление заявки #', id, 'от', userName || 'Система');
 
     // ==================== 1. ПОЛУЧЕНИЕ ТЕКУЩЕЙ ЗАЯВКИ ====================
     const { data: currentOrder, error: fetchError } = await supabase
@@ -34,7 +34,7 @@ export async function PUT(request: NextRequest) {
 
     if (finalStatuses.includes(currentOrder.status) && updateData.status !== undefined) {
       delete updateData.status;
-      console.log('⚠️ Попытка изменить статус финальной заявки — отклонено');
+    //  console.log('⚠️ Попытка изменить статус финальной заявки — отклонено');
     }
 
     // ==================== 3. ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
@@ -110,7 +110,7 @@ export async function PUT(request: NextRequest) {
       if (historyError) {
         console.error('❌ Ошибка записи истории:', historyError);
       } else {
-        console.log(`📜 Записано ${changes.length} изменений в историю`);
+      //  console.log(`📜 Записано ${changes.length} изменений в историю`);
       }
     }
 
@@ -125,7 +125,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: false, message: updateError.message }, { status: 500 });
     }
 
-    console.log(`✅ Заявка #${id} успешно обновлена. Новый статус: ${updateData.status || currentOrder.status}`);
+   // console.log(`✅ Заявка #${id} успешно обновлена. Новый статус: ${updateData.status || currentOrder.status}`);
 
     return NextResponse.json({ 
       success: true, 

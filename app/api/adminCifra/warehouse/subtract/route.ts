@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
   try {
     const { pfmLiters = 0, linomixLiters = 0 } = await request.json();
 
-    console.log(`🔄 [SUBTRACT] Запрос: ПФМ-НЛК = ${pfmLiters} л, Линомикс = ${linomixLiters} л`);
+   // console.log(`🔄 [SUBTRACT] Запрос: ПФМ-НЛК = ${pfmLiters} л, Линомикс = ${linomixLiters} л`);
 
     // ПФМ-НЛК (additive_id = 1)
     if (pfmLiters > 0) {

@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
       .delete()
       .eq('user_id', sourceUserId);
 
-    console.log(`✅ Клиенты объединены: ${sourceUserId} → ${targetUserId}`);
+   // console.log(`✅ Клиенты объединены: ${sourceUserId} → ${targetUserId}`);
 
     return NextResponse.json({ 
       success: true, 

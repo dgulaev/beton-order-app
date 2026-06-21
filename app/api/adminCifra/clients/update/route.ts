@@ -12,7 +12,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { userId, full_name, organization_name, phone, inn, ...other } = body;
 
-    console.log('📥 [Update Client] Получен payload:', body);
+   // console.log('📥 [Update Client] Получен payload:', body);
 
     if (!userId) {
       return NextResponse.json({ 
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    console.log(`✅ Клиент ${userId} успешно обновлён`, updatePayload);
+   // console.log(`✅ Клиент ${userId} успешно обновлён`, updatePayload);
     return NextResponse.json({ 
       success: true, 
       message: 'Клиент успешно обновлён' 

@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
 
     const currentUserId = parseInt(userIdParam);
 
-    console.log(`🔍 [Reminders Debug] Запрос для userId: ${currentUserId}`);
+   // console.log(`🔍 [Reminders Debug] Запрос для userId: ${currentUserId}`);
 
     const { data: currentUser } = await supabase
       .from('users')
@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
       .eq('user_id', currentUserId)
       .single();
 
-    console.log(`👤 Роль: ${currentUser?.role}`);
+   // console.log(`👤 Роль: ${currentUser?.role}`);
 
     const today = new Date().toISOString().split('T')[0];
 
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
 
     if (error) throw error;
 
-    console.log(`📊 Всего клиентов с next_contact: ${allClients?.length || 0}`);
+   // console.log(`📊 Всего клиентов с next_contact: ${allClients?.length || 0}`);
 
     let filtered = allClients || [];
 
@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
       filtered = filtered.filter((c: any) => {
         const isAssigned = c.assigned_to === currentUserId;
         if (isAssigned) {
-          console.log(`✅ Найден привязанный клиент: ${c.organization_name} (ID ${c.user_id})`);
+         // console.log(`✅ Найден привязанный клиент: ${c.organization_name} (ID ${c.user_id})`);
         }
         return isAssigned;
       });
@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
       isOverdue: new Date(c.next_contact) < new Date()
     }));
 
-    console.log(`📢 [Reminders] Итогово найдено ${result.length} напоминаний`);
+  //  console.log(`📢 [Reminders] Итогово найдено ${result.length} напоминаний`);
 
     return NextResponse.json(result);
 

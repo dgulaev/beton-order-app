@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
   try {
     const { id, status, loading_started_at, podvizhnost } = await request.json();
 
-    console.log('📥 [API] Получены данные:', { id, status, podvizhnost, loading_started_at });
+   // console.log('📥 [API] Получены данные:', { id, status, podvizhnost, loading_started_at });
 
     if (!id) {
       return NextResponse.json({ success: false, message: 'id обязателен' }, { status: 400 });
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
 
     if (updateError) throw updateError;
 
-    console.log('✅ [API] Миксер обновлён');
+   // console.log('✅ [API] Миксер обновлён');
 
         // === ИСПРАВЛЕННАЯ ЛОГИКА ЗАВЕРШЕНИЯ ЗАКАЗА ===
     if (status === 'Разгружен') {
@@ -88,7 +88,7 @@ export async function POST(request: NextRequest) {
       const allUnloaded = allMixers.length > 0 && 
                          allMixers.every((m: any) => m?.status === 'Разгружен');
 
-      console.log(`📊 Проверка завершения: ${totalDelivered.toFixed(1)} / ${orderVolume.toFixed(1)} | Все разгружены: ${allUnloaded}`);
+     // console.log(`📊 Проверка завершения: ${totalDelivered.toFixed(1)} / ${orderVolume.toFixed(1)} | Все разгружены: ${allUnloaded}`);
 
       if (allUnloaded && totalDelivered >= orderVolume * 0.98) {
         await supabase
@@ -100,9 +100,9 @@ export async function POST(request: NextRequest) {
           })
           .eq('id', orderId);
 
-        console.log(`🎉 Заказ #${orderId} полностью выполнен (${totalDelivered.toFixed(1)} м³)`);
+       // console.log(`🎉 Заказ #${orderId} полностью выполнен (${totalDelivered.toFixed(1)} м³)`);
       } else if (allUnloaded) {
-        console.log(`⚠️ Все миксеры разгружены, но объём неполный (${totalDelivered.toFixed(1)} / ${orderVolume.toFixed(1)})`);
+      //  console.log(`⚠️ Все миксеры разгружены, но объём неполный (${totalDelivered.toFixed(1)} / ${orderVolume.toFixed(1)})`);
       }
     }
 

@@ -16,7 +16,7 @@ export async function GET() {
 
     if (error) throw error;
 
-    console.log(`✅ Найдено сотрудников: ${data?.length || 0}`);
+   // console.log(`✅ Найдено сотрудников: ${data?.length || 0}`);
 
     return NextResponse.json({ 
       success: true, 

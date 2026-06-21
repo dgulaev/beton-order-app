@@ -44,7 +44,7 @@ export async function GET() {
 
     const duplicates = Object.values(grouped).filter((g: any) => g.clients.length > 1);
 
-    console.log(`🔍 Найдено групп дублей: ${duplicates.length}`);
+   // console.log(`🔍 Найдено групп дублей: ${duplicates.length}`);
     return NextResponse.json(duplicates);
 
   } catch (error: any) {

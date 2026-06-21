@@ -49,7 +49,7 @@ const isGuest = userRole === 'guest';
     if (!audio) return;
     audio.currentTime = 0;
     audio.play().catch((err) => {
-      console.log('Звук заблокирован браузером (нормально):', err.message);
+     // console.log('Звук заблокирован браузером (нормально):', err.message);
     });
   };
 
@@ -93,13 +93,13 @@ const checkUserRole = async (savedUserId: string) => {
       
       // Главный Админ (user_id = 1777619517739) может входить всегда
       if (parseInt(savedUserId) === 1777619517739) {
-        console.log('✅ Главный Админ — разрешаем вход несмотря на force_logout_version');
+       // console.log('✅ Главный Админ — разрешаем вход несмотря на force_logout_version');
         setUserRole(data.role || 'admin');
         return;
       } 
       
       // Все остальные сотрудники выкидываются автоматически
-      console.log(`🔴 Принудительный выход для пользователя ${savedUserId}`);
+     // console.log(`🔴 Принудительный выход для пользователя ${savedUserId}`);
       localStorage.removeItem('userId');
       setIsLoggedIn(false);
       setUserRole(null);
@@ -143,7 +143,7 @@ const handleLogin = async (e: React.FormEvent) => {
     if (data.success && data.userId) {
       localStorage.setItem('userId', data.userId.toString());
       
-      console.log('✅ Логин успешен, обновляем состояние');
+     // console.log('✅ Логин успешен, обновляем состояние');
       
       setIsLoggedIn(true);
       setUserRole(data.role);
@@ -352,7 +352,7 @@ useEffect(() => {
         body: JSON.stringify({ userId: parseInt(savedUserId) })
       });
 
-      console.log('❤️ Heartbeat sent, status:', res.status);
+     // console.log('❤️ Heartbeat sent, status:', res.status);
     } catch (e) {
       console.warn('Heartbeat failed:', e);
     }
@@ -371,7 +371,7 @@ useEffect(() => {
   (window as any).showVisualNotification = showVisualNotification;
   (window as any).playNotificationSound = playNotificationSound;
   
-  console.log('✅ window.showVisualNotification и playNotificationSound доступны');
+ // console.log('✅ window.showVisualNotification и playNotificationSound доступны');
 }, []); // пустой массив — выполняется один раз
 
  // ==================== БЛОК 5. УЛУЧШЕННЫЙ POLLING ====================
@@ -380,7 +380,7 @@ useEffect(() => {
     return;
   }
 
-  console.log(`✅ Polling запущен для роли: ${userRole}`);
+ // console.log(`✅ Polling запущен для роли: ${userRole}`);
 
   let lastMaxOrderId = parseInt(localStorage.getItem('lastMaxOrderId') || '0');
   let lastKnownData: Record<number, any> = {};
@@ -407,7 +407,7 @@ useEffect(() => {
 
       if (currentMaxId > lastMaxOrderId) {
         const newOrders = orders.filter((o: any) => o.id > lastMaxOrderId);
-        console.log(`🆕 Найдено новых заявок: ${newOrders.length}`);
+       // console.log(`🆕 Найдено новых заявок: ${newOrders.length}`);
 
         for (const newOrder of newOrders) {
           setNewOrdersCount(prev => prev + 1);
@@ -440,9 +440,9 @@ useEffect(() => {
 
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        console.warn('Polling: запрос превысил таймаут (30 сек)');
+       // console.warn('Polling: запрос превысил таймаут (30 сек)');
       } else {
-        console.warn('Polling error:', err);
+       // console.warn('Polling error:', err);
       }
     }
   };
@@ -474,7 +474,7 @@ useEffect(() => {
 
       const reminders = await res.json();
 
-      console.log(`📢 Получено ${reminders.length} напоминаний`);
+     // console.log(`📢 Получено ${reminders.length} напоминаний`);
 
       reminders.forEach((reminder: any) => {
         const key = `client-reminder-${reminder.groupId || reminder.user_id}`;
