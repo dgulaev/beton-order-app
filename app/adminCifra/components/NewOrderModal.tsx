@@ -165,7 +165,7 @@ export default function NewOrderModal({
     }
   };
 
-   // ==================== 9. СОЗДАНИЕ ЗАЯВКИ ====================
+      // ==================== 9. СОЗДАНИЕ ЗАЯВКИ ====================
 const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
   setIsSubmitting(true);
@@ -204,11 +204,15 @@ const handleSubmit = async (e: React.FormEvent) => {
     return;
   }
 
+  // Получаем ID текущего сотрудника
+  const savedUserId = localStorage.getItem('userId');
+  const createdByStaff = savedUserId ? parseInt(savedUserId) : 1777619517739;
+
   // ================================================
   // 2. ПОДГОТОВКА PAYLOAD
   // ================================================
   const payload = {
-    userId: adminUserId,
+    userId: adminUserId,                    // ID клиента (если есть)
     grade: form.grade,
     volume: parseFloat(form.volume),
     delivery_date: form.deliveryDate,
@@ -224,15 +228,19 @@ const handleSubmit = async (e: React.FormEvent) => {
     totalPrice: totalPrice || 0,
     comment: form.comment?.trim() || null,
 
+    // ==================== НОВЫЕ ПОЛЯ ДЛЯ ЕДИНООБРАЗИЯ ====================
+    created_by: createdByStaff,             // ← Кто создал заявку
+    curator_name: currentUserName || 'Сотрудник', // ← Имя куратора
+
     // ==================== ДАННЫЕ ДЛЯ ИСТОРИИ ====================
     isFromAdmin: true,
     source: 'admin',
     userRole: currentRole || 'admin',
-    userName: currentUserName || localStorage.getItem('userName') || 'Сотрудник',  // ← Надёжный fallback
+    userName: currentUserName || localStorage.getItem('userName') || 'Сотрудник',
   };
 
   try {
-    console.log('📤 Создание заявки от:', payload.userName, '(', payload.userRole, ')');
+    console.log('📤 Создание заявки от:', payload.userName, 'ID:', createdByStaff);
 
     const response = await fetch('/api/order', {
       method: 'POST',
@@ -242,10 +250,7 @@ const handleSubmit = async (e: React.FormEvent) => {
 
     const data = await response.json();
 
-        if (data.success) {
-      // ================================================
-      // 3. ПОЛНЫЙ ОБЪЕКТ ДЛЯ ОПТИМИСТИЧЕСКОГО ОБНОВЛЕНИЯ
-      // ================================================
+    if (data.success) {
       const createdOrder = {
         id: data.orderId,
         grade: form.grade,
@@ -261,6 +266,7 @@ const handleSubmit = async (e: React.FormEvent) => {
         organization_name: form.organizationName?.trim() || null,
         inn: form.inn?.trim() || null,
         comment: form.comment?.trim() || null,
+        created_by: createdByStaff,
       };
 
       setOrderCreated(createdOrder);
@@ -268,12 +274,10 @@ const handleSubmit = async (e: React.FormEvent) => {
 
       alert(`✅ Заявка #${data.orderId} успешно создана!`);
       
-      // Безопасный вызов onSuccess
       if (typeof onSuccess === 'function') {
         onSuccess(createdOrder);
       }
 
-      // Закрываем модалку
       setTimeout(() => {
         onClose();
       }, 800);

@@ -134,3 +134,43 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
+
+// ==================== POST — СОЗДАНИЕ НОВОГО КЛИЕНТА ====================
+export async function POST(request: NextRequest) {
+  try {
+    const payload = await request.json();
+
+    // Генерируем user_id
+    const userId = Date.now();
+
+    const newClient = {
+      user_id: userId,
+      role: 'client',
+      phone: payload.phone,
+      full_name: payload.full_name || null,
+      organization_name: payload.organization_name || null,
+      inn: payload.inn || null,
+      address: payload.address || null,
+      balance: payload.balance || 0,
+      referral_code: payload.referral_code || 'R' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+      created_by: payload.created_by || null,
+      created_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('users')
+      .insert(newClient)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    console.log(`✅ Создан новый клиент: ${data.organization_name || data.full_name} | user_id: ${data.user_id} | created_by: ${data.created_by}`);
+
+    return NextResponse.json({ success: true, client: data });
+
+  } catch (error: any) {
+    console.error('Create client error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}

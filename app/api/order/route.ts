@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
     const isFromAdmin = !!(payload.isFromAdmin === true || payload.source === 'admin');
     console.log(`📍 [Order API] Источник заявки: ${isFromAdmin ? 'АДМИНКА ЦИФРА' : 'МИНИ-ПРИЛОЖЕНИЕ МАКС'}`);
 
-    // ================================================
+// ================================================
 // 3. ЛОГИКА СОЗДАНИЯ/ПОИСКА КЛИЕНТА ИЗ АДМИНКИ
 // ================================================
 let finalUserId = userId;
@@ -110,8 +110,14 @@ if (isFromAdmin) {
     finalUserId = existingClient.user_id;
     console.log(`👤 Используем существующего клиента: ${finalUserId}`);
   } else {
-    // Создаём нового клиента
+    // ================================================
+    // СОЗДАНИЕ НОВОГО КЛИЕНТА С КУРАТОРОМ
+    // ================================================
     const newUserId = Date.now() + Math.floor(Math.random() * 1000000);
+
+    // Получаем данные текущего сотрудника из payload (из фронта)
+    const createdByStaff = payload.created_by || 1777619517739; // fallback на тебя
+    const curatorName = payload.curator_name || payload.userName || 'Сотрудник';
 
     const { data: newClient, error: createError } = await supabase
       .from('users')
@@ -124,6 +130,12 @@ if (isFromAdmin) {
         inn: inn || null,
         balance: 0,
         referral_code: 'R' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+        
+        // ==================== НОВЫЕ ПОЛЯ (по твоей просьбе) ====================
+        created_by: createdByStaff,      // Кто создал клиента
+        curator_id: createdByStaff,      // Назначаем создателя куратором
+        curator_name: curatorName,       // Имя куратора
+
         created_at: new Date().toISOString()
       })
       .select('user_id')
@@ -133,14 +145,14 @@ if (isFromAdmin) {
       console.error('❌ Ошибка создания клиента:', createError);
     } else if (newClient) {
       finalUserId = newClient.user_id;
-      console.log(`✅ Создан новый клиент: ${finalUserId}`);
+      console.log(`✅ Создан новый клиент: ${finalUserId} | created_by: ${createdByStaff} | curator: ${curatorName}`);
     }
   }
 }
 
 console.log(`🔑 Финальный user_id заказа: ${finalUserId} (изначально было ${userId})`);
 
-    // ================================================
+// ================================================
 // 3.1 АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ КОНТАКТОВ КЛИЕНТА (УЛУЧШЕННЫЙ)
 // ================================================
 const supabase = getSupabaseClient();
@@ -272,6 +284,9 @@ console.log(`✅ next_contact сохранён: ${nextContact}`);
     // ================================================
     // 7. СОЗДАНИЕ ЗАКАЗА
     // ================================================
+    const createdByStaff = payload.created_by || null;
+    const curatorName = payload.curator_name || payload.userName || null;
+
     const { data: orderData, error: insertError } = await supabase
       .from('orders')
       .insert([{
@@ -292,6 +307,10 @@ console.log(`✅ next_contact сохранён: ${nextContact}`);
         total_price: totalPrice || 0,
         status: 'new',
         referred_by: referredBy,
+
+        // ==================== НОВЫЕ ПОЛЯ ====================
+        created_by: createdByStaff,
+        curator_name: curatorName,
       }])
       .select()
       .single();
@@ -302,23 +321,22 @@ console.log(`✅ next_contact сохранён: ${nextContact}`);
     }
 
     const orderId = orderData.id;
-    console.log(`✅ Заказ #${orderId} успешно создан для клиента ${finalUserId}`);
+    console.log(`✅ Заказ #${orderId} успешно создан | created_by: ${createdByStaff} | curator: ${curatorName}`);
 
-        // ================================================
+    // ================================================
     // 8. ЗАПИСЬ В ИСТОРИЮ СОЗДАНИЯ ЗАЯВКИ
     // ================================================
     if (orderId) {
-      // ←←← ИСПРАВЛЕНИЕ: используем реальное имя из фронта
       const creatorName = payload.userName && payload.userName !== 'Сотрудник' 
         ? payload.userName 
-        : (isFromAdmin ? 'Администратор' : 'Клиент');
+        : (curatorName || (isFromAdmin ? 'Администратор' : 'Клиент'));
 
       const creatorRole = payload.userRole || (isFromAdmin ? 'admin' : 'client');
 
       const historyEntry = {
         order_id: orderId,
         action: 'Создал заявку',
-        user_name: creatorName,           // ← Теперь будет реальное имя
+        user_name: creatorName,
         user_role: creatorRole,
         field_name: null,
         old_value: null,
@@ -331,9 +349,9 @@ console.log(`✅ next_contact сохранён: ${nextContact}`);
           .from('order_history')
           .insert([historyEntry]);
 
-        console.log(`📜 ИСТОРИЯ СОЗДАНИЯ: "${creatorName}" (${creatorRole}) создал заявку #${orderId}`);
+        console.log(`📜 ИСТОРИЯ: "${creatorName}" создал заявку #${orderId}`);
       } catch (err: any) {
-        console.error('Ошибка записи истории создания заявки:', err);
+        console.error('Ошибка записи истории:', err);
       }
     }
 

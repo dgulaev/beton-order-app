@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import EfficiencyPage from '../efficiency/page';
 import NewOrderModal from './NewOrderModal';
 
+import { supabase } from '@/lib/supabaseClient';   // ← Правильный импорт
+
 // ==================== 0.1 ГЛОБАЛЬНЫЕ ТИПЫ ДЛЯ WINDOW ===============
 declare global {
   interface Window {
@@ -13,14 +15,18 @@ declare global {
 
 export default function ClientsPage() {
 
-  // ==================== 1. ОСНОВНЫЕ СОСТОЯНИЯ ====================
+ // ==================== 1. ОСНОВНЫЕ СОСТОЯНИЯ ====================
   const [profiles, setProfiles] = useState<any[]>([]);
   const [userOrders, setUserOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [ordersLoading, setOrdersLoading] = useState(false);
-  const [search, setSearch] = useState('');
+  
+  const [searchTerm, setSearchTerm] = useState('');        
+  const [debouncedSearch, setDebouncedSearch] = useState(''); 
+  
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
   const [selectedProfile, setSelectedProfile] = useState<any>(null);
+  const [curators, setCurators] = useState<any[]>([]);
   const [isNewOrderModalOpen, setIsNewOrderModalOpen] = useState(false);
   const [clientVolumes, setClientVolumes] = useState<Record<number | string, number>>({});
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -33,7 +39,40 @@ export default function ClientsPage() {
   const [currentRole, setCurrentRole] = useState<string>('admin');
   const [userFullName, setUserFullName] = useState<string>('');
   const [callHistory, setCallHistory] = useState<any[]>([]);
-  const [searchQuery, setSearchQuery] = useState(''); // для debounce
+  const [currentUserId, setCurrentUserId] = useState<string>('');
+  const [staffProfiles, setStaffProfiles] = useState<any[]>([]);
+
+  // ==================== DEBOUNCE ДЛЯ ПОИСКА ====================
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm.trim());
+      if (searchTerm.trim() !== debouncedSearch) {
+        setCurrentPage(1);
+      }
+    }, 5000);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+    // ==================== ЗАГРУЗКА КУРАТОРОВ ====================
+  useEffect(() => {
+    const loadCurators = async () => {
+      try {
+        const { data } = await supabase
+          .from('users')
+          .select('user_id, full_name, role')
+          .in('role', ['admin', 'manager', 'dispatcher'])
+          .order('full_name');
+
+        setCurators(data || []);
+        console.log("Кураторы загружены:", data?.length);
+      } catch (error) {
+        console.error("Ошибка загрузки кураторов:", error);
+      }
+    };
+
+    loadCurators();
+  }, []);
 
   // ==================== ПАГИНАЦИЯ ====================
   const [currentPage, setCurrentPage] = useState(1);
@@ -53,69 +92,80 @@ export default function ClientsPage() {
     address: '',
   });
 
-    // Поиск с задержкой (debounce)
+    // ==================== АВТООПРЕДЕЛЕНИЕ ТЕКУЩЕГО СТАФФА ====================
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setSearchQuery(search.trim());
-      if (search.trim() !== searchQuery) {   // чтобы не сбрасывать лишний раз
-        setCurrentPage(1);
-      }
-    }, 500); // увеличил до 500мс
-
-    return () => clearTimeout(timer);
-  }, [search]);
+    const savedUserId = localStorage.getItem('userId');
+    if (savedUserId) {
+      setCurrentUserId(savedUserId);
+      console.log('✅ Текущий создатель клиента:', savedUserId);
+    } else {
+      setCurrentUserId('1777619517739'); // fallback
+    }
+  }, []);
 
     // ==================== 2. ЗАГРУЗКА КЛИЕНТОВ С ПАГИНАЦИЕЙ ====================
-  const fetchClientsPage = async (page: number = 1) => {
-  const startTime = Date.now();
-  setLoading(true);
+    const fetchClientsPage = async (page: number = 1) => {
+    setLoading(true);
 
-  try {
-    let url = `/api/adminCifra/clients/grouped?page=${page}&limit=${itemsPerPage}`;
-    
-    if (searchQuery) {
-      url += `&search=${encodeURIComponent(searchQuery)}`;
-    }
-
-    console.log(`🚀 [Загрузка] Страница ${page} | Поиск: "${searchQuery}" | Tab: ${activeTab}`);
-
-    const res = await fetch(url);
-    
-    if (res.ok) {
-      const data = await res.json();
+    try {
+      let url = `/api/adminCifra/clients/grouped?page=${page}&limit=${itemsPerPage}`;
       
-      let result = data.clients || data.groups || data;
-
-      // Если открыта вкладка Staff — загружаем сотрудников отдельно
-      if (activeTab === 'staff') {
-        const staffRes = await fetch('/api/adminCifra/clients?all=true');
-        if (staffRes.ok) {
-          const allUsers = await staffRes.json();
-          result = allUsers
-            .filter((u: any) => ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase()))
-            .map((s: any) => ({ ...s, isStaff: true }));
-        }
+      if (debouncedSearch) {
+        url += `&search=${encodeURIComponent(debouncedSearch)}`;
       }
 
-      setProfiles(result);
-      setTotalPages(data.totalPages || 1);
-      setTotalClients(data.total || 0);
+      const res = await fetch(url);
+      
+      if (res.ok) {
+        const data = await res.json();
+        
+        let result = data.clients || data.groups || data;
 
-      console.log(`✅ Загружено ${result.length} записей`);
+        if (activeTab === 'staff') {
+          const staffRes = await fetch('/api/adminCifra/clients?all=true');
+          if (staffRes.ok) {
+            const allUsers = await staffRes.json();
+            result = allUsers
+              .filter((u: any) => ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase()))
+              .map((s: any) => ({ ...s, isStaff: true }));
+          }
+        }
+
+        setProfiles(result);
+        setTotalPages(data.totalPages || 1);
+        setTotalClients(data.total || 0);
+      }
+    } catch (err) {
+      console.error('❌ Ошибка загрузки клиентов:', err);
+    } finally {
+      setLoading(false);
     }
-  } catch (err) {
-    console.error('❌ Ошибка загрузки:', err);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   // Первая загрузка и смена страницы + поиск
   useEffect(() => {
     fetchClientsPage(currentPage);
-  }, [currentPage, searchQuery, activeTab]);  // ← Добавили searchQuery
+  }, [currentPage, debouncedSearch, activeTab]);
 
-  // ==================== ЗАГРУЗКА РОЛИ + РЕАЛЬНОГО ИМЕНИ ====================
+  // ==================== 2.0.1 ЗАГРУЗКА ДАННЫХ ДЛЯ ВКЛАДКИ СТАФФ ====================
+useEffect(() => {
+  if (activeTab === 'staff') {
+    fetch('/api/adminCifra/staff/stats')   // ← без ?staffId
+      .then(res => res.json())
+      .then(data => {
+        // data теперь должен быть массивом сотрудников
+        setStaffProfiles(Array.isArray(data) ? data : []);
+        console.log('✅ Стафф загружен:', data.length || 0, 'человек');
+      })
+      .catch(err => {
+        console.error('Ошибка загрузки стаффа:', err);
+        setStaffProfiles([]);
+      });
+  }
+}, [activeTab]);
+
+
+  // ==================== 2.0.2 ЗАГРУЗКА РОЛИ + РЕАЛЬНОГО ИМЕНИ ====================
   useEffect(() => {
     const loadRoleAndName = async () => {
       const savedUserId = localStorage.getItem('userId');
@@ -158,6 +208,95 @@ export default function ClientsPage() {
 
     loadRoleAndName();
   }, []);
+
+
+// ==================== 2.0.3 ОБРАБОТКА КЛИКА ПО КАРТОЧКЕ ====================
+const handleSelectProfile = async (profile: any) => {
+  console.log("🔍 Выбран профиль:", profile);
+
+  let selected = { ...profile };
+
+  if (['admin', 'manager', 'dispatcher', 'operator'].includes((profile.role || '').toLowerCase())) {
+    selected.isStaff = true;
+    selected.role = profile.role;
+
+    try {
+      const res = await fetch(`/api/adminCifra/staff/stats?staffId=${profile.user_id}`);
+      if (res.ok) {
+        const data = await res.json();
+        console.log("📦 Данные от API для сотрудника:", data);
+
+        // Основные данные
+        selected.clients_count = data.clients_count || 0;
+        selected.total_volume = data.total_volume || 0;
+        selected.attracted_clients = data.attracted_clients || data.clients_count || 0;
+
+        // === НОВЫЕ ДИНАМИЧЕСКИЕ МЕТРИКИ ===
+        selected.new_clients_30d = data.new_clients_30d ?? 0;
+        selected.repeat_order_percent = data.repeat_order_percent ?? 0;
+
+        if (data.clients && Array.isArray(data.clients)) {
+          // Убираем дубликаты + сортируем
+          const uniqueMap = new Map();
+          data.clients.forEach((c: any) => {
+            if (c.user_id && !uniqueMap.has(c.user_id)) {
+              uniqueMap.set(c.user_id, c);
+            }
+          });
+
+          const uniqueClients = Array.from(uniqueMap.values())
+            .sort((a, b) => 
+              (a.organization_name || a.full_name || '').localeCompare(b.organization_name || b.full_name || '')
+            );
+
+          selected.clients = uniqueClients;
+          console.log(`✅ Успешно сохранено ${uniqueClients.length} уникальных клиентов из ${data.clients.length}`);
+        }
+      }
+    } catch (e) {
+      console.error("Ошибка загрузки данных сотрудника:", e);
+    }
+  } 
+  // === Если это клиент ===
+  else {
+    const mainClient = profile.clients?.[0] || profile;
+
+    if (mainClient?.user_id) {
+      try {
+        const { data: clientData } = await supabase
+          .from('users')
+          .select('created_by')
+          .eq('user_id', mainClient.user_id)
+          .single();
+
+        if (clientData?.created_by) {
+          const { data: curator } = await supabase
+            .from('users')
+            .select('full_name')
+            .eq('user_id', clientData.created_by)
+            .single();
+
+          if (curator?.full_name) {
+            selected.curator_name = curator.full_name;
+            selected.created_by = clientData.created_by;
+
+            if (selected.clients && selected.clients.length > 0) {
+              selected.clients = selected.clients.map((c: any) => ({
+                ...c,
+                curator_name: curator.full_name,
+                created_by: clientData.created_by
+              }));
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Ошибка загрузки куратора:", e);
+      }
+    }
+  }
+
+  setSelectedProfile(selected);
+};
 
   // ==================== 2.1 АВТООТКРЫТИЕ КЛИЕНТА ИЗ УВЕДОМЛЕНИЯ ====================
 useEffect(() => {
@@ -387,52 +526,65 @@ const loadGroupOrders = async (group: any) => {
     }
   };
 
-    // ==================== 3.0.4 СОЗДАНИЕ НОВОГО КЛИЕНТА ====================
-  const createNewClient = async () => {
-    if (!newClientForm.phone) {
-      alert('Укажите телефон клиента');
-      return;
-    }
+   // ==================== 3.0.4 СОЗДАНИЕ НОВОГО КЛИЕНТА ====================
+const createNewClient = async () => {
+  if (!newClientForm.phone) {
+    alert('Укажите телефон клиента');
+    return;
+  }
 
-    try {
-      const payload = {
-        role: 'client',
-        phone: newClientForm.phone,
-        full_name: newClientForm.type === 'physical' ? newClientForm.full_name : null,
-        organization_name: newClientForm.type === 'legal' ? newClientForm.organization_name : null,
-        inn: newClientForm.inn || null,
-        address: newClientForm.address || null,
-        balance: 0,
-        referral_code: 'R' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-      };
+  if (!currentUserId) {
+    alert('Не удалось определить текущего пользователя. Обновите страницу.');
+    return;
+  }
 
-      const res = await fetch('/api/adminCifra/clients', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+  try {
+    const payload = {
+      role: 'client',
+      phone: newClientForm.phone,
+      full_name: newClientForm.type === 'physical' ? newClientForm.full_name : null,
+      organization_name: newClientForm.type === 'legal' ? newClientForm.organization_name : null,
+      inn: newClientForm.inn || null,
+      address: newClientForm.address || null,
+      balance: 0,
+      referral_code: 'R' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+      
+      // === Привязка к текущему куратору ===
+      created_by: parseInt(currentUserId),
+      curator_id: parseInt(currentUserId),
+      curator_name: userFullName || null
+    };
+
+    const res = await fetch('/api/adminCifra/clients', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+      alert(`✅ Новый клиент успешно создан и привязан к куратору: ${userFullName}`);
+      
+      setIsNewClientModalOpen(false);
+      
+      setNewClientForm({
+        type: 'legal' as 'legal' | 'physical',
+        full_name: '',
+        organization_name: '',
+        phone: '',
+        inn: '',
+        address: '',
       });
 
-      if (res.ok) {
-        alert('✅ Новый клиент успешно создан!');
-        setIsNewClientModalOpen(false);
-        setNewClientForm({
-          type: 'legal',
-          full_name: '',
-          organization_name: '',
-          phone: '',
-          inn: '',
-          address: '',
-        });
-        window.location.reload(); // обновляем список
-      } else {
-        const err = await res.json();
-        alert(`Ошибка: ${err.error || 'Не удалось создать клиента'}`);
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Ошибка соединения с сервером');
+      fetchClientsPage(currentPage);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      alert(`Ошибка: ${err.error || 'Не удалось создать клиента'}`);
     }
-  };
+  } catch (err) {
+    console.error(err);
+    alert('Ошибка соединения с сервером');
+  }
+};
 
     // ==================== 3.1 ФУНКЦИИ УПРАВЛЕНИЯ КЛИЕНТАМИ (ОБЪЕДИНЕНИЕ ДУБЛЕЙ) ====================
 
@@ -774,11 +926,11 @@ const staff = profiles.filter((item: any) =>
 
 const currentList = activeTab === 'clients' ? clients : staff;
 
-// Фильтрация по поиску
+// Фильтрация по поиску (используем searchTerm)
 const filteredList = currentList.filter((item: any) => {
-  if (!search || search.trim() === '') return true;
+  if (!searchTerm || searchTerm.trim() === '') return true;
 
-  const searchLower = search.toLowerCase().trim();
+  const searchLower = searchTerm.toLowerCase().trim();
 
   if (activeTab === 'clients' && item.groupId) {
     // Поиск по группе клиентов
@@ -1114,7 +1266,8 @@ window.callClient = (clientId: number | string) => {
     Новый клиент
   </button>
 
-  {/* Кнопка Эффективность */}
+  {/* ==================== Кнопка Эффективность (отключена) ==================== */}
+{/* 
   <button 
     onClick={() => setActiveTab('efficiency')}
     style={{
@@ -1148,6 +1301,7 @@ window.callClient = (clientId: number | string) => {
       }} />
     )}
   </button>
+*/}
 
 </div>
   
@@ -1226,28 +1380,24 @@ window.callClient = (clientId: number | string) => {
 )}
 </div>
 
-{/* ==================== ПОЛЕ ПОИСКА — ТОЛЬКО НА КЛИЕНТАХ И СТАФФЕ ==================== */}
+{/* ==================== ПОЛЕ ПОИСКА — С DEBOUNCE ==================== */}
 {(activeTab === 'clients' || activeTab === 'staff') && (
   <div style={{ position: 'relative', width: '100%', maxWidth: '720px', marginBottom: '32px' }}>
-    <div style={{ 
-      position: 'absolute', 
-      left: '20px', 
-      top: '50%', 
-      transform: 'translateY(-50%)',
-      color: '#94A3B8',
-      fontSize: '20px',
-      pointerEvents: 'none'
-    }}>
-      
-    </div>
-    
     <input
-  type="text"
-  placeholder="Поиск по имени, организации, телефону, ИНН..."
-  value={search}
-  onChange={(e) => setSearch(e.target.value)}
-  style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', background: '#1E2937', border: '1px solid #334155', color: '#fff' }}
-/>
+      type="text"
+      placeholder="Поиск по имени, организации, телефону, ИНН..."
+      value={searchTerm}
+      onChange={(e) => setSearchTerm(e.target.value)}
+      style={{ 
+        width: '100%', 
+        padding: '12px 16px', 
+        borderRadius: '12px', 
+        background: '#1E2937', 
+        border: '1px solid #334155', 
+        color: '#fff',
+        fontSize: '16px'
+      }}
+    />
   </div>
 )}
 
@@ -1261,97 +1411,127 @@ window.callClient = (clientId: number | string) => {
         gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', 
         gap: '16px'
       }}>
-                {profiles
-          .filter((item: any) => {
-            const isStaffItem = item.isStaff || 
-                               ['admin', 'manager', 'dispatcher', 'operator'].includes((item.role || '').toLowerCase());
-            return activeTab === 'staff' ? isStaffItem : !isStaffItem;
-          })
-          .map((client: any) => {
-            const isStaff = client.isStaff || ['admin','manager','dispatcher','operator'].includes((client.role || '').toLowerCase());
-            const vol = client.total_volume || client.totalVolume || 0;
-            const ordersCount = client.total_orders || client.totalOrders || 0;
+        {activeTab === 'staff' ? (
+          // ==================== КАРТОЧКИ СОТРУДНИКОВ (НОВАЯ ЛОГИКА) ====================
+          staffProfiles.map((person: any) => (
+            <div
+              key={person.user_id}
+              onClick={() => handleSelectProfile(person)}
+              style={{ 
+                background: '#1E2937', 
+                borderRadius: '16px', 
+                padding: '20px',
+                cursor: 'pointer',
+                border: selectedProfile?.user_id === person.user_id ? '2px solid #10B981' : '1px solid #334155',
+                minHeight: '190px',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between'
+              }}
+            >
+              {/* Верхняя часть */}
+              <div>
+                <div style={{ fontSize: '18px', fontWeight: '700', marginBottom: '6px', lineHeight: 1.3 }}>
+                  {person.full_name || 'Без имени'}
+                </div>
+                <div style={{ color: '#10B981', fontSize: '15px', marginBottom: '16px' }}>
+                  {person.role ? person.role.toUpperCase() : 'СОТРУДНИК'}
+                </div>
+              </div>
 
-            return (
-              <div 
-                key={client.groupId || client.user_id || client.id} 
-                onClick={() => setSelectedProfile(client)} 
-                style={{ 
-                  background: '#1E2937', 
-                  borderRadius: '16px', 
-                  padding: '16px 18px',
-                  cursor: 'pointer',
-                  border: selectedProfile?.groupId === client.groupId || 
-                          selectedProfile?.user_id === client.user_id 
-                    ? '2px solid #10B981' 
-                    : '1px solid #334155',
-                  minHeight: '148px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  justifyContent: 'space-between'
-                }}
-              >
-                {/* Верхняя часть — Имя и телефон */}
-                <div>
-                  <div style={{ fontSize: '17px', fontWeight: '700', marginBottom: '4px', lineHeight: 1.3 }}>
-                    {client.organization_name || client.full_name || client.name || 'Без названия'}
-                    {isStaff && <span style={{ marginLeft: '8px', color: '#10B981', fontSize: '13px' }}>• Сотрудник</span>}
+              {/* Нижняя часть — статистика куратора */}
+              <div style={{ background: '#334155', borderRadius: '12px', padding: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontSize: '32px', fontWeight: '700', color: '#60A5FA' }}>
+                      {person.clients_count || 0}
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#94A3B8' }}>клиентов</div>
                   </div>
-                  <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '12px' }}>
-                    {client.phones ? client.phones.join(' • ') : client.phone || '—'}
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '28px', fontWeight: '700', color: '#fff' }}>
+                      {person.total_volume || 0}
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#94A3B8' }}>м³ всего</div>
                   </div>
                 </div>
-
-                {/* Нижняя часть — разная для клиентов и сотрудников */}
-                {isStaff ? (
-                  <div style={{ 
-                    padding: '10px 14px', 
-                    background: '#334155', 
-                    borderRadius: '10px',
-                    textAlign: 'center',
-                    fontSize: '15px',
-                    color: '#CBD5E1',
-                    fontWeight: '600'
-                  }}>
-                    {client.role ? client.role.toUpperCase() : 'СОТРУДНИК'}
-                  </div>
-                ) : (
-                  <>
-                    {/* Статус для клиентов */}
-                    <div style={{ 
-                      display: 'inline-block',
-                      padding: '4px 12px',
-                      background: '#334155',
-                      color: '#94A3B8',
-                      borderRadius: '9999px',
-                      fontSize: '13.5px',
-                      fontWeight: '600',
-                      marginBottom: '12px'
-                    }}>
-                      Клиент
-                    </div>
-
-                    {/* Статистика */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                      <div>
-                        <div style={{ color: '#60A5FA', fontSize: '26px', fontWeight: '700', lineHeight: 1 }}>
-                          {vol.toFixed(1)}
-                        </div>
-                        <div style={{ color: '#94A3B8', fontSize: '13px' }}>м³ заказано</div>
-                      </div>
-
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: '24px', fontWeight: '700', color: '#94A3B8' }}>
-                          {ordersCount}
-                        </div>
-                        <div style={{ color: '#94A3B8', fontSize: '13px' }}>заказов</div>
-                      </div>
-                    </div>
-                  </>
-                )}
               </div>
-            );
-          })}
+            </div>
+          ))
+        ) : (
+          // ==================== СТАРЫЕ КАРТОЧКИ КЛИЕНТОВ (без изменений) ====================
+          profiles
+            .filter((item: any) => {
+              const isStaffItem = item.isStaff || 
+                                 ['admin', 'manager', 'dispatcher', 'operator'].includes((item.role || '').toLowerCase());
+              return !isStaffItem;
+            })
+            .map((client: any) => {
+              const vol = client.total_volume || client.totalVolume || 0;
+              const ordersCount = client.total_orders || client.totalOrders || 0;
+
+              return (
+                <div 
+                  key={client.groupId || client.user_id || client.id} 
+                  onClick={() => handleSelectProfile(client)}
+                  style={{ 
+                    background: '#1E2937', 
+                    borderRadius: '16px', 
+                    padding: '16px 18px',
+                    cursor: 'pointer',
+                    border: selectedProfile?.groupId === client.groupId || 
+                            selectedProfile?.user_id === client.user_id 
+                      ? '2px solid #10B981' 
+                      : '1px solid #334155',
+                    minHeight: '152px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between'
+                  }}
+                >
+                  {/* Верхняя часть — Имя и телефон */}
+                  <div>
+                    <div style={{ fontSize: '17px', fontWeight: '700', marginBottom: '4px', lineHeight: 1.3 }}>
+                      {client.organization_name || client.full_name || client.name || 'Без названия'}
+                    </div>
+                    <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '12px' }}>
+                      {client.phones ? client.phones.join(' • ') : client.phone || '—'}
+                    </div>
+
+                    {!client.isStaff && client.curator_name && (
+                      <div style={{ 
+                        fontSize: '13.5px', 
+                        color: '#94A3B8', 
+                        padding: '6px 10px',
+                        background: '#334155',
+                        borderRadius: '8px',
+                        marginBottom: '12px'
+                      }}>
+                        👤 Куратор: <span style={{ color: '#60A5FA', fontWeight: '600' }}>{client.curator_name}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Нижняя часть для клиентов */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                    <div>
+                      <div style={{ color: '#60A5FA', fontSize: '26px', fontWeight: '700', lineHeight: 1 }}>
+                        {vol.toFixed(1)}
+                      </div>
+                      <div style={{ color: '#94A3B8', fontSize: '13px' }}>м³ заказано</div>
+                    </div>
+
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontSize: '24px', fontWeight: '700', color: '#94A3B8' }}>
+                        {ordersCount}
+                      </div>
+                      <div style={{ color: '#94A3B8', fontSize: '13px' }}>заказов</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+        )}
       </div>
     ) : (
       /* ==================== РЕЖИМ ТАБЛИЦЫ ==================== */
@@ -1475,8 +1655,162 @@ window.callClient = (clientId: number | string) => {
      {/* ==================== ВКЛАДКА ЭФФЕКТИВНОСТЬ ================================ */}
              {activeTab === 'efficiency' && <EfficiencyPage />}
 
-     {/* ==================== 9. БОКОВАЯ ПАНЕЛЬ ПРОФИЛЯ КЛИЕНТА ==================== */}
+     {/* ==================== 9. БОКОВАЯ ПАНЕЛЬ ==================== */}
 {selectedProfile && (
+  <>
+    {/* ==================== БОКОВАЯ ПАНЕЛЬ ДЛЯ СОТРУДНИКА ==================== */}
+{selectedProfile.isStaff ? (
+  <div style={{ 
+    position: 'fixed', 
+    top: 0, 
+    right: 0, 
+    width: '760px', 
+    height: '100vh',
+    background: '#1E2937', 
+    borderLeft: '1px solid #334155', 
+    zIndex: 1000, 
+    overflow: 'auto' 
+  }}>
+    <div style={{ padding: '32px' }}>
+
+      <button 
+        onClick={() => setSelectedProfile(null)} 
+        style={{ float: 'right', fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8' }}
+      >
+        ×
+      </button>
+
+      <h2 style={{ marginBottom: '4px' }}>{selectedProfile.full_name}</h2>
+      <div style={{ color: '#10B981', fontSize: '17px', fontWeight: '600', marginBottom: '32px' }}>
+        {selectedProfile.role?.toUpperCase() || 'СОТРУДНИК'}
+      </div>
+
+      {/* Основная статистика */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '40px' }}>
+        <div style={{ background: '#25334A', padding: '28px 20px', borderRadius: '16px', textAlign: 'center' }}>
+          <div style={{ fontSize: '48px', fontWeight: '700', color: '#60A5FA' }}>
+            {selectedProfile.clients_count || 0}
+          </div>
+          <div style={{ color: '#94A3B8', fontSize: '15px' }}>Клиентов на кураторстве</div>
+        </div>
+        <div style={{ background: '#25334A', padding: '28px 20px', borderRadius: '16px', textAlign: 'center' }}>
+          <div style={{ fontSize: '48px', fontWeight: '700' }}>
+            {selectedProfile.total_volume || 0}
+          </div>
+          <div style={{ color: '#94A3B8', fontSize: '15px' }}>м³ всего продано</div>
+        </div>
+      </div>
+
+
+{/* ==================== БЛОК ЭФФЕКТИВНОСТЬ КУРАТОРА ==================== */}
+{selectedProfile.isStaff && (
+  <div style={{ marginBottom: '24px' }}>
+    <h3 style={{ marginBottom: '16px', color: '#94A3B8', fontSize: '15px' }}>
+      Эффективность куратора
+    </h3>
+    
+    <div style={{ 
+      background: '#25334A', 
+      borderRadius: '16px', 
+      padding: '20px',
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, 1fr)',
+      gap: '16px'
+    }}>
+      <div>
+        <div style={{ fontSize: '26px', fontWeight: '700', color: '#34D399' }}>
+          {selectedProfile.clients?.length || 0}
+        </div>
+        <div style={{ fontSize: '13px', color: '#94A3B8' }}>активных клиентов</div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: '26px', fontWeight: '700', color: '#FBBF24' }}>
+          {selectedProfile.clients?.length > 0 
+            ? Math.round((selectedProfile.total_volume || 0) / selectedProfile.clients.length) 
+            : 0}
+        </div>
+        <div style={{ fontSize: '13px', color: '#94A3B8' }}>средний объём</div>
+      </div>
+
+            <div>
+  <div style={{ fontSize: '26px', fontWeight: '700', color: '#A78BFA' }}>
+    {selectedProfile.new_clients_30d ?? 0}
+  </div>
+  <div style={{ fontSize: '13px', color: '#94A3B8' }}>новых за 30 дней</div>
+</div>
+
+      <div>
+  <div style={{ fontSize: '26px', fontWeight: '700', color: '#10B981' }}>
+    {selectedProfile.repeat_order_percent ?? 0}%
+  </div>
+  <div style={{ fontSize: '13px', color: '#94A3B8' }}>повторных заказов</div>
+</div>
+    </div>
+
+        {/* Главная метрика */}
+    <div style={{ 
+      marginTop: '12px', 
+      background: '#25334A', 
+      borderRadius: '12px', 
+      padding: '14px 20px', 
+      display: 'flex', 
+      justifyContent: 'space-between', 
+      alignItems: 'center' 
+    }}>
+      <div style={{ color: '#94A3B8' }}>Привлёк клиентов</div>
+      <div style={{ fontSize: '24px', fontWeight: '700' }}>
+        {selectedProfile.clients_count || 0}
+      </div>
+    </div>
+  </div>
+)}
+
+{/* Список клиентов */}
+{selectedProfile.clients && selectedProfile.clients.length > 0 ? (
+  <div>
+    <h3 style={{ marginBottom: '16px', color: '#94A3B8' }}>
+      Клиенты куратора ({selectedProfile.clients.length})
+    </h3>
+    <div style={{ maxHeight: '520px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {selectedProfile.clients.map((client: any) => (
+        <div key={client.user_id} style={{ 
+          background: '#25334A', 
+          padding: '16px', 
+          borderRadius: '12px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <div>
+            <div style={{ fontWeight: '600' }}>
+              {client.organization_name || client.full_name || 'Без названия'}
+            </div>
+            <div style={{ color: '#94A3B8', fontSize: '14px' }}>{client.phone}</div>
+          </div>
+          <div style={{ color: '#60A5FA', fontWeight: '700', textAlign: 'right' }}>
+            {(client.total_volume || 0)} м³
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+) : (
+  <div style={{ 
+    textAlign: 'center', 
+    padding: '100px 40px', 
+    color: '#94A3B8',
+    background: '#25334A',
+    borderRadius: '16px'
+  }}>
+    Пока нет клиентов под кураторством
+  </div>
+)}
+
+    </div>
+  </div>
+) : (
+      /* ==================== СТАРАЯ БОКОВАЯ ПАНЕЛЬ ДЛЯ КЛИЕНТОВ (без изменений) ==================== */
   <div style={{ 
     position: 'fixed', 
     top: 0, 
@@ -1510,6 +1844,123 @@ window.callClient = (clientId: number | string) => {
           📞 {selectedProfile.phones.filter(Boolean).join(' • ')}
         </p>
       )}
+
+      {/* === КУРАТОР === */}
+      {selectedProfile.curator_name && (
+        <div style={{ marginTop: '20px', marginBottom: '24px' }}>
+          <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>
+            👤 Куратор клиента
+          </div>
+          <div style={{ 
+            fontSize: '18px', 
+            fontWeight: '600', 
+            color: '#60A5FA',
+            padding: '12px 16px',
+            background: '#334155',
+            borderRadius: '10px',
+            display: 'inline-block'
+          }}>
+            {selectedProfile.curator_name}
+          </div>
+        </div>
+      )}
+
+    {/* ==================== СЕЛЕКТ ВЫБОРА КУРАТОРА — ТОЛЬКО ДЛЯ АДМИНА ==================== */}
+
+{(window.localStorage.getItem('user_role') === 'admin' || 
+  window.localStorage.getItem('role') === 'admin' || 
+  window.localStorage.getItem('userRole') === 'admin') && (
+  <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid #334155' }}>
+    <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
+      Назначить куратора
+    </div>
+    <select
+      value={selectedProfile.curator_id || ''}
+      onChange={async (e) => {
+        const newCuratorIdStr = e.target.value;
+        if (!newCuratorIdStr) return;
+        const newCuratorId = parseInt(newCuratorIdStr);
+        if (isNaN(newCuratorId)) return;
+
+        let clientIds: number[] = [];
+
+        if (selectedProfile.clients && Array.isArray(selectedProfile.clients)) {
+          selectedProfile.clients.forEach((c: any) => {
+            const id = Number(c?.user_id);
+            if (!isNaN(id) && id > 0) clientIds.push(id);
+          });
+        } else if (selectedProfile.user_id) {
+          const id = Number(selectedProfile.user_id);
+          if (!isNaN(id) && id > 0) clientIds.push(id);
+        } else if (selectedProfile.groupId) {
+          const id = Number(selectedProfile.groupId.split('_')[0]);
+          if (!isNaN(id)) clientIds.push(id);
+        }
+
+        if (clientIds.length === 0) {
+          alert("❌ Не найдены клиенты для обновления");
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/adminCifra/clients/update-curator', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_ids: clientIds,
+              new_curator_id: newCuratorId
+            })
+          });
+
+          const result = await response.json();
+
+          if (!response.ok) {
+            alert("Ошибка: " + (result.error || 'Неизвестная ошибка'));
+            return;
+          }
+
+          const newCuratorName = e.target.options[e.target.selectedIndex].text.split(' (')[0] || 'Новый куратор';
+
+          const updatedProfile = {
+            ...selectedProfile,
+            curator_name: newCuratorName,
+            curator_id: newCuratorId,
+            clients: selectedProfile.clients ? selectedProfile.clients.map((c: any) => ({
+              ...c,
+              curator_name: newCuratorName,
+              curator_id: newCuratorId
+            })) : null
+          };
+
+          setSelectedProfile(updatedProfile);
+
+          alert(`✅ Куратор "${newCuratorName}" успешно назначен`);
+          setTimeout(() => window.location.reload(), 800);
+
+        } catch (err) {
+          console.error(err);
+          alert("Ошибка при назначении куратора");
+        }
+      }}
+      style={{
+        width: '100%',
+        padding: '12px 16px',
+        background: '#334155',
+        color: 'white',
+        border: 'none',
+        borderRadius: '10px',
+        fontSize: '16px'
+      }}
+    >
+      <option value="">Выберите куратора...</option>
+      {curators.map((curator: any) => (
+        <option key={curator.user_id} value={curator.user_id}>
+          {curator.full_name} ({curator.role})
+        </option>
+      ))}
+    </select>
+  </div>
+)}
 
       {/* 9.3 Действия (кнопки) — ВСЕ КНОПКИ СОХРАНЕНЫ */}
       <div style={{ display: 'flex', gap: '12px', margin: '28px 0', flexWrap: 'wrap' }}>
@@ -1925,6 +2376,9 @@ window.callClient = (clientId: number | string) => {
         </div>
       </div>
     )}
+
+    </>
+)}
 
       {/* ==================== 9.7 МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ ==================== */}
 {isEditModalOpen && editingClient && Array.isArray(editingClient) && (
