@@ -656,14 +656,17 @@ if (!userRole || !allowedRoles.includes(userRole)) {
   
 
   return (
-    <div style={{ 
-      transform: `scale(${scale})`, 
-      transformOrigin: 'top left',
-      width: `${100 / scale}%`,
-      height: `${100 / scale}%`,
-      overflow: 'hidden',
-      minHeight: '100vh'
-    }}>
+    <div 
+      style={{ 
+        transform: `scale(${scale})`, 
+        transformOrigin: 'top left',
+        width: `${100 / scale}%`,
+        height: `${100 / scale}%`,
+        overflow: 'hidden',
+        minHeight: '100vh'
+      }}
+      className="admin-layout"   // ← Добавили для мобильной адаптации
+    >
       <div style={{ 
         display: 'flex', 
         minHeight: '100vh', 
@@ -801,7 +804,7 @@ if (!userRole || !allowedRoles.includes(userRole)) {
 
                 {(userRole === 'admin') && (
                   <Link href="/adminCifra/withdrawals" style={navLinkStyle(isActive('/adminCifra/withdrawals'), isCollapsed)}>
-                    <DollarSign size={22} /> {!isCollapsed && <span>Выводы наличных</span>}
+                    <DollarSign size={22} /> {!isCollapsed && <span>Вывод баллов</span>}
                   </Link>
                 )}
 

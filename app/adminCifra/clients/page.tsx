@@ -40,7 +40,10 @@ export default function ClientsPage() {
   const [userFullName, setUserFullName] = useState<string>('');
   const [callHistory, setCallHistory] = useState<any[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string>('');
+  const [currentUserRole, setCurrentUserRole] = useState<string>('manager');
   const [staffProfiles, setStaffProfiles] = useState<any[]>([]);
+  const [isStaffEditModalOpen, setIsStaffEditModalOpen] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<any>(null);
 
   // ==================== DEBOUNCE ДЛЯ ПОИСКА ====================
   useEffect(() => {
@@ -92,16 +95,34 @@ export default function ClientsPage() {
     address: '',
   });
 
-    // ==================== АВТООПРЕДЕЛЕНИЕ ТЕКУЩЕГО СТАФФА ====================
-  useEffect(() => {
-    const savedUserId = localStorage.getItem('userId');
-    if (savedUserId) {
-      setCurrentUserId(savedUserId);
-      console.log('✅ Текущий создатель клиента:', savedUserId);
+   // ==================== АВТООПРЕДЕЛЕНИЕ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ ====================
+useEffect(() => {
+  const savedUserId = localStorage.getItem('userId');
+  
+  if (savedUserId) {
+    setCurrentUserId(savedUserId);
+    console.log('✅ Текущий userId:', savedUserId);
+
+    if (savedUserId === '1777619517739') {
+      localStorage.setItem('currentUserRole', 'admin');
+      setCurrentUserRole('admin');
+      console.log('✅ Главный администратор');
     } else {
-      setCurrentUserId('1777619517739'); // fallback
+      const savedRole = localStorage.getItem('currentUserRole');
+      if (savedRole) {
+        setCurrentUserRole(savedRole);
+        console.log('✅ Роль из localStorage:', savedRole);
+      } else {
+        setCurrentUserRole('manager');
+        localStorage.setItem('currentUserRole', 'manager');
+        console.log('✅ Установлена роль по умолчанию: manager');
+      }
     }
-  }, []);
+  } else {
+    setCurrentUserId('1777619517739');
+    setCurrentUserRole('admin');
+  }
+}, []);
 
     // ==================== 2. ЗАГРУЗКА КЛИЕНТОВ С ПАГИНАЦИЕЙ ====================
     const fetchClientsPage = async (page: number = 1) => {
@@ -150,12 +171,31 @@ export default function ClientsPage() {
   // ==================== 2.0.1 ЗАГРУЗКА ДАННЫХ ДЛЯ ВКЛАДКИ СТАФФ ====================
 useEffect(() => {
   if (activeTab === 'staff') {
-    fetch('/api/adminCifra/staff/stats')   // ← без ?staffId
+    fetch('/api/adminCifra/staff/stats')
       .then(res => res.json())
       .then(data => {
-        // data теперь должен быть массивом сотрудников
-        setStaffProfiles(Array.isArray(data) ? data : []);
-        console.log('✅ Стафф загружен:', data.length || 0, 'человек');
+        let staffList = Array.isArray(data) ? data : [];
+
+        // Фильтр + сортировка с Гостем
+        staffList = staffList
+          .filter((u: any) => 
+            ['admin', 'manager', 'dispatcher', 'operator', 'guest'].includes((u.role || '').toLowerCase())
+          )
+          .sort((a: any, b: any) => {
+            const roleOrder: { [key: string]: number } = {
+              admin: 1,
+              manager: 2,
+              dispatcher: 3,
+              operator: 4,
+              guest: 5
+            };
+            return (roleOrder[a.role] || 999) - (roleOrder[b.role] || 999) || 
+                   (a.full_name || '').localeCompare(b.full_name || '');
+          });
+
+        setStaffProfiles(staffList);
+        console.log('✅ Стафф загружен:', staffList.length, 'человек');
+        console.log('Список имён:', staffList.map((s: any) => s.full_name));
       })
       .catch(err => {
         console.error('Ошибка загрузки стаффа:', err);
@@ -586,23 +626,28 @@ const createNewClient = async () => {
   }
 };
 
-    // ==================== 3.1 ФУНКЦИИ УПРАВЛЕНИЯ КЛИЕНТАМИ (ОБЪЕДИНЕНИЕ ДУБЛЕЙ) ====================
-
-  const findDuplicates = async () => {
-    try {
-      const res = await fetch('/api/adminCifra/clients/duplicates');
-      if (res.ok) {
-        const data = await res.json();
-        setClientsToMerge(data);
-        setShowMergeModal(true);
-      } else {
-        alert('Не удалось получить список дублей');
+    // ==================== ПОИСК ДУБЛЕЙ (информационный) ====================
+const findDuplicates = async () => {
+  try {
+    const res = await fetch('/api/adminCifra/clients/duplicates');
+    if (res.ok) {
+      const data = await res.json();
+      
+      if (data.length === 0) {
+        alert('✅ Дубликатов не найдено');
+        return;
       }
-    } catch (err) {
-      console.error(err);
-      alert('Ошибка поиска дублей');
+
+      setClientsToMerge(data);
+      setShowMergeModal(true);
+    } else {
+      alert('Не удалось получить список дублей');
     }
-  };
+  } catch (err) {
+    console.error(err);
+    alert('Ошибка поиска дублей');
+  }
+};
 
   const mergeClients = async (sourceId: number | string, targetId: number | string) => {
     if (!confirm(`Объединить клиента ${sourceId} с клиентом ${targetId}?`)) return;
@@ -1142,6 +1187,59 @@ window.callClient = (clientId: number | string) => {
     alert('Ошибка сохранения результата звонка');
   });
 };
+
+// ==================== ФУНКЦИЯ РЕДАКТИРОВАНИЯ СОТРУДНИКА ====================
+const editStaff = (staffMember: any) => {
+  setEditingStaff(staffMember);        // новая переменная состояния
+  setIsStaffEditModalOpen(true);
+};
+
+// ==================== СМЕНА ПАРОЛЯ ДЛЯ СОТРУДНИКА ====================
+const changeStaffPassword = async (staffMember: any) => {
+  if (!staffMember?.user_id) {
+    alert('Не удалось определить ID сотрудника');
+    return;
+  }
+
+  const newPassword = prompt(`Новый пароль для сотрудника:\n${staffMember.full_name}`, 'guest2026');
+
+  if (newPassword === null) return; // отмена
+  if (newPassword.length < 6) {
+    alert('Пароль должен содержать минимум 6 символов');
+    return;
+  }
+
+  if (!confirm(`Сменить пароль для "${staffMember.full_name}" на:\n\n${newPassword}\n\nВы уверены?`)) {
+    return;
+  }
+
+  try {
+    const bcrypt = require('bcryptjs');
+    const saltRounds = 12;
+    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+    const res = await fetch('/api/adminCifra/staff/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: staffMember.user_id,
+        encrypted_password: hashedPassword
+      })
+    });
+
+    if (res.ok) {
+      alert(`✅ Пароль успешно изменён для ${staffMember.full_name}`);
+    } else {
+      const errorData = await res.json().catch(() => ({}));
+      alert(`Ошибка: ${errorData.error || 'Не удалось обновить пароль'}`);
+    }
+  } catch (err) {
+    console.error(err);
+    alert('Произошла ошибка при смене пароля');
+  }
+};
+
+
   return (
     <div style={{ background: '#0F172A', minHeight: '100vh', color: '#fff', padding: '32px 40px' }}>
       <h1 style={{ fontSize: '32px', fontWeight: '700', marginBottom: '32px' }}>Клиенты CRM</h1>
@@ -1222,7 +1320,7 @@ window.callClient = (clientId: number | string) => {
     )}
   </button>
 
-  {/* Кнопка Объединить дубли */}
+  {/* Кнопка Показать дубли */}
   <button 
     onClick={findDuplicates}
     style={{
@@ -1241,7 +1339,7 @@ window.callClient = (clientId: number | string) => {
     }}
   >
     <span style={{ fontSize: '22px', opacity: 0.9 }}>🔗</span>
-    Объединить дубли
+    Показать дубли
   </button>
 
   {/* Кнопка Новый клиент */}
@@ -1533,123 +1631,218 @@ window.callClient = (clientId: number | string) => {
             })
         )}
       </div>
-    ) : (
+        ) : (
       /* ==================== РЕЖИМ ТАБЛИЦЫ ==================== */
       <div style={{ background: '#1E2937', borderRadius: '16px', overflow: 'hidden' }}>
+
         {/* Шапка таблицы */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: '2fr 1fr 140px 140px 120px',
-          padding: '18px 28px',
-          background: '#25334A',
-          borderBottom: '2px solid #334155',
-          fontSize: '15px',
-          fontWeight: '600',
-          color: '#94A3B8',
-          textTransform: 'uppercase',
-          letterSpacing: '0.5px'
-        }}>
-          <div>Клиент / Организация</div>
-          <div>ИНН</div>
-          <div>Статус</div>
-          <div>Объём бетона</div>
-          <div>Заказы</div>
-        </div>
+      {activeTab === 'staff' ? (
+  <div style={{
+    display: 'grid',
+    gridTemplateColumns: currentUserRole === 'admin' 
+      ? '2.8fr 160px 1.6fr 1.1fr 130px' 
+      : '2.8fr 1.6fr 1.1fr 130px',
+    padding: '18px 28px',
+    background: '#25334A',
+    borderBottom: '2px solid #334155',
+    fontSize: '15px',
+    fontWeight: '600',
+    color: '#94A3B8'
+  }}>
+    <div>Сотрудник</div>
+    {currentUserRole === 'admin' && <div style={{ textAlign: 'center' }}>Пароль</div>}
+    <div>Телефон</div>
+    <div style={{ textAlign: 'center' }}>Роль</div>
+    <div style={{ textAlign: 'center' }}>Изменить</div>
+  </div>
+) : (
+
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: '2fr 1fr 140px 140px 120px',
+            padding: '18px 28px',
+            background: '#25334A',
+            borderBottom: '2px solid #334155',
+            fontSize: '15px',
+            fontWeight: '600',
+            color: '#94A3B8'
+          }}>
+            <div>Клиент / Организация</div>
+            <div>ИНН</div>
+            <div>Статус</div>
+            <div>Объём бетона</div>
+            <div>Заказы</div>
+          </div>
+        )}
 
         {/* Строки таблицы */}
-        {profiles.map((client: any) => {   // ← profiles вместо filteredList
-          const isStaff = client.isStaff || ['admin','manager','dispatcher','operator'].includes((client.role || '').toLowerCase());
-          const vol = client.total_volume || client.totalVolume || 0;
-          const ordersCount = client.total_orders || client.totalOrders || 0;
+        {(activeTab === 'staff' ? staffProfiles : profiles).map((item: any) => {
+          if (activeTab === 'staff') {
+  return (
+    <div
+      key={item.user_id}
+      onClick={() => setSelectedProfile(item)}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: currentUserRole === 'admin' 
+          ? '2.8fr 160px 1.6fr 1.1fr 130px' 
+          : '2.8fr 1.6fr 1.1fr 130px',
+        padding: '16px 28px',
+        borderBottom: '1px solid #334155',
+        cursor: 'pointer',
+        alignItems: 'center',
+        opacity: item.role === 'guest' ? 0.92 : 1,
+        background: item.role === 'guest' ? '#1F2A38' : 'transparent'
+      }}
+      onMouseOver={(e) => {
+        e.currentTarget.style.background = item.role === 'guest' ? '#334155' : '#25334A';
+      }}
+      onMouseOut={(e) => {
+        e.currentTarget.style.background = item.role === 'guest' ? '#1F2A38' : 'transparent';
+      }}
+    >
+      {/* 1. Сотрудник */}
+      <div>
+        <div style={{ fontWeight: '600', fontSize: '17px' }}>{item.full_name}</div>
+        {item.role === 'guest' && (
+          <div style={{ fontSize: '13px', color: '#94A3B8', marginTop: '2px' }}>
+            Демо-доступ
+          </div>
+        )}
+      </div>
 
-          let statusText = '❄️ Холодный';
-          let statusColor = '#64748B';
+      {/* 2. Пароль — только для админа */}
+      {currentUserRole === 'admin' && (
+        <div style={{ textAlign: 'center' }}>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              changeStaffPassword(item);
+            }}
+            style={{
+              padding: '8px 16px',
+              backgroundColor: '#8B5CF6',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '14px',
+              cursor: 'pointer',
+              fontWeight: '500'
+            }}
+          >
+            Сменить пароль
+          </button>
+        </div>
+      )}
 
-          if (!isStaff) {
-            if (vol >= 30 || ordersCount >= 5) {
-              statusText = '🔥 Горячий';
-              statusColor = '#EF4444';
-            } else if (vol >= 8 || ordersCount >= 2) {
-              statusText = '🌡️ Тёплый';
-              statusColor = '#F59E0B';
-            }
+      {/* 3. Телефон */}
+      <div style={{ color: '#94A3B8' }}>{item.phone || '—'}</div>
+
+      {/* 4. Роль */}
+      <div style={{ textAlign: 'center' }}>
+        <span style={{ 
+          padding: '6px 16px', 
+          borderRadius: '9999px', 
+          fontSize: '13px', 
+          background: item.role === 'admin' ? '#7C3AED' : 
+                      item.role === 'guest' ? '#475569' : '#334155', 
+          color: 'white',
+          display: 'inline-block'
+        }}>
+          {item.role === 'admin' ? 'Администратор' : 
+           item.role === 'dispatcher' ? 'Диспетчер' : 
+           item.role === 'operator' ? 'Оператор' : 
+           item.role === 'guest' ? 'Гость' : 'Менеджер'}
+        </span>
+      </div>
+
+      {/* 5. Изменить */}
+      <div style={{ textAlign: 'center' }}>
+        <button 
+          onClick={(e) => { e.stopPropagation(); editStaff(item); }}
+          style={{ 
+            padding: '8px 18px', 
+            background: '#3B82F6', 
+            border: 'none', 
+            borderRadius: '8px', 
+            color: 'white', 
+            cursor: 'pointer' 
+          }}
+        >
+          Изменить
+        </button>
+  </div>
+</div>
+            );
+          } else {
+            const vol = item.total_volume || item.totalVolume || 0;
+            const ordersCount = item.total_orders || item.totalOrders || 0;
+            let statusText = '❄️ Холодный';
+            let statusColor = '#64748B';
+            if (vol >= 30 || ordersCount >= 5) { statusText = '🔥 Горячий'; statusColor = '#EF4444'; }
+            else if (vol >= 8 || ordersCount >= 2) { statusText = '🌡️ Тёплый'; statusColor = '#F59E0B'; }
+
+            return (
+              <div
+                key={item.groupId || item.user_id}
+                onClick={() => setSelectedProfile(item)}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '2fr 1fr 140px 140px 120px',
+                  padding: '14px 28px',
+                  borderBottom: '1px solid #334155',
+                  cursor: 'pointer',
+                  alignItems: 'center'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.background = '#25334A'}
+                onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                <div>
+                  <div style={{ fontWeight: '600', fontSize: '17px' }}>{item.organization_name || item.full_name || 'Без названия'}</div>
+                  <div style={{ color: '#94A3B8', fontSize: '14px' }}>{item.phones ? item.phones.join(' • ') : item.phone || '—'}</div>
+                </div>
+                <div style={{ color: '#94A3B8' }}>{item.inn || '—'}</div>
+                <div style={{ color: statusColor, fontWeight: '600' }}>{statusText}</div>
+                <div style={{ fontSize: '18px', fontWeight: '700', color: '#60A5FA' }}>{vol.toFixed(1)} м³</div>
+                <div style={{ color: '#94A3B8', fontWeight: '500' }}>{ordersCount} шт.</div>
+              </div>
+            );
           }
-
-          return (
-            <div
-              key={client.groupId || client.user_id || client.id}
-              onClick={() => setSelectedProfile(client)}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '2fr 1fr 140px 140px 120px',
-                padding: '14px 28px',
-                borderBottom: '1px solid #334155',
-                cursor: 'pointer',
-                alignItems: 'center',
-                transition: 'background 0.2s',
-              }}
-              onMouseOver={(e) => e.currentTarget.style.background = '#25334A'}
-              onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
-            >
-              <div>
-                <div style={{ fontWeight: '600', fontSize: '17px' }}>
-                  {client.organization_name || client.full_name || client.name || 'Без названия'}
-                </div>
-                <div style={{ color: '#94A3B8', fontSize: '14px' }}>
-                  {client.phones ? client.phones.join(' • ') : client.phone || '—'}
-                </div>
-              </div>
-
-              <div style={{ color: '#94A3B8' }}>{client.inn || '—'}</div>
-
-              <div style={{ color: statusColor, fontWeight: '600' }}>
-                {isStaff ? 'Сотрудник' : statusText}
-              </div>
-
-              <div style={{ fontSize: '18px', fontWeight: '700', color: '#60A5FA' }}>
-                {vol.toFixed(1)} м³
-              </div>
-
-              <div style={{ color: '#94A3B8', fontWeight: '500' }}>
-                {ordersCount} шт.
-              </div>
-            </div>
-          );
         })}
       </div>
     )}
-
-    {/* ==================== ПАГИНАЦИЯ ==================== */}
-    {totalPages > 1 && (
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'center', 
-        alignItems: 'center', 
-        gap: '16px', 
-        marginTop: '40px' 
-      }}>
-        <button 
-          onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-          disabled={currentPage === 1}
-          style={{ padding: '12px 24px', background: currentPage === 1 ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
-        >
-          ← Назад
-        </button>
-
-        <div style={{ fontSize: '17px', fontWeight: '600' }}>
-          Страница <span style={{ color: '#10B981' }}>{currentPage}</span> из {totalPages}
-        </div>
-
-        <button 
-          onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-          disabled={currentPage === totalPages}
-          style={{ padding: '12px 24px', background: currentPage === totalPages ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === totalPages ? 'not-allowed' : 'pointer' }}
-        >
-          Вперед →
-        </button>
-      </div>
-    )}
   </>
+)}
+
+{/* ==================== ПАГИНАЦИЯ ==================== */}
+{totalPages > 1 && (
+  <div style={{ 
+    display: 'flex', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    gap: '16px', 
+    marginTop: '40px' 
+  }}>
+    <button 
+      onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+      disabled={currentPage === 1}
+      style={{ padding: '12px 24px', background: currentPage === 1 ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
+    >
+      ← Назад
+    </button>
+
+    <div style={{ fontSize: '17px', fontWeight: '600' }}>
+      Страница <span style={{ color: '#10B981' }}>{currentPage}</span> из {totalPages}
+    </div>
+
+    <button 
+      onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+      disabled={currentPage === totalPages}
+      style={{ padding: '12px 24px', background: currentPage === totalPages ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === totalPages ? 'not-allowed' : 'pointer' }}
+    >
+      Вперед →
+    </button>
+  </div>
 )}
 
      {/* ==================== ВКЛАДКА ЭФФЕКТИВНОСТЬ ================================ */}
@@ -2518,6 +2711,72 @@ window.callClient = (clientId: number | string) => {
   </div>
 )}
 
+
+{/* ==================== МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ СОТРУДНИКА ==================== */}
+{isStaffEditModalOpen && editingStaff && (
+  <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 1300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    <div style={{ background: '#1E2937', width: '620px', borderRadius: '20px', padding: '32px', color: '#fff' }}>
+      <h2 style={{ marginBottom: '24px' }}>Редактирование сотрудника</h2>
+
+      <div style={{ display: 'grid', gap: '16px' }}>
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>ФИО</label>
+          <input 
+            value={editingStaff.full_name || ''} 
+            onChange={(e) => setEditingStaff({...editingStaff, full_name: e.target.value})}
+            style={{ width: '95%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '10px', color: '#fff' }} 
+          />
+        </div>
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Телефон</label>
+          <input 
+            value={editingStaff.phone || ''} 
+            onChange={(e) => setEditingStaff({...editingStaff, phone: e.target.value})}
+            style={{ width: '95%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '10px', color: '#fff' }} 
+          />
+        </div>
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Роль</label>
+          <select 
+            value={editingStaff.role || 'manager'} 
+            onChange={(e) => setEditingStaff({...editingStaff, role: e.target.value})}
+            style={{ width: '99%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '10px', color: '#fff' }}
+          >
+            <option value="admin">Администратор</option>
+            <option value="manager">Менеджер</option>
+            <option value="dispatcher">Диспетчер</option>
+            <option value="operator">Оператор</option>
+          </select>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: '12px', marginTop: '32px' }}>
+        <button 
+          onClick={() => { setIsStaffEditModalOpen(false); setEditingStaff(null); }} 
+          style={{ flex: 1, padding: '16px', background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}
+        >
+          Отмена
+        </button>
+        <button 
+          onClick={() => {
+            // Здесь будет сохранение в Supabase
+            console.log('Сохраняем сотрудника:', editingStaff);
+            alert('Изменения сохранены (пока заглушка)');
+            setIsStaffEditModalOpen(false);
+            setEditingStaff(null);
+            // window.location.reload(); // или обновить список staff
+          }} 
+          style={{ flex: 1, padding: '16px', background: '#10B981', border: 'none', borderRadius: '12px', color: '#fff', fontWeight: '600' }}
+        >
+          Сохранить
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
     {/* ==================== МОДАЛКА СОЗДАНИЯ / ДУБЛИРОВАНИЯ ЗАКАЗА ==================== */}
 {isNewOrderModalOpen && (
   <NewOrderModal 
@@ -2556,7 +2815,7 @@ window.callClient = (clientId: number | string) => {
 )}
 
 
-             {/* ==================== МОДАЛЬНОЕ ОКНО ОБЪЕДИНЕНИЯ ДУБЛЕЙ ==================== */}
+             {/* ==================== МОДАЛЬНОЕ ОКНО ДУБЛЕЙ ==================== */}
 {showMergeModal && clientsToMerge.length > 0 && (
   <div style={{
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -2564,53 +2823,34 @@ window.callClient = (clientId: number | string) => {
     display: 'flex', alignItems: 'center', justifyContent: 'center'
   }}>
     <div style={{
-      background: '#1E2937', width: '740px', borderRadius: '20px', padding: '32px', color: '#fff', maxHeight: '90vh', overflow: 'auto'
+      background: '#1E2937', width: '780px', borderRadius: '20px', 
+      padding: '32px', color: '#fff', maxHeight: '88vh', overflow: 'auto'
     }}>
-      <h2 style={{ marginBottom: '8px' }}>Найдены дубли клиентов</h2>
+      <h2 style={{ marginBottom: '12px' }}>Группы дублей</h2>
       <p style={{ color: '#94A3B8', marginBottom: '24px' }}>
-        Они уже сгруппированы визуально. Вы можете присоединить отдельные карточки к группам.
+        Клиенты уже автоматически группируются по ИНН (юрлица) и ФИО (физлица).
       </p>
 
       {clientsToMerge.map((group: any, idx: number) => (
-        <div key={idx} style={{ marginBottom: '28px', background: '#25334A', padding: '20px', borderRadius: '16px' }}>
-          <h3 style={{ marginBottom: '12px' }}>
-            Группа по ИНН: {group.inn}
+        <div key={idx} style={{ 
+          marginBottom: '24px', 
+          background: '#25334A', 
+          padding: '20px', 
+          borderRadius: '16px' 
+        }}>
+          <h3 style={{ color: '#FBBF24', marginBottom: '12px' }}>
+            {group.inn ? `ИНН: ${group.inn}` : `ФИО: ${group.full_name}`}
           </h3>
-          <p style={{ color: '#94A3B8', marginBottom: '16px' }}>
-            {group.clients.length} клиентов в группе
-          </p>
-
+          <div style={{ color: '#94A3B8', marginBottom: '12px' }}>
+            {group.clients.length} записей
+          </div>
+          
           {group.clients.map((c: any, i: number) => (
             <div key={i} style={{ 
-              padding: '14px', 
-              background: '#1E2937', 
-              borderRadius: '12px', 
-              marginBottom: '10px',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center'
+              padding: '10px 0', 
+              borderBottom: i < group.clients.length - 1 ? '1px solid #334155' : 'none'
             }}>
-              <div>
-                <strong>{c.organization_name || c.full_name}</strong><br />
-                <span style={{ color: '#94A3B8' }}>{c.phone}</span>
-              </div>
-              <button 
-                onClick={() => {
-                  // Здесь можно добавить логику присоединения к основной группе
-                  alert(`Присоединить ${c.phone} к основной группе?`);
-                }}
-                style={{
-                  padding: '8px 20px',
-                  background: '#10B981',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '9999px',
-                  fontSize: '14px',
-                  cursor: 'pointer'
-                }}
-              >
-                Присоединить к группе
-              </button>
+              {c.organization_name || c.full_name} — {c.phone || '—'}
             </div>
           ))}
         </div>
@@ -2618,7 +2858,7 @@ window.callClient = (clientId: number | string) => {
 
       <button 
         onClick={() => setShowMergeModal(false)}
-        style={{ padding: '14px 32px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
+        style={{ padding: '14px 36px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
       >
         Закрыть
       </button>

@@ -504,6 +504,14 @@ const printTTN = (mixerId: number) => {
   }
 };
 
+// Форматирование объёма без лишних нулей
+const formatVolume = (value: number | string) => {
+  const num = Number(value);
+  if (isNaN(num)) return '0';
+  
+  return num.toFixed(2).replace(/\.?0+$/, '');
+};
+
 
 
   return (
@@ -699,10 +707,13 @@ const printTTN = (mixerId: number) => {
 }}>
   <div style={{ color: '#94A3B8', fontSize: '14px' }}>Назначено бетона</div>
   <div style={{ fontSize: '32px', fontWeight: '700', color: '#10B981', margin: '8px 0' }}>
-    {Number(assignedVolume).toFixed(1)} / {Number(orderVolume).toFixed(1)} м³
+    {formatVolume(assignedVolume)} / {formatVolume(orderVolume)} м³
   </div>
   <div style={{ fontSize: '14px', color: isFullyReady ? '#10B981' : '#F59E0B' }}>
-    {isFullyReady ? '✅ Полностью укомплектовано' : `Осталось ${Number(orderVolume - assignedVolume).toFixed(1)} м³`}
+    {isFullyReady 
+      ? '✅ Полностью укомплектовано' 
+      : `Осталось ${formatVolume(orderVolume - assignedVolume)} м³`
+    }
   </div>
 </div>
 

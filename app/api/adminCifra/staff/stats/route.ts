@@ -116,7 +116,7 @@ export async function GET(request: NextRequest) {
     const { data: staffList } = await supabase
       .from('users')
       .select('user_id, full_name, phone, role')
-      .in('role', ['admin', 'manager', 'dispatcher', 'operator'])
+      .in('role', ['admin', 'manager', 'dispatcher', 'operator', 'guest'])
       .order('full_name', { ascending: true });
 
     if (!staffList) return NextResponse.json([]);

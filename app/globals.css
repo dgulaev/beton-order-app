@@ -42,14 +42,80 @@ input, select, textarea, button {
   }
 }
 
-/* Дополнительная анимация для всплывающего уведомления */
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
   10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
   20%, 40%, 60%, 80% { transform: translateX(4px); }
 }
 
-/* Стиль для уведомления (на всякий случай) */
 .notification {
   animation: slideIn 0.4s ease forwards;
+}
+
+/* ==================== МОБИЛЬНАЯ АДАПТАЦИЯ ==================== */
+@media (max-width: 768px) {
+  body {
+    font-size: 15px;
+  }
+
+  /* Главный layout */
+  .admin-layout {
+    transform: none !important;
+    width: 100% !important;
+    height: auto !important;
+  }
+
+  /* Основной контент */
+  .admin-content {
+    padding: 12px 16px !important;
+    min-height: 100vh;
+  }
+
+  /* Карточки и блоки */
+  .card, div[style*="background: #1E2937"] {
+    padding: 16px !important;
+    margin-bottom: 12px;
+    border-radius: 16px;
+  }
+
+  /* Таблицы */
+  table {
+    font-size: 14px;
+    width: 100%;
+  }
+
+  th, td {
+    padding: 10px 8px !important;
+  }
+
+  /* Кнопки */
+  button, .button {
+    padding: 14px 20px !important;
+    font-size: 16px !important;
+    min-height: 48px;
+  }
+
+  /* Заголовки */
+  h1, h2 {
+    font-size: 1.5rem !important;
+  }
+
+  /* Сворачиваемое меню на мобильных */
+  nav a {
+    padding: 14px 12px !important;
+  }
+
+  /* Всплывающие уведомления */
+  div[style*="position: fixed"][style*="right: 24px"] {
+    width: 92% !important;
+    left: 4% !important;
+    right: auto !important;
+    min-width: auto !important;
+  }
+}
+
+/* Улучшение touch */
+button, a, .clickable {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: rgba(0,0,0,0.1);
 }
