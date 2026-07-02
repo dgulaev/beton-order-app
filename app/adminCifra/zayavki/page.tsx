@@ -1378,8 +1378,8 @@ ${order.customer_type?.includes('Юридическое')
               <div style={{ color: '#94A3B8' }}>Объём</div>
               <input 
                 type="number" 
-                step="0.1"
-                min="0.1"
+                step="0.01"
+                min="0.01"
                 value={selectedOrder.volume || ''} 
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, volume: e.target.value })}
                 style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}

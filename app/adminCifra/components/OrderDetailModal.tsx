@@ -515,28 +515,30 @@ const formatVolume = (value: number | string) => {
 
 
   return (
+  <div 
+    style={{ 
+      position: 'fixed', 
+      inset: 0, 
+      background: 'rgba(0,0,0,0.94)', 
+      zIndex: 9999, 
+      display: 'flex', 
+      alignItems: 'center', 
+      justifyContent: 'center' 
+    }} 
+    onClick={onClose}
+  >
     <div 
-      style={{ 
-        position: 'fixed', 
-        inset: 0, 
-        background: 'rgba(0,0,0,0.94)', 
-        zIndex: 9999, 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center' 
-      }} 
-      onClick={onClose}
-    >
-      <div 
-        style={{ 
-          background: '#1E2937', 
-          width: '1300px', 
-          borderRadius: '24px', 
-          padding: '32px', 
-          maxHeight: '94vh', 
-          overflow: 'auto',
-          boxShadow: '0 30px 80px rgba(0,0,0,0.7)'
-        }} 
+  style={{ 
+    background: '#1E2937', 
+    width: '1300px', 
+    borderRadius: '24px', 
+    padding: '32px', 
+    height: '1300px',                    // ← Фиксированная высота в пикселях
+    maxHeight: '1400px',                 // ← Ограничиваем
+    overflow: 'auto',                   // ← Скролл если контент не помещается
+    boxShadow: '0 30px 80px rgba(0,0,0,0.7)',
+    margin: '40px auto'
+  }}
         onClick={e => e.stopPropagation()}
       >
         {/* ==================== HEADER ==================== */}
@@ -997,7 +999,7 @@ const formatVolume = (value: number | string) => {
                 type="number" 
                 id="mixerVolume"
                 placeholder="8"
-                step="0.5"
+                step="0.01"
                 style={{ 
                   width: '80%', 
                   padding: '14px', 

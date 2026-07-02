@@ -428,8 +428,8 @@ const handleSubmit = async (e: React.FormEvent) => {
                   placeholder="Объём, м³" 
                   value={form.volume} 
                   onChange={handleChange} 
-                  step="0.1" 
-                  min="0.1" 
+                  step="0.01" 
+                  min="0.01" 
                   style={{ padding: '14px', background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }} 
                   required 
                 />
