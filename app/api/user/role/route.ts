@@ -8,23 +8,42 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export async function POST(request: NextRequest) {
   try {
-    const { userId } = await request.json();
+    let userId: number | null = null;
+
+    // 1. Пытаемся получить userId из тела запроса (для совместимости)
+    try {
+      const body = await request.json();
+      if (body.userId) {
+        userId = parseInt(body.userId.toString(), 10);
+      }
+    } catch {}
+
+    // 2. Если нет — берём из заголовка (для нового хука)
+    if (!userId) {
+      const headerUserId = request.headers.get('x-user-id');
+      if (headerUserId) {
+        userId = parseInt(headerUserId, 10);
+      }
+    }
+
     console.log('🔍 [Role API] Received userId:', userId);
 
     if (!userId) {
+      console.log('⚠️ No userId found');
       return NextResponse.json({ 
         success: true, 
         role: 'client',
-        full_name: 'Сотрудник' 
+        full_name: 'Сотрудник',
+        forceLogoutVersion: 0 
       });
     }
 
-    const parsedUserId = parseInt(userId.toString(), 10);
+    const parsedUserId = userId;
 
     // Устанавливаем контекст пользователя
     await supabase.rpc('set_current_user_id', { p_user_id: parsedUserId });
 
-    // Получаем роль + имя + версию логаута
+    // Получаем данные
     const { data, error } = await supabase
       .from('users')
       .select('role, full_name, username, force_logout_version')
@@ -48,7 +67,7 @@ export async function POST(request: NextRequest) {
       success: true, 
       role,
       full_name,
-      forceLogoutVersion 
+      force_logout_version: forceLogoutVersion   // нормализуем имя поля
     });
 
   } catch (e: any) {
@@ -57,7 +76,7 @@ export async function POST(request: NextRequest) {
       success: true, 
       role: 'client', 
       full_name: 'Сотрудник',
-      forceLogoutVersion: 0 
+      force_logout_version: 0 
     });
   }
 }

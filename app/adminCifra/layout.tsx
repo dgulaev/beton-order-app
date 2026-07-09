@@ -3,29 +3,57 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell, CheckCircle, LogOut, Globe } from 'lucide-react';
-
 import { useEffect, useState, useRef } from 'react';
-
 import Image from 'next/image';
+import { useUserRole } from '../providers/UserRoleProvider';   // ← ДОБАВИЛИ
 
 export default function AdminCifraLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isActive = (path: string) => pathname === path;
 
-  // ==================== 1. ОСНОВНЫЕ СОСТОЯНИЯ ====================
-  const [userRole, setUserRole] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // ==================== 1. РОЛЬ ИЗ PROVIDER ====================
+  const { user, loading: roleLoading, isAdmin } = useUserRole();
+
   const [isCollapsed, setIsCollapsed] = useState(true);
 
-  // ==================== 1.1 НОВОЕ: СОСТОЯНИЕ АВТОРИЗАЦИИ ====================
-const [isLoggedIn, setIsLoggedIn] = useState(false);
-const [phone, setPhone] = useState('');
-const [password, setPassword] = useState('');
-const [loginLoading, setLoginLoading] = useState(false);
-const [loginError, setLoginError] = useState('');
+  // ==================== 1.1 СОСТОЯНИЯ АВТОРИЗАЦИИ ====================
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
 
-// ==================== 1.2 РОЛЬ GUEST ====================
-const isGuest = userRole === 'guest';
+  const isLoggedIn = !!user && !roleLoading;
+  const userRole = user?.role || null;
+  const isGuest = userRole === 'guest';
+
+  // ==================== 1.3 АВТОМАТИЧЕСКИЙ РЕДИРЕКТ НА МОБИЛЬНУЮ ВЕРСИЮ ====================
+  useEffect(() => {
+    const redirectToMobile = () => {
+      const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Samsung/i.test(navigator.userAgent) ||
+                       window.innerWidth <= 768;
+
+      const currentPath = window.location.pathname;
+
+      if (isMobile && currentPath.startsWith('/adminCifra') && !window.location.search.includes('desktop=true')) {
+        let newPath = currentPath.replace('/adminCifra', '/mobile');
+
+        if (newPath === '/mobile/dashboard' || newPath.includes('dashboard')) {
+          newPath = '/mobile/';
+        }
+
+        newPath = newPath.replace('/mobile/mobile', '/mobile').replace('//', '/');
+
+        console.log('📱 Auto redirect to mobile:', newPath);
+        window.location.replace(newPath);
+      }
+    };
+
+    // Проверяем сразу + небольшая задержка
+    redirectToMobile();
+    const timer = setTimeout(redirectToMobile, 700);
+
+    return () => clearTimeout(timer);
+  }, []);
 
   // ==================== 2. СОСТОЯНИЯ УВЕДОМЛЕНИЙ ====================
   const [newOrdersCount, setNewOrdersCount] = useState(0);
@@ -53,69 +81,39 @@ const isGuest = userRole === 'guest';
     });
   };
 
-  // ==================== 3. ПРОВЕРКА АВТОРИЗАЦИИ И FORCE LOGOUT ====================
-useEffect(() => {
-  const savedUserId = localStorage.getItem('userId');
-  
-  if (!savedUserId) {
-    setIsLoggedIn(false);
-    setLoading(false);
-    return;
-  }
+  // ==================== 3. FORCE LOGOUT + ПОЛИНГ ====================
+  useEffect(() => {
+    const savedUserId = localStorage.getItem('userId');
+    if (!savedUserId) return;
 
-  setIsLoggedIn(true);
-  checkUserRole(savedUserId);
+    // Периодическая проверка force_logout_version
+    const forceCheckInterval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/user/role', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: parseInt(savedUserId) }),
+        });
 
-  // === ПОЛИНГ ПРИНУДИТЕЛЬНОГО ВЫХОДА ===
-  // Для продакшена делаем проверку раз в 30 минут, чтобы не создавать лишнюю нагрузку на базу
-  const forceCheckInterval = setInterval(() => {
-    const currentUserId = localStorage.getItem('userId');
-    if (currentUserId) {
-      checkUserRole(currentUserId);
-    }
-  }, 1800000); // 30 минут = 1 800 000 миллисекунд
+        const data = await res.json();
 
-  return () => clearInterval(forceCheckInterval);
-}, []);
+        if (data.forceLogoutVersion && data.forceLogoutVersion >= 9999) {
+          if (parseInt(savedUserId) === 1777619517739) {
+            console.log('✅ Главный Админ — игнорируем force logout');
+            return;
+          }
 
-const checkUserRole = async (savedUserId: string) => {
-  try {
-    const res = await fetch('/api/user/role', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: parseInt(savedUserId) }),
-    });
+          console.log(`🔴 Force logout для пользователя ${savedUserId}`);
+          localStorage.removeItem('userId');
+         // window.location.reload();
+        }
+      } catch (e) {
+        console.warn('Force logout check failed:', e);
+      }
+    }, 1800000); // каждые 30 минут
 
-    const data = await res.json();
-
-    // === ПРИНУДИТЕЛЬНЫЙ ВЫХОД ===
-    if (data.forceLogoutVersion && data.forceLogoutVersion >= 9999) {
-      
-      // Главный Админ (user_id = 1777619517739) может входить всегда
-      if (parseInt(savedUserId) === 1777619517739) {
-       // console.log('✅ Главный Админ — разрешаем вход несмотря на force_logout_version');
-        setUserRole(data.role || 'admin');
-        return;
-      } 
-      
-      // Все остальные сотрудники выкидываются автоматически
-     // console.log(`🔴 Принудительный выход для пользователя ${savedUserId}`);
-      localStorage.removeItem('userId');
-      setIsLoggedIn(false);
-      setUserRole(null);
-      window.location.reload();
-      return;
-    }
-
-    setUserRole(data.role || 'client');
-
-  } catch (e) {
-    console.error('Role check error:', e);
-    setUserRole('client');
-  } finally {
-    setLoading(false);
-  }
-};
+    return () => clearInterval(forceCheckInterval);
+  }, []);
 
   // ==================== 3.1 ОЧИСТКА СТАРЫХ ЗАКРЫТЫХ УВЕДОМЛЕНИЙ ====================
   useEffect(() => {
@@ -126,46 +124,36 @@ const checkUserRole = async (savedUserId: string) => {
   }, []);
 
   // ==================== 4. ВХОД ====================
-const handleLogin = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setLoginLoading(true);
-  setLoginError('');
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginLoading(true);
+    setLoginError('');
 
-  try {
-    const res = await fetch('/api/auth/admin-login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, password }),
-    });
+    try {
+      const res = await fetch('/api/auth/admin-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, password }),
+      });
 
-    const data = await res.json();
+      const data = await res.json();
 
-    if (data.success && data.userId) {
-      localStorage.setItem('userId', data.userId.toString());
-      
-     // console.log('✅ Логин успешен, обновляем состояние');
-      
-      setIsLoggedIn(true);
-      setUserRole(data.role);
-      setPhone('');
-      setPassword('');
-      
-      // Жёсткая перезагрузка страницы
-      window.location.reload();
-      
-    } else {
-      setLoginError(data.message || 'Неверный телефон или пароль');
+      if (data.success && data.userId) {
+        localStorage.setItem('userId', data.userId.toString());
+       // window.location.reload(); // перезагрузка обновит роль через Provider
+      } else {
+        setLoginError(data.message || 'Неверный телефон или пароль');
+      }
+    } catch (err) {
+      console.error('Login error:', err);
+      setLoginError('Ошибка соединения с сервером');
+    } finally {
+      setLoginLoading(false);
     }
-  } catch (err) {
-    console.error('Login error:', err);
-    setLoginError('Ошибка соединения с сервером');
-  } finally {
-    setLoginLoading(false);
-  }
-};
+  };
 
 
-  // ==================== 4.2 УВЕДОМЛЕНИЕ ПО КЛИЕНТУ (НОВЫЙ БЛОК) ====================
+  // ==================== 4.2 УВЕДОМЛЕНИЕ ПО КЛИЕНТУ  ====================
   const showClientReminder = (client: any) => {
     const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
     const key = `client-reminder-${client.groupId || client.user_id}`;
@@ -456,66 +444,73 @@ useEffect(() => {
   };
 }, [userRole]);
 
-// ==================== 5.1 ПРОВЕРКА НАПОМИНАНИЙ ПО КЛИЕНТАМ (ОДИН РАЗ В ДЕНЬ) ====================
-useEffect(() => {
-  if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) return;
+  // ==================== 5.1 ПРОВЕРКА НАПОМИНАНИЙ ПО КЛИЕНТАМ — ОТКЛЮЧЕНО ====================
+  // useEffect(() => {
+  //   if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) return;
 
-  const checkClientReminders = async () => {
-    try {
-      const savedUserId = localStorage.getItem('userId');
-      if (!savedUserId) return;
+  //   const checkClientReminders = async () => {
+  //     try {
+  //       const savedUserId = localStorage.getItem('userId');
+  //       if (!savedUserId) return;
 
-      const res = await fetch(`/api/adminCifra/clients/reminders?userId=${savedUserId}`);
+  //       const res = await fetch(`/api/adminCifra/clients/reminders?userId=${savedUserId}`);
 
-      if (!res.ok) {
-        console.warn('Reminders API returned:', res.status);
-        return;
-      }
+  //       if (!res.ok) {
+  //         console.warn('Reminders API returned:', res.status);
+  //         return;
+  //       }
 
-      const reminders = await res.json();
+  //       const reminders = await res.json();
 
-     // console.log(`📢 Получено ${reminders.length} напоминаний`);
+  //       reminders.forEach((reminder: any) => {
+  //         const key = `client-reminder-${reminder.groupId || reminder.user_id}`;
+  //         const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
 
-      reminders.forEach((reminder: any) => {
-        const key = `client-reminder-${reminder.groupId || reminder.user_id}`;
-        const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
+  //         if (!closed.includes(key)) {
+  //           showClientReminder(reminder);
+  //         }
+  //       });
+  //     } catch (err) {
+  //       console.warn('Client reminders check error:', err);
+  //     }
+  //   };
 
-        if (!closed.includes(key)) {
-          showClientReminder(reminder);
-        }
-      });
-    } catch (err) {
-      console.warn('Client reminders check error:', err);
-    }
-  };
+  //   checkClientReminders();
 
-  // Первый запуск
-  checkClientReminders();
+  //   const now = new Date();
+  //   const tomorrow9AM = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0);
+  //   const timeUntil9AM = tomorrow9AM.getTime() - now.getTime();
 
-  // Ежедневная проверка в 9:00 утра
-  const now = new Date();
-  const tomorrow9AM = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0);
-  const timeUntil9AM = tomorrow9AM.getTime() - now.getTime();
+  //   const dailyTimer = setTimeout(() => {
+  //     checkClientReminders();
+  //     setInterval(checkClientReminders, 24 * 60 * 60 * 1000);
+  //   }, timeUntil9AM);
 
-  const dailyTimer = setTimeout(() => {
-    checkClientReminders();
-    setInterval(checkClientReminders, 24 * 60 * 60 * 1000);
-  }, timeUntil9AM);
+  //   return () => clearTimeout(dailyTimer);
 
-  return () => clearTimeout(dailyTimer);
-
-}, [userRole]);
+  // }, [userRole]);
 
 
-  // ==================== 6. СБРОС СЧЁТЧИКА ====================
+    // ==================== 6. СБРОС СЧЁТЧИКА ====================
   useEffect(() => {
     if (pathname === '/adminCifra/zayavki') {
       setNewOrdersCount(0);
     }
   }, [pathname]);
 
-  if (loading) {
-    return <div style={{ padding: '100px', textAlign: 'center', background: '#0F172A', color: '#94A3B8', minHeight: '100vh' }}>Загрузка...</div>;
+     // ==================== ЗАГРУЗКА ====================
+  if (roleLoading) {
+    return (
+      <div style={{ 
+        padding: '100px', 
+        textAlign: 'center', 
+        background: '#0F172A', 
+        color: '#94A3B8', 
+        minHeight: '100vh' 
+      }}>
+        Загрузка...
+      </div>
+    );
   }
 
 
@@ -624,7 +619,7 @@ const forceLogoutAll = async () => {
 
     if (data.success) {
       alert('✅ Все сотрудники успешно выкинуты из системы!');
-      window.location.reload();
+      // window.location.reload();
     } else {
       alert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
     }
@@ -634,12 +629,10 @@ const forceLogoutAll = async () => {
 };
 
 
-  // ==================== ПРОВЕРКА РОЛЕЙ ====================
-const allowedRoles = ['admin', 'manager', 'dispatcher', 'operator', 'guest'];
-
-if (!userRole || !allowedRoles.includes(userRole)) {
-  return <div style={{ padding: '100px', textAlign: 'center', background: '#0F172A', color: '#94A3B8' }}>Доступ запрещён</div>;
-}
+    // ==================== ПРОВЕРКА РОЛЕЙ ====================
+  if (!isLoggedIn || !userRole) {
+    return <div style={{ padding: '100px', textAlign: 'center', background: '#0F172A', color: '#94A3B8', minHeight: '100vh' }}>Доступ запрещён</div>;
+  }
 
   // ==================== 7. ГЛОБАЛЬНЫЙ МАСШТАБ ====================
   const getGlobalScale = () => {
@@ -673,9 +666,13 @@ if (!userRole || !allowedRoles.includes(userRole)) {
         backgroundColor: '#0F172A',
         color: '#fff'
       }}>
+
+        
         
         {/* ==================== 8. СВОРАЧИВАЕМОЕ МЕНЮ ==================== */}
-        <div style={{
+        <div 
+        className="sidebar-menu"
+        style={{
           width: isCollapsed ? '72px' : '280px',
           backgroundColor: '#1E2937',
           color: '#fff',
@@ -687,13 +684,14 @@ if (!userRole || !allowedRoles.includes(userRole)) {
           flexShrink: 0,
           overflow: 'hidden'
         }}>
+
           
           {/* Кнопка сворачивания */}
           <div style={{ 
             display: 'flex', 
             justifyContent: 'flex-end', 
             marginBottom: '20px',
-            paddingRight: '8px'
+            paddingRight: '13px'
           }}>
             <button 
               onClick={() => setIsCollapsed(!isCollapsed)}
@@ -706,7 +704,7 @@ if (!userRole || !allowedRoles.includes(userRole)) {
                 borderRadius: '8px'
               }}
             >
-              {isCollapsed ? <Menu size={24} /> : <X size={24} />}
+              {isCollapsed ? <Menu size={23} /> : <X size={20} />}
             </button>
           </div>
 
