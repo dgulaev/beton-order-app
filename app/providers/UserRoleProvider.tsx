@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, ReactNode, useEffect, useState } from 'react';
+import { createContext, useContext, ReactNode, useEffect, useState, useCallback } from 'react';
 
 interface UserRole {
   role: string;
@@ -24,36 +24,25 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-    const fetchRole = async (force = false) => {
+  const fetchRole = useCallback(async (force = false) => {
     try {
-      setLoading(true);
-
-      // Проверка кэша (5 минут)
-      if (!force) {
-        const cached = localStorage.getItem('userRoleCache');
-        if (cached) {
-          const { data, timestamp } = JSON.parse(cached);
-          if (Date.now() - timestamp < 300000) { // 5 минут
-            setUser(data);
-            setError(null);
-            setLoading(false);
-            return;
-          }
-        }
-      }
+      if (!force) setLoading(true);
 
       const savedUserId = localStorage.getItem('userId');
-      const headers: HeadersInit = { 'Content-Type': 'application/json' };
-
-      if (savedUserId) {
-        headers['x-user-id'] = savedUserId;
+      if (!savedUserId) {
+        setUser(null);
+        setLoading(false);
+        return;
       }
 
       const res = await fetch('/api/user/role', {
         method: 'POST',
-        headers,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': savedUserId,
+        },
         body: JSON.stringify({}),
-        cache: 'no-store'
+        cache: 'no-store',
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -62,37 +51,61 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
       setUser(data);
       setError(null);
 
-      // Сохраняем в кэш
-      localStorage.setItem('userRoleCache', JSON.stringify({
-        data,
-        timestamp: Date.now()
-      }));
+      // Проверка принудительного выхода
+      const currentVersion = data?.force_logout_version || 0;
+      const lastVersion = parseInt(localStorage.getItem('lastForceLogoutVersion') || '0');
+
+      if (currentVersion > lastVersion) {
+        localStorage.removeItem('userId');
+        localStorage.removeItem('userPhone');
+        localStorage.removeItem('userRoleCache');
+        alert('Ваш сеанс был завершён администратором. Пожалуйста, войдите заново.');
+        window.location.href = '/';
+        return;
+      }
+
+      localStorage.setItem('lastForceLogoutVersion', currentVersion.toString());
 
     } catch (err: any) {
       console.warn('Role fetch error:', err);
       setError(err.message);
-      setUser(null);
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchRole();
-    const interval = setInterval(fetchRole, 300000);
-    return () => clearInterval(interval);
   }, []);
 
-  const refreshRole = () => fetchRole();
+  // === ОДИН РАЗ при загрузке + проверка при возврате на вкладку ===
+  useEffect(() => {
+    fetchRole();
+
+    // Проверяем роль только когда пользователь возвращается на вкладку
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchRole(true); // force = true, без лишнего loading
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [fetchRole]);
+
+  const refreshRole = useCallback(() => {
+    fetchRole(true);
+  }, [fetchRole]);
 
   return (
-    <UserRoleContext.Provider value={{
-      user,
-      loading,
-      error,
-      isAdmin: user?.role === 'admin',
-      refreshRole
-    }}>
+    <UserRoleContext.Provider
+      value={{
+        user,
+        loading,
+        error,
+        isAdmin: user?.role === 'admin',
+        refreshRole,
+      }}
+    >
       {children}
     </UserRoleContext.Provider>
   );

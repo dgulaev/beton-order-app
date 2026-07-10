@@ -54,11 +54,11 @@ export function useUserRole() {
 
     fetchRole(); // только один раз при монтировании
 
-    // Проверка force logout — раз в 5 минут (не чаще!)
+    // Проверка force logout — раз в 10 часов (не чаще!)
     const interval = setInterval(() => {
       const savedUserId = localStorage.getItem('userId');
       if (savedUserId) fetchRole();
-    }, 300000); // 5 минут
+    }, 36_000_000); // 10 часов
 
     return () => {
       isMounted = false;

@@ -5,7 +5,6 @@ import MobileLayout from '@/app/mobile/layout';
 import MobileDashboardOrderModal from './components/MobileDashboardOrderModal';
 import MobileCalendar from './components/MobileCalendar';
 
-
 export default function MobileDashboard() {
   // ==================== 1. СТАТУСЫ И СОСТОЯНИЯ ====================
   const [allOrders, setAllOrders] = useState<any[]>([]);
@@ -33,24 +32,21 @@ export default function MobileDashboard() {
     }
   }, []);
 
-
-  // ==================== 5. ЗАГРУЗКА ДАННЫХ ====================
+  // ==================== 5. ЗАГРУЗКА ДАННЫХ (ОПТИМИЗИРОВАНО) ====================
   useEffect(() => {
     const dateStr = selectedDate.toISOString().split('T')[0];
 
-    fetch('/api/adminCifra/all-orders')
-      .then(r => r.json())
-      .then(data => setAllOrders(data))
-      .catch(console.error);
-
-    fetch(`/api/adminCifra/active-mixers?date=${dateStr}`)
-      .then(r => r.json())
-      .then(data => setActiveMixers(data || []))
-      .catch(console.error);
-
-    fetch('/api/adminCifra/order-mixers')
-      .then(r => r.json())
-      .then(data => setMixerAssignments(data))
+    // Один Promise.all вместо нескольких отдельных fetch
+    Promise.all([
+      fetch('/api/adminCifra/all-orders'),
+      fetch(`/api/adminCifra/active-mixers?date=${dateStr}`),
+      fetch('/api/adminCifra/order-mixers')
+    ])
+      .then(async ([ordersRes, mixersRes, assignmentsRes]) => {
+        if (ordersRes.ok) setAllOrders(await ordersRes.json());
+        if (mixersRes.ok) setActiveMixers(await mixersRes.json() || []);
+        if (assignmentsRes.ok) setMixerAssignments(await assignmentsRes.json());
+      })
       .catch(console.error);
   }, [selectedDate]);
 
@@ -271,7 +267,6 @@ export default function MobileDashboard() {
             const time = order.delivery_time || '—';
             const volume = Number(order.volume || 0);
 
-            // ==================== СТИЛЬ ТОЛЬКО ДЛЯ ИКОНКИ ====================
             const getOrderIcon = (status: string) => {
               switch (status) {
                 case 'cancelled':
@@ -292,7 +287,7 @@ export default function MobileDashboard() {
                 key={order.id}
                 onClick={() => setSelectedOrder(order)}
                 style={{
-                  background: '#25334A',        // ← единый фон для всех
+                  background: '#25334A',
                   padding: '14px 16px',
                   borderRadius: '12px',
                   marginBottom: '10px',
@@ -380,13 +375,7 @@ export default function MobileDashboard() {
               <div style={{ fontSize: '14px', color: '#94A3B8' }}>В пути</div>
             </div>
           </div>
-        
-
-
-
-       {/* Закрывающий диф контейнера */}
-      </div>
-      
+        </div>
 
                   {/* Модалка заказа */}
       {selectedOrder && (
@@ -397,7 +386,7 @@ export default function MobileDashboard() {
           setMixerAssignments={setMixerAssignments}
           allOrders={allOrders}
           setAllOrders={setAllOrders}
-          allMixers={[]}
+          allMixers={activeMixers}
           currentUser={{ id: 0, name: '', role: '' }}
           handleStatusChange={() => {}}
           deleteMixer={() => {}}
@@ -410,12 +399,7 @@ export default function MobileDashboard() {
         />
       )}
 
-      {/* ==================== УЛУЧШЕННАЯ МОДАЛКА КАЛЕНДАРЯ (без изменения Calendar.tsx) ==================== */}
-      {/* Кнопка открытия календаря */}
-      <div style={{ textAlign: 'center', margin: '20px 0 28px 0' }}>
-      </div>
-
-      {/* Модалка календаря */}
+      {/* ==================== УЛУЧШЕННАЯ МОДАЛКА КАЛЕНДАРЯ ==================== */}
       {showCalendar && (
         <div 
           style={{ 

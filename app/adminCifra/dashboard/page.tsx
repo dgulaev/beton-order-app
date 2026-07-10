@@ -3,18 +3,13 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import Calendar from '../Calendar';
 import { Order } from '../hooks/useCalendarOrders';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@/app/utils/supabase/client';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import OrderDetailModal from '../components/OrderDetailModal';
 import Image from 'next/image';
 
-
-
-// Создаём клиент Supabase (один раз на весь файл)
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+// ==================== 0. SUPABASE CLIENT ====================
+const supabase = createClient();
 
 export default function AdminCifraDashboard() {
 
@@ -27,7 +22,7 @@ export default function AdminCifraDashboard() {
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const MINUTES_PER_CUBIC_METER = 1;
+  const MINUTES_PER_CUBIC_METER = 2;
 
   // ==================== 2. СТАТУСЫ ЗАКАЗОВ (глобальная функция) ====================
   const getStatusConfig = (status: string) => {
@@ -55,7 +50,7 @@ export default function AdminCifraDashboard() {
  const [history, setHistory] = useState<any[]>([]);
  const [currentUser, setCurrentUser] = useState<{ id: number; name?: string; role: string } | null>(null);
 
-    // ==================== ДОБАВЛЕНИЕ В ИСТОРИЮ (финальная улучшенная версия) ====================
+    // ==================== 3. ДОБАВЛЕНИЕ В ИСТОРИЮ (финальная улучшенная версия) ====================
 const addToHistory = async (action: string, details?: any) => {
   if (!selectedOrder?.id) return;
 
@@ -135,7 +130,7 @@ const addToHistory = async (action: string, details?: any) => {
   }
 };
 
-// ==================== ПЕРЕВОД СТАТУСОВ ====================
+// ==================== 3.1 ПЕРЕВОД СТАТУСОВ ====================
 const getStatusRussian = (status: string): string => {
   const map: Record<string, string> = {
     'new': 'Новый',
@@ -242,7 +237,7 @@ const getMixerStatusStyle = (status: string) => {
   }
 };
 
-// ==================== ЗАГРУЗКА УВЕДОМЛЕНИЙ ====================
+// ==================== 6.1 ЗАГРУЗКА УВЕДОМЛЕНИЙ ====================
 useEffect(() => {
   fetchNotifications(); // первая загрузка
 
@@ -408,7 +403,7 @@ const completionPercent = planToday > 0
     if (saved) setUserId(parseInt(saved, 10));
   }, []);
 
- // ==================== ЗАГРУЗКА РОЛИ + ИМЕНИ ====================
+ // ==================== 14.1 ЗАГРУЗКА РОЛИ + ИМЕНИ ====================
 useEffect(() => {
   if (!userId) {
     setLoadingRole(false);
@@ -443,7 +438,7 @@ useEffect(() => {
     .finally(() => setLoadingRole(false));
 }, [userId]);
 
-  // ==================== ЗАГРУЗКА CURRENT USER ====================
+  // ==================== 14.2 ЗАГРУЗКА CURRENT USER ====================
   useEffect(() => {
     if (userId && userRole) {
       setCurrentUser({
@@ -562,7 +557,7 @@ useEffect(() => {
   }, []);
 
   // ==================== 20. REALTIME ==================================================
-  useRealtimeOrders(setAllOrders);
+   // useRealtimeOrders(setAllOrders);
 
       // ==================== 21. АВТО-ОБНОВЛЕНИЕ ДАННЫХ ================================
 useEffect(() => {
@@ -742,7 +737,7 @@ const deleteMixer = async (mixerId: number | string, index: number) => {
   const mixerName = mixerToDelete.mixerName || mixerToDelete.number || mixerToDelete.mixer_name || 'Миксер';
   const currentStatus = mixerToDelete.status || 'Загрузка';
 
-  // ==================== ЗАПРЕЩЁННЫЕ СТАТУСЫ ====================
+  // ====================28.1  ЗАПРЕЩЁННЫЕ СТАТУСЫ ====================
   const forbiddenStatuses = ['В пути', 'На объекте', 'Разгружен', 'Возврат', 'Проблема'];
 
   if (forbiddenStatuses.includes(currentStatus)) {
@@ -899,7 +894,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
         padding: '16px'
       }}>
 
-        {/* ==================== ОСНОВНОЙ GRID ==================== */}
+        {/* ==================== 32. ОСНОВНОЙ GRID ==================== */}
         <div style={{ 
           display: 'grid',
           gridTemplateColumns: 'minmax(820px, 1fr) minmax(430px, 510px)', 
@@ -910,7 +905,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
           minHeight: 'calc(100vh - 80px)'
         }}>
 
-      {/* ==================== ЛЕВАЯ КОЛОНКА ( KPI) ==================== */}
+      {/* ==================== 33. ЛЕВАЯ КОЛОНКА ( KPI) ==================== */}
       <div style={{ 
           flex: 1, 
           minWidth: '950px',
@@ -989,7 +984,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
 </div>
 </div>
 
-       {/* ==================== KPI — РЕАЛЬНЫЕ ДАННЫЕ ==================== */}
+       {/* ==================== 34. KPI — РЕАЛЬНЫЕ ДАННЫЕ ==================== */}
         <div style={{ 
                display: 'grid', 
                gridTemplateColumns: 'repeat(4, 1fr)', 
@@ -999,7 +994,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
                paddingBottom: '8px'
          }}>
           
-       {/* ==================== ЗАЯВКИ СЕГОДНЯ (точно как Миксеры) ==================== */}
+       {/* ==================== 35. ЗАЯВКИ СЕГОДНЯ (точно как Миксеры) ==================== */}
 <div style={{ 
   background: '#25334A', 
   borderRadius: '20px', 
@@ -1066,7 +1061,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
   </div>
 </div>
 
-          {/* ==================== ВЫПОЛНЕНИЕ ПЛАНА ==================== */}
+  {/* ==================== 36. ВЫПОЛНЕНИЕ ПЛАНА ==================== */}
 <div style={{ 
   background: '#25334A', 
   borderRadius: '20px', 
@@ -1095,13 +1090,13 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
   </div>
 </div>
 
-          {/* ==================== ЗАДЕРЖКИ ОТГРУЗОК ==================== */}
+   {/* ==================== 37.  ЗАДЕРЖКИ ОТГРУЗОК ==================== */}
 <div style={{ 
   background: '#25334A', 
   borderRadius: '20px', 
   padding: '24px', 
-  minHeight: '180px',           // ← фиксированная минимальная высота
-  height: 'fit-content',        // ← не растягивается выше нужного
+  minHeight: '180px',           
+  height: 'fit-content',        
   display: 'flex',
   flexDirection: 'column'
 }}>
@@ -1128,7 +1123,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
       <div style={{ 
         flex: 1, 
         overflowY: 'auto', 
-        maxHeight: '52px',           // ← ограничение высоты списка
+        maxHeight: '52px',           
         marginTop: '8px',
         paddingRight: '8px'
       }}>
@@ -1170,7 +1165,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
   )}
 </div>
 
-          {/* 4. Миксеры в работе — за выбранный день */}
+   {/* 4. Миксеры в работе — за выбранный день */}
 <div 
   onClick={() => window.location.href = '/adminCifra/mixers'}
   style={{ 
@@ -1235,7 +1230,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
   </div>
 </div>
       </div>
-      {/* ==================== ТАЙМЛАЙН (УЛУЧШЕННЫЙ — В СТИЛЕ ЦИФРА.AI) ==================== */}
+      {/* ==================== 38. ТАЙМЛАЙН (УЛУЧШЕННЫЙ — В СТИЛЕ ЦИФРА.AI) ==================== */}
        <div style={{ 
             flex: 1, 
             minWidth: '680px',
@@ -1336,7 +1331,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
     </div>
   </div>
 
-  {/* ==================== УЛУЧШЕННАЯ ШКАЛА ВРЕМЕНИ ==================== */}
+  {/* ==================== 39. УЛУЧШЕННАЯ ШКАЛА ВРЕМЕНИ ==================== */}
 <div style={{ marginBottom: '16px', position: 'relative' }}>
   
   {/* Основные метки (каждый час) */}
@@ -1413,7 +1408,8 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
 
   const volume = Number(order.volume) || 10;
   const durationMinutes = volume * MINUTES_PER_CUBIC_METER;
-  // ==================== НАСТРОЙКА ЧАСОВОГО ПОЯСА ====================
+
+  // ==================== 39. НАСТРОЙКА ЧАСОВОГО ПОЯСА ====================
   const TIMEZONE_OFFSET = 3; // ← твой часовой пояс (CEST = +2). Если Москва — 3, если UTC — 0
   const endMinutes = startMinutes + durationMinutes;
 
@@ -1428,7 +1424,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
     overflowMinutes = Math.round(endMinutes - 1440);
   }
 
-  // ==================== ДИНАМИЧЕСКИЙ ПЛАН НА ДЕНЬ ====================
+  // ==================== 40. ДИНАМИЧЕСКИЙ ПЛАН НА ДЕНЬ ====================
 const planToday = todayOrders.reduce((sum, o) => sum + Number(o.volume || 0), 0);
 
 const completedVolume = todayOrders
@@ -1442,7 +1438,7 @@ const completionPercent = planToday > 0
   ? Math.round((completedVolume / planToday) * 100) 
   : 0;
 
-     // ==================== СТАТУС ЗАКАЗА ====================
+     // ==================== 41. СТАТУС ЗАКАЗА ====================
     const statusColor = 
     order.status === 'completed' ? '#10B981' : 
     order.status === 'processing' ? '#3B82F6' : 
@@ -1455,7 +1451,7 @@ const completionPercent = planToday > 0
     order.status === 'new' ? '🟡 Новая' :
     order.status === 'cancelled' ? '❌ Отменена' : '—';
 
-  // ==================== РАСЧЁТ ЛОГИСТИКИ ====================
+  // ==================== 42. РАСЧЁТ ЛОГИСТИКИ ====================
 const assignedVolume = mixerAssignments
     .filter(m => String(m.orderId) === String(order.id))   // ← надёжное сравнение
     .reduce((sum, m) => sum + Number(m.volume || 0), 0);
@@ -1467,7 +1463,7 @@ const isLogisticsReady = assignedVolume >= orderVolume && assignedVolume > 0;
 const isFullyAssigned = assignedVolume >= orderVolume && assignedVolume > 0;
 const isReadyInDB = (order as any).logistics_ready === true;
 
-// ==================== 32. ГЕНЕРАЦИЯ ОТЧЁТА ДЛЯ МЕССЕНДЖЕРА ====================
+// ==================== 43. ГЕНЕРАЦИЯ ОТЧЁТА ДЛЯ МЕССЕНДЖЕРА ====================
 const generateDailyReport = () => {
   if (groupedMixers.length === 0) {
     alert('На выбранный день нет активных заявок');
@@ -1530,7 +1526,7 @@ const generateDailyReport = () => {
       onMouseEnter={e => e.currentTarget.style.background = '#2A3A52'}
       onMouseLeave={e => e.currentTarget.style.background = '#25334A'}
     >
-   {/* ==================== МЕТКА ЛОГИСТИКИ ==================== */}
+   {/* ==================== 44. МЕТКА ЛОГИСТИКИ ==================== */}
 <div style={{
     width: '20px',
     height: '20px',
@@ -1660,7 +1656,7 @@ const generateDailyReport = () => {
     </div>
    </div>
   </div>
-            {/* ==================== МИКСЕРЫ В РАБОТЕ ==================== */}
+            {/* ==================== 45. МИКСЕРЫ В РАБОТЕ ==================== */}
 <div style={{ 
   width: '100%', 
   maxWidth: '480px', 
@@ -1803,7 +1799,7 @@ const generateDailyReport = () => {
                    {mixer.number || mixer.mixer_name}
                  </div>
 
-                 {/* ==================== ВРЕМЯ + ОБЪЁМ (в одну строку справа) ==================== */}
+                 {/* ==================== 46. ВРЕМЯ + ОБЪЁМ (в одну строку справа) ==================== */}
                  <div style={{ 
                    color: '#94A3B8', 
                    fontSize: '13px',
@@ -1869,7 +1865,7 @@ const generateDailyReport = () => {
 
   </div>
 
-{/* ==================== КНОПКА СФОРМИРОВАТЬ ОТЧЁТ ==================== */}
+{/* ==================== 47. КНОПКА СФОРМИРОВАТЬ ОТЧЁТ ==================== */}
 <button 
   onClick={() => {
     const dateKey = selectedDate.toISOString().split('T')[0];
@@ -1991,7 +1987,7 @@ const generateDailyReport = () => {
 </div>
 </div>
 
-     {/* ==================== МОДАЛЬНОЕ ОКНО ЗАКАЗА ==================== */}
+     {/* ==================== 48. МОДАЛЬНОЕ ОКНО ЗАКАЗА ==================== */}
 {selectedOrder && (
   <OrderDetailModal
     key={selectedOrder.id}                    

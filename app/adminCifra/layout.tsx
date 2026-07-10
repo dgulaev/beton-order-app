@@ -12,7 +12,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const isActive = (path: string) => pathname === path;
 
   // ==================== 1. РОЛЬ ИЗ PROVIDER ====================
-  const { user, loading: roleLoading, isAdmin } = useUserRole();
+  const { user, loading: roleLoading } = useUserRole();
 
   const [isCollapsed, setIsCollapsed] = useState(true);
 
@@ -26,7 +26,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const userRole = user?.role || null;
   const isGuest = userRole === 'guest';
 
-  // ==================== 1.3 АВТОМАТИЧЕСКИЙ РЕДИРЕКТ НА МОБИЛЬНУЮ ВЕРСИЮ ====================
+  // ==================== 1.2 АВТОМАТИЧЕСКИЙ РЕДИРЕКТ НА МОБИЛЬНУЮ ВЕРСИЮ ====================
   useEffect(() => {
     const redirectToMobile = () => {
       const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Samsung/i.test(navigator.userAgent) ||
@@ -48,7 +48,6 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       }
     };
 
-    // Проверяем сразу + небольшая задержка
     redirectToMobile();
     const timer = setTimeout(redirectToMobile, 700);
 
@@ -81,39 +80,24 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     });
   };
 
-  // ==================== 3. FORCE LOGOUT + ПОЛИНГ ====================
+    // ==================== 3. FORCE LOGOUT + ПОЛИНГ (через провайдер) ====================
   useEffect(() => {
-    const savedUserId = localStorage.getItem('userId');
-    if (!savedUserId) return;
+    if (!user) return;
 
-    // Периодическая проверка force_logout_version
-    const forceCheckInterval = setInterval(async () => {
-      try {
-        const res = await fetch('/api/user/role', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: parseInt(savedUserId) }),
-        });
+    // Надёжное получение user_id
+    const userId = (user as any).user_id || (user as any).id || 0;
 
-        const data = await res.json();
-
-        if (data.forceLogoutVersion && data.forceLogoutVersion >= 9999) {
-          if (parseInt(savedUserId) === 1777619517739) {
-            console.log('✅ Главный Админ — игнорируем force logout');
-            return;
-          }
-
-          console.log(`🔴 Force logout для пользователя ${savedUserId}`);
-          localStorage.removeItem('userId');
-         // window.location.reload();
-        }
-      } catch (e) {
-        console.warn('Force logout check failed:', e);
+    if (user.force_logout_version && user.force_logout_version >= 9999) {
+      if (userId === 1777619517739) {
+        console.log('✅ Главный Админ — игнорируем force logout');
+        return;
       }
-    }, 1800000); // каждые 30 минут
 
-    return () => clearInterval(forceCheckInterval);
-  }, []);
+      console.log(`🔴 Force logout для пользователя ${userId}`);
+      localStorage.removeItem('userId');
+      // window.location.reload(); // можно оставить закомментированным
+    }
+  }, [user]);
 
   // ==================== 3.1 ОЧИСТКА СТАРЫХ ЗАКРЫТЫХ УВЕДОМЛЕНИЙ ====================
   useEffect(() => {
@@ -123,8 +107,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     }
   }, []);
 
-  // ==================== 4. ВХОД ====================
-  const handleLogin = async (e: React.FormEvent) => {
+    // ==================== 4. ВХОД ====================
+  const handleLogin = async (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoginLoading(true);
     setLoginError('');
@@ -140,7 +124,6 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
       if (data.success && data.userId) {
         localStorage.setItem('userId', data.userId.toString());
-       // window.location.reload(); // перезагрузка обновит роль через Provider
       } else {
         setLoginError(data.message || 'Неверный телефон или пароль');
       }
@@ -152,52 +135,160 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     }
   };
 
+  // ==================== 4.1 УВЕДОМЛЕНИЕ ПО КЛИЕНТУ ====================
+ // const showClientReminder = (client: any) => {
+   // const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
+   // const key = `client-reminder-${client.groupId || client.user_id}`;
 
-  // ==================== 4.2 УВЕДОМЛЕНИЕ ПО КЛИЕНТУ  ====================
-  const showClientReminder = (client: any) => {
-    const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
-    const key = `client-reminder-${client.groupId || client.user_id}`;
+   // if (closed.includes(key)) return;
 
-    if (closed.includes(key)) return;
+   // const notif = document.createElement('div');
+  //  notif.style.cssText = `
+  //    position: fixed;
+   //   top: 90px;
+   //   right: 24px;
+   //   background: linear-gradient(135deg, #f59e0b, #fbbf24);
+  //    color: #0f172a;
+   //   padding: 18px 24px;
+   //  borderRadius: 16px;
+   //  z-index: 10000;
+    //  box-shadow: 0 20px 40px rgba(245, 158, 11, 0.4);
+    //  display: flex;
+    //  align-items: center;
+    //  gap: 16px;
+    //  min-width: 420px;
+   //  cursor: pointer;
+   // `;
+
+   // notif.innerHTML = `
+    //  <div style="font-size: 36px;">📞</div>
+    //  <div style="flex: 1;">
+     //   <div style="font-size: 17px; font-weight: 700;">Пора позвонить клиенту!</div>
+     //   <div style="font-size: 15px; margin-top: 4px;">
+     //     ${client.organization_name || client.full_name || 'Клиент'}
+    //    </div>
+    //    <div style="font-size: 14px; opacity: 0.9;">
+    //      Следующий контакт: ${new Date(client.next_contact).toLocaleDateString('ru-RU')}
+     //   </div>
+     // </div>
+     // <div style="font-size: 28px; cursor: pointer; padding: 4px 10px;" class="close-reminder">✕</div>
+    //`;
+//
+   // const closeBtn = notif.querySelector('.close-reminder') as HTMLElement;
+   // const closeNotification = () => {
+     // notif.remove();
+    //  const closedList = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
+    //  closedList.push(key);
+    //  localStorage.setItem('closedNotifications', JSON.stringify(closedList));
+   // };
+//
+   // if (closeBtn) {
+   //  closeBtn.addEventListener('click', (e) => {
+    //    e.stopPropagation();
+    //    closeNotification();
+    //  });
+  //  }
+
+   // notif.addEventListener('click', () => {
+   //   window.location.href = '/adminCifra/clients';
+   //   closeNotification();
+   // });
+//
+   // document.body.appendChild(notif);
+  //  playNotificationSound();
+ // };
+
+  // ==================== 4.2 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
+  const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', orderData?: any, oldData?: any) => {
+    const orderId = orderData?.id || '—';
+
+    let title = '';
+    let message = '';
+    let emoji = '';
+
+    const formatDate = (dateStr: string) => {
+      if (!dateStr) return '';
+      const date = new Date(dateStr);
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}-${month}-${year}`;
+    };
+
+    if (type === 'new') {
+      emoji = '🆕';
+      title = 'Новая заявка!';
+      const deliveryStr = formatDate(orderData?.delivery_date);
+      message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} м³`;
+      if (deliveryStr) message += ` — на ${deliveryStr}`;
+    } 
+    else if (type === 'status') {
+      emoji = '🔄';
+      title = 'Статус изменён';
+
+      const statusMap: Record<string, string> = {
+        'new': 'Новая',
+        'NEW': 'Новая',
+        'processing': 'В работе',
+        'completed': 'Выполнена',
+        'cancelled': 'Отменена'
+      };
+
+      const rawStatus = (orderData?.status || '').toString().toLowerCase();
+      const statusText = statusMap[rawStatus] || orderData?.status || '—';
+      
+      message = `Заявка №${orderId} → ${statusText}`;
+    } 
+    else if (type === 'volume') {
+      emoji = '📦';
+      title = 'Изменён объём';
+      message = `Заявка №${orderId} — было ${oldData?.volume || '?'} → стало ${orderData?.volume} м³`;
+    } 
+    else if (type === 'datetime') {
+      emoji = '🕒';
+      title = 'Изменены дата и время';
+      const deliveryStr = formatDate(orderData?.delivery_date);
+      message = `Заявка №${orderId} — ${deliveryStr}`;
+      if (orderData?.delivery_time) {
+        message += ` ${orderData.delivery_time}`;
+      }
+    }
+
+    playNotificationSound();
 
     const notif = document.createElement('div');
     notif.style.cssText = `
       position: fixed;
-      top: 90px;
+      top: 24px;
       right: 24px;
-      background: linear-gradient(135deg, #f59e0b, #fbbf24);
+      background: linear-gradient(135deg, #22c55e, #86efac);
       color: #0f172a;
-      padding: 18px 24px;
-      borderRadius: 16px;
+      padding: 16px 22px;
+      border-radius: 16px;
       z-index: 10000;
-      box-shadow: 0 20px 40px rgba(245, 158, 11, 0.4);
+      font-weight: 600;
+      box-shadow: 0 20px 40px rgba(34, 197, 94, 0.45);
       display: flex;
-      align-items: center;
-      gap: 16px;
-      min-width: 420px;
+      alignItems: center;
+      gap: 14px;
+      min-width: 390px;
       cursor: pointer;
     `;
 
     notif.innerHTML = `
-      <div style="font-size: 36px;">📞</div>
+      <div style="font-size: 34px;">${emoji}</div>
       <div style="flex: 1;">
-        <div style="font-size: 17px; font-weight: 700;">Пора позвонить клиенту!</div>
-        <div style="font-size: 15px; margin-top: 4px;">
-          ${client.organization_name || client.full_name || 'Клиент'}
-        </div>
-        <div style="font-size: 14px; opacity: 0.9;">
-          Следующий контакт: ${new Date(client.next_contact).toLocaleDateString('ru-RU')}
-        </div>
+        <div style="font-size: 16px; font-weight: 700;">${title}</div>
+        <div style="font-size: 14px; opacity: 0.92;">${message}</div>
       </div>
-      <div style="font-size: 28px; cursor: pointer; padding: 4px 10px;" class="close-reminder">✕</div>
+      <div style="font-size: 24px; opacity: 0.75; cursor: pointer; padding: 4px 8px;" class="close-btn">✕</div>
     `;
 
-    const closeBtn = notif.querySelector('.close-reminder') as HTMLElement;
+    const closeBtn = notif.querySelector('.close-btn') as HTMLElement;
+
     const closeNotification = () => {
       notif.remove();
-      const closedList = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
-      closedList.push(key);
-      localStorage.setItem('closedNotifications', JSON.stringify(closedList));
+      setNewOrdersCount(prev => Math.max(0, prev - 1));
     };
 
     if (closeBtn) {
@@ -207,298 +298,133 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       });
     }
 
-    notif.addEventListener('click', () => {
-      window.location.href = '/adminCifra/clients';
-      closeNotification();
+    notif.addEventListener('click', (e) => {
+      if (e.target !== closeBtn) {
+        window.location.href = '/adminCifra/zayavki';
+        closeNotification();
+      }
     });
 
     document.body.appendChild(notif);
-    playNotificationSound();
-  };
-// ==================== 4.3 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
-const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', orderData?: any, oldData?: any) => {
-  const orderId = orderData?.id || '—';
-
-  let title = '';
-  let message = '';
-  let emoji = '';
-
-  // Функция форматирования даты
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return '';
-    const date = new Date(dateStr);
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    return `${day}-${month}-${year}`;
   };
 
-  if (type === 'new') {
-    emoji = '🆕';
-    title = 'Новая заявка!';
-    const deliveryStr = formatDate(orderData?.delivery_date);
-    message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} м³`;
-    if (deliveryStr) message += ` — на ${deliveryStr}`;
-  } 
-  else if (type === 'status') {
-  emoji = '🔄';
-  title = 'Статус изменён';
+  // ==================== 4.3 HEARTBEAT — ОБНОВЛЕНИЕ АКТИВНОСТИ (каждые 5 минут) ====================
+  useEffect(() => {
+    const savedUserId = localStorage.getItem('userId');
+    if (!savedUserId || userRole === 'guest') return;
 
-  // Надёжный перевод статусов (независимо от регистра)
-  const statusMap: Record<string, string> = {
-    'new': 'Новая',
-    'NEW': 'Новая',
-    'processing': 'В работе',
-    'completed': 'Выполнена',
-    'cancelled': 'Отменена'
-  };
+    const sendHeartbeat = async () => {
+      try {
+        const res = await fetch('/api/adminCifra/heartbeat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: parseInt(savedUserId) })
+        });
+      } catch (e) {
+        console.warn('Heartbeat failed:', e);
+      }
+    };
 
-  const rawStatus = (orderData?.status || '').toString().toLowerCase();
-  const statusText = statusMap[rawStatus] || orderData?.status || '—';
-  
-  message = `Заявка №${orderId} → ${statusText}`;
-}
-  else if (type === 'volume') {
-    emoji = '📦';
-    title = 'Изменён объём';
-    message = `Заявка №${orderId} — было ${oldData?.volume || '?'} → стало ${orderData?.volume} м³`;
-  } 
-  else if (type === 'datetime') {
-    emoji = '🕒';
-    title = 'Изменены дата и время';
-    const deliveryStr = formatDate(orderData?.delivery_date);
-    message = `Заявка №${orderId} — ${deliveryStr}`;
-    if (orderData?.delivery_time) {
-      message += ` ${orderData.delivery_time}`;
+    sendHeartbeat();
+
+    const interval = setInterval(sendHeartbeat, 10 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, [userRole]);
+
+  // ==================== 4.4 ПРИСВОЕНИЕ ФУНКЦИЙ В WINDOW ====================
+  useEffect(() => {
+    (window as any).showVisualNotification = showVisualNotification;
+    (window as any).playNotificationSound = playNotificationSound;
+  }, []);
+
+  // ==================== БЛОК 5. УЛУЧШЕННЫЙ POLLING ====================
+  useEffect(() => {
+    if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) {
+      return;
     }
-  }
 
-  playNotificationSound();
+    let lastMaxOrderId = parseInt(localStorage.getItem('lastMaxOrderId') || '0');
+    let lastKnownData: Record<number, any> = {};
 
-  const notif = document.createElement('div');
-  notif.style.cssText = `
-    position: fixed;
-    top: 24px;
-    right: 24px;
-    background: linear-gradient(135deg, #22c55e, #86efac);
-    color: #0f172a;
-    padding: 16px 22px;
-    border-radius: 16px;
-    z-index: 10000;
-    font-weight: 600;
-    box-shadow: 0 20px 40px rgba(34, 197, 94, 0.45);
-    display: flex;
-    alignItems: center;
-    gap: 14px;
-    min-width: 390px;
-    cursor: pointer;
-  `;
+    const checkOrders = async () => {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-  notif.innerHTML = `
-    <div style="font-size: 34px;">${emoji}</div>
-    <div style="flex: 1;">
-      <div style="font-size: 16px; font-weight: 700;">${title}</div>
-      <div style="font-size: 14px; opacity: 0.92;">${message}</div>
-    </div>
-    <div style="font-size: 24px; opacity: 0.75; cursor: pointer; padding: 4px 8px;" class="close-btn">✕</div>
-  `;
+        const res = await fetch('/api/adminCifra/all-orders', {
+          signal: controller.signal,
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' }
+        });
 
-  const closeBtn = notif.querySelector('.close-btn') as HTMLElement;
+        clearTimeout(timeoutId);
 
-  const closeNotification = () => {
-    notif.remove();
-    setNewOrdersCount(prev => Math.max(0, prev - 1));
-  };
+        if (!res.ok) return;
 
-  if (closeBtn) {
-    closeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeNotification();
-    });
-  }
+        const response = await res.json();
+        const orders = Array.isArray(response) ? response : (response.orders || response || []);
 
-  notif.addEventListener('click', (e) => {
-    if (e.target !== closeBtn) {
-      window.location.href = '/adminCifra/zayavki';
-      closeNotification();
-    }
-  });
+        const currentMaxId = orders.length > 0 ? Math.max(...orders.map((o: any) => o.id || 0)) : 0;
 
-  document.body.appendChild(notif);
-};
+        if (currentMaxId > lastMaxOrderId) {
+          const newOrders = orders.filter((o: any) => o.id > lastMaxOrderId);
 
-// ==================== 4.3.1 HEARTBEAT — ОБНОВЛЕНИЕ АКТИВНОСТИ (каждые 5 минут) ====================
-useEffect(() => {
-  const savedUserId = localStorage.getItem('userId');
-  if (!savedUserId || userRole === 'guest') return;
+          for (const newOrder of newOrders) {
+            setNewOrdersCount(prev => prev + 1);
+            if (typeof playNotificationSound === 'function') playNotificationSound();
+            showVisualNotification('new', newOrder);
+          }
 
-  const sendHeartbeat = async () => {
-    try {
-      const res = await fetch('/api/adminCifra/heartbeat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: parseInt(savedUserId) })
-      });
-
-     // console.log('❤️ Heartbeat sent, status:', res.status);
-    } catch (e) {
-      console.warn('Heartbeat failed:', e);
-    }
-  };
-
-  sendHeartbeat(); // сразу
-
-  // Интервал — 10 минут
-  const interval = setInterval(sendHeartbeat, 10 * 60 * 1000);
-
-  return () => clearInterval(interval);
-}, [userRole]);
-
-// ==================== 4.4 ПРИСВОЕНИЕ ФУНКЦИЙ В WINDOW (ВАЖНО!) ====================
-useEffect(() => {
-  (window as any).showVisualNotification = showVisualNotification;
-  (window as any).playNotificationSound = playNotificationSound;
-  
- // console.log('✅ window.showVisualNotification и playNotificationSound доступны');
-}, []); // пустой массив — выполняется один раз
-
- // ==================== БЛОК 5. УЛУЧШЕННЫЙ POLLING ====================
-useEffect(() => {
-  if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) {
-    return;
-  }
-
- // console.log(`✅ Polling запущен для роли: ${userRole}`);
-
-  let lastMaxOrderId = parseInt(localStorage.getItem('lastMaxOrderId') || '0');
-  let lastKnownData: Record<number, any> = {};
-
-  const checkOrders = async () => {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 секунд
-
-      const res = await fetch('/api/adminCifra/all-orders', {
-        signal: controller.signal,
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' }
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!res.ok) return;
-
-      const response = await res.json();
-      const orders = Array.isArray(response) ? response : (response.orders || response || []);
-
-      const currentMaxId = orders.length > 0 ? Math.max(...orders.map((o: any) => o.id || 0)) : 0;
-
-      if (currentMaxId > lastMaxOrderId) {
-        const newOrders = orders.filter((o: any) => o.id > lastMaxOrderId);
-       // console.log(`🆕 Найдено новых заявок: ${newOrders.length}`);
-
-        for (const newOrder of newOrders) {
-          setNewOrdersCount(prev => prev + 1);
-          if (typeof playNotificationSound === 'function') playNotificationSound();
-          showVisualNotification('new', newOrder);
+          lastMaxOrderId = currentMaxId;
+          localStorage.setItem('lastMaxOrderId', currentMaxId.toString());
         }
 
-        lastMaxOrderId = currentMaxId;
-        localStorage.setItem('lastMaxOrderId', currentMaxId.toString());
-      }
+        orders.forEach((order: any) => {
+          const prev = lastKnownData[order.id];
+          if (prev) {
+            if (prev.status !== order.status) {
+              if (typeof playNotificationSound === 'function') playNotificationSound();
+              showVisualNotification('status', order);
+            }
+            if (prev.volume !== order.volume) {
+              if (typeof playNotificationSound === 'function') playNotificationSound();
+              showVisualNotification('volume', order, prev);
+            }
+            if (prev.delivery_date !== order.delivery_date || prev.delivery_time !== order.delivery_time) {
+              if (typeof playNotificationSound === 'function') playNotificationSound();
+              showVisualNotification('datetime', order);
+            }
+          }
+          lastKnownData[order.id] = { ...order };
+        });
 
-      orders.forEach((order: any) => {
-        const prev = lastKnownData[order.id];
-        if (prev) {
-          if (prev.status !== order.status) {
-            if (typeof playNotificationSound === 'function') playNotificationSound();
-            showVisualNotification('status', order);
-          }
-          if (prev.volume !== order.volume) {
-            if (typeof playNotificationSound === 'function') playNotificationSound();
-            showVisualNotification('volume', order, prev);
-          }
-          if (prev.delivery_date !== order.delivery_date || prev.delivery_time !== order.delivery_time) {
-            if (typeof playNotificationSound === 'function') playNotificationSound();
-            showVisualNotification('datetime', order);
-          }
+      } catch (err: any) {
+        if (err.name === 'AbortError') {
+          // console.warn('Polling: запрос превысил таймаут (30 сек)');
+        } else {
+          // console.warn('Polling error:', err);
         }
-        lastKnownData[order.id] = { ...order };
-      });
-
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-       // console.warn('Polling: запрос превысил таймаут (30 сек)');
-      } else {
-       // console.warn('Polling error:', err);
       }
-    }
-  };
+    };
 
-  const initialTimer = setTimeout(checkOrders, 2000);
-  const interval = setInterval(checkOrders, 20000); // 20 секунд
+    const initialTimer = setTimeout(checkOrders, 2000);
+    const interval = setInterval(checkOrders, 20000);
 
-  return () => {
-    clearTimeout(initialTimer);
-    clearInterval(interval);
-  };
-}, [userRole]);
+    return () => {
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+    };
+  }, [userRole]);
 
-  // ==================== 5.1 ПРОВЕРКА НАПОМИНАНИЙ ПО КЛИЕНТАМ — ОТКЛЮЧЕНО ====================
-  // useEffect(() => {
-  //   if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) return;
-
-  //   const checkClientReminders = async () => {
-  //     try {
-  //       const savedUserId = localStorage.getItem('userId');
-  //       if (!savedUserId) return;
-
-  //       const res = await fetch(`/api/adminCifra/clients/reminders?userId=${savedUserId}`);
-
-  //       if (!res.ok) {
-  //         console.warn('Reminders API returned:', res.status);
-  //         return;
-  //       }
-
-  //       const reminders = await res.json();
-
-  //       reminders.forEach((reminder: any) => {
-  //         const key = `client-reminder-${reminder.groupId || reminder.user_id}`;
-  //         const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
-
-  //         if (!closed.includes(key)) {
-  //           showClientReminder(reminder);
-  //         }
-  //       });
-  //     } catch (err) {
-  //       console.warn('Client reminders check error:', err);
-  //     }
-  //   };
-
-  //   checkClientReminders();
-
-  //   const now = new Date();
-  //   const tomorrow9AM = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0, 0);
-  //   const timeUntil9AM = tomorrow9AM.getTime() - now.getTime();
-
-  //   const dailyTimer = setTimeout(() => {
-  //     checkClientReminders();
-  //     setInterval(checkClientReminders, 24 * 60 * 60 * 1000);
-  //   }, timeUntil9AM);
-
-  //   return () => clearTimeout(dailyTimer);
-
-  // }, [userRole]);
-
-
-    // ==================== 6. СБРОС СЧЁТЧИКА ====================
+  // ==================== 6. СБРОС СЧЁТЧИКА ====================
   useEffect(() => {
     if (pathname === '/adminCifra/zayavki') {
       setNewOrdersCount(0);
     }
   }, [pathname]);
 
-     // ==================== ЗАГРУЗКА ====================
+  // ==================== 6.1 ЗАГРУЗКА ====================
   if (roleLoading) {
     return (
       <div style={{ 
@@ -513,8 +439,7 @@ useEffect(() => {
     );
   }
 
-
-  // ==================== ФОРМА ВХОДА (если не авторизован) ====================
+  // ==================== 6.2 ФОРМА ВХОДА ====================
   if (!isLoggedIn) {
     return (
       <div style={{
@@ -602,39 +527,37 @@ useEffect(() => {
     );
   }
 
-  // ==================== 4.1 КНОПКА "ВЫКИНУТЬ ВСЕХ" ====================
-const forceLogoutAll = async () => {
-  if (!confirm('Вы уверены, что хотите выкинуть ВСЕХ сотрудников?\n\nОни будут вынуждены заново ввести пароль.')) {
-    return;
-  }
-
-  try {
-    const res = await fetch('/api/adminCifra/force-logout-all', { 
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: 1777619517739 }) // твой user_id
-    });
-
-    const data = await res.json();
-
-    if (data.success) {
-      alert('✅ Все сотрудники успешно выкинуты из системы!');
-      // window.location.reload();
-    } else {
-      alert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
+  // ==================== 7. КНОПКА "ВЫКИНУТЬ ВСЕХ" ====================
+  const forceLogoutAll = async () => {
+    if (!confirm('Вы уверены, что хотите выкинуть ВСЕХ сотрудников?\n\nОни будут вынуждены заново ввести пароль.')) {
+      return;
     }
-  } catch (err) {
-    alert('Ошибка соединения с сервером');
-  }
-};
 
+    try {
+      const res = await fetch('/api/adminCifra/force-logout-all', { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: 1777619517739 })
+      });
 
-    // ==================== ПРОВЕРКА РОЛЕЙ ====================
+      const data = await res.json();
+
+      if (data.success) {
+        alert('✅ Все сотрудники успешно выкинуты из системы!');
+      } else {
+        alert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
+      }
+    } catch (err) {
+      alert('Ошибка соединения с сервером');
+    }
+  };
+
+  // ==================== 7.1 ПРОВЕРКА РОЛЕЙ ====================
   if (!isLoggedIn || !userRole) {
     return <div style={{ padding: '100px', textAlign: 'center', background: '#0F172A', color: '#94A3B8', minHeight: '100vh' }}>Доступ запрещён</div>;
   }
 
-  // ==================== 7. ГЛОБАЛЬНЫЙ МАСШТАБ ====================
+  // ==================== 8. ГЛОБАЛЬНЫЙ МАСШТАБ ====================
   const getGlobalScale = () => {
     const width = window.innerWidth;
     if (width >= 2560) return 1.00;
@@ -646,8 +569,6 @@ const forceLogoutAll = async () => {
 
   const scale = getGlobalScale();
 
-  
-
   return (
     <div 
       style={{ 
@@ -658,7 +579,7 @@ const forceLogoutAll = async () => {
         overflow: 'hidden',
         minHeight: '100vh'
       }}
-      className="admin-layout"   // ← Добавили для мобильной адаптации
+      className="admin-layout"
     >
       <div style={{ 
         display: 'flex', 
@@ -669,7 +590,7 @@ const forceLogoutAll = async () => {
 
         
         
-        {/* ==================== 8. СВОРАЧИВАЕМОЕ МЕНЮ ==================== */}
+        {/* ==================== 9. СВОРАЧИВАЕМОЕ МЕНЮ ==================== */}
         <div 
         className="sidebar-menu"
         style={{
@@ -708,7 +629,7 @@ const forceLogoutAll = async () => {
             </button>
           </div>
 
-      {/* ==================== ЛОГОТИП TRADECOM ==================== */}
+      {/* ==================== 9.1 ЛОГОТИП TRADECOM ==================== */}
           <div style={{ 
             padding: '0 12px', 
             marginBottom: '40px', 
@@ -748,7 +669,7 @@ const forceLogoutAll = async () => {
               <Home size={22} /> {!isCollapsed && <span>Дашборд</span>}
             </Link>
 
-            {/* ==================== БЛОК 9: ПУНКТ МЕНЮ "ЗАЯВКИ" ==================== */}
+            {/* ==================== БЛОК 10: ПУНКТ МЕНЮ "ЗАЯВКИ" ==================== */}
             <div>
               <Link 
                 href="/adminCifra/zayavki" 
@@ -760,7 +681,7 @@ const forceLogoutAll = async () => {
               </Link>
             </div>
 
-            {/* ==================== БЛОК 9.1: ОГРАНИЧЕНИЕ МЕНЮ ==================== */}
+            {/* ==================== БЛОК 11: ОГРАНИЧЕНИЕ МЕНЮ ==================== */}
             {userRole === 'operator' ? (
               <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
                 <UserCog size={22} /> {!isCollapsed && <span>Оператор БСУ</span>}
@@ -789,7 +710,7 @@ const forceLogoutAll = async () => {
 
                 
 
-                {/* ==================== БЛОК 9.2 ССЫЛКА "КТО В ОНЛАЙН" ==================== */}
+                {/* ==================== БЛОК 12 ССЫЛКА "КТО В ОНЛАЙН" ==================== */}
                  {(userRole === 'admin') && (
                  <Link 
                     href="/adminCifra/online" 
@@ -806,7 +727,7 @@ const forceLogoutAll = async () => {
                   </Link>
                 )}
 
-                {/* ==================== БЛОК 9.3 ССЫЛКА "ВЫКИНУТЬ ВСЕХ" ==================== */}
+                {/* ==================== БЛОК 13 ССЫЛКА "ВЫКИНУТЬ ВСЕХ" ==================== */}
                 {(userRole === 'admin') && (
                 <Link 
                     href="#" 
@@ -825,7 +746,7 @@ const forceLogoutAll = async () => {
           </nav>
         </div>
 
-        {/* ==================== 10. ОСНОВНОЙ КОНТЕНТ ==================== */}
+        {/* ==================== 14. ОСНОВНОЙ КОНТЕНТ ==================== */}
         <div style={{ 
           flex: 1, 
           overflow: 'auto', 
@@ -845,7 +766,7 @@ const forceLogoutAll = async () => {
   );
 }
 
-// ==================== 11. СТИЛЬ ДЛЯ ССЫЛОК ====================
+// ==================== 15. СТИЛЬ ДЛЯ ССЫЛОК ====================
 const navLinkStyle = (active: boolean, collapsed: boolean) => ({
   display: 'flex',
   alignItems: 'center',
@@ -860,4 +781,4 @@ const navLinkStyle = (active: boolean, collapsed: boolean) => ({
   fontWeight: '500' as const,
   justifyContent: collapsed ? 'center' : 'flex-start',
   transition: 'all 0.2s',
-} as React.CSSProperties);   // ← Добавили эту строку
+} as React.CSSProperties);

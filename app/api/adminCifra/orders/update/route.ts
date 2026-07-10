@@ -65,6 +65,14 @@ export async function PUT(request: NextRequest) {
       logistics_ready: 'готовность логистики'
     };
 
+    // Русские названия статусов
+    const statusNames: Record<string, string> = {
+      new: 'Новая',
+      processing: 'В работе',
+      completed: 'Выполнена',
+      cancelled: 'Отменена'
+    };
+
     for (const field of fieldsToTrack) {
       const oldValue = currentOrder[field];
       const newValue = updateData[field];
@@ -79,13 +87,19 @@ export async function PUT(request: NextRequest) {
 
         if (field === 'is_questionable') {
           actionText = newValue ? 'Поставил метку "Под вопросом"' : 'Снял метку "Под вопросом"';
-        } else if (field === 'status') {
-          actionText = `Изменил статус заявки на "${newStr}"`;
-        } else if (field === 'volume') {
+        } 
+        else if (field === 'status') {
+          const oldStatusName = statusNames[oldStr] || oldStr;
+          const newStatusName = statusNames[newStr] || newStr;
+          actionText = `Изменил статус заявки с "${oldStatusName}" на "${newStatusName}"`;
+        } 
+        else if (field === 'volume') {
           actionText = `Изменил объём с ${oldStr} на ${newStr} м³`;
-        } else if (field === 'delivery_time') {
+        } 
+        else if (field === 'delivery_time') {
           actionText = `Изменил время доставки с ${oldStr} на ${newStr}`;
-        } else if (field === 'delivery_date') {
+        } 
+        else if (field === 'delivery_date') {
           actionText = `Изменил дату доставки`;
         }
 
@@ -110,7 +124,7 @@ export async function PUT(request: NextRequest) {
       if (historyError) {
         console.error('❌ Ошибка записи истории:', historyError);
       } else {
-      //  console.log(`📜 Записано ${changes.length} изменений в историю`);
+        console.log(`📜 Записано ${changes.length} изменений в историю`);
       }
     }
 
