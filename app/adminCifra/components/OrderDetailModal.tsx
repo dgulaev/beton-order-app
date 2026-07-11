@@ -22,17 +22,18 @@ interface OrderDetailModalProps {
   setSelectedOrder: React.Dispatch<React.SetStateAction<Order | null>>;
 }
 
-// ==================== ПЕРЕВОД СТАТУСОВ ====================
-const getStatusRussian = (status: string): string => {
-  const map: Record<string, string> = {
-    'new': 'Новый',
-    'processing': 'В работе',
-    'completed': 'Выполнен',
-    'cancelled': 'Отменён',
-    'loading': 'Загрузка',
-    'on_way': 'В пути',
-  };
-  return map[status?.toLowerCase()] || status || '—';
+// ==================== ПЕРЕВОД РОЛЕЙ ДЛЯ ОТОБРАЖЕНИЯ В ИСТОРИИ ====================
+const getRoleDisplayName = (role: string): string => {
+  switch (role) {
+    case 'admin': return 'Админ';
+    case 'manager': return 'Менеджер';
+    case 'dispatcher': return 'Диспетчер';
+    case 'logist': return 'Логист';
+    case 'logistic': return 'Логист';
+    case 'operator': return 'Оператор';
+    case 'accountant': return 'Бухгалтер';
+    default: return role;
+  }
 };
 
 export default function OrderDetailModal({
@@ -91,13 +92,6 @@ const loadData = async () => {
     console.error('Ошибка загрузки данных модалки:', err);
   }
 };
-
-// ==================== 0.5. ПРОВЕРКА СТАТУСА ЗАЯВКИ ПРИ ОТКРЫТИИ МОДАЛКИ ====================
-useEffect(() => {
-  if (order?.id) {
-    checkAndUpdateOrderStatus();
-  }
-}, [order?.id]);   // срабатывает каждый раз при открытии новой заявки
 
   // ==================== 1. ЛОКАЛЬНОЕ СОСТОЯНИЕ ЗАКАЗА ====================
   const [localOrder, setLocalOrder] = useState(order);
@@ -190,13 +184,12 @@ const saveSortOrderToDB = async () => {
 };
 
   // ==================== 5. ОБНОВЛЕНИЕ СТАТУСА МИКСЕРА ====================
+  // Запись в историю и авто-смена статуса заявки (Рейд 2: В работе → Выполнена)
+  // теперь выполняются централизованно на сервере в /api/adminCifra/order-mixers/status,
+  // чтобы поведение было одинаковым для всех источников (модалка, сайдбар, оператор).
 const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
   const oldMixer = mixerAssignments.find(m => m.id === mixerId);
   const oldStatus = oldMixer?.status || 'Загрузка';
-  const mixerName = oldMixer?.mixerName || 
-                    oldMixer?.number || 
-                    oldMixer?.mixer_name || 
-                    `Миксер #${mixerId}`;
 
   if (oldStatus === newStatus) return;
 
@@ -206,127 +199,39 @@ const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
   );
 
   try {
-    await fetch('/api/adminCifra/order-mixers/status', {
+    const res = await fetch('/api/adminCifra/order-mixers/status', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: mixerId, status: newStatus })
+      body: JSON.stringify({
+        id: mixerId,
+        status: newStatus,
+        userName: getCurrentUserName(),
+        userRole: getCurrentRole()
+      })
     });
 
-    // ←←← ПРЯМОЙ ВЫЗОВ С ЧЁТКИМ ТЕКСТОМ
-    const actionText = `Изменил статус миксера ${mixerName} с "${oldStatus}" на "${newStatus}"`;
+    const data = await res.json();
 
-    console.log('📝 Записываем в историю:', actionText);
-
-    if (typeof addToHistory === 'function') {
-      await addToHistory(actionText);
-    } else if (typeof window !== 'undefined' && (window as any).addToHistoryGlobal) {
-      (window as any).addToHistoryGlobal(actionText);
+    if (!res.ok || !data.success) {
+      throw new Error(data.message || 'Не удалось изменить статус миксера');
     }
 
-    // Авто-смена статуса заявки
-    await checkAndUpdateOrderStatus();
+    // Обновляем историю сразу — сервер уже записал нужные записи
+    if (typeof setHistory === 'function' && order?.id) {
+      const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
+      if (histRes.ok) setHistory(await histRes.json());
+    }
 
-  } catch (err) {
+  } catch (err: any) {
     console.error('Ошибка обновления статуса миксера:', err);
-    
+
     // Откат
     setMixerAssignments(prev =>
       prev.map(m => m.id === mixerId ? { ...m, status: oldStatus } : m)
     );
-    alert(`Не удалось изменить статус миксера.`);
+    alert(err.message || 'Не удалось изменить статус миксера.');
   }
 };
-
-// ==================== 6. АВТОМАТИЧЕСКАЯ СМЕНА СТАТУСА ЗАЯВКИ (СТРОГАЯ ВЕРСИЯ 2 + СОХРАНЕНИЕ В БД) ====================
-const checkAndUpdateOrderStatus = async () => {
-  if (!order?.id) return;
-
-  const orderMixers = mixerAssignments.filter(m => String(m.orderId) === String(order.id));
-  if (orderMixers.length === 0) return;
-
-  const totalAssignedVolume = orderMixers.reduce((sum, m) => sum + Number(m.volume || 0), 0);
-  const orderVolume = Number(order.volume || 0);
-
-  const allUnloaded = orderMixers.length > 0 && 
-                     orderMixers.every(m => m.status === 'Разгружен');
-
-  let newStatus = order.status;
-
-  console.log(`🔍 [СТАТУС] Заявка #${order.id} | Объём: ${totalAssignedVolume.toFixed(1)} / ${orderVolume.toFixed(1)} | Все разгружены: ${allUnloaded}`);
-
-  // ==================== СТРОГОЕ УСЛОВИЕ ====================
-  if (allUnloaded && totalAssignedVolume >= orderVolume * 0.98) { 
-    // Только если почти полный объём + все разгружены
-    newStatus = 'completed';
-    console.log(`✅ ПОЛНОСТЬЮ ВЫПОЛНЕНА (${totalAssignedVolume.toFixed(1)} м³)`);
-  } 
-  else if (totalAssignedVolume > 0 && order.status === 'new') {
-    newStatus = 'processing';
-    console.log(`🔄 В работе (объём ${totalAssignedVolume.toFixed(1)} м³)`);
-  }
-
-  // Защита от изменения финальных статусов
-  if (order.status === 'completed' || order.status === 'cancelled') {
-    newStatus = order.status;
-  }
-
-  if (newStatus !== order.status) {
-    console.log(`🔄 Автосмена статуса: ${order.status} → ${newStatus}`);
-
-    // ==================== СОХРАНЕНИЕ В БАЗУ ДАННЫХ ====================
-    try {
-      const response = await fetch('/api/adminCifra/orders/update', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: order.id,
-          status: newStatus,
-          userRole: 'admin',
-          userName: 'Система (авто)'
-        })
-      });
-
-      if (!response.ok) {
-        console.warn('⚠️ API вернул ошибку при обновлении статуса');
-      } else {
-        console.log(`💾 Статус успешно сохранён в базу: ${newStatus}`);
-      }
-    } catch (err) {
-      console.error('❌ Не удалось сохранить статус в базу:', err);
-    }
-
-    // Обновляем состояния UI
-    setAllOrders(prev => prev.map(o => 
-      o.id === order.id ? { ...o, status: newStatus, logistics_ready: newStatus === 'completed' } : o
-    ));
-
-    setLocalOrder(prev => prev ? { 
-      ...prev, 
-      status: newStatus, 
-      logistics_ready: newStatus === 'completed' 
-    } as any : null);
-
-    if (typeof setSelectedOrder === 'function') {
-      setSelectedOrder((prev: any) => prev ? { 
-        ...prev, 
-        status: newStatus, 
-        logistics_ready: newStatus === 'completed' 
-      } : null);
-    }
-
-    // История
-    if (typeof addToHistory === 'function') {
-      const actionText = newStatus === 'completed' 
-        ? `Автоматически изменил статус заявки на "Выполнена" (${totalAssignedVolume.toFixed(1)} м³) [SYSTEM]` 
-        : `Автоматически изменил статус заявки на "В работе" (${totalAssignedVolume.toFixed(1)} м³) [SYSTEM]`;
-      
-      await addToHistory(actionText);
-    }
-  } else {
-    console.log('✅ Статус не меняем');
-  }
-};
-
 
   // ==================== 6.1 ПОЛУЧЕНИЕ МИКСЕРОВ ТЕКУЩЕГО ЗАКАЗА (новые внизу) ====================
 const currentMixers = mixerAssignments
@@ -593,22 +498,25 @@ const formatVolume = (value: number | string) => {
     ));
 
     try {
-      const res = await fetch('/api/adminCifra/order-logistics', {
-        method: 'POST',
+      // Ручная смена статуса всегда идёт через /orders/update — там же
+      // защита финальных статусов и запись истории с реальной ролью.
+      const res = await fetch('/api/adminCifra/orders/update', {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          orderId: order.id,
-          status: newStatus
+          id: order.id,
+          status: newStatus,
+          userName: getCurrentUserName(),
+          userRole: getCurrentRole()
         })
       });
 
       const data = await res.json();
 
       if (data.success) {
-        // ←←← ГЛАВНОЕ ИСПРАВЛЕНИЕ
-                if (typeof addToHistory === 'function') {
-          const statusText = `Изменил статус заявки с "${getStatusRussian(oldStatus)}" на "${getStatusRussian(newStatus)}"`;
-          await addToHistory(statusText);
+        if (typeof setHistory === 'function') {
+          const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
+          if (histRes.ok) setHistory(await histRes.json());
         }
       } else {
         // Откат
@@ -1037,6 +945,10 @@ const formatVolume = (value: number | string) => {
     const newSortOrder = maxSortOrder + 1;
 
     // === 1. Сохраняем миксер в базу ===
+    // Сервер сам: (а) проверит, что заявка не в финальном статусе,
+    // (б) запишет историю добавления миксера,
+    // (в) при необходимости автоматически переведёт заявку "Новая → В работе"
+    // и тоже запишет это в историю — от имени "Системы", а не сотрудника.
     const res = await fetch('/api/adminCifra/order-mixers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1046,7 +958,9 @@ const formatVolume = (value: number | string) => {
         time: time,
         volume: vol,
         sortOrder: newSortOrder,
-        status: 'Загрузка'
+        status: 'Загрузка',
+        userName: getCurrentUserName(),
+        userRole: getCurrentRole()
       })
     });
 
@@ -1072,51 +986,21 @@ const formatVolume = (value: number | string) => {
         return updated.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
       });
 
-      // === 4. Авто-смена статуса заказа (если полностью заполнен) ===
-const newAssignedVolume = [...mixerAssignments, newMixer]
-  .filter(m => String(m.orderId) === String(order.id))
-  .reduce((sum, m) => sum + Number(m.volume || 0), 0);
+      // === 4. Если сервер перевёл заявку в "В работе" — обновляем локальный список заказов ===
+      if (result.newOrderStatus) {
+        setAllOrders(prev => prev.map(o =>
+          o.id === order.id ? { ...o, status: result.newOrderStatus } : o
+        ));
+      }
 
-const orderVolume = Number(order.volume || 0);
-const isFullyReady = newAssignedVolume >= orderVolume && newAssignedVolume > 0;
+      // === 5. Обновляем историю сразу ===
+      if (typeof setHistory === 'function') {
+        const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
+        if (histRes.ok) setHistory(await histRes.json());
+      }
 
-if (isFullyReady && order.status === 'new') {
-  // Обновляем локально
-  setAllOrders(prev => prev.map(o => 
-    o.id === order.id ? { ...o, status: 'processing', logistics_ready: true } : o
-  ));
-
-  // === Важно: Отправляем в базу как автоматическое действие ===
-  try {
-    await fetch('/api/adminCifra/orders/update', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id: order.id,
-        status: 'processing',
-        logistics_ready: true,
-        userName: 'Система',           // ← Чтобы не приписывать человеку
-        userRole: 'system'
-      })
-    });
-  } catch (e) {
-    console.error('Не удалось обновить статус автоматически:', e);
-  }
-}
-
-// === 5. Запись в историю ===
-if (typeof addToHistory === 'function') {
-  await addToHistory(`Добавил миксер ${name} (${vol} м³ в ${time})`);
-  
-  // Дополнительная запись про авто-статус (если сработал)
-  if (isFullyReady && order.status === 'new') {
-    await addToHistory('Автоматически изменил статус заявки на "В работе"');
-  }
-}
-
-if (typeof window !== 'undefined') {
-  window.dispatchEvent(new Event('mixerAdded'));
-}
+      // 🔥 window.dispatchEvent('mixerAdded') убран — дашборд получает INSERT
+      // через realtime-подписку на order_mixers, ручной рефетч больше не нужен
 
       // === 6. Очистка формы ===
       (document.getElementById('mixerName') as HTMLInputElement).value = '';
@@ -1126,7 +1010,8 @@ if (typeof window !== 'undefined') {
 
       console.log(`✅ Миксер ${name} добавлен в конец списка (sortOrder = ${newSortOrder})`);
     } else {
-      alert('Ошибка сохранения миксера в базу');
+      const errData = await res.json().catch(() => ({}));
+      alert(errData.error || 'Ошибка сохранения миксера в базу');
     }
   }}
   style={{
@@ -1186,7 +1071,8 @@ if (typeof window !== 'undefined') {
           month: '2-digit'
         });
 
-        const cleanAction = (entry.action || '').replace(' [SYSTEM]', '');
+        const cleanAction = entry.action || '';
+        const isAuto = entry.user_role === 'system';
 
         // Определение цвета изменения
         let highlightColor = '#CBD5E1';
@@ -1218,11 +1104,9 @@ if (typeof window !== 'undefined') {
             
             {/* Контент */}
             <div style={{ flex: 1 }}>
-              <strong style={{ color: '#CBD5E1' }}>
-                {entry.user_name?.includes('SYSTEM') || cleanAction.includes('[SYSTEM]') 
-                  ? '🤖 Система' 
-                  : (entry.user_name || 'Сотрудник')}
-                {entry.user_role && ` (${entry.user_role})`}
+              <strong style={{ color: isAuto ? '#60A5FA' : '#CBD5E1' }}>
+                {isAuto ? '🤖 Система (автоматически)' : (entry.user_name || 'Сотрудник')}
+                {!isAuto && entry.user_role && entry.user_role !== 'unknown' && ` (${getRoleDisplayName(entry.user_role)})`}
               </strong>
 
               <div style={{ marginTop: '4px', color: '#E2E8F0', lineHeight: '1.4' }}>

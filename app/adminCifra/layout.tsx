@@ -5,7 +5,8 @@ import { usePathname } from 'next/navigation';
 import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell, CheckCircle, LogOut, Globe } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
 import Image from 'next/image';
-import { useUserRole } from '../providers/UserRoleProvider';   // ← ДОБАВИЛИ
+import { useUserRole } from '../providers/UserRoleProvider';
+import { useOrderChangeNotifications } from '@/hooks/useRealtimeOrders';
 
 export default function AdminCifraLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -76,7 +77,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     if (!audio) return;
     audio.currentTime = 0;
     audio.play().catch((err) => {
-     // console.log('Звук заблокирован браузером (нормально):', err.message);
+      console.warn('🔇 [Notify] Звук не воспроизведён:', err?.name, '—', err?.message);
     });
   };
 
@@ -198,6 +199,28 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   //  playNotificationSound();
  // };
 
+  // ==================== 4.1.1 КОНТЕЙНЕР ДЛЯ СТЕКА БАННЕРОВ (новые не перекрывают старые) ====================
+  const getNotificationContainer = (): HTMLElement => {
+    let container = document.getElementById('order-notifications-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'order-notifications-container';
+      container.style.cssText = `
+        position: fixed;
+        top: 24px;
+        right: 24px;
+        z-index: 10000;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 12px;
+        pointer-events: none;
+      `;
+      document.body.appendChild(container);
+    }
+    return container;
+  };
+
   // ==================== 4.2 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
   const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', orderData?: any, oldData?: any) => {
     const orderId = orderData?.id || '—';
@@ -258,21 +281,19 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
     const notif = document.createElement('div');
     notif.style.cssText = `
-      position: fixed;
-      top: 24px;
-      right: 24px;
+      position: relative;
       background: linear-gradient(135deg, #22c55e, #86efac);
       color: #0f172a;
       padding: 16px 22px;
       border-radius: 16px;
-      z-index: 10000;
       font-weight: 600;
       box-shadow: 0 20px 40px rgba(34, 197, 94, 0.45);
       display: flex;
-      alignItems: center;
+      align-items: center;
       gap: 14px;
       min-width: 390px;
       cursor: pointer;
+      pointer-events: auto;
     `;
 
     notif.innerHTML = `
@@ -305,7 +326,9 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       }
     });
 
-    document.body.appendChild(notif);
+    // Новый баннер добавляется в начало стека — самые свежие уведомления сверху,
+    // старые автоматически сдвигаются вниз (flex-контейнер), а не перекрываются.
+    getNotificationContainer().prepend(notif);
   };
 
   // ==================== 4.3 HEARTBEAT — ОБНОВЛЕНИЕ АКТИВНОСТИ (каждые 5 минут) ====================
@@ -338,84 +361,28 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     (window as any).playNotificationSound = playNotificationSound;
   }, []);
 
-  // ==================== БЛОК 5. УЛУЧШЕННЫЙ POLLING ====================
-  useEffect(() => {
-    if (!userRole || !['admin', 'manager', 'dispatcher', 'operator'].includes(userRole)) {
-      return;
-    }
-
-    let lastMaxOrderId = parseInt(localStorage.getItem('lastMaxOrderId') || '0');
-    let lastKnownData: Record<number, any> = {};
-
-    const checkOrders = async () => {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-        const res = await fetch('/api/adminCifra/all-orders', {
-          signal: controller.signal,
-          cache: 'no-store',
-          headers: { 'Cache-Control': 'no-cache' }
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!res.ok) return;
-
-        const response = await res.json();
-        const orders = Array.isArray(response) ? response : (response.orders || response || []);
-
-        const currentMaxId = orders.length > 0 ? Math.max(...orders.map((o: any) => o.id || 0)) : 0;
-
-        if (currentMaxId > lastMaxOrderId) {
-          const newOrders = orders.filter((o: any) => o.id > lastMaxOrderId);
-
-          for (const newOrder of newOrders) {
-            setNewOrdersCount(prev => prev + 1);
-            if (typeof playNotificationSound === 'function') playNotificationSound();
-            showVisualNotification('new', newOrder);
-          }
-
-          lastMaxOrderId = currentMaxId;
-          localStorage.setItem('lastMaxOrderId', currentMaxId.toString());
-        }
-
-        orders.forEach((order: any) => {
-          const prev = lastKnownData[order.id];
-          if (prev) {
-            if (prev.status !== order.status) {
-              if (typeof playNotificationSound === 'function') playNotificationSound();
-              showVisualNotification('status', order);
-            }
-            if (prev.volume !== order.volume) {
-              if (typeof playNotificationSound === 'function') playNotificationSound();
-              showVisualNotification('volume', order, prev);
-            }
-            if (prev.delivery_date !== order.delivery_date || prev.delivery_time !== order.delivery_time) {
-              if (typeof playNotificationSound === 'function') playNotificationSound();
-              showVisualNotification('datetime', order);
-            }
-          }
-          lastKnownData[order.id] = { ...order };
-        });
-
-      } catch (err: any) {
-        if (err.name === 'AbortError') {
-          // console.warn('Polling: запрос превысил таймаут (30 сек)');
-        } else {
-          // console.warn('Polling error:', err);
-        }
-      }
-    };
-
-    const initialTimer = setTimeout(checkOrders, 2000);
-    const interval = setInterval(checkOrders, 20000);
-
-    return () => {
-      clearTimeout(initialTimer);
-      clearInterval(interval);
-    };
-  }, [userRole]);
+  // ==================== БЛОК 5. REALTIME-УВЕДОМЛЕНИЯ О ЗАЯВКАХ ====================
+  const staffRoles = ['admin', 'manager', 'dispatcher', 'operator'];
+  useOrderChangeNotifications({
+    enabled: !!userRole && staffRoles.includes(userRole),
+    onNewOrder: (order) => {
+      setNewOrdersCount((prev) => prev + 1);
+      playNotificationSound();
+      showVisualNotification('new', order);
+    },
+    onStatusChange: (order) => {
+      playNotificationSound();
+      showVisualNotification('status', order);
+    },
+    onVolumeChange: (order, oldOrder) => {
+      playNotificationSound();
+      showVisualNotification('volume', order, oldOrder);
+    },
+    onDateTimeChange: (order) => {
+      playNotificationSound();
+      showVisualNotification('datetime', order);
+    },
+  });
 
   // ==================== 6. СБРОС СЧЁТЧИКА ====================
   useEffect(() => {

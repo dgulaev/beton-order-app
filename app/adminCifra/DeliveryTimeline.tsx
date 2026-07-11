@@ -85,8 +85,8 @@ export default function DeliveryTimeline() {
                 color: statusTextColor,
                 whiteSpace: 'nowrap'
               }}>
-                {order.status === 'new' && 'Новый'}
-                {order.status === 'processing' && 'Вработе'}
+                {order.status === 'new' && 'Новая'}
+                {order.status === 'processing' && 'В работе'}
                 {order.status === 'completed' && 'Выполнена'}
                 {order.status === 'cancelled' && 'Отменена'}
               </div>

@@ -2,23 +2,38 @@
 
 import { useState, useEffect } from 'react';
 import { Order } from './hooks/useCalendarOrders';
+import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
 
 interface CalendarProps {
   onClose: () => void;
+  /** Если передан — не делаем отдельный fetch, используем данные дашборда */
+  orders?: Order[];
 }
 
-export default function Calendar({ onClose }: CalendarProps) {
+export default function Calendar({ onClose, orders: externalOrders }: CalendarProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [allOrders, setAllOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [allOrders, setAllOrders] = useState<Order[]>(externalOrders ?? []);
+  const [loading, setLoading] = useState(!externalOrders?.length);
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
-  // Загружаем ВСЕ заказы (как в других страницах)
+  // Синхронизация с переданными заказами (дашборд + realtime)
   useEffect(() => {
+    if (externalOrders) {
+      setAllOrders(externalOrders);
+      setLoading(false);
+    }
+  }, [externalOrders]);
+
+  useRealtimeOrders(setAllOrders, { enabled: !externalOrders });
+
+  // Загружаем заказы только если не переданы снаружи
+  useEffect(() => {
+    if (externalOrders) return;
+
     const fetchAllOrders = async () => {
       setLoading(true);
       try {
@@ -35,7 +50,7 @@ export default function Calendar({ onClose }: CalendarProps) {
     };
 
     fetchAllOrders();
-  }, []);
+  }, [externalOrders]);
 
   // Группировка по датам
   const groupedByDate: { [key: string]: Order[] } = {};
@@ -195,7 +210,7 @@ export default function Calendar({ onClose }: CalendarProps) {
                              (order as any).status === 'processing' ? '#1e40af' :
                              (order as any).status === 'completed' ? '#166534' : '#b91c1c'
                     }}>
-                      {(order as any).status === 'new' && 'Новый'}
+                      {(order as any).status === 'new' && 'Новая'}
                       {(order as any).status === 'processing' && 'В работе'}
                       {(order as any).status === 'completed' && 'Выполнена'}
                       {(order as any).status === 'cancelled' && 'Отменена'}
@@ -263,7 +278,7 @@ export default function Calendar({ onClose }: CalendarProps) {
                        (selectedOrder as any).status === 'processing' ? '#1e40af' :
                        (selectedOrder as any).status === 'completed' ? '#166534' : '#b91c1c'
               }}>
-                {(selectedOrder as any).status === 'new' && 'Новый'}
+                {(selectedOrder as any).status === 'new' && 'Новая'}
                 {(selectedOrder as any).status === 'processing' && 'В работе'}
                 {(selectedOrder as any).status === 'completed' && 'Выполнена'}
                 {(selectedOrder as any).status === 'cancelled' && 'Отменена'}

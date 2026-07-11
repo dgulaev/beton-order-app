@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// service_role, т.к. таблица users закрыта RLS от anon (там password_hash).
+// Роут серверный, ключ на клиент не уходит — это безопасно.
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,9 +41,6 @@ export async function POST(request: NextRequest) {
     }
 
     const parsedUserId = userId;
-
-    // Устанавливаем контекст пользователя
-    await supabase.rpc('set_current_user_id', { p_user_id: parsedUserId });
 
     // Получаем данные
     const { data, error } = await supabase

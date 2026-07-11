@@ -6,15 +6,20 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+const FINAL_STATUSES = ['completed', 'cancelled'];
+const STATUS_LABELS_RU: Record<string, string> = {
+  new: 'Новая',
+  processing: 'В работе',
+  completed: 'Выполнена',
+  cancelled: 'Отменена'
+};
 
-
-
+// Небольшой допуск на погрешность округления объёма (не 0.98 — почти строгое покрытие).
+const VOLUME_EPSILON = 0.01;
 
 export async function POST(request: NextRequest) {
   try {
-    const { id, status, loading_started_at, podvizhnost } = await request.json();
-
-   // console.log('📥 [API] Получены данные:', { id, status, podvizhnost, loading_started_at });
+    const { id, status, loading_started_at, podvizhnost, userName, userRole } = await request.json();
 
     if (!id) {
       return NextResponse.json({ success: false, message: 'id обязателен' }, { status: 400 });
@@ -41,7 +46,17 @@ export async function POST(request: NextRequest) {
     }
 
     const orderId = mixer.order_id;
+    const orderStatus = mixer.orders?.status;
     const orderVolume = Number(mixer.orders?.volume || 0);
+    const oldStatus = mixer.status || 'Загрузка';
+
+    // ==================== ЗАЩИТА ФИНАЛЬНЫХ ЗАЯВОК ====================
+    if (status && FINAL_STATUSES.includes(orderStatus)) {
+      return NextResponse.json({
+        success: false,
+        message: `Заявка уже в финальном статусе "${STATUS_LABELS_RU[orderStatus] || orderStatus}" — изменение миксеров запрещено`
+      }, { status: 400 });
+    }
 
     // Подготовка данных для обновления
     const updateData: any = {
@@ -66,10 +81,21 @@ export async function POST(request: NextRequest) {
 
     if (updateError) throw updateError;
 
-   // console.log('✅ [API] Миксер обновлён');
+    // ==================== ИСТОРИЯ: СМЕНА СТАТУСА МИКСЕРА ====================
+    const historyEntries: any[] = [];
 
-        // === ИСПРАВЛЕННАЯ ЛОГИКА ЗАВЕРШЕНИЯ ЗАКАЗА ===
-    if (status === 'Разгружен') {
+    if (status && status !== oldStatus) {
+      const mixerName = mixer.mixer_name || `Миксер #${id}`;
+      historyEntries.push({
+        order_id: orderId,
+        action: `Изменил статус миксера ${mixerName} с "${oldStatus}" на "${status}"`,
+        user_name: userName || 'Диспетчер',
+        user_role: userRole || null
+      });
+    }
+
+    // ==================== ПРАВИЛО 2: авто-завершение заявки ====================
+    if (status === 'Разгружен' && !FINAL_STATUSES.includes(orderStatus)) {
       const { data: allMixersData, error: fetchMixersError } = await supabase
         .from('order_mixers')
         .select('volume, status')
@@ -85,38 +111,50 @@ export async function POST(request: NextRequest) {
         return sum + Number(m?.volume || 0);
       }, 0);
 
-      const allUnloaded = allMixers.length > 0 && 
+      const allUnloaded = allMixers.length > 0 &&
                          allMixers.every((m: any) => m?.status === 'Разгружен');
 
-     // console.log(`📊 Проверка завершения: ${totalDelivered.toFixed(1)} / ${orderVolume.toFixed(1)} | Все разгружены: ${allUnloaded}`);
-
-      if (allUnloaded && totalDelivered >= orderVolume * 0.98) {
-        await supabase
+      if (allUnloaded && totalDelivered >= orderVolume - VOLUME_EPSILON) {
+        const { error: completeError } = await supabase
           .from('orders')
-          .update({ 
+          .update({
             status: 'completed',
             logistics_ready: true,
             updated_at: new Date().toISOString()
           })
           .eq('id', orderId);
 
-       // console.log(`🎉 Заказ #${orderId} полностью выполнен (${totalDelivered.toFixed(1)} м³)`);
-      } else if (allUnloaded) {
-      //  console.log(`⚠️ Все миксеры разгружены, но объём неполный (${totalDelivered.toFixed(1)} / ${orderVolume.toFixed(1)})`);
+        if (completeError) {
+          console.error('Не удалось автоматически завершить заявку:', completeError);
+        } else {
+          historyEntries.push({
+            order_id: orderId,
+            action: `Автоматически изменил статус заявки с "В работе" на "Выполнена" (разгружено ${totalDelivered.toFixed(2).replace(/\.?0+$/, '')} м³ из ${orderVolume.toFixed(2).replace(/\.?0+$/, '')} м³)`,
+            user_name: 'Система',
+            user_role: 'system'
+          });
+        }
       }
     }
 
-    return NextResponse.json({ 
-      success: true, 
+    if (historyEntries.length > 0) {
+      const { error: historyError } = await supabase.from('order_history').insert(historyEntries);
+      if (historyError) {
+        console.error('Ошибка записи истории при смене статуса миксера:', historyError);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
       message: `Статус миксера обновлён на "${status || '—'}"`,
       data: { mixerId: id, status, orderId }
     });
 
   } catch (error: any) {
     console.error('❌ Ошибка обновления статуса миксера:', error);
-    return NextResponse.json({ 
-      success: false, 
-      message: error.message || 'Внутренняя ошибка сервера' 
+    return NextResponse.json({
+      success: false,
+      message: error.message || 'Внутренняя ошибка сервера'
     }, { status: 500 });
   }
 }

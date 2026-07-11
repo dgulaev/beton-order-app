@@ -3,13 +3,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import Calendar from '../Calendar';
 import { Order } from '../hooks/useCalendarOrders';
-import { createClient } from '@/app/utils/supabase/client';
-import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
+import { useRealtimeOrders, useRealtimeOrderMixers, formatOrderMixer } from '../../../hooks/useRealtimeOrders';
 import OrderDetailModal from '../components/OrderDetailModal';
 import Image from 'next/image';
-
-// ==================== 0. SUPABASE CLIENT ====================
-const supabase = createClient();
 
 export default function AdminCifraDashboard() {
 
@@ -133,10 +129,10 @@ const addToHistory = async (action: string, details?: any) => {
 // ==================== 3.1 ПЕРЕВОД СТАТУСОВ ====================
 const getStatusRussian = (status: string): string => {
   const map: Record<string, string> = {
-    'new': 'Новый',
+    'new': 'Новая',
     'processing': 'В работе',
-    'completed': 'Выполнен',
-    'cancelled': 'Отменён',
+    'completed': 'Выполнена',
+    'cancelled': 'Отменена',
     'loading': 'Загрузка',
     'on_way': 'В пути',
     'ready': 'Готов',
@@ -145,22 +141,7 @@ const getStatusRussian = (status: string): string => {
   return map[status?.toLowerCase()] || status || '—';
 };
 
-    // ==================== 4. ЗАГРУЗКА НАЗНАЧЕННЫХ МИКСЕРОВ ====================
-  useEffect(() => {
-    const fetchAssignedMixers = async () => {
-      try {
-        const res = await fetch('/api/adminCifra/order-mixers');
-        if (res.ok) {
-          const data = await res.json();
-          setMixerAssignments(data);
-        }
-      } catch (err) {
-        console.error('Ошибка загрузки назначенных миксеров:', err);
-      }
-    };
-
-    fetchAssignedMixers();
-  }, []);
+    // ==================== 4. (убрано) Дублировало блок 22 — начальная загрузка mixerAssignments уже там ====================
 
     // ==================== 5. РЕАКТИВНЫЙ МАСШТАБ =================================
   const [scale, setScale] = useState(1);
@@ -284,6 +265,25 @@ useEffect(() => {
 
     fetchActiveMixers();
   }, []);
+
+  // ==================== REALTIME: ЗАЯВКИ ====================
+  const { status: ordersRealtimeStatus } = useRealtimeOrders(setAllOrders);
+
+  // ==================== REALTIME: АКТИВНЫЕ МИКСЕРЫ ====================
+  const { status: mixersRealtimeStatus } = useRealtimeOrderMixers(setActiveMixers, {
+    activeOnly: true,
+    orders: allOrders,
+  });
+
+  // ==================== REALTIME: ВСЕ НАЗНАЧЕНИЯ МИКСЕРОВ ====================
+  useRealtimeOrderMixers(setMixerAssignments, { orders: allOrders });
+
+  // Обогащаем миксеры данными заказа при обновлении allOrders
+  useEffect(() => {
+    if (!allOrders.length) return;
+    setActiveMixers((prev) => prev.map((m) => formatOrderMixer(m, allOrders)));
+    setMixerAssignments((prev) => prev.map((m) => formatOrderMixer(m, allOrders)));
+  }, [allOrders]);
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -467,29 +467,6 @@ useEffect(() => {
     fetchMixers();
   }, []);
 
-    // ==================== 16. ЗАГРУЗКА АКТИВНЫХ МИКСЕРОВ ====================
-  useEffect(() => {
-    const fetchActiveMixers = async () => {
-      try {
-        console.log('🔄 Запрашиваем активные миксеры...');
-        const res = await fetch('/api/adminCifra/active-mixers');
-        console.log('📡 Статус ответа:', res.status);
-        
-        if (res.ok) {
-          const data = await res.json();
-          console.log('✅ Получены миксеры:', data);
-          setActiveMixers(data);
-        } else {
-          console.error('❌ Ошибка API:', res.status);
-        }
-      } catch (err) {
-        console.error('❌ Ошибка запроса:', err);
-      }
-    };
-
-    fetchActiveMixers();
-  }, []);
-
       // ==================== 17. СМЕНА СТАТУСА МИКСЕРА ====================
   const handleStatusChange = async (mixerId: number | string, newStatus: string) => {
     console.log(`🔄 Меняем статус миксера ${mixerId} → ${newStatus}`);
@@ -498,7 +475,12 @@ useEffect(() => {
       const res = await fetch('/api/adminCifra/order-mixers/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: mixerId, status: newStatus })
+        body: JSON.stringify({
+          id: mixerId,
+          status: newStatus,
+          userName: userFullName || 'Диспетчер',
+          userRole: userRole || 'admin'
+        })
       });
 
       const data = await res.json();
@@ -539,71 +521,6 @@ useEffect(() => {
     return () => clearInterval(interval);
   }, []);
 
-    // ==================== 19. АВТО-ОБНОВЛЕНИЕ ТАЙМЛАЙНА ============================
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch('/api/adminCifra/all-orders');
-        if (res.ok) {
-          const freshOrders = await res.json();
-          setAllOrders(freshOrders);
-        }
-      } catch (err) {
-        console.error('Ошибка автообновления заказов:', err);
-      }
-    }, 20000); // каждые 20 секунд
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // ==================== 20. REALTIME ==================================================
-   // useRealtimeOrders(setAllOrders);
-
-      // ==================== 21. АВТО-ОБНОВЛЕНИЕ ДАННЫХ ================================
-useEffect(() => {
-  const refreshData = async () => {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 секунд таймаут
-
-      const [ordersRes, mixersRes] = await Promise.all([
-        fetch('/api/adminCifra/all-orders', { 
-          signal: controller.signal,
-          cache: 'no-store' 
-        }),
-        fetch('/api/adminCifra/active-mixers', { 
-          signal: controller.signal,
-          cache: 'no-store' 
-        })
-      ]);
-
-      clearTimeout(timeoutId);
-
-      if (ordersRes.ok) {
-        const freshOrders = await ordersRes.json();
-        setAllOrders(Array.isArray(freshOrders) ? freshOrders : freshOrders.orders || freshOrders || []);
-      }
-
-      if (mixersRes.ok) {
-        const freshMixers = await mixersRes.json();
-        setActiveMixers(freshMixers);
-      }
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        console.warn('Auto-refresh: запрос превысил таймаут (25 сек)');
-      } else {
-        console.error('Ошибка автообновления:', err);
-      }
-    }
-  };
-
-  refreshData();                    // сразу при загрузке
-
-  const interval = setInterval(refreshData, 20000); // каждые 20 секунд
-
-  return () => clearInterval(interval);
-}, []);
-
     // ==================== 22. ГЛОБАЛЬНАЯ ЗАГРУЗКА ВСЕХ НАЗНАЧЕННЫХ МИКСЕРОВ ===============
   useEffect(() => {
     const fetchAllAssignedMixers = async () => {
@@ -622,24 +539,7 @@ useEffect(() => {
     fetchAllAssignedMixers();
   }, []);
 
-    // ============ 23. ВОССТАНОВЛЕНИЕ ГЛОБАЛЬНОГО СОСТОЯНИЯ ПРИ ЗАКРЫТИИ МОДАЛКИ ============
-  useEffect(() => {
-    if (!selectedOrder) {
-      // При закрытии модалки — перезагружаем все миксеры
-      const reloadAllMixers = async () => {
-        try {
-          const res = await fetch('/api/adminCifra/order-mixers');
-          if (res.ok) {
-            const data = await res.json();
-            setMixerAssignments(data);
-          }
-        } catch (e) {}
-      };
-      reloadAllMixers();
-    }
-  }, [selectedOrder]);
-
-  // ==================== 24. ЗАГРУЗКА МИКСЕРОВ ДЛЯ ОТКРЫТОЙ МОДАЛКИ ==========================
+    // ==================== 24. ЗАГРУЗКА МИКСЕРОВ ДЛЯ ОТКРЫТОЙ МОДАЛКИ ==========================
         useEffect(() => {
     if (!selectedOrder?.id) {
       setMixerAssignments([]);        // очищаем при закрытии
@@ -685,31 +585,19 @@ useEffect(() => {
     loadHistory();
   }, [selectedOrder?.id]);   // ← важно: зависимость только от id
 
-  // ==================== 26. СЛУШАТЕЛЬ ДЛЯ ОБНОВЛЕНИЯ ПОСЛЕ ДОБАВЛЕНИЯ МИКСЕРА ====================
+  // ==================== 26. (убрано) 'mixerAdded' больше не нужен — INSERT в order_mixers ====================
+  // теперь прилетает через useRealtimeOrderMixers(setMixerAssignments, ...) выше автоматически
+
+  // ==================== 26.1 СИНХРОНИЗАЦИЯ ОТКРЫТОЙ МОДАЛКИ С REALTIME-ОБНОВЛЕНИЯМИ ====================
+  // Статус заявки теперь меняется на сервере (авто-правила), поэтому открытая
+  // модалка должна подхватывать свежий статус из allOrders (обновляется через realtime).
   useEffect(() => {
-    const handleMixerAdded = () => {
-      console.log('🔄 Миксер добавлен из модалки, обновляем данные...');
-      
-      // Можно добавить принудительную перезагрузку назначенных миксеров
-      const reloadMixers = async () => {
-        try {
-          const res = await fetch('/api/adminCifra/order-mixers');
-          if (res.ok) {
-            const data = await res.json();
-            setMixerAssignments(data);
-          }
-        } catch (e) {}
-      };
-
-      reloadMixers();
-    };
-
-    window.addEventListener('mixerAdded', handleMixerAdded);
-
-    return () => {
-      window.removeEventListener('mixerAdded', handleMixerAdded);
-    };
-  }, []);
+    if (!selectedOrder?.id) return;
+    const fresh = allOrders.find(o => String(o.id) === String(selectedOrder.id));
+    if (fresh && (fresh.status !== selectedOrder.status || (fresh as any).logistics_ready !== (selectedOrder as any).logistics_ready)) {
+      setSelectedOrder(prev => prev ? { ...prev, ...fresh } : prev);
+    }
+  }, [allOrders, selectedOrder?.id]);
 
   if (loadingRole || loadingOrders) {
     return <div style={{ minHeight: '100vh', background: '#0F172A', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Загрузка дашборда...</div>;
@@ -805,7 +693,10 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   );
 };
 
-    // ==================== 30. ЗАВЕРШЕНИЕ ЛОГИСТИКИ + АВТО-СМЕНА СТАТУСА =================================
+    // ==================== 30. ЗАВЕРШЕНИЕ ЛОГИСТИКИ =================================
+    // Статус заявки этой кнопкой больше не меняется — он управляется только
+    // двумя автоматическими правилами (добавление миксера / полная разгрузка),
+    // реализованными на сервере. Здесь фиксируется лишь готовность логистики.
 const completeLogistics = async (selectedOrderParam?: Order) => {
   const targetOrder = selectedOrderParam || selectedOrder;
   if (!targetOrder) return;
@@ -817,19 +708,15 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
   const orderVolume = Number(targetOrder.volume || 0);
   const isFullyReady = assignedVolume >= orderVolume && assignedVolume > 0;
 
-  // Новое строгое условие — не меняем статус, если уже финальный
-  const isFinalStatus = targetOrder.status === 'completed' || targetOrder.status === 'cancelled';
-  const newStatus = isFullyReady && !isFinalStatus ? 'processing' : targetOrder.status;
-
   // Optimistic update
   setAllOrders(prev => prev.map(o =>
     o.id === targetOrder.id
-      ? { ...o, logistics_ready: true, status: newStatus }
+      ? { ...o, logistics_ready: true }
       : o
   ));
 
   if (selectedOrder && selectedOrder.id === targetOrder.id) {
-    setSelectedOrder(prev => prev ? { ...prev, status: newStatus, logistics_ready: true } : null);
+    setSelectedOrder(prev => prev ? { ...prev, logistics_ready: true } : null);
   }
 
   try {
@@ -838,8 +725,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         orderId: targetOrder.id,
-        logisticsReady: true,
-        autoStatus: newStatus
+        logisticsReady: true
       })
     });
 
@@ -2014,7 +1900,7 @@ const generateDailyReport = () => {
       {showCalendar && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowCalendar(false)}>
           <div onClick={e => e.stopPropagation()}>
-            <Calendar onClose={() => setShowCalendar(false)} />
+            <Calendar orders={allOrders} onClose={() => setShowCalendar(false)} />
           </div>
         </div>
       )}

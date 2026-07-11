@@ -1,12 +1,28 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import MobileLayout from '@/app/mobile/layout';
 import MobileDashboardOrderModal from './components/MobileDashboardOrderModal';
 import MobileCalendar from './components/MobileCalendar';
 
+// 🔥 Подключаем хуки авторизации и real-time
+import { useUserRole } from '../providers/UserRoleProvider';
+import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
+
 export default function MobileDashboard() {
   // ==================== 1. СТАТУСЫ И СОСТОЯНИЯ ====================
+  // 🔥 Убираем локальные стейты для userId/userRole — берем всё из провайдера
+  const { user, loading: roleLoading } = useUserRole();
+  // 🔥 localStorage недоступен на сервере — читаем его только после маунта,
+  // иначе будет ReferenceError при SSR/первом рендере
+  const [userId, setUserId] = useState<number | null>(null);
+  useEffect(() => {
+    const stored = parseInt(localStorage.getItem('userId') || '');
+    setUserId(Number.isNaN(stored) ? null : stored);
+  }, []);
+  const userRole = user?.role || '';
+
+  // 🔥 Оставляем только нужные стейты
   const [allOrders, setAllOrders] = useState<any[]>([]);
   const [activeMixers, setActiveMixers] = useState<any[]>([]);
   const [mixerAssignments, setMixerAssignments] = useState<any[]>([]);
@@ -19,7 +35,7 @@ export default function MobileDashboard() {
     return new Date(now.getFullYear(), now.getMonth(), now.getDate());
   });
 
-  // ==================== 3. КОРРЕКЦИЯ TIMEZONE ====================
+  // ==================== 3. КОРРЕКЦИЯ TIMEZONE (оптимизировано) ====================
   useEffect(() => {
     const now = new Date();
     const localToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -32,23 +48,99 @@ export default function MobileDashboard() {
     }
   }, []);
 
-  // ==================== 5. ЗАГРУЗКА ДАННЫХ (ОПТИМИЗИРОВАНО) ====================
-  useEffect(() => {
-    const dateStr = selectedDate.toISOString().split('T')[0];
+ // ==================== 5. ЗАГРУЗКА ДАННЫХ (REAL-TIME + FETCH) ====================
 
-    // Один Promise.all вместо нескольких отдельных fetch
-    Promise.all([
-      fetch('/api/adminCifra/all-orders'),
-      fetch(`/api/adminCifra/active-mixers?date=${dateStr}`),
-      fetch('/api/adminCifra/order-mixers')
-    ])
-      .then(async ([ordersRes, mixersRes, assignmentsRes]) => {
-        if (ordersRes.ok) setAllOrders(await ordersRes.json());
-        if (mixersRes.ok) setActiveMixers(await mixersRes.json() || []);
-        if (assignmentsRes.ok) setMixerAssignments(await assignmentsRes.json());
+  const selectedYearNum = selectedDate.getFullYear();
+  const selectedMonthNum = selectedDate.getMonth() + 1; // 1-12, как ждёт API
+
+  // 🔥 Границы месяца — используются и для fetch, и для realtime-фильтра,
+  // чтобы оба источника данных всегда были синхронизированы по диапазону.
+  const monthStart = `${selectedYearNum}-${String(selectedMonthNum).padStart(2, '0')}-01`;
+  const daysInMonth = new Date(selectedYearNum, selectedMonthNum, 0).getDate();
+  const monthEnd = `${selectedYearNum}-${String(selectedMonthNum).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+
+  // Realtime поддерживает несколько условий через запятую (AND), поэтому можно
+  // ограничить канал тем же месяцем, что и в /api/adminCifra/orders
+  const deliveryDateFilter = `delivery_date=gte.${monthStart},delivery_date=lte.${monthEnd}`;
+
+  // 🔥 Подписка на все изменения в таблице ORDERS.
+  // Хук возвращает только { status } — сам список заказов приходит через setAllOrders,
+  // поэтому деструктурировать orders/loading отсюда было ошибкой (их там никогда не было).
+  const { status: ordersRealtimeStatus } = useRealtimeOrders(
+    setAllOrders,
+    {
+      filter: deliveryDateFilter,
+      enabled: Boolean(userId)
+    }
+  );
+
+  // 🔥 Реалтайм присылает ТОЛЬКО будущие изменения (INSERT/UPDATE/DELETE),
+  // он никогда не отдаёт уже существующие строки. Без этого fetch страница
+  // при открытии/смене даты будет пустой, пока кто-то не изменит заказ.
+  // Используем существующий рабочий роут — он уже принимает year/month.
+  const [ordersLoading, setOrdersLoading] = useState(true);
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    setOrdersLoading(true);
+
+    fetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`Orders fetch failed: ${res.status}`);
+        return res.json();
       })
-      .catch(console.error);
-  }, [selectedDate]);
+      .then((data) => {
+        if (!cancelled) setAllOrders(data);
+      })
+      .catch((err) => {
+        console.error('Initial orders fetch failed:', err);
+      })
+      .finally(() => {
+        if (!cancelled) setOrdersLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedYearNum, selectedMonthNum, userId]);
+
+// 🔥 Active Mixers и Assignments — единоразовая загрузка
+// Поллинг убран, так как real-time уже обеспечивает обновления
+useEffect(() => {
+  const dateStr = selectedDate.toISOString().split('T')[0];
+
+  const fetchActiveMixers = async () => {
+    const res = await fetch(`/api/adminCifra/active-mixers?date=${dateStr}`);
+    if (!res.ok) {
+      console.error('Active mixers error:', res.status);
+      return [];
+    }
+    return res.json();
+  };
+
+  const fetchAssignments = async () => {
+    const res = await fetch('/api/adminCifra/order-mixers');
+    if (!res.ok) {
+      console.error('Assignments error:', res.status);
+      return [];
+    }
+    return res.json();
+  };
+
+  // 🔥 Защита от race-condition: ждём завершения обоих запросов
+  Promise.all([fetchActiveMixers(), fetchAssignments()])
+    .then(([mixers, assignments]) => {
+      setActiveMixers(mixers);
+      setMixerAssignments(assignments);
+    })
+    .catch((err) => {
+      console.error('Initial data fetch failed:', err);
+      // 🔥 Можно показать баннер "Нет связи с сервером"
+    });
+
+  // 🔥 Больше никакого setInterval — real-time сам подтянет изменения
+}, [selectedDate]);
+
 
   // ==================== 6. РАСЧЁТЫ И ФИЛЬТРЫ ====================
   const selectedYear = selectedDate.getFullYear();
@@ -56,43 +148,46 @@ export default function MobileDashboard() {
   const selectedDay = String(selectedDate.getDate()).padStart(2, '0');
   const selectedDateStr = `${selectedYear}-${selectedMonth}-${selectedDay}`;
 
-  // Фильтрация заказов на выбранный день (для таймлайна)
-  const todayOrders = allOrders
-    .filter((o: any) => {
-      if (!o?.delivery_date) return false;
+  // 🔥 Мемоизация фильтров (это повысит плавность скролла)
+  const todayOrders = useMemo(() => {
+    return allOrders
+      .filter((o: any) => {
+        if (!o?.delivery_date) return false;
 
-      let orderDateStr = '';
+        let orderDateStr = '';
 
-      if (typeof o.delivery_date === 'string') {
-        orderDateStr = o.delivery_date.substring(0, 10);
-      } else {
-        try {
-          const date = new Date(o.delivery_date);
-          orderDateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-        } catch (e) {
-          orderDateStr = String(o.delivery_date).substring(0, 10);
+        if (typeof o.delivery_date === 'string') {
+          orderDateStr = o.delivery_date.substring(0, 10);
+        } else {
+          try {
+            const date = new Date(o.delivery_date);
+            orderDateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+          } catch (e) {
+            orderDateStr = String(o.delivery_date).substring(0, 10);
+          }
         }
-      }
 
-      return orderDateStr === selectedDateStr;
-    })
-    .sort((a: any, b: any) => 
-      (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00')
-    );
+        return orderDateStr === selectedDateStr;
+      })
+      .sort((a: any, b: any) => 
+        (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00')
+      );
+  }, [allOrders, selectedDateStr]);
 
-  // Фильтрация активных миксеров
-  const activeMixersForDate = activeMixers.filter(m => {
-    if (!m.delivery_date && !m.order_delivery_date) return true;
-    const mixerDate = (m.delivery_date || m.order_delivery_date || '').substring(0, 10);
-    return mixerDate === selectedDateStr;
-  });
+  // 🔥 Мемоизация миксеров (чтобы не пересчитывать при каждом рендере)
+  const activeMixersForDate = useMemo(() => {
+    return activeMixers.filter(m => {
+      if (!m.delivery_date && !m.order_delivery_date) return true;
+      const mixerDate = (m.delivery_date || m.order_delivery_date || '').substring(0, 10);
+      return mixerDate === selectedDateStr;
+    });
+  }, [activeMixers, selectedDateStr]);
 
   // ==================== 7. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
   const completeLogistics = (order: any) => {
     alert(`Логистика по заявке #${order.id} завершена`); // временно
     setSelectedOrder(null);
   };
-
   // ==============================================
   // return (продолжение файла)
   // ==============================================
@@ -142,9 +237,33 @@ export default function MobileDashboard() {
           fontSize: '28px', 
           fontWeight: '700', 
           margin: 0,
-          color: '#ffffff'
+          color: '#ffffff',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
         }}>
           Дашборд
+          <span
+            title={
+              ordersRealtimeStatus === 'SUBSCRIBED'
+                ? 'Реалтайм подключен'
+                : ordersRealtimeStatus === 'ERROR'
+                ? 'Нет связи, переподключение...'
+                : 'Подключение...'
+            }
+            style={{
+              width: '9px',
+              height: '9px',
+              borderRadius: '50%',
+              display: 'inline-block',
+              background:
+                ordersRealtimeStatus === 'SUBSCRIBED'
+                  ? '#10B981'
+                  : ordersRealtimeStatus === 'ERROR'
+                  ? '#EF4444'
+                  : '#FACC15'
+            }}
+          />
         </h1>
 
         <button

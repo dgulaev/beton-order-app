@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = 'https://nhudnzdgtidocwwzpqge.supabase.co';
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// service_role, т.к. таблица users закрыта RLS от anon (там password_hash).
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 export async function GET(request: NextRequest) {
   try {
@@ -20,8 +21,6 @@ export async function GET(request: NextRequest) {
     if (isNaN(userId)) {
       return NextResponse.json({ success: false, message: 'Invalid userId' }, { status: 400 });
     }
-
-    await supabase.rpc('set_current_user_id', { p_user_id: userId });
 
     const { data: referrals, error } = await supabase
       .from('users')

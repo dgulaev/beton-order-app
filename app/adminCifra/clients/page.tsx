@@ -854,10 +854,10 @@ const loadOrderHistory = async (orderId: number | string) => {
 // ==================== КОНФИГУРАЦИЯ СТАТУСОВ ====================
 const getStatusConfig = (status: string) => {
   switch (status) {
-    case 'new': return { label: '🟡 Новый', bg: '#FACC15', color: '#FACC15', final: false };
+    case 'new': return { label: '🟡 Новая', bg: '#FACC15', color: '#FACC15', final: false };
     case 'processing': return { label: '🔵 В работе', bg: '#3B82F6', color: '#3B82F6', final: false };
-    case 'completed': return { label: '🟢 Выполнен', bg: '#10B981', color: '#10B981', final: true };
-    case 'cancelled': return { label: '🔴 Отменён', bg: '#EF4444', color: '#EF4444', final: true };
+    case 'completed': return { label: '🟢 Выполнена', bg: '#10B981', color: '#10B981', final: true };
+    case 'cancelled': return { label: '🔴 Отменена', bg: '#EF4444', color: '#EF4444', final: true };
     default: return { label: status, bg: '#64748B', color: '#94A3B8', final: false };
   }
 };
@@ -2455,17 +2455,17 @@ const changeStaffPassword = async (staffMember: any) => {
   ) : userOrders.length > 0 ? (
     userOrders.map((o: any) => {
       // Русские статусы
-      let statusText = 'Новый';
+      let statusText = 'Новая';
       let statusColor = '#FACC15';
 
       if (o.status === 'completed') {
-        statusText = 'Выполнен';
+        statusText = 'Выполнена';
         statusColor = '#10B981';
       } else if (o.status === 'processing') {
         statusText = 'В работе';
         statusColor = '#3B82F6';
       } else if (o.status === 'cancelled') {
-        statusText = 'Отменён';
+        statusText = 'Отменена';
         statusColor = '#EF4444';
       }
 
@@ -3074,10 +3074,10 @@ const changeStaffPassword = async (staffMember: any) => {
         color: getStatusColor(selectedOrder.status),
         marginBottom: '28px'
       }}>
-        {selectedOrder.status === 'new' && '🟡 Новый заказ'}
+        {selectedOrder.status === 'new' && '🟡 Новая заявка'}
         {selectedOrder.status === 'processing' && '🔵 В работе'}
-        {selectedOrder.status === 'completed' && '🟢 Выполнен'}
-        {selectedOrder.status === 'cancelled' && '🔴 Отменён'}
+        {selectedOrder.status === 'completed' && '🟢 Выполнена'}
+        {selectedOrder.status === 'cancelled' && '🔴 Отменена'}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
@@ -3180,10 +3180,10 @@ const changeStaffPassword = async (staffMember: any) => {
                       width: '100%'
                     }}
                   >
-                    <option value="new">🟡 Новый</option>
+                    <option value="new">🟡 Новая</option>
                     <option value="processing">🔵 В работе</option>
-                    <option value="completed">🟢 Выполнен</option>
-                    <option value="cancelled">🔴 Отменён</option>
+                    <option value="completed">🟢 Выполнена</option>
+                    <option value="cancelled">🔴 Отменена</option>
                   </select>
                 )}
 

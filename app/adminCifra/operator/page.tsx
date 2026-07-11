@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useTodayLoadingMixers } from '../hooks/useTodayLoadingMixers';
+import { useRealtimeProductionLogs } from '@/hooks/useRealtimeOrders';
+import { useUserRole } from '../../providers/UserRoleProvider';
 import WarehousePage from '../warehouse/page';
 import ReportsPage from '../reports/page';
 import RecipesPage from '../recipes/page';
@@ -12,6 +14,11 @@ export default function OperatorBSUPage() {
   const [currentShift] = useState('Дневная');
   const [selectedTrip, setSelectedTrip] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'zayavki' | 'warehouse' | 'reports' | 'recipes'>('zayavki');
+
+  // ==================== ИДЕНТИЧНОСТЬ ОПЕРАТОРА (для записи в историю) ====================
+  const { user } = useUserRole();
+  const operatorName = user?.full_name || user?.username || 'Оператор';
+  const operatorRole = user?.role || 'operator';
 
     // ==================== 0. УПРАВЛЕНИЕ ДАТОЙ ====================
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -67,14 +74,6 @@ export default function OperatorBSUPage() {
     });
   }, [queueTrips]);
 
-  // ==================== 0.3 РЕАЛТАЙМ ОБНОВЛЕНИЕ ====================
-  useEffect(() => {
-    const interval = setInterval(() => {
-      console.log(`[Realtime] Принудительное обновление данных — ${new Date().toLocaleTimeString('ru-RU')}`);
-    }, 4000);
-
-    return () => clearInterval(interval);
-  }, []);
 
   // ==================== 0.4 ЗАГРУЗКА РЕЦЕПТОВ ИЗ БАЗЫ ====================
   const [recipes, setRecipes] = useState<any[]>([]);
@@ -144,7 +143,9 @@ export default function OperatorBSUPage() {
         body: JSON.stringify({ 
           id: trip.id, 
           status: 'Загрузка',
-          loading_started_at: now 
+          loading_started_at: now,
+          userName: operatorName,
+          userRole: operatorRole
         })
       });
 
@@ -187,18 +188,19 @@ export default function OperatorBSUPage() {
       await fetch('/api/adminCifra/order-mixers/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: trip.id, status: 'В пути' })
+        body: JSON.stringify({
+          id: trip.id,
+          status: 'В пути',
+          userName: operatorName,
+          userRole: operatorRole
+        })
       });
 
       // ✅ МГНОВЕННОЕ УДАЛЕНИЕ ИЗ ОЧЕРЕДИ
       setLocalQueueTrips(prev => prev.filter(t => String(t.id) !== String(trip.id)));
 
-      // Обновляем отгруженные
-      const res = await fetch('/api/adminCifra/production-log');
-      if (res.ok) {
-        const updated = await res.json();
-        setCompletedTrips(Array.isArray(updated) ? updated : []);
-      }
+      // 🔥 Ручной рефетч убран — новая запись production_logs придёт через realtime
+      // (useRealtimeProductionLogs) и другим операторам, и текущему, без лишнего запроса
 
       setTimeout(() => {
         setLoadingTrips(prev => {
@@ -234,8 +236,34 @@ export default function OperatorBSUPage() {
     fetchCompletedTrips();
   }, []);
 
+  // Live-обновление ленты "Отгружено сегодня" — подхватывает записи от любого оператора
+  useRealtimeProductionLogs(setCompletedTrips);
+
     // ==================== 1.3 ЛОКАЛЬНЫЕ ИЗМЕНЕНИЯ ПОДВИЖНОСТИ ====================
  const [podvizhnostOverrides, setPodvizhnostOverrides] = useState<Record<number, string>>({});
+
+  // ==================== ИСТОРИЯ ИЗМЕНЕНИЙ ЗАЯВКИ (для модалки рейса) ====================
+  const [tripHistory, setTripHistory] = useState<any[]>([]);
+
+  useEffect(() => {
+    const orderId = selectedTrip?.order_id || selectedTrip?.orderId;
+    if (!orderId) {
+      setTripHistory([]);
+      return;
+    }
+
+    const loadTripHistory = async () => {
+      try {
+        const res = await fetch(`/api/adminCifra/order-history?orderId=${orderId}`);
+        if (res.ok) setTripHistory(await res.json());
+      } catch (err) {
+        console.error('Ошибка загрузки истории заявки:', err);
+        setTripHistory([]);
+      }
+    };
+
+    loadTripHistory();
+  }, [selectedTrip?.order_id, selectedTrip?.orderId]);
 
 
   // ==================== МАКСИМАЛЬНО СТРОГАЯ ФИЛЬТРАЦИЯ ====================
@@ -869,11 +897,21 @@ export default function OperatorBSUPage() {
                 padding: '16px', 
                 borderRadius: '12px',
                 fontSize: '14.5px',
-                lineHeight: '1.7'
+                lineHeight: '1.7',
+                maxHeight: '220px',
+                overflowY: 'auto'
               }}>
-                • {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} — Оператор начал загрузку миксера {selectedTrip.mixer_name || selectedTrip.number}<br/>
-                • {new Date(Date.now() + 90000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} — Загрузка завершена, объём {selectedTrip.volume} м³<br/>
-                • {new Date(Date.now() + 150000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} — Миксер отправлен на объект (статус "В пути")
+                {tripHistory.length > 0 ? tripHistory.map((entry: any, i: number) => (
+                  <div key={i} style={{ marginBottom: '8px' }}>
+                    • {new Date(entry.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} —{' '}
+                    {entry.user_role === 'system' ? '🤖 Система (автоматически): ' : `${entry.user_name || 'Сотрудник'}: `}
+                    {entry.action}
+                  </div>
+                )) : (
+                  <div style={{ color: '#64748B', textAlign: 'center', padding: '10px 0' }}>
+                    История изменений пуста
+                  </div>
+                )}
               </div>
             </div>
 

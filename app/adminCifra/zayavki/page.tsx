@@ -50,6 +50,20 @@ const getStatusConfig = (status: string) => {
   const isAdmin = (role: string): boolean => {
     return role?.toLowerCase().trim() === 'admin';
   };
+
+  // ==================== ПЕРЕВОД РОЛЕЙ ДЛЯ ОТОБРАЖЕНИЯ В ИСТОРИИ ====================
+  const getRoleDisplayName = (role: string): string => {
+    switch (role) {
+      case 'admin': return 'Админ';
+      case 'manager': return 'Менеджер';
+      case 'dispatcher': return 'Диспетчер';
+      case 'logist': return 'Логист';
+      case 'logistic': return 'Логист';
+      case 'operator': return 'Оператор';
+      case 'accountant': return 'Бухгалтер';
+      default: return role;
+    }
+  };
  
 
   // ==================== ЗАГРУЗКА ИСТОРИИ ИЗМЕНЕНИЙ ====================
@@ -280,10 +294,10 @@ ${order.customer_type?.includes('Юридическое')
     console.log('📋 Данные заявки успешно скопированы:', copiedData);
   };
 
-    // ==================== REALTIME ====================
-  useRealtimeOrders(setAllOrders);
+  // ==================== REALTIME (начальная загрузка + live-обновления) ====================
+  const { status: ordersRealtimeStatus } = useRealtimeOrders(setAllOrders);
 
-  // Загрузка всех заказов при открытии страницы
+  // Загрузка всех заказов при открытии страницы (realtime не отдаёт существующие строки)
   useEffect(() => {
     const fetchAllOrders = async () => {
       setLoading(true);
@@ -302,59 +316,6 @@ ${order.customer_type?.includes('Юридическое')
 
     fetchAllOrders();
   }, []);
-
-    // ==================== АВТООБНОВЛЕНИЕ (устойчивое) ====================
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchOrders = async () => {
-      try {
-        const res = await fetch('/api/adminCifra/all-orders', { 
-          cache: 'no-store',
-          headers: { 
-            'Cache-Control': 'no-cache, no-store, must-revalidate' 
-          }
-        });
-
-        if (res.ok && isMounted) {
-          const data = await res.json();
-          setAllOrders(data);
-          // console.log(`🔄 Автообновление заявок (${new Date().toLocaleTimeString('ru-RU')})`);
-        }
-      } catch (err: any) {
-        // Только предупреждение, без ошибки в консоли при временных проблемах
-        console.warn('⚠️ Ошибка автообновления (временная, игнорируем):', err.message || err);
-      }
-    };
-
-    // Первое обновление сразу после загрузки
-    fetchOrders();
-
-    // Интервал
-    const interval = setInterval(fetchOrders, 45000); // 45 секунд вместо 60
-
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, []);
-
-  // ==================== Синхронизация статуса после изменений в модалке логистики ====================
-  useEffect(() => {
-    if (selectedOrder === null) {
-      const refresh = async () => {
-        try {
-          const res = await fetch('/api/adminCifra/all-orders', { cache: 'no-store' });
-          if (res.ok) {
-            setAllOrders(await res.json());
-          }
-        } catch (e) {
-          console.error('Ошибка синхронизации списка заявок', e);
-        }
-      };
-      refresh();
-    }
-  }, [selectedOrder]);
 
   // ==================== 1. РАБОТА С ДАТАМИ (ИСПРАВЛЕНО) ====================
   // Новая функция — надёжно получает дату в локальном часовом поясе
@@ -1078,10 +1039,10 @@ ${order.customer_type?.includes('Юридическое')
       }}
     >
       <option value="all">Все статусы</option>
-      <option value="new">🟡 Новый</option>
+      <option value="new">🟡 Новая</option>
       <option value="processing">🔵 В работе</option>
-      <option value="completed">🟢 Выполнен</option>
-      <option value="cancelled">🔴 Отменён</option>
+      <option value="completed">🟢 Выполнена</option>
+      <option value="cancelled">🔴 Отменена</option>
     </select>
   </div>
 
@@ -1178,10 +1139,10 @@ ${order.customer_type?.includes('Юридическое')
           fontWeight: '600',
           fontSize: '15px'
         }}>
-          {order.status === 'new' && 'Новый'}
+          {order.status === 'new' && 'Новая'}
           {order.status === 'processing' && 'В работе'}
-          {order.status === 'completed' && 'Выполнен'}
-          {order.status === 'cancelled' && 'Отменён'}
+          {order.status === 'completed' && 'Выполнена'}
+          {order.status === 'cancelled' && 'Отменена'}
         </div>
       </div>
     )) : (
@@ -1242,10 +1203,10 @@ ${order.customer_type?.includes('Юридическое')
           backgroundColor: getStatusColor(selectedOrder.status) + '20',
           color: getStatusColor(selectedOrder.status),
         }}>
-          {selectedOrder.status === 'new' && '🟡 Новый заказ'}
+          {selectedOrder.status === 'new' && '🟡 Новая заявка'}
           {selectedOrder.status === 'processing' && '🔵 В работе'}
-          {selectedOrder.status === 'completed' && '🟢 Выполнен'}
-          {selectedOrder.status === 'cancelled' && '🔴 Отменён'}
+          {selectedOrder.status === 'completed' && '🟢 Выполнена'}
+          {selectedOrder.status === 'cancelled' && '🔴 Отменена'}
         </div>
 
         {/* Чекбокс "Под вопросом" */}
@@ -1319,33 +1280,12 @@ ${order.customer_type?.includes('Юридическое')
 <input 
   value={selectedOrder.organization_name || selectedOrder.full_name || ''} 
   onChange={(e) => {
-    const oldValue = selectedOrder.organization_name || selectedOrder.full_name || '';
-    const newValue = e.target.value;
-    
+    // Запись в историю происходит централизованно при нажатии "Сохранить"
+    // (через /api/adminCifra/orders/update, который сам пишет диф изменений).
     setSelectedOrder({ 
       ...selectedOrder, 
-      organization_name: newValue 
+      organization_name: e.target.value 
     });
-
-    // Запись в историю
-    if (newValue !== oldValue && selectedOrder.id) {
-      const actionText = `Изменил название организации с "${oldValue}" на "${newValue}"`;
-      
-      // Прямой запрос в API истории
-      fetch(`/api/adminCifra/orders/${selectedOrder.id}/history`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: actionText,
-          user_name: userFullName || 'Сотрудник'
-        })
-      }).catch(err => console.error('Ошибка записи в историю:', err));
-
-      // Обновляем историю в модалке
-      if (typeof loadOrderHistory === 'function') {
-        setTimeout(() => loadOrderHistory(selectedOrder.id), 500);
-      }
-    }
   }}
   style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
 />
@@ -1434,10 +1374,10 @@ ${order.customer_type?.includes('Юридическое')
                       width: '100%'
                     }}
                   >
-                    <option value="new">🟡 Новый</option>
+                    <option value="new">🟡 Новая</option>
                     <option value="processing">🔵 В работе</option>
-                    <option value="completed">🟢 Выполнен</option>
-                    <option value="cancelled">🔴 Отменён</option>
+                    <option value="completed">🟢 Выполнена</option>
+                    <option value="cancelled">🔴 Отменена</option>
                   </select>
                 )}
 
@@ -1597,10 +1537,10 @@ ${order.customer_type?.includes('Юридическое')
             {actionText}
           </div>
           
-          <div style={{ color: '#60A5FA', marginTop: '2px' }}>
-            {entry.user_name} 
-            {entry.user_role && entry.user_role !== 'unknown' && (
-              <span style={{ color: '#94A3B8', fontSize: '13px' }}> ({entry.user_role})</span>
+          <div style={{ color: entry.user_role === 'system' ? '#60A5FA' : '#60A5FA', marginTop: '2px' }}>
+            {entry.user_role === 'system' ? '🤖 Система (автоматически)' : entry.user_name}
+            {entry.user_role && entry.user_role !== 'unknown' && entry.user_role !== 'system' && (
+              <span style={{ color: '#94A3B8', fontSize: '13px' }}> ({getRoleDisplayName(entry.user_role)})</span>
             )}
           </div>
 

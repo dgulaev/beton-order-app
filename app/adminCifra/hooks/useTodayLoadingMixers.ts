@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRealtimeOrderMixers } from '@/hooks/useRealtimeOrders';
 
 export const useTodayLoadingMixers = () => {
   const [allMixers, setAllMixers] = useState<any[]>([]);
@@ -13,12 +14,12 @@ export const useTodayLoadingMixers = () => {
       setError(null);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 секунд таймаут
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
       const res = await fetch('/api/adminCifra/active-mixers?withOrders=true', {
         cache: 'no-store',
         headers: { 'Cache-Control': 'no-cache' },
-        signal: controller.signal
+        signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
@@ -32,12 +33,10 @@ export const useTodayLoadingMixers = () => {
 
       setAllMixers(mixersArray);
       setError(null);
-
     } catch (err: any) {
       console.warn(`[useTodayLoadingMixers] Попытка ${retryCount + 1} не удалась:`, err.message);
 
-      if (retryCount < 5) { // до 5 попыток
-        // Увеличиваем задержку с каждой попыткой
+      if (retryCount < 5) {
         const delay = 600 + retryCount * 400;
         setTimeout(() => fetchMixers(retryCount + 1), delay);
       } else {
@@ -50,22 +49,17 @@ export const useTodayLoadingMixers = () => {
     }
   }, []);
 
+  // Начальная загрузка (realtime не отдаёт уже существующие строки)
   useEffect(() => {
-    // Небольшая задержка при первой загрузке страницы
     const initialTimeout = setTimeout(() => {
       fetchMixers();
     }, 300);
 
-    // Обновление каждые 10 секунд
-    const interval = setInterval(() => {
-      fetchMixers();
-    }, 8000);
-
-    return () => {
-      clearTimeout(initialTimeout);
-      clearInterval(interval);
-    };
+    return () => clearTimeout(initialTimeout);
   }, [fetchMixers]);
+
+  // Live-обновления статусов миксеров
+  useRealtimeOrderMixers(setAllMixers, { activeOnly: false });
 
   return { allMixers, loading, error, refetch: fetchMixers };
 };

@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
 // ==================== POST — Добавить запись в историю ====================
 export async function POST(request: NextRequest) {
   try {
-    const { order_id, action, user_name } = await request.json();
+    const { order_id, action, user_name, user_role, field_name, old_value, new_value } = await request.json();
 
     if (!order_id || !action) {
       return NextResponse.json({ 
@@ -40,12 +40,20 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
+    // Автоматические действия системы всегда подписываются как "Система",
+    // никогда именем реального сотрудника, который инициировал триггер.
+    const isAuto = user_role === 'system';
+
     const { data, error } = await supabase
       .from('order_history')
       .insert([{
         order_id,
         action,
-        user_name: user_name || 'Диспетчер'
+        user_name: isAuto ? 'Система' : (user_name || 'Диспетчер'),
+        user_role: user_role || null,
+        field_name: field_name || null,
+        old_value: old_value ?? null,
+        new_value: new_value ?? null
       }])
       .select()
       .single();

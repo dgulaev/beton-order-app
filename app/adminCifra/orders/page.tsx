@@ -201,7 +201,7 @@ export default function OrdersPage() {
                                order.status === 'processing' ? '#1e40af' :
                                order.status === 'completed' ? '#166534' : '#b91c1c'
                       }}>
-                        {order.status === 'new' && 'Новый'}
+                        {order.status === 'new' && 'Новая'}
                         {order.status === 'processing' && 'В работе'}
                         {order.status === 'completed' && 'Выполнена'}
                         {order.status === 'cancelled' && 'Отменена'}
