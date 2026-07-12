@@ -33,11 +33,14 @@ export async function POST(request: NextRequest) {
       }, { status: 403 });
     }
 
-    // Принудительный logout всех сотрудников
+    // Принудительный logout всех сотрудников, КРОМЕ самого админа, который
+    // нажал кнопку — иначе он тоже выкинет сам себя при следующей проверке
+    // роли (force_logout_version проверяется без исключений по user_id).
     const { error } = await supabase
       .from('users')
       .update({ force_logout_version: 9999 })
-      .in('role', ['admin', 'manager', 'dispatcher', 'operator']);
+      .in('role', ['admin', 'manager', 'dispatcher', 'operator'])
+      .neq('user_id', parseInt(userId));
 
     if (error) {
       console.error('Update error:', error);

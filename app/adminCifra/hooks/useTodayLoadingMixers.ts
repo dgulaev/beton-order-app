@@ -58,8 +58,15 @@ export const useTodayLoadingMixers = () => {
     return () => clearTimeout(initialTimeout);
   }, [fetchMixers]);
 
-  // Live-обновления статусов миксеров
-  useRealtimeOrderMixers(setAllMixers, { activeOnly: false });
+  // Live-обновления статусов миксеров.
+  // onInsertRow: order_mixers не хранит клиента/марку/дату заказа (это поля
+  // orders), а список orders сюда не передаём — поэтому при появлении новой
+  // строки по realtime подтягиваем полностью обогащённые данные полным
+  // рефетчем, чтобы у оператора сразу были клиент и марка, а не "—".
+  useRealtimeOrderMixers(setAllMixers, {
+    activeOnly: false,
+    onInsertRow: () => fetchMixers(),
+  });
 
   return { allMixers, loading, error, refetch: fetchMixers };
 };

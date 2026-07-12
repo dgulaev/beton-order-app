@@ -15,7 +15,16 @@ interface UserRoleContextType {
   error: string | null;
   isAdmin: boolean;
   refreshRole: () => void;
+  logout: () => void;
 }
+
+// Как часто проверяем force_logout_version, пока пользователь активен на
+// странице (плюс проверка при возврате на вкладку и сразу после входа).
+// Это лишь страховка на случай, если вкладка держится открытой и активной
+// без переключений весь день (обычная проверка при возврате на вкладку
+// покрывает все остальные случаи мгновенно). 1 час — достаточно редко, чтобы
+// не нагружать сервер лишними запросами.
+const FORCE_LOGOUT_POLL_MS = 60 * 60_000;
 
 const UserRoleContext = createContext<UserRoleContextType | undefined>(undefined);
 
@@ -60,25 +69,48 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem('userPhone');
         localStorage.removeItem('userRoleCache');
         alert('Ваш сеанс был завершён администратором. Пожалуйста, войдите заново.');
-        window.location.href = '/';
+        // Перезагружаем текущую страницу, а не уводим на "/" — layout сам
+        // покажет форму входа на нужном пути (/adminCifra или /mobile).
+        window.location.reload();
         return;
       }
 
       localStorage.setItem('lastForceLogoutVersion', currentVersion.toString());
 
     } catch (err: any) {
-      console.warn('Role fetch error:', err);
+      // fetch кидает TypeError ("Failed to fetch"), когда сервер временно
+      // недоступен (перезапуск дев-сервера, потеря сети, уход со страницы) —
+      // это не ошибка приложения, а обычный сетевой сбой. Следующий тик
+      // интервала/возврат на вкладку всё исправит сам, поэтому не шумим в
+      // консоль на каждый такой случай — предупреждаем только на реальные
+      // ошибки API (не-network, например неожиданный HTTP-статус).
+      if (!(err instanceof TypeError)) {
+        console.warn('Role fetch error:', err);
+      }
       setError(err.message);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // === ОДИН РАЗ при загрузке + проверка при возврате на вкладку ===
+  const logout = useCallback(() => {
+    localStorage.removeItem('userId');
+    localStorage.removeItem('userPhone');
+    localStorage.removeItem('userRoleCache');
+    localStorage.removeItem('lastForceLogoutVersion');
+    setUser(null);
+    // Перезагружаем ТЕКУЩУЮ страницу (а не уводим на "/") — сами layout'ы
+    // /adminCifra и /mobile уже показывают форму входа на своём пути, когда
+    // пользователь не залогинен. Раньше редирект на "/" уводил на публичный
+    // лендинг вместо формы входа в админку.
+    window.location.reload();
+  }, []);
+
+  // === При загрузке + при возврате на вкладку + периодически ===
   useEffect(() => {
     fetchRole();
 
-    // Проверяем роль только когда пользователь возвращается на вкладку
+    // Проверяем роль, когда пользователь возвращается на вкладку
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         fetchRole(true); // force = true, без лишнего loading
@@ -87,8 +119,18 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
+    // Единая периодическая проверка force_logout_version — гарантирует, что
+    // после "Разлогинить всех" сотрудник будет выкинут максимум через
+    // FORCE_LOGOUT_POLL_MS, даже если не переключал вкладку. Это единственное
+    // место в приложении, где выполняется такой опрос (раньше было 2-3
+    // дублирующих независимых интервала в разных layout'ах).
+    const pollInterval = setInterval(() => {
+      if (localStorage.getItem('userId')) fetchRole(true);
+    }, FORCE_LOGOUT_POLL_MS);
+
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearInterval(pollInterval);
     };
   }, [fetchRole]);
 
@@ -104,6 +146,7 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
         error,
         isAdmin: user?.role === 'admin',
         refreshRole,
+        logout,
       }}
     >
       {children}

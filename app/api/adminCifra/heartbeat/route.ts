@@ -12,7 +12,12 @@ export async function POST(request: NextRequest) {
     const { userId } = await request.json();
     if (!userId) return NextResponse.json({ success: false }, { status: 400 });
 
-    const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+    // x-forwarded-for может содержать список через запятую (клиент, затем
+    // промежуточные прокси/CDN) — реальный IP клиента всегда первый в списке.
+    const forwardedFor = request.headers.get('x-forwarded-for');
+    const ip = forwardedFor?.split(',')[0]?.trim()
+      || request.headers.get('x-real-ip')?.trim()
+      || 'unknown';
     const userAgent = request.headers.get('user-agent') || 'unknown';
 
     const { error } = await supabase

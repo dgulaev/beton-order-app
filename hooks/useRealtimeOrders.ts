@@ -23,12 +23,57 @@ interface ChannelEntry {
   status: RealtimeStatus;
   retryCount: number;
   retryTimer?: ReturnType<typeof setTimeout>;
+  // Отложенное закрытие канала при потере последнего подписчика (см. cleanup в useRealtime) —
+  // отменяется, если подписчик появляется снова до срабатывания таймера.
+  pendingCleanupTimer?: ReturnType<typeof setTimeout>;
+  // Храним параметры подписки в самой записи, чтобы можно было форсировать
+  // переподключение снаружи (по visibilitychange/online), не имея их под рукой.
+  table: string;
+  event: ChangeEvent;
+  filter?: string;
 }
  
  
 const channelRegistry = new Map<string, ChannelEntry>();
  
 const MAX_RETRY_DELAY_MS = 30_000;
+
+// ⚠️ КЛЮЧЕВОЙ ФИКС: supabase.removeChannel() сам провоцирует статус CLOSED на
+// callback'е этого канала (это часть его штатной обработки leave). Без этой
+// пометки наш обработчик CLOSED не мог отличить «канал закрылся сам по себе»
+// от «мы сами только что попросили его закрыться перед пересозданием» —
+// и планировал ещё один реконнект НА КАНАЛ, который мы САМИ закрываем.
+// Это давало самоподдерживающийся бесконечный цикл: reconnect → сам вызывает
+// removeChannel → тот триггерит CLOSED → обработчик планирует новый reconnect → ...
+const intentionallyClosingChannels = new WeakSet<RealtimeChannel>();
+
+async function removeChannelIntentionally(channel: RealtimeChannel) {
+  intentionallyClosingChannels.add(channel);
+  try {
+    await supabase.removeChannel(channel);
+  } catch {
+    // канал мог уже быть невалиден — игнорируем
+  } finally {
+    // ⚠️ ЕЩЁ ОДИН КЛЮЧЕВОЙ ФИКС: supabase.removeChannel() внутри вызывает
+    // channel.teardown() ТОЛЬКО если channel.unsubscribe() разрешился со
+    // статусом 'ok'. Если канал уже был в состоянии ERROR/CLOSED (а это ровно
+    // наш случай — мы вызываем это именно при реконнекте после сбоя),
+    // unsubscribe() почти всегда резолвится как 'timed out' или 'error'
+    // (серверу некому подтверждать leave), и teardown() пропускается.
+    // Канал остаётся «зомби» во внутреннем списке RealtimeClient.channels.
+    // Следующий supabase.channel(тот же topic) находит этот зомби-канал
+    // (уже прошедший subscribe()) и возвращает ЕГО ЖЕ вместо нового —
+    // а вызов .on('postgres_changes', ...) на уже подписанном канале бросает
+    // "cannot add `postgres_changes` callbacks ... after `subscribe()`",
+    // и весь realtime для этой таблицы обрывается без восстановления.
+    // Поэтому подчищаем канал сами, безусловно, не полагаясь на unsubscribe().
+    try {
+      channel.teardown();
+    } catch {
+      // игнорируем — например, если метод недоступен в другой версии клиента
+    }
+  }
+}
  
 function buildChannelKey(table: string, event: ChangeEvent, filter?: string) {
   return `realtime:${table}:${event}:${filter ?? 'nofilter'}`;
@@ -44,15 +89,80 @@ function scheduleReconnect(channelKey: string, table: string, event: ChangeEvent
   console.warn(`⏳ [Realtime] Переподключение через ${delay}мс → ${table} (попытка ${entry.retryCount})`);
  
   entry.retryTimer = setTimeout(() => {
-    
-    try {
-      supabase.removeChannel(entry.channel);
-    } catch {
-      // канал мог уже быть невалиден — игнорируем
-    }
-    channelRegistry.delete(channelKey);
-    ensureChannel(channelKey, table, event, filter);
+    reconnectChannel(channelKey, table, event, filter);
   }, delay);
+}
+ 
+// Флаг на запись, чтобы не запустить два параллельных реконнекта одного канала
+// (например, из scheduleReconnect и из forceReconnectAll одновременно).
+const reconnectingKeys = new Set<string>();
+
+async function reconnectChannel(channelKey: string, table: string, event: ChangeEvent, filter?: string) {
+  if (reconnectingKeys.has(channelKey)) return;
+  reconnectingKeys.add(channelKey);
+
+  try {
+    const entry = channelRegistry.get(channelKey);
+    if (entry?.retryTimer) clearTimeout(entry.retryTimer);
+
+    // ⚠️ Критично: сохраняем подписчиков (React-компоненты) старого канала —
+    // ensureChannel() создаёт новую пустую коллекцию listeners, и без переноса
+    // все они «отвалятся» навсегда после реконнекта (компоненты не пересоздают
+    // подписку сами, у них нет для этого триггера в useEffect).
+    const preservedListeners = entry?.listeners;
+    // ⚠️ Также переносим счётчик попыток — иначе backoff всегда стартует с нуля
+    // и получается бесконечный цикл реконнекта раз в 1000мс без реального роста задержки.
+    const preservedRetryCount = entry?.retryCount ?? 0;
+
+    if (entry) {
+      // Ждём подтверждения отписки от сервера ПЕРЕД тем, как открыть новый канал
+      // с тем же именем топика. Если не ждать — join нового канала может прилететь
+      // раньше, чем сервер обработает leave старого, и сервер тут же закроет новый
+      // (конфликт по топику). Помечаем канал как «закрываем намеренно», чтобы
+      // сам этот removeChannel не спровоцировал ещё один реконнект по CLOSED.
+      await removeChannelIntentionally(entry.channel);
+    }
+
+    channelRegistry.delete(channelKey);
+    const newEntry = ensureChannel(channelKey, table, event, filter);
+    newEntry.retryCount = preservedRetryCount;
+
+    if (preservedListeners && preservedListeners.size > 0) {
+      preservedListeners.forEach((l) => newEntry.listeners.add(l));
+      // Сообщаем всем перенесённым подписчикам актуальный статус нового канала.
+      newEntry.listeners.forEach((l) => l.onStatusChange?.(newEntry.status));
+    }
+  } finally {
+    reconnectingKeys.delete(channelKey);
+  }
+}
+ 
+// ==================== ФОРСИРОВАННЫЙ РЕКОННЕКТ ПРИ ВОЗВРАТЕ НА ВКЛАДКУ / ВОССТАНОВЛЕНИИ СЕТИ ====================
+// Фоновые вкладки (особенно на мобильных) браузер сильно троттлит — обычные setTimeout
+// с экспоненциальной задержкой могут не сработать вовремя, пока вкладка не активна.
+// Поэтому при visibilitychange/online принудительно и немедленно пересоздаём все каналы,
+// которые сейчас в статусе ERROR/CLOSED, минуя оставшуюся задержку backoff.
+let forceReconnectListenerAttached = false;
+
+function attachForceReconnectListeners() {
+  if (forceReconnectListenerAttached || typeof document === 'undefined') return;
+  forceReconnectListenerAttached = true;
+
+  const forceReconnectAll = (reason: string) => {
+    channelRegistry.forEach((entry, channelKey) => {
+      if (entry.status === 'ERROR' || entry.status === 'CLOSED') {
+        console.log(`🔁 [Realtime] Форс-переподключение (${reason}) → ${entry.table}`);
+        entry.retryCount = 0; // не ждём полный backoff — пробуем сразу
+        reconnectChannel(channelKey, entry.table, entry.event, entry.filter);
+      }
+    });
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') forceReconnectAll('вкладка снова активна');
+  });
+
+  window.addEventListener('online', () => forceReconnectAll('сеть восстановлена'));
 }
  
 function notifyStatus(channelKey: string, status: RealtimeStatus) {
@@ -63,6 +173,8 @@ function notifyStatus(channelKey: string, status: RealtimeStatus) {
 }
  
 function ensureChannel(channelKey: string, table: string, event: ChangeEvent, filter?: string): ChannelEntry {
+  attachForceReconnectListeners();
+
   const existing = channelRegistry.get(channelKey);
   if (existing) return existing;
  
@@ -100,18 +212,40 @@ function ensureChannel(channelKey: string, table: string, event: ChangeEvent, fi
       }
  
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        console.error(`❌ [Realtime] ${status} → ${table}`, err);
+        // console.warn, а не console.error: это ожидаемое временное событие
+        // (например, мобильный браузер обрывает соединение в фоне — код 1006),
+        // а не баг приложения. Само переподключение уже реализовано ниже.
+        // console.error в dev-режиме Next.js триггерит блокирующий оверлей
+        // "Console Error" на весь экран — на мобильном это выглядит как
+        // сломанное приложение, хотя реконнект отрабатывает штатно.
+        console.warn(`⚠️ [Realtime] ${status} → ${table}`, err);
         notifyStatus(channelKey, 'ERROR');
         scheduleReconnect(channelKey, table, event, filter);
       }
  
       if (status === 'CLOSED') {
-        console.warn(`⚠️ [Realtime] Канал закрыт → ${table}`);
-        notifyStatus(channelKey, 'CLOSED');
+        // Если МЫ САМИ только что попросили этот канал закрыться (реконнект или
+        // unmount-cleanup) — это ожидаемое событие, а не разрыв связи. Оно уже
+        // обрабатывается тем кодом, который вызвал removeChannel — здесь просто
+        // выходим, чтобы не запустить дублирующий/самоподдерживающийся реконнект.
+        if (intentionallyClosingChannels.has(channel)) {
+          return;
+        }
+
+        const e = channelRegistry.get(channelKey);
+        // Если запись всё ещё в реестре — это неожиданное закрытие (например, разрыв
+        // сокета из-за простоя вкладки), а не наша штатная отписка при unmount
+        // (та удаляет запись из реестра ДО вызова removeChannel). В этом случае
+        // тоже планируем переподключение, а не оставляем канал висеть закрытым.
+        if (e) {
+          console.warn(`⚠️ [Realtime] Канал неожиданно закрыт → ${table}, планируем переподключение`);
+          notifyStatus(channelKey, 'CLOSED');
+          scheduleReconnect(channelKey, table, event, filter);
+        }
       }
     });
  
-  const entry: ChannelEntry = { channel, listeners, status: 'CONNECTING', retryCount: 0 };
+  const entry: ChannelEntry = { channel, listeners, status: 'CONNECTING', retryCount: 0, table, event, filter };
   channelRegistry.set(channelKey, entry);
   console.log(`🟢 [Realtime] Создан канал → ${channelKey}`);
   return entry;
@@ -156,8 +290,17 @@ export function useRealtime({
  
     const channelKey = buildChannelKey(table, event, filter);
     const entry = ensureChannel(channelKey, table, event, filter);
- 
-    
+
+    // Если канал был запланирован к закрытию (отложенный cleanup предыдущего
+    // подписчика, см. ниже) — отменяем закрытие, раз у канала снова есть подписчик.
+    // Актуально для React StrictMode в dev: mount → cleanup → mount происходят
+    // почти мгновенно, и без этой отмены канал бы закрывался и пересоздавался
+    // с тем же именем топика при каждом рендере.
+    if (entry.pendingCleanupTimer) {
+      clearTimeout(entry.pendingCleanupTimer);
+      entry.pendingCleanupTimer = undefined;
+    }
+
     const listener: Listener = {
       onInsert: (r) => callbacksRef.current.onInsert?.(r),
       onUpdate: (n, o) => callbacksRef.current.onUpdate?.(n, o),
@@ -175,14 +318,32 @@ export function useRealtime({
     listener.onStatusChange?.(entry.status);
  
     return () => {
-      entry.listeners.delete(listener);
- 
-      // Если это был последний подписчик — закрываем канал и чистим таймеры
-      if (entry.listeners.size === 0) {
-        if (entry.retryTimer) clearTimeout(entry.retryTimer);
-        supabase.removeChannel(entry.channel);
-        channelRegistry.delete(channelKey);
-        console.log(`🔌 [Realtime] Канал закрыт (нет подписчиков) → ${channelKey}`);
+      // Берём АКТУАЛЬНУЮ запись из реестра, а не захваченную по замыканию —
+      // если между подпиской и unmount произошёл реконнект, entry из замыкания
+      // уже заменён на новый объект, и отписка от старого ничего не удалит.
+      const currentEntry = channelRegistry.get(channelKey) ?? entry;
+      currentEntry.listeners.delete(listener);
+
+      // Если это был последний подписчик — НЕ закрываем канал синхронно.
+      // React StrictMode в dev делает mount → cleanup → mount почти мгновенно;
+      // если закрыть канал прямо здесь, повторный mount попытается открыть новый
+      // канал с тем же именем топика ДО того, как сервер обработает leave старого,
+      // и получит немедленный CLOSED → бесконечный цикл реконнекта.
+      // Поэтому откладываем реальное закрытие на следующий тик: если к этому
+      // моменту подписчик появился снова (см. отмену выше при mount) — не закрываем.
+      if (currentEntry.listeners.size === 0) {
+        currentEntry.pendingCleanupTimer = setTimeout(async () => {
+          if (currentEntry.listeners.size > 0) return; // подписчик успел вернуться
+
+          if (currentEntry.retryTimer) clearTimeout(currentEntry.retryTimer);
+          // Помечаем как намеренное закрытие — иначе CLOSED от этого removeChannel
+          // сам спровоцирует ещё один ненужный реконнект уже удалённого канала.
+          await removeChannelIntentionally(currentEntry.channel);
+          if (channelRegistry.get(channelKey) === currentEntry) {
+            channelRegistry.delete(channelKey);
+          }
+          console.log(`🔌 [Realtime] Канал закрыт (нет подписчиков) → ${channelKey}`);
+        }, 0);
       }
     };
    
@@ -272,6 +433,15 @@ export function useRealtimeOrderMixers(
     orders?: any[];
     /** true — хранить только активные статусы (active-mixers) */
     activeOnly?: boolean;
+    /**
+     * Вызывается при INSERT нового order_mixers. order_mixers сам по себе не
+     * хранит organization_name/delivery_date/concrete_grade — если вызывающий
+     * код не передаёт `orders` для обогащения (как, например, страница
+     * оператора БСУ), у только что вставленной строки эти поля будут пустыми.
+     * Используйте этот callback, чтобы подтянуть полные данные (например,
+     * полным рефетчем) сразу после того, как строка появилась локально.
+     */
+    onInsertRow?: (newRecord: any) => void;
   }
 ) {
   const orders = options?.orders;
@@ -290,6 +460,8 @@ export function useRealtimeOrderMixers(
         if (prev.some((m) => String(m.id) === String(formatted.id))) return prev;
         return [formatted, ...prev];
       });
+
+      options?.onInsertRow?.(newRecord);
     },
     onUpdate: (newRecord) => {
       const formatted = formatOrderMixer(newRecord, orders);
@@ -304,7 +476,27 @@ export function useRealtimeOrderMixers(
           if (!exists) return [formatted, ...prev];
         }
 
-        return prev.map((m) => (String(m.id) === String(formatted.id) ? { ...m, ...formatted } : m));
+        return prev.map((m) => {
+          if (String(m.id) !== String(formatted.id)) return m;
+
+          // ⚠️ order_mixers не хранит organization_name/delivery_date/
+          // concrete_grade — это поля таблицы orders. Если `orders` не был
+          // передан (или заказ ещё не подгружен на момент события),
+          // formatOrderMixer вернёт по ним null. Без явного fallback такое
+          // обновление затирало бы уже известное обогащение (клиент, марка,
+          // дата), полученное при первой загрузке — строка "теряла" данные
+          // после каждого статус-обновления по realtime.
+          return {
+            ...m,
+            ...formatted,
+            delivery_date: formatted.delivery_date ?? m.delivery_date ?? null,
+            delivery_time: formatted.delivery_time ?? m.delivery_time ?? null,
+            organization_name: formatted.organization_name ?? m.organization_name ?? null,
+            client_name: formatted.client_name ?? m.client_name ?? null,
+            concrete_grade: formatted.concrete_grade ?? m.concrete_grade ?? null,
+            client: formatted.client && formatted.client !== '—' ? formatted.client : (m.client ?? '—'),
+          };
+        });
       });
     },
     onDelete: (oldRecord) => {

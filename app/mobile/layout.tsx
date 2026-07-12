@@ -1,26 +1,29 @@
 'use client';
 
-import { ReactNode, useEffect, useState, useRef } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Home, Package, Truck, Factory, Users } from 'lucide-react';
+import { Home, Package, Truck, Factory, Users, LogOut } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 import { useUserRole } from '../providers/UserRoleProvider';
 
 
 
 export default function MobileLayout({ children }: { children: ReactNode }) {
-  
+
   // ==================== 1. РОЛЬ ИЗ PROVIDER ====================
-  const { user, loading: roleLoading } = useUserRole();
+  // Единственный источник правды о роли/логине/force-logout — сам провайдер
+  // уже опрашивает /api/user/role при монтировании, при возврате на вкладку
+  // и периодически (см. UserRoleProvider). Раньше здесь был ещё один
+  // независимый интервал (раз в 10 минут), который дублировал эту же логику.
+  const { user, loading: roleLoading, refreshRole, logout } = useUserRole();
+  const isLoggedIn = !!user && !roleLoading;
+  const userRole = user?.role || null;
 
   // ==================== 1.1 СОСТОЯНИЯ АВТОРИЗАЦИИ ==============
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [userRole, setUserRole] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
   // ==================== 1.2 СКРЫТИЕ БОКОВОГО МЕНЮ ====================
   useEffect(() => {
@@ -34,67 +37,6 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
     const timer = setTimeout(hideSidebar, 200);
     return () => clearTimeout(timer);
   }, []);
-
-      // ==================== 1.3 ПРОВЕРКА РОЛИ + FORCE LOGOUT (каждые 10 минут) ====================
-  useEffect(() => {
-    const savedUserId = localStorage.getItem('userId');
-    
-    if (!savedUserId) {
-      setIsLoggedIn(false);
-      setLoading(false);
-      return;
-    }
-
-    setIsLoggedIn(true);
-    checkUserRole(savedUserId);   
-
-    // Проверка каждые 10 минут
-    const forceCheckInterval = setInterval(() => {
-      const currentUserId = localStorage.getItem('userId');
-      if (currentUserId) {
-        checkUserRole(currentUserId);
-      }
-    }, 600000); // ← 10 минут = 600000 миллисекунд
-
-    return () => clearInterval(forceCheckInterval);
-  }, []);
-
-  const checkUserRole = async (savedUserId: string) => {
-    try {
-      const res = await fetch('/api/user/role', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: parseInt(savedUserId) }),
-      });
-
-      const data = await res.json();
-
-      if (data.force_logout_version && data.force_logout_version >= 9999) {
-        if (parseInt(savedUserId) === 1777619517739) {
-          console.log('✅ Главный Админ — разрешаем вход');
-          setUserRole(data.role || 'admin');
-          return;
-        } 
-
-        console.log(`🔴 Принудительный выход для пользователя ${savedUserId}`);
-        localStorage.removeItem('userId');
-        setIsLoggedIn(false);
-        setUserRole(null);
-        setPhone('');
-        setPassword('');
-        return;
-      }
-
-      setUserRole(data.role || 'client');
-
-    } catch (e) {
-      console.error('Role check error:', e);
-      setUserRole('client');
-    } finally {
-      setLoading(false);
-    }
-  };
-
 
      // ==================== 4. ВХОД ====================
   const handleLogin = async (e: React.FormEvent) => {
@@ -113,18 +55,11 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
 
      if (data.success && data.userId) {
        localStorage.setItem('userId', data.userId.toString());
-  
-       // Правильно берём роль
-      const userRoleFromServer = data.role || data.userRole || 'admin';
-  
-       setIsLoggedIn(true);
-       setUserRole(userRoleFromServer);
-  
+       refreshRole(); // подхватываем роль сразу, без перезагрузки страницы
+
        setPhone('');
        setPassword('');
        setLoginError('');
-  
-      console.log(`✅ Успешный вход. Роль: ${userRoleFromServer}`);
      } else {
        setLoginError(data.message || 'Неверный логин/пароль');
      }
@@ -138,12 +73,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
 
   // ==================== 5. ВЫХОД ====================
   const handleLogout = () => {
-    localStorage.removeItem('userId');
-    setIsLoggedIn(false);
-    setUserRole(null);
-    setPhone('');
-    setPassword('');
-    console.log('✅ Выход выполнен');
+    if (confirm('Выйти из системы?')) logout();
   };
 
 
@@ -221,8 +151,31 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
 
   return (
     <div id="mobile-root" style={{ width: '100vw', maxWidth: '100vw', overflowX: 'hidden', backgroundColor: '#0F172A', minHeight: '100vh', position: 'relative' }}>
-      
-       
+
+      {/* ==================== ЛИЧНЫЙ ВЫХОД (не для главного админа) ==================== */}
+      {userRole !== 'admin' && (
+        <button
+          onClick={handleLogout}
+          aria-label="Выйти"
+          style={{
+            position: 'fixed',
+            top: '12px',
+            right: '12px',
+            zIndex: 1001,
+            background: '#1E2937',
+            border: '1px solid #334155',
+            borderRadius: '9999px',
+            padding: '8px 14px',
+            color: '#94A3B8',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            fontSize: '13px'
+          }}
+        >
+          <LogOut size={16} /> Выйти
+        </button>
+      )}
 
       {children}
 

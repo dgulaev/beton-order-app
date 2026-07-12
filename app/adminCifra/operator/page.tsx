@@ -30,13 +30,23 @@ export default function OperatorBSUPage() {
    // ==================== 0.1 РЕАЛЬНЫЕ ДАННЫЕ ====================
   const { allMixers: rawMixers } = useTodayLoadingMixers();
 
-  // ==================== 0.2 ФИЛЬТРАЦИЯ + ЛОКАЛЬНОЕ УПРАВЛЕНИЕ ====================
-  const [localQueueTrips, setLocalQueueTrips] = useState<any[]>([]);
+  // ==================== 0.2 ФИЛЬТРАЦИЯ + ОПТИМИСТИЧНОЕ СКРЫТИЕ ====================
+  // ⚠️ ID миксеров, которые мы только что сами перевели в "В пути" (кнопка
+  // "Загружен"). Скрываем их из очереди немедленно, не дожидаясь тика
+  // realtime-обновления order_mixers — иначе возможна гонка: если между нашим
+  // обновлением и приходом его realtime-события успевает прилететь ЛЮБОЕ
+  // другое realtime-событие по order_mixers (например, дежурный статус другого
+  // миксера), `queueTrips` пересчитывается из ещё не обновившегося rawMixers и
+  // строка "телепортируется" обратно в очередь — это и была причина жалобы
+  // оператора. Как только сам realtime подтвердит новый статус, id убирается
+  // из этого набора (см. эффект ниже).
+  const [optimisticallyRemovedIds, setOptimisticallyRemovedIds] = useState<Set<string>>(new Set());
 
   const queueTrips = useMemo(() => {
     return rawMixers
       .filter((trip: any) => {
         if (!trip || trip.status !== 'Загрузка') return false;
+        if (optimisticallyRemovedIds.has(String(trip.id))) return false;
 
         let tripDateStr = '';
 
@@ -62,17 +72,30 @@ export default function OperatorBSUPage() {
         const timeB = b.time || '00:00';
         return timeA.localeCompare(timeB);
       });
-  }, [rawMixers, selectedDate]);
+  }, [rawMixers, selectedDate, optimisticallyRemovedIds]);
 
-  // Синхронизация локального состояния
+  // Как только rawMixers по realtime подтвердит, что миксер и правда больше
+  // не "Загрузка" — снимаем принудительное скрытие (оно уже не нужно, а
+  // держать id вечно в Set смысла нет).
   useEffect(() => {
-    setLocalQueueTrips(prev => {
-      if (JSON.stringify(prev) !== JSON.stringify(queueTrips)) {
-        return queueTrips;
-      }
-      return prev;
+    if (optimisticallyRemovedIds.size === 0) return;
+
+    setOptimisticallyRemovedIds(prev => {
+      let changed = false;
+      const next = new Set(prev);
+
+      prev.forEach(id => {
+        const mixer = rawMixers.find((m: any) => String(m.id) === id);
+        // Миксер пропал из rawMixers или сменил статус — realtime подтвердил.
+        if (!mixer || mixer.status !== 'Загрузка') {
+          next.delete(id);
+          changed = true;
+        }
+      });
+
+      return changed ? next : prev;
     });
-  }, [queueTrips]);
+  }, [rawMixers, optimisticallyRemovedIds]);
 
 
   // ==================== 0.4 ЗАГРУЗКА РЕЦЕПТОВ ИЗ БАЗЫ ====================
@@ -99,6 +122,19 @@ export default function OperatorBSUPage() {
   const [loadingTrips, setLoadingTrips] = useState<Record<number, boolean>>({});
   const [tripStartTimes, setTripStartTimes] = useState<Record<number, string>>({});
 
+  // ⚠️ ФИКС ТАЙМЕРА: getLoadingDuration() считает разницу от new Date().getTime()
+  // ПРЯМО В РЕНДЕРЕ, но ничто не заставляло компонент перерисовываться каждую
+  // секунду/минуту — надпись на кнопке "В работе • N мин" обновлялась только
+  // случайно, если рендер происходил по другой причине (поэтому "таймер не
+  // всегда срабатывает"). tick форсирует регулярный перерендер, пока есть
+  // хотя бы одна активная загрузка.
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (Object.keys(loadingTrips).length === 0) return;
+    const interval = setInterval(() => setTick(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [loadingTrips]);
+
     // ==================== 1.0 ЗАГРУЗКА СОСТОЯНИЯ ЗАГРУЗКИ ПРИ СТАРТЕ ====================
   useEffect(() => {
     const loadLoadingState = async () => {
@@ -111,10 +147,10 @@ export default function OperatorBSUPage() {
         const newStartTimes: Record<number, string> = {};
 
         data.forEach((trip: any) => {
-          // Улучшенная проверка
-          if ((trip.status === 'Загрузка' || trip.status === 'В работе') && 
-              (trip.loading_started_at || trip.loadingStartedAt)) {
-            
+          // Таймер идёт только у миксеров со статусом "Загрузка"
+          // ("В работе" — это статус заявки, а не миксера, тут был лишний
+          // мёртвый кейс, который никогда не мог сработать для order_mixers).
+          if (trip.status === 'Загрузка' && (trip.loading_started_at || trip.loadingStartedAt)) {
             newLoading[trip.id] = true;
             newStartTimes[trip.id] = trip.loading_started_at || trip.loadingStartedAt;
           }
@@ -196,8 +232,25 @@ export default function OperatorBSUPage() {
         })
       });
 
-      // ✅ МГНОВЕННОЕ УДАЛЕНИЕ ИЗ ОЧЕРЕДИ
-      setLocalQueueTrips(prev => prev.filter(t => String(t.id) !== String(trip.id)));
+      // ✅ МГНОВЕННОЕ УДАЛЕНИЕ ИЗ ОЧЕРЕДИ (оптимистично, до прихода realtime)
+      const tripIdStr = String(trip.id);
+      setOptimisticallyRemovedIds(prev => {
+        const next = new Set(prev);
+        next.add(tripIdStr);
+        return next;
+      });
+
+      // Страховка: если realtime-обновление по какой-то причине не придёт
+      // (обрыв связи и т.п.), через 20с снимаем принудительное скрытие —
+      // список покажет актуальное состояние сервера, а не "зависшую" пустоту.
+      setTimeout(() => {
+        setOptimisticallyRemovedIds(prev => {
+          if (!prev.has(tripIdStr)) return prev;
+          const next = new Set(prev);
+          next.delete(tripIdStr);
+          return next;
+        });
+      }, 20000);
 
       // 🔥 Ручной рефетч убран — новая запись production_logs придёт через realtime
       // (useRealtimeProductionLogs) и другим операторам, и текущему, без лишнего запроса
@@ -388,8 +441,7 @@ export default function OperatorBSUPage() {
     if (!startTime) return '—';
 
     const start = new Date(startTime).getTime();
-    const now = new Date().getTime();
-    const minutes = Math.floor((now - start) / 60000);
+    const minutes = Math.floor((tick - start) / 60000);
 
     return minutes > 0 ? `${minutes} мин` : '1 мин';
   };
@@ -553,7 +605,7 @@ export default function OperatorBSUPage() {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
-                {(localQueueTrips.length > 0 ? localQueueTrips : queueTrips).map((trip) => {
+                {queueTrips.map((trip) => {
                   const client = trip.organization_name || trip.client_name || '—';
                   const isLoading = loadingTrips[trip.id];
 

@@ -13,7 +13,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const isActive = (path: string) => pathname === path;
 
   // ==================== 1. РОЛЬ ИЗ PROVIDER ====================
-  const { user, loading: roleLoading } = useUserRole();
+  const { user, loading: roleLoading, refreshRole, logout } = useUserRole();
 
   const [isCollapsed, setIsCollapsed] = useState(true);
 
@@ -81,25 +81,6 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     });
   };
 
-    // ==================== 3. FORCE LOGOUT + ПОЛИНГ (через провайдер) ====================
-  useEffect(() => {
-    if (!user) return;
-
-    // Надёжное получение user_id
-    const userId = (user as any).user_id || (user as any).id || 0;
-
-    if (user.force_logout_version && user.force_logout_version >= 9999) {
-      if (userId === 1777619517739) {
-        console.log('✅ Главный Админ — игнорируем force logout');
-        return;
-      }
-
-      console.log(`🔴 Force logout для пользователя ${userId}`);
-      localStorage.removeItem('userId');
-      // window.location.reload(); // можно оставить закомментированным
-    }
-  }, [user]);
-
   // ==================== 3.1 ОЧИСТКА СТАРЫХ ЗАКРЫТЫХ УВЕДОМЛЕНИЙ ====================
   useEffect(() => {
     const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
@@ -125,6 +106,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
       if (data.success && data.userId) {
         localStorage.setItem('userId', data.userId.toString());
+        refreshRole(); // подхватываем роль сразу, без перезагрузки страницы
       } else {
         setLoginError(data.message || 'Неверный телефон или пароль');
       }
@@ -709,6 +691,21 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                </Link>
                )}
               </>
+            )}
+
+            {/* ==================== БЛОК 13.1 ЛИЧНЫЙ ВЫХОД (не для главного админа — у него есть "Разлогинить всех") ==================== */}
+            {userRole !== 'admin' && (
+              <Link
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (confirm('Выйти из системы?')) logout();
+                }}
+                style={navLinkStyle(false, isCollapsed)}
+              >
+                <LogOut size={22} />
+                {!isCollapsed && <span>Выйти</span>}
+              </Link>
             )}
           </nav>
         </div>
