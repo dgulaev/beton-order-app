@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Image from 'next/image';
+import { useRealtime } from '@/hooks/useRealtimeOrders';
 
 import { supabase } from '@/lib/supabaseClient';
 
@@ -280,11 +281,17 @@ const loadTodayConsumption = async () => {
     (window as any).rollbackAdditivesFromReport = rollbackAdditivesFromReport;
 
     console.log('✅ WarehousePage загружен');
-
-    const interval = setInterval(loadTodayConsumption, 8000);
-
-    return () => clearInterval(interval);
   }, []);
+
+  // Раньше здесь был setInterval(loadTodayConsumption, 8000) — опрос тяжёлого
+  // JOIN-запроса каждые 8с на КАЖДОЙ открытой странице склада, постоянная
+  // фоновая нагрузка на Vercel/Supabase. Теперь пересчитываем расход только
+  // когда реально появляется новая запись отгрузки (INSERT в production_logs).
+  useRealtime({
+    table: 'production_logs',
+    event: 'INSERT',
+    onInsert: () => loadTodayConsumption(),
+  });
 
     // ==================== АВТОМАТИЧЕСКАЯ ЗАГРУЗКА ФБС ====================
   useEffect(() => {

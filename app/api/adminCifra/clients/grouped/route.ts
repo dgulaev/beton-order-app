@@ -37,17 +37,35 @@ export async function GET(request: NextRequest) {
 
     if (error) throw error;
 
-    // Получаем кураторов
+    // Кураторы и объёмы заказов — раньше это было N+1 (отдельный await-запрос
+    // объёма заказов на КАЖДОГО клиента страницы, последовательно один за
+    // другим — 18 клиентов = 18 round-trip'ов к Supabase, отсюда наблюдаемые
+    // 2+ секунды на запрос). Теперь оба запроса батчатся по всем user_id сразу
+    // и идут параллельно.
     const createdByIds = [...new Set(clients?.map((c: any) => c.created_by).filter(Boolean) || [])];
+    const clientUserIds = [...new Set(clients?.map((c: any) => c.user_id).filter(Boolean) || [])];
 
-    let curatorsMap = new Map();
-    if (createdByIds.length > 0) {
-      const { data: curators } = await supabase
-        .from('users')
-        .select('user_id, full_name')
-        .in('user_id', createdByIds);
-      curators?.forEach((c: any) => curatorsMap.set(c.user_id, c.full_name));
-    }
+    const [curatorsRes, ordersRes] = await Promise.all([
+      createdByIds.length > 0
+        ? supabase.from('users').select('user_id, full_name').in('user_id', createdByIds)
+        : Promise.resolve({ data: [] as any[] }),
+      clientUserIds.length > 0
+        ? supabase.from('orders').select('user_id, volume').in('user_id', clientUserIds)
+        : Promise.resolve({ data: [] as any[] }),
+    ]);
+
+    const curatorsMap = new Map();
+    curatorsRes.data?.forEach((c: any) => curatorsMap.set(c.user_id, c.full_name));
+
+    // Агрегируем объём/кол-во заказов на клиента одним проходом по уже
+    // полученным данным — вместо отдельного запроса на каждого клиента.
+    const ordersByUser = new Map<number, { volume: number; count: number }>();
+    ordersRes.data?.forEach((o: any) => {
+      const entry = ordersByUser.get(o.user_id) || { volume: 0, count: 0 };
+      entry.volume += Number(o.volume || 0);
+      entry.count += 1;
+      ordersByUser.set(o.user_id, entry);
+    });
 
     const grouped = new Map();
 
@@ -80,17 +98,10 @@ export async function GET(request: NextRequest) {
 
       if (client.phone) group.phones.push(client.phone);
 
-      if (client.user_id) {
-        const { data: orders } = await supabase
-          .from('orders')
-          .select('volume')
-          .eq('user_id', client.user_id);
-
-        if (orders?.length) {
-          const vol = orders.reduce((sum: number, o: any) => sum + Number(o.volume || 0), 0);
-          group.total_volume += vol;
-          group.total_orders += orders.length;
-        }
+      const orderAgg = client.user_id ? ordersByUser.get(client.user_id) : undefined;
+      if (orderAgg) {
+        group.total_volume += orderAgg.volume;
+        group.total_orders += orderAgg.count;
       }
 
       group.clients.push({
