@@ -25,6 +25,11 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
+          # set -o pipefail — без этого ошибка pg_dump "проглатывалась" внутри
+          # пайпа: gzip всё равно успешно сжимал пустой ввод в валидный
+          # (но бесполезный) gzip-файл на 20 байт, и шаг завершался "успешно".
+          set -euo pipefail
+
           if [ -z "$DATABASE_URL" ]; then
             echo "::error::Секрет SUPABASE_DB_URL не задан. Добавьте его в Settings → Secrets and variables → Actions."
             exit 1
@@ -32,8 +37,21 @@ jobs:
 
           mkdir -p db-backups
           TIMESTAMP=$(date -u +'%Y-%m-%d')
-          pg_dump "$DATABASE_URL" --no-owner --no-acl --format=plain | gzip > "db-backups/backup-${TIMESTAMP}.sql.gz"
-          echo "Создан файл: db-backups/backup-${TIMESTAMP}.sql.gz ($(du -h db-backups/backup-${TIMESTAMP}.sql.gz | cut -f1))"
+          FILE="db-backups/backup-${TIMESTAMP}.sql.gz"
+
+          pg_dump "$DATABASE_URL" --no-owner --no-acl --format=plain | gzip > "$FILE"
+
+          SIZE=$(stat -c%s "$FILE")
+          echo "Создан файл: $FILE ($SIZE байт)"
+
+          # Вторая страховка: реальный дамп базы весит явно больше 1 КБ даже
+          # для пустой БД (одна структура таблиц). Если файл меньше — что-то
+          # пошло не так, даже если pg_dump не вернул код ошибки явно.
+          if [ "$SIZE" -lt 1024 ]; then
+            echo "::error::Дамп подозрительно мал ($SIZE байт) — вероятно pg_dump завершился с ошибкой (неверный пароль или сетевая проблема IPv4/IPv6). Backup не будет закоммичен."
+            rm -f "$FILE"
+            exit 1
+          fi
 
       - name: Remove backups older than 30 days
         run: find db-backups -name 'backup-*.sql.gz' -mtime +30 -delete

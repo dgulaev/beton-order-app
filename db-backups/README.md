@@ -24,6 +24,16 @@
 Проверить сразу, не дожидаясь ночи: вкладка **Actions** → workflow
 **Database Backup** → кнопка **Run workflow**.
 
+## Если backup не создаётся / файл пустой (~20 байт)
+
+Самая частая причина — прямое подключение вида
+`db.xxxxx.supabase.co:5432` у Supabase иногда работает только по IPv6, а
+раннеры GitHub Actions — IPv4-only, из-за чего `pg_dump` не может
+подключиться. Решение: в Supabase Dashboard → **Project Settings →
+Database** переключите вид строки подключения на **Session pooler**
+(порт `6543` или `5432`, имя пользователя вида `postgres.xxxxxxxx`) — она
+работает по IPv4, и подставьте её в секрет `SUPABASE_DB_URL` вместо прямой.
+
 ## Восстановление из бэкапа
 
 ```bash
