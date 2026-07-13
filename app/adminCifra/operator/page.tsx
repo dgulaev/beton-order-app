@@ -196,12 +196,24 @@ export default function OperatorBSUPage() {
   };
 
        // ==================== 1.2 ЗАВЕРШИТЬ ЗАГРУЗКУ ====================
+  // ⚠️ Защита от повторного клика: кнопка "Загружен" оставалась активной всё
+  // время выполнения запросов (loadingTrips[trip.id] сбрасывается только
+  // через 600мс ПОСЛЕ завершения), поэтому быстрый повторный/двойной клик
+  // запускал completeLoading ещё раз параллельно — это и создавало
+  // дублирующиеся записи в production_logs (по 2-3 одинаковые строки в
+  // "Отгружено сегодня" на один и тот же рейс).
+  const [completingTripIds, setCompletingTripIds] = useState<Set<number>>(new Set());
+
   const completeLoading = async (trip: any) => {
+    if (completingTripIds.has(trip.id)) return; // уже в процессе — игнорируем повторный клик
+
     const startTime = tripStartTimes[trip.id] || trip.loading_started_at;
     if (!startTime) {
       alert('❗ Сначала нажмите кнопку "Начать"');
       return;
     }
+
+    setCompletingTripIds(prev => new Set(prev).add(trip.id));
 
     const endTime = new Date().toISOString();
     const durationMinutes = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000);
@@ -266,6 +278,12 @@ export default function OperatorBSUPage() {
     } catch (err) {
       console.error(err);
       alert('Ошибка при сохранении производства');
+    } finally {
+      setCompletingTripIds(prev => {
+        const next = new Set(prev);
+        next.delete(trip.id);
+        return next;
+      });
     }
   };
 
@@ -734,19 +752,19 @@ export default function OperatorBSUPage() {
                             e.stopPropagation(); 
                             completeLoading(trip); 
                           }} 
-                          disabled={!loadingTrips[trip.id]}   // ← Кнопка активна ТОЛЬКО когда начата загрузка
+                          disabled={!loadingTrips[trip.id] || completingTripIds.has(trip.id)}   // ← Активна только когда начата загрузка и не в процессе завершения (защита от дублей по двойному клику)
                           style={{ 
                             padding: '7px 14px', 
-                            background: loadingTrips[trip.id] ? '#3B82F6' : '#475569', 
+                            background: loadingTrips[trip.id] && !completingTripIds.has(trip.id) ? '#3B82F6' : '#475569', 
                             color: 'white', 
                             border: 'none', 
                             borderRadius: '9999px', 
                             fontSize: '13px', 
                             fontWeight: '600',
-                            cursor: loadingTrips[trip.id] ? 'pointer' : 'not-allowed'
+                            cursor: loadingTrips[trip.id] && !completingTripIds.has(trip.id) ? 'pointer' : 'not-allowed'
                           }}
                         >
-                          Загружен
+                          {completingTripIds.has(trip.id) ? 'Сохранение…' : 'Загружен'}
                         </button>
                       </div>
                     </div>

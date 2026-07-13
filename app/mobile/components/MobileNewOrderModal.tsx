@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import { formatPhoneInput } from '@/lib/phone';
 
 
 interface MobileNewOrderModalProps {
@@ -43,43 +44,9 @@ export default function MobileNewOrderModal({
     comment: '',
   });
 
-    // ==================== 3. УМНАЯ ОБРАБОТКА ТЕЛЕФОНА (ПРОСТОЙ ВАРИАНТ) ====================
+    // ==================== 3. УМНАЯ ОБРАБОТКА ТЕЛЕФОНА (общая логика — lib/phone.ts) ====================
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let value = e.target.value;
-
-    // Разрешаем полное удаление
-    if (value.length === 0) {
-      setForm(prev => ({ ...prev, phone: '+7' }));
-      return;
-    }
-
-    // Оставляем только цифры
-    let digits = value.replace(/\D/g, '');
-
-    // Защита от 8 и 9 в начале
-    if (digits.startsWith('8')) {
-      digits = '7' + digits.slice(1);
-    } else if (digits.startsWith('9')) {
-      digits = '7' + digits;
-    }
-
-    // Максимум 11 цифр
-    if (digits.length > 11) {
-      digits = digits.slice(0, 11);
-    }
-
-    // Простое форматирование
-    let formatted = '+7';
-    const rest = digits.slice(1); // цифры после 7
-
-    if (rest.length > 0) {
-      formatted += ' ' + rest.slice(0, 3);
-      if (rest.length > 3) formatted += ' ' + rest.slice(3, 6);
-      if (rest.length > 6) formatted += '-' + rest.slice(6, 8);
-      if (rest.length > 8) formatted += '-' + rest.slice(8, 10);
-    }
-
-    setForm(prev => ({ ...prev, phone: formatted }));
+    setForm(prev => ({ ...prev, phone: formatPhoneInput(e.target.value) }));
   };
 
 
@@ -194,7 +161,11 @@ export default function MobileNewOrderModal({
 
       if (data.success) {
         alert(`✅ Заявка #${data.orderId} успешно создана!`);
-        if (onSuccess) onSuccess({ id: data.orderId, ...form });
+        // ⚠️ Отдаём наверх те же имена полей, что и в payload/ответе сервера
+        // (delivery_date/delivery_time), а не form.deliveryDate/deliveryTime —
+        // иначе оптимистично добавленная заявка не проходила фильтр по дню
+        // (страница фильтрует именно по delivery_date) и "не показывалась".
+        if (onSuccess) onSuccess({ ...payload, id: data.orderId });
         onClose();
       } else {
         alert(data.message || 'Ошибка создания заявки');

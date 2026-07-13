@@ -11,6 +11,7 @@ import Link from 'next/link';
 import { Home, Package, Truck, Factory, Users, ArrowLeft, Loader2 } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useUserRole } from '../providers/UserRoleProvider';
+import { formatPhoneInput } from '@/lib/phone';
 import {
   getStoredDriverSession,
   storeDriverSession,
@@ -337,7 +338,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
                 type="tel"
                 placeholder="+7 (___) ___-__-__"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                onChange={(e) => setPhone(formatPhoneInput(e.target.value))}
                 style={INPUT_STYLE}
                 autoFocus
                 required

@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import bcrypt from 'bcryptjs';
+import { phonesMatch } from '@/lib/phone';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -19,14 +20,18 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // Ищем пользователя по телефону
-    const { data: user, error } = await supabase
+    // Ищем пользователя по НОРМАЛИЗОВАННОМУ телефону — сотрудник может ввести
+    // номер начиная с "8" или без "+7"/"8" вовсе, а в базе телефон может
+    // храниться в другом формате. Точное сравнение строк ловило это как
+    // "пользователь не найден", хотя телефон был правильный.
+    const { data: candidates, error } = await supabase
       .from('users')
       .select('user_id, role, phone, password_hash, full_name, organization_name, force_logout_version')
-      .eq('phone', phone.trim())
-      .single();
+      .not('phone', 'is', null);
 
-    if (error || !user) {
+    const user = !error ? (candidates || []).find((u) => phonesMatch(u.phone, phone)) : null;
+
+    if (!user) {
       console.warn(`❌ Пользователь не найден по телефону: ${phone}`);
       return NextResponse.json({ 
         success: false, 

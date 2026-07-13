@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
+import { useYandexRouteHref } from '@/lib/yandexRoute';
 
 interface OrderDetailModalProps {
   order: Order | null;
@@ -101,6 +102,10 @@ const loadData = async () => {
   useEffect(() => {
     setLocalOrder(order);
   }, [order]);
+
+  // Ссылка на маршрут в Яндекс.Картах — "дозревает" в фоне до координат,
+  // как только геокодирование адреса доставки вернётся с сервера (см. lib/yandexRoute.ts).
+  const yandexRouteHref = useYandexRouteHref(order.address);
 
   // ==================== 2. HELPER ДЛЯ ОПРЕДЕЛЕНИЯ РОЛИ ====================
   const getCurrentRole = () => {
@@ -861,7 +866,15 @@ const formatVolume = (value: number | string) => {
       };
 
       // === 3. Добавляем в конец списка и сортируем по sortOrder (маленькие сверху) ===
+      // ⚠️ Защита от задвоения: realtime-подписка (useRealtimeOrderMixers в
+      // dashboard/page.tsx) слушает INSERT в order_mixers и может добавить
+      // эту же строку в mixerAssignments раньше, чем сюда придёт ответ fetch
+      // (событие по realtime иногда приходит быстрее HTTP-ответа). Без проверки
+      // на существующий id миксер добавлялся дважды — эту гонку и наблюдал
+      // диспетчер (после переоткрытия модалки дубль пропадал, т.к. loadData()
+      // заново тянет данные с сервера, где дубля никогда не было).
       setMixerAssignments(prev => {
+        if (prev.some(m => String(m.id) === String(savedId))) return prev;
         const updated = [...prev, newMixer];
         return updated.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
       });
@@ -1051,10 +1064,10 @@ const formatVolume = (value: number | string) => {
       🗺️ Google Maps
     </a>
 
-    <a 
-      href={`https://yandex.ru/maps/?ll=34.415968,53.254623&z=12&mode=route&rtext=Брянск,%20Орловский%20тупик,%206~${encodeURIComponent(order.address || '')}&rtt=auto`} 
-      target="_blank" 
-      rel="noopener noreferrer" 
+    <a
+      href={yandexRouteHref}
+      target="_blank"
+      rel="noopener noreferrer"
       style={{ 
         flex: 1,
         padding: '13px 18px', 
@@ -1062,7 +1075,7 @@ const formatVolume = (value: number | string) => {
         color: 'white', 
         textAlign: 'center', 
         borderRadius: '12px', 
-        textDecoration: 'none', 
+        textDecoration: 'none',
         fontWeight: '600',
         fontSize: '15px',
         transition: 'all 0.2s'

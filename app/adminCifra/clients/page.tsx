@@ -5,6 +5,7 @@ import EfficiencyPage from '../efficiency/page';
 import NewOrderModal from './NewOrderModal';
 
 import { supabase } from '@/lib/supabaseClient';   // ← Правильный импорт
+import { useYandexRouteHref } from '@/lib/yandexRoute';
 
 // ==================== 0.1 ГЛОБАЛЬНЫЕ ТИПЫ ДЛЯ WINDOW ===============
 declare global {
@@ -832,6 +833,7 @@ const openOrderModal = (orderId: number | string) => {
 // ==================== 3.6 СОСТОЯНИЯ И ФУНКЦИИ ДЛЯ МОДАЛКИ ЗАКАЗА ====================
 
 const [selectedOrder, setSelectedOrder] = useState<any>(null);
+const yandexRouteHref = useYandexRouteHref(selectedOrder?.address);
 const [orderHistory, setOrderHistory] = useState<any[]>([]);
 const [isSendingNotification, setIsSendingNotification] = useState(false);
 const [allOrders, setAllOrders] = useState<any[]>([]);
@@ -3247,7 +3249,7 @@ const changeStaffPassword = async (staffMember: any) => {
                   </a>
 
                   <a 
-                    href={`https://yandex.ru/maps/?ll=34.415968,53.254623&z=12&mode=route&rtext=Брянск,%20Орловский%20тупик,%206~${encodeURIComponent(selectedOrder.address || '')}&rtt=auto`}
+                    href={yandexRouteHref}
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{ 

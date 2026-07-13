@@ -19,13 +19,16 @@ export async function POST(request: NextRequest) {
 
     const trimmedPhone = phone.trim();
 
-    // Сотрудник — точное совпадение телефона, как в /api/auth/admin-login
-    // (пароль здесь не проверяем, только определяем, кому показать шаг с паролем).
-    const { data: staffUser } = await supabase
+    // Сотрудник — сравниваем по нормализованному телефону (как и водителей
+    // ниже), а не точным совпадением строки: сотрудник может ввести номер,
+    // начиная с "8" или без "+7"/"8" вовсе, а в базе телефон может храниться
+    // в другом формате ("+7...", "8...", просто 10 цифр и т.п.).
+    const { data: staffUsers } = await supabase
       .from('users')
-      .select('user_id, role, full_name, organization_name')
-      .eq('phone', trimmedPhone)
-      .maybeSingle();
+      .select('user_id, role, full_name, organization_name, phone')
+      .not('phone', 'is', null);
+
+    const staffUser = (staffUsers || []).find((u) => phonesMatch(u.phone, trimmedPhone)) || null;
 
     const staff =
       staffUser && staffUser.role && ALLOWED_STAFF_ROLES.includes(staffUser.role)

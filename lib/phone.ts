@@ -20,3 +20,38 @@ export function phonesMatch(a: string | null | undefined, b: string | null | und
   const normB = normalizePhone(b);
   return !!normA && normA === normB;
 }
+
+/**
+ * Форматирует телефон "на лету" по мере ввода в поле — всегда приводит к
+ * виду "+7 999 123-45-67", даже если пользователь начал вводить с "8" или
+ * сразу с цифры "9" (без "+7"/"8"). Используется в формах входа и создания
+ * заявки, чтобы не заставлять сотрудника/клиента вручную стирать "8" и
+ * печатать "+7".
+ */
+export function formatPhoneInput(value: string): string {
+  if (value.length === 0) return '+7';
+
+  let digits = value.replace(/\D/g, '');
+
+  // Ведущая "8" → "7" (стандартный российский код страны).
+  if (digits.startsWith('8')) {
+    digits = '7' + digits.slice(1);
+  } else if (!digits.startsWith('7')) {
+    // Ввод начался не с "8" и не с "7" (например прямо с "9") — подставляем "7".
+    digits = '7' + digits;
+  }
+
+  digits = digits.slice(0, 11);
+
+  let formatted = '+7';
+  const rest = digits.slice(1);
+
+  if (rest.length > 0) {
+    formatted += ' ' + rest.slice(0, 3);
+    if (rest.length > 3) formatted += ' ' + rest.slice(3, 6);
+    if (rest.length > 6) formatted += '-' + rest.slice(6, 8);
+    if (rest.length > 8) formatted += '-' + rest.slice(8, 10);
+  }
+
+  return formatted;
+}

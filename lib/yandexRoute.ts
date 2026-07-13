@@ -1,8 +1,11 @@
 // lib/yandexRoute.ts
+'use client';
 // Построение ссылки на маршрут в Яндекс.Картах для водителей — от завода до
 // адреса доставки из заявки. Ссылка вида https://yandex.ru/maps/?rtext=...
 // на телефоне открывает нативное приложение Яндекс.Карт (если установлено,
 // через универсальные ссылки), иначе — веб-версию в браузере.
+
+import { useEffect, useMemo, useState } from 'react';
 
 // Точка отправления — всегда завод, адрес не меняется от заявки к заявке.
 // TODO: при опечатке/переезде — просто исправить эту строку, больше менять
@@ -84,7 +87,16 @@ export function normalizeDeliveryAddress(rawAddress: string | null | undefined):
   return `г. Брянск, ${trimmed}`;
 }
 
-/** Ссылка на построение маршрута в Яндекс.Картах от завода до адреса доставки. */
+/**
+ * Ссылка на построение маршрута в Яндекс.Картах по ТЕКСТОВЫМ адресам.
+ * Работает в обычном браузере (в т.ч. на телефоне) — веб-версия Яндекс.Карт
+ * сама геокодирует текст в координаты. НЕ работает в Яндекс.Браузере: он
+ * перехватывает ссылки на yandex.ru/maps и передаёт их прямо в приложение
+ * Яндекс.Карт, минуя геокодер веб-страницы, а приложение понимает в rtext
+ * только координаты — поэтому используем эту ссылку только как запасной
+ * вариант, если геокодирование через `buildYandexMapsRouteUrlByCoords` не
+ * удалось (см. `useYandexRouteHref`).
+ */
 export function buildYandexMapsRouteUrl(rawAddress: string | null | undefined): string {
   const destination = normalizeDeliveryAddress(rawAddress);
   const params = new URLSearchParams({
@@ -92,4 +104,85 @@ export function buildYandexMapsRouteUrl(rawAddress: string | null | undefined): 
     rtt: 'auto',
   });
   return `https://yandex.ru/maps/?${params.toString()}`;
+}
+
+// Координаты завода (Брянск, Орловский тупик, 6) — получены геокодером один
+// раз и захардкожены, чтобы не дёргать API на каждое построение маршрута:
+// точка отправления не меняется от заявки к заявке.
+const ROUTE_ORIGIN_COORDS = { lat: 53.25347, lon: 34.416444 };
+
+/** Ссылка на построение маршрута в Яндекс.Картах по КООРДИНАТАМ — работает
+ * одинаково надёжно и в обычном браузере, и в Яндекс.Браузере (открывает
+ * приложение и сразу строит маршрут). */
+function buildYandexMapsRouteUrlByCoords(destLat: number, destLon: number): string {
+  const params = new URLSearchParams({
+    rtext: `${ROUTE_ORIGIN_COORDS.lat},${ROUTE_ORIGIN_COORDS.lon}~${destLat},${destLon}`,
+    rtt: 'auto',
+  });
+  return `https://yandex.ru/maps/?${params.toString()}`;
+}
+
+/** Геокодирует адрес через сервер (DaData) в координаты. null, если не удалось. */
+async function geocodeAddress(address: string): Promise<{ lat: number; lon: number } | null> {
+  try {
+    const res = await fetch('/api/geocode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (typeof data.lat === 'number' && typeof data.lon === 'number') {
+      return { lat: data.lat, lon: data.lon };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Хук для кнопки/ссылки «Маршрут»: сразу отдаёт текстовую ссылку (работает
+ * почти везде), а как только в фоне подтягиваются координаты — переключает
+ * на ссылку по координатам (надёжно работает и в Яндекс.Браузере).
+ *
+ * ⚠️ Раньше вместо этого использовался приём с window.open('', '_blank') +
+ * последующим редиректом внутри onClick — чтобы можно было открыть окно
+ * СИНХРОННО (до асинхронного геокодирования), а потом подставить в него
+ * готовый URL. На мобильных браузерах (не только Яндекс.Браузере — похоже,
+ * во всех Chromium-based) это открывало не отдельную вкладку, а просто
+ * "обеляло" текущую страницу пустым документом, и после закрытия приложения
+ * Карт пользователь видел белый экран, пока не нажимал "назад" в браузере.
+ * Обычная ссылка <a href> с уже готовым URL (даже если он "дозревает"
+ * асинхронно и подставляется только когда пользователь ещё не успел
+ * кликнуть) браузер обрабатывает штатно, без побочных эффектов.
+ */
+export function useYandexRouteHref(rawAddress: string | null | undefined): string {
+  // Синхронный текстовый фолбэк — пересчитывается прямо при рендере, без
+  // setState в эффекте (это и держит href актуальным сразу при смене адреса,
+  // до того как подтянутся координаты).
+  const fallbackHref = useMemo(() => buildYandexMapsRouteUrl(rawAddress), [rawAddress]);
+
+  // Результат геокодирования — храним вместе с адресом, для которого он
+  // получен: если rawAddress уже сменился, а старый результат ещё "летит",
+  // просто игнорируем его (сравнение ниже), не сбрасывая state вручную.
+  const [resolved, setResolved] = useState<{ address: string | null | undefined; href: string } | null>(null);
+
+  useEffect(() => {
+    if (!rawAddress) return;
+
+    let cancelled = false;
+    const destination = normalizeDeliveryAddress(rawAddress);
+
+    geocodeAddress(destination).then((coords) => {
+      if (cancelled || !coords) return;
+      setResolved({ address: rawAddress, href: buildYandexMapsRouteUrlByCoords(coords.lat, coords.lon) });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rawAddress]);
+
+  return resolved && resolved.address === rawAddress ? resolved.href : fallbackHref;
 }

@@ -171,7 +171,10 @@ const { user } = useUserRole();   // ← Берём роль из провайд
 
   const handleNewOrderSubmit = (newOrder?: any) => {
     if (newOrder) {
-      setAllOrders(prev => [newOrder, ...prev]);
+      setAllOrders(prev => {
+        if (prev.some(o => String(o.id) === String(newOrder.id))) return prev;
+        return [newOrder, ...prev];
+      });
     }
     setShowNewOrderModal(false);
     setNewOrderInitialData(null);

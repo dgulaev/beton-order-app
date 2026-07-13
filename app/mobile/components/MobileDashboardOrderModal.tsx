@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Order } from '../../adminCifra/hooks/useCalendarOrders';
+import { useYandexRouteHref } from '@/lib/yandexRoute';
 
 interface MobileOrderDetailModalProps {
   order: Order | null;
@@ -38,6 +39,7 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
 
   const [localOrder, setLocalOrder] = useState(order);
   const [history, setLocalHistory] = useState(initialHistory || []);
+  const yandexRouteHref = useYandexRouteHref(order.address);
 
   // ==================== ЗАГРУЗКА ИСТОРИИ ====================
   useEffect(() => {
@@ -132,14 +134,6 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
 
     // Добавляем префикс
     return `Брянск, ${address}`;
-  };
-
-  const openYandexMaps = () => {
-    const destination = getFullAddressForRoute(order.address || '');
-    window.open(
-      `https://yandex.ru/maps/?ll=34.37,53.25&z=12&mode=route&rtext=Брянск,%20Орловский%20тупик,%206А~${encodeURIComponent(destination)}&rtt=auto`, 
-      '_blank'
-    );
   };
 
   const openGoogleMaps = () => {
@@ -379,8 +373,10 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
          {/* 5. КАРТЫ (с автоподстановкой города) */}
           <div style={{ marginBottom: '28px' }}>
             <div style={{ display: 'flex', gap: '12px' }}>
-              <button 
-                onClick={openYandexMaps}
+              <a 
+                href={yandexRouteHref}
+                target="_blank"
+                rel="noopener noreferrer"
                 style={{ 
                   flex: 1, 
                   padding: '16px', 
@@ -389,11 +385,14 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
                   border: 'none', 
                   borderRadius: '12px', 
                   fontSize: '16px',
-                  fontWeight: '600'
+                  fontWeight: '600',
+                  textAlign: 'center',
+                  textDecoration: 'none',
+                  display: 'inline-block'
                 }}
               >
                 🗺️ Яндекс.Карты
-              </button>
+              </a>
               <button 
                 onClick={openGoogleMaps}
                 style={{ 

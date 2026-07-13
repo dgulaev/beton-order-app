@@ -7,6 +7,7 @@ import { useEffect, useState, useRef } from 'react';
 import Image from 'next/image';
 import { useUserRole } from '../providers/UserRoleProvider';
 import { useOrderChangeNotifications } from '@/hooks/useRealtimeOrders';
+import { formatPhoneInput } from '@/lib/phone';
 
 export default function AdminCifraLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -418,7 +419,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               type="tel"
               placeholder="+7 (___) ___-__-__"
               value={phone}
-              onChange={(e) => setPhone(e.target.value)}
+              onChange={(e) => setPhone(formatPhoneInput(e.target.value))}
               style={{
                 width: '90%',
                 padding: '16px',

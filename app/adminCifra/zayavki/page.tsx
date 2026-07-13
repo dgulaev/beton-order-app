@@ -4,10 +4,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
+import { useYandexRouteHref } from '@/lib/yandexRoute';
 
 export default function ZayavkiPage() {
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
+  const yandexRouteHref = useYandexRouteHref(selectedOrder?.address);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -1458,7 +1460,7 @@ ${order.customer_type?.includes('Юридическое')
                   </a>
 
                   <a 
-                    href={`https://yandex.ru/maps/?ll=34.415968,53.254623&z=12&mode=route&rtext=Брянск,%20Орловский%20тупик,%206~${encodeURIComponent(selectedOrder.address || '')}&rtt=auto`}
+                    href={yandexRouteHref}
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{ 
@@ -1825,7 +1827,12 @@ ${order.customer_type?.includes('Юридическое')
     }} 
     onSuccess={(newOrder) => {
       if (newOrder) {
-        setAllOrders(prev => [newOrder, ...prev]);
+        // Защита от задвоения: realtime-подписка useRealtimeOrders (см. ниже)
+        // может вставить эту же заявку раньше, чем вернётся ответ на создание.
+        setAllOrders(prev => {
+          if (prev.some(o => String(o.id) === String(newOrder.id))) return prev;
+          return [newOrder, ...prev];
+        });
       }
     }} 
     initialData={newOrderInitialData}

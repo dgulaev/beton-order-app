@@ -74,6 +74,27 @@ export async function POST(request: NextRequest) {
       ? Math.round((new Date(end_time).getTime() - new Date(start_time).getTime()) / 60000) 
       : null;
 
+    // ⚠️ Защита от задвоения на сервере (доп. страховка к клиентской защите
+    // от повторного клика): если для этого же миксера рейс уже был записан
+    // за последнюю минуту — это повтор одного и того же запроса (двойной
+    // клик/повторный fetch), а не новый рейс. Возвращаем уже существующую
+    // запись вместо создания дубликата.
+    if (order_mixer_id) {
+      const oneMinuteAgo = new Date(Date.now() - 60000).toISOString();
+      const { data: recent } = await supabase
+        .from('production_logs')
+        .select('*')
+        .eq('order_mixer_id', order_mixer_id)
+        .gte('created_at', oneMinuteAgo)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (recent) {
+        return NextResponse.json({ success: true, data: recent, deduplicated: true });
+      }
+    }
+
     const { data, error } = await supabase
       .from('production_logs')
       .insert([{
