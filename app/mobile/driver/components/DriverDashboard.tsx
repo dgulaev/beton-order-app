@@ -9,6 +9,7 @@ import { LogOut, Clock, MapPin, Package, ChevronRight, Bell } from 'lucide-react
 import { useRealtime } from '@/hooks/useRealtimeOrders';
 import { driverFetch, DriverMixerInfo, DriverTrip } from '../driverClient';
 import DriverTripDetailModal from './DriverTripDetailModal';
+import RouteButton from './RouteButton';
 
 interface Props {
   mixer: DriverMixerInfo;
@@ -247,6 +248,12 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
                 <MapPin size={15} color="#94A3B8" style={{ marginTop: '2px', flexShrink: 0 }} />
                 <span style={{ color: '#94A3B8', fontSize: '13.5px', lineHeight: 1.4 }}>{trip.order.address}</span>
+              </div>
+            )}
+
+            {trip.order?.address && (
+              <div style={{ marginTop: '10px' }}>
+                <RouteButton address={trip.order.address} compact />
               </div>
             )}
 

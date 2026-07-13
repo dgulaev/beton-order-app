@@ -1,6 +1,7 @@
 'use client';
 
 import { DriverTrip } from '../driverClient';
+import RouteButton from './RouteButton';
 
 interface Props {
   trip: DriverTrip;
@@ -76,6 +77,12 @@ export default function DriverTripDetailModal({ trip, onClose }: Props) {
             <div style={{ color: '#94A3B8' }}>Статус рейса</div>
             <div style={{ fontWeight: '600' }}>{trip.status}</div>
           </div>
+
+          {trip.order?.address && (
+            <div style={{ marginTop: '16px' }}>
+              <RouteButton address={trip.order.address} />
+            </div>
+          )}
         </div>
 
         <div style={{ background: '#25334A', borderRadius: '16px', padding: '18px', color: '#fff' }}>
