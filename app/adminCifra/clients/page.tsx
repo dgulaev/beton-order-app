@@ -833,7 +833,7 @@ const openOrderModal = (orderId: number | string) => {
 // ==================== 3.6 СОСТОЯНИЯ И ФУНКЦИИ ДЛЯ МОДАЛКИ ЗАКАЗА ====================
 
 const [selectedOrder, setSelectedOrder] = useState<any>(null);
-const yandexRouteHref = useYandexRouteHref(selectedOrder?.address);
+const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(selectedOrder?.address);
 const [orderHistory, setOrderHistory] = useState<any[]>([]);
 const [isSendingNotification, setIsSendingNotification] = useState(false);
 const [allOrders, setAllOrders] = useState<any[]>([]);
@@ -3252,6 +3252,8 @@ const changeStaffPassword = async (staffMember: any) => {
                     href={yandexRouteHref}
                     target="_blank"
                     rel="noopener noreferrer"
+                    aria-disabled={!yandexRouteReady}
+                    onClick={(e) => { if (!yandexRouteReady) e.preventDefault(); }}
                     style={{ 
                       flex: 1,
                       padding: '12px 16px', 
@@ -3261,10 +3263,12 @@ const changeStaffPassword = async (staffMember: any) => {
                       borderRadius: '12px',
                       textDecoration: 'none',
                       fontSize: '15px',
-                      fontWeight: '600'
+                      fontWeight: '600',
+                      opacity: yandexRouteReady ? 1 : 0.6,
+                      cursor: yandexRouteReady ? 'pointer' : 'wait'
                     }}
                   >
-                    Яндекс
+                    {yandexRouteReady ? 'Яндекс' : '...'}
                   </a>
 
                   <a 

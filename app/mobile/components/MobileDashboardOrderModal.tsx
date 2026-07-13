@@ -39,7 +39,7 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
 
   const [localOrder, setLocalOrder] = useState(order);
   const [history, setLocalHistory] = useState(initialHistory || []);
-  const yandexRouteHref = useYandexRouteHref(order.address);
+  const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(order.address);
 
   // ==================== ЗАГРУЗКА ИСТОРИИ ====================
   useEffect(() => {
@@ -377,6 +377,8 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
                 href={yandexRouteHref}
                 target="_blank"
                 rel="noopener noreferrer"
+                aria-disabled={!yandexRouteReady}
+                onClick={(e) => { if (!yandexRouteReady) e.preventDefault(); }}
                 style={{ 
                   flex: 1, 
                   padding: '16px', 
@@ -388,10 +390,12 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
                   fontWeight: '600',
                   textAlign: 'center',
                   textDecoration: 'none',
-                  display: 'inline-block'
+                  display: 'inline-block',
+                  opacity: yandexRouteReady ? 1 : 0.6,
+                  cursor: yandexRouteReady ? 'pointer' : 'wait'
                 }}
               >
-                🗺️ Яндекс.Карты
+                🗺️ {yandexRouteReady ? 'Яндекс.Карты' : 'Строим маршрут...'}
               </a>
               <button 
                 onClick={openGoogleMaps}

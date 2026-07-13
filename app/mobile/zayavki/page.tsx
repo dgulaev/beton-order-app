@@ -33,33 +33,45 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   const currentRole = user?.role || 'admin';
   const userFullName = user?.full_name || user?.username || 'Сотрудник';
 
-  // ==================== 4. ЗАГРУЗКА ДАННЫХ (один useEffect) ====================
+  // ==================== 4. ЗАГРУЗКА ДАННЫХ ====================
+  // Рецепты грузим один раз — справочник маленький и не меняется от даты.
   useEffect(() => {
-    const fetchAllData = async () => {
-      try {
-        const [ordersRes, recipesRes] = await Promise.all([
-          fetch('/api/adminCifra/all-orders', { cache: 'no-store' }),
-          fetch('/api/adminCifra/recipes')
-        ]);
-
-        if (ordersRes.ok) {
-          const ordersData = await ordersRes.json();
-          setAllOrders(Array.isArray(ordersData) ? ordersData : []);
-        }
-
-        if (recipesRes.ok) {
-          const recipesData = await recipesRes.json();
-          setRecipes(recipesData);
-        }
-      } catch (err) {
-        console.error('Ошибка загрузки данных:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchAllData();
+    fetch('/api/adminCifra/recipes')
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => setRecipes(data))
+      .catch((err) => console.error('Ошибка загрузки рецептов:', err));
   }, []);
+
+  // Заявки — грузим только за МЕСЯЦ выбранной даты (как на дашборде), а не
+  // все заявки за всё время (раньше /api/adminCifra/all-orders отдавал
+  // сотни КБ и рос с каждым днём — именно это было одной из причин
+  // подвисаний мобильной версии). Перезагружаем при переходе в другой месяц.
+  const selectedYearNum = selectedDate.getFullYear();
+  const selectedMonthNum = selectedDate.getMonth() + 1;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+
+    fetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`, { cache: 'no-store' })
+      .then((res) => {
+        if (!res.ok) throw new Error(`Orders fetch failed: ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (!cancelled) setAllOrders(Array.isArray(data) ? data : []);
+      })
+      .catch((err) => {
+        console.error('Ошибка загрузки заявок:', err);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedYearNum, selectedMonthNum]);
 
   // ==================== 5. ФИЛЬТР ЗАКАЗОВ НА ВЫБРАННЫЙ ДЕНЬ ====================
   const selectedYear = selectedDate.getFullYear();

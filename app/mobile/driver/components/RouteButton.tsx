@@ -8,7 +8,12 @@
 // открывать окно вручную через window.open() в onClick — именно это на
 // мобильных браузерах (в т.ч. Яндекс.Браузере) оставляло белый экран после
 // возврата из приложения Карт.
-import { Navigation } from 'lucide-react';
+//
+// Пока координаты не готовы (ready === false), клик по кнопке блокируем: в
+// Яндекс.Браузере переход по ещё текстовой ссылке открывает приложение БЕЗ
+// построения маршрута (см. lib/yandexRoute.ts). Обычно это доли секунды при
+// первом показе адреса за сессию — дальше он берётся из кэша мгновенно.
+import { Loader2, Navigation } from 'lucide-react';
 import { useYandexRouteHref } from '@/lib/yandexRoute';
 
 interface Props {
@@ -17,7 +22,7 @@ interface Props {
 }
 
 export default function RouteButton({ address, compact }: Props) {
-  const href = useYandexRouteHref(address);
+  const { href, ready } = useYandexRouteHref(address);
   if (!address) return null;
 
   return (
@@ -25,7 +30,11 @@ export default function RouteButton({ address, compact }: Props) {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      onClick={(e) => e.stopPropagation()}
+      aria-disabled={!ready}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!ready) e.preventDefault();
+      }}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -40,9 +49,11 @@ export default function RouteButton({ address, compact }: Props) {
         textDecoration: 'none',
         flexShrink: 0,
         whiteSpace: 'nowrap',
+        opacity: ready ? 1 : 0.6,
+        cursor: ready ? 'pointer' : 'wait',
       }}
     >
-      <Navigation size={compact ? 14 : 16} />
+      {ready ? <Navigation size={compact ? 14 : 16} /> : <Loader2 size={compact ? 14 : 16} style={{ animation: 'spin 1s linear infinite' }} />}
       Маршрут
     </a>
   );

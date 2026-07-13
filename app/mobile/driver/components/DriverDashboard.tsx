@@ -123,9 +123,18 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
     }
   };
 
+  // once=true — подключаем realtime только ПОСЛЕ первой отрисовки рейсов
+  // (обычным fetch), а не сразу при маунте: на слабой мобильной сети
+  // WebSocket-хендшейк конкурировал с самым первым, самым важным запросом
+  // за канал/CPU и усугублял подвисание при заходе в кабинет водителя.
+  const [initialTripsLoaded, setInitialTripsLoaded] = useState(false);
+
   useEffect(() => {
     setLoading(true);
-    Promise.all([fetchToday(), fetchHistory()]).finally(() => setLoading(false));
+    Promise.all([fetchToday(), fetchHistory()]).finally(() => {
+      setLoading(false);
+      setInitialTripsLoaded(true);
+    });
   }, []);
 
   // ==================== REALTIME: НОВЫЕ И ИЗМЕНЁННЫЕ РЕЙСЫ ЭТОГО МИКСЕРА ====================
@@ -133,6 +142,7 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
     table: 'order_mixers',
     event: '*',
     filter: `mixer_name=eq.${mixer.number}`,
+    enabled: initialTripsLoaded,
     onInsert: async (record) => {
       playAlertSound();
 

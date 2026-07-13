@@ -15,9 +15,13 @@ const STATUS_LABELS_RU: Record<string, string> = {
   cancelled: 'Отменена'
 };
 
-// GET — все назначенные миксеры (для дашборда) или по orderId
+// GET — все назначенные миксеры (для дашборда), по одному orderId, или по
+// списку orderIds (через запятую) — это сильно урезает выборку там, где
+// нужны назначения только для заявок за конкретный день/месяц, а не за всё
+// время (см. app/mobile/page.tsx).
 export async function GET(request: NextRequest) {
   const orderId = request.nextUrl.searchParams.get('orderId');
+  const orderIdsParam = request.nextUrl.searchParams.get('orderIds');
 
   try {
     let query = supabase
@@ -44,6 +48,16 @@ export async function GET(request: NextRequest) {
     // Если передан orderId — фильтруем по заказу
     if (orderId) {
       query = query.eq('order_id', parseInt(orderId));
+    } else if (orderIdsParam) {
+      const ids = orderIdsParam
+        .split(',')
+        .map((id) => parseInt(id.trim()))
+        .filter((id) => Number.isFinite(id));
+      if (ids.length > 0) {
+        query = query.in('order_id', ids);
+      } else {
+        return NextResponse.json([]);
+      }
     }
 
     const { data, error } = await query;

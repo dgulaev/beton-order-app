@@ -63,6 +63,14 @@ export default function MobileDashboard() {
   // ограничить канал тем же месяцем, что и в /api/adminCifra/orders
   const deliveryDateFilter = `delivery_date=gte.${monthStart},delivery_date=lte.${monthEnd}`;
 
+  // 🔥 Realtime подключаем ТОЛЬКО после того, как основные данные (заявки за
+  // месяц) уже отрисованы обычным fetch'ем — иначе на слабой мобильной сети
+  // WebSocket-подключение конкурирует за канал/CPU с самим первым рендером и
+  // подгрузкой данных, усугубляя подвисание при заходе в приложение.
+  // Once=true — далее остаётся включённым постоянно (в т.ч. при смене
+  // месяца), просто НЕ участвует в самой первой, самой критичной загрузке.
+  const [initialOrdersLoaded, setInitialOrdersLoaded] = useState(false);
+
   // 🔥 Подписка на все изменения в таблице ORDERS.
   // Хук возвращает только { status } — сам список заказов приходит через setAllOrders,
   // поэтому деструктурировать orders/loading отсюда было ошибкой (их там никогда не было).
@@ -70,7 +78,7 @@ export default function MobileDashboard() {
     setAllOrders,
     {
       filter: deliveryDateFilter,
-      enabled: Boolean(userId)
+      enabled: Boolean(userId) && initialOrdersLoaded
     }
   );
 
@@ -96,7 +104,10 @@ export default function MobileDashboard() {
         console.error('Initial orders fetch failed:', err);
       })
       .finally(() => {
-        if (!cancelled) setOrdersLoading(false);
+        if (!cancelled) {
+          setOrdersLoading(false);
+          setInitialOrdersLoaded(true);
+        }
       });
 
     return () => {
@@ -104,42 +115,62 @@ export default function MobileDashboard() {
     };
   }, [selectedYearNum, selectedMonthNum, userId]);
 
-// 🔥 Active Mixers и Assignments — единоразовая загрузка
+// 🔥 Active Mixers — единоразовая загрузка на выбранную дату.
 // Поллинг убран, так как real-time уже обеспечивает обновления
 useEffect(() => {
   const dateStr = selectedDate.toISOString().split('T')[0];
 
-  const fetchActiveMixers = async () => {
-    const res = await fetch(`/api/adminCifra/active-mixers?date=${dateStr}`);
-    if (!res.ok) {
-      console.error('Active mixers error:', res.status);
-      return [];
-    }
-    return res.json();
-  };
-
-  const fetchAssignments = async () => {
-    const res = await fetch('/api/adminCifra/order-mixers');
-    if (!res.ok) {
-      console.error('Assignments error:', res.status);
-      return [];
-    }
-    return res.json();
-  };
-
-  // 🔥 Защита от race-condition: ждём завершения обоих запросов
-  Promise.all([fetchActiveMixers(), fetchAssignments()])
-    .then(([mixers, assignments]) => {
-      setActiveMixers(mixers);
-      setMixerAssignments(assignments);
+  fetch(`/api/adminCifra/active-mixers?date=${dateStr}`)
+    .then((res) => {
+      if (!res.ok) throw new Error(`Active mixers error: ${res.status}`);
+      return res.json();
     })
+    .then((mixers) => setActiveMixers(mixers))
     .catch((err) => {
       console.error('Initial data fetch failed:', err);
       // 🔥 Можно показать баннер "Нет связи с сервером"
     });
-
-  // 🔥 Больше никакого setInterval — real-time сам подтянет изменения
 }, [selectedDate]);
+
+// 🔥 Назначенные миксеры — раньше грузили ВСЮ таблицу order_mixers (за всё
+// время работы завода — сотни КБ и постоянно растёт), хотя на дашборде
+// нужны назначения только для заявок ТЕКУЩЕГО МЕСЯЦА (allOrders уже
+// отфильтрован по месяцу выше). Ограничиваем запрос конкретными orderId.
+const orderIdsKey = useMemo(
+  () => allOrders.map((o: any) => o.id).join(','),
+  [allOrders]
+);
+
+useEffect(() => {
+  let cancelled = false;
+
+  if (!orderIdsKey) {
+    // setState — внутри микротаска, а не прямо в теле эффекта (та же
+    // причина, что и у остальных асинхронных обновлений здесь).
+    Promise.resolve().then(() => {
+      if (!cancelled) setMixerAssignments([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }
+
+  fetch(`/api/adminCifra/order-mixers?orderIds=${orderIdsKey}`)
+    .then((res) => {
+      if (!res.ok) throw new Error(`Assignments error: ${res.status}`);
+      return res.json();
+    })
+    .then((assignments) => {
+      if (!cancelled) setMixerAssignments(assignments);
+    })
+    .catch((err) => {
+      console.error('Assignments fetch failed:', err);
+    });
+
+  return () => {
+    cancelled = true;
+  };
+}, [orderIdsKey]);
 
 
   // ==================== 6. РАСЧЁТЫ И ФИЛЬТРЫ ====================

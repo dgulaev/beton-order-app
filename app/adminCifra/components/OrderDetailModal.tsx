@@ -105,7 +105,7 @@ const loadData = async () => {
 
   // Ссылка на маршрут в Яндекс.Картах — "дозревает" в фоне до координат,
   // как только геокодирование адреса доставки вернётся с сервера (см. lib/yandexRoute.ts).
-  const yandexRouteHref = useYandexRouteHref(order.address);
+  const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(order.address);
 
   // ==================== 2. HELPER ДЛЯ ОПРЕДЕЛЕНИЯ РОЛИ ====================
   const getCurrentRole = () => {
@@ -1068,6 +1068,8 @@ const formatVolume = (value: number | string) => {
       href={yandexRouteHref}
       target="_blank"
       rel="noopener noreferrer"
+      aria-disabled={!yandexRouteReady}
+      onClick={(e) => { if (!yandexRouteReady) e.preventDefault(); }}
       style={{ 
         flex: 1,
         padding: '13px 18px', 
@@ -1078,10 +1080,12 @@ const formatVolume = (value: number | string) => {
         textDecoration: 'none',
         fontWeight: '600',
         fontSize: '15px',
-        transition: 'all 0.2s'
+        transition: 'all 0.2s',
+        opacity: yandexRouteReady ? 1 : 0.6,
+        cursor: yandexRouteReady ? 'pointer' : 'wait'
       }}
     >
-      🗺️ Яндекс.Карты
+      🗺️ {yandexRouteReady ? 'Яндекс.Карты' : 'Строим маршрут...'}
     </a>
   </div>
 </div>

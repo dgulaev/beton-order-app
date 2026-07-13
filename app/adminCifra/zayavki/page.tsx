@@ -9,7 +9,7 @@ import { useYandexRouteHref } from '@/lib/yandexRoute';
 export default function ZayavkiPage() {
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
-  const yandexRouteHref = useYandexRouteHref(selectedOrder?.address);
+  const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(selectedOrder?.address);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -1463,6 +1463,8 @@ ${order.customer_type?.includes('Юридическое')
                     href={yandexRouteHref}
                     target="_blank"
                     rel="noopener noreferrer"
+                    aria-disabled={!yandexRouteReady}
+                    onClick={(e) => { if (!yandexRouteReady) e.preventDefault(); }}
                     style={{ 
                       flex: 1,
                       padding: '12px 16px', 
@@ -1472,10 +1474,12 @@ ${order.customer_type?.includes('Юридическое')
                       borderRadius: '12px',
                       textDecoration: 'none',
                       fontSize: '15px',
-                      fontWeight: '600'
+                      fontWeight: '600',
+                      opacity: yandexRouteReady ? 1 : 0.6,
+                      cursor: yandexRouteReady ? 'pointer' : 'wait'
                     }}
                   >
-                    Яндекс
+                    {yandexRouteReady ? 'Яндекс' : '...'}
                   </a>
 
                   <a 

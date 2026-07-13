@@ -16,9 +16,16 @@ import {
   getStoredDriverSession,
   storeDriverSession,
   clearDriverSession,
+  getStoredDriverMixerCache,
+  storeDriverMixerCache,
+  clearDriverMixerCache,
   DriverMixerInfo,
 } from './driver/driverClient';
 import DriverDashboard from './driver/components/DriverDashboard';
+
+// Сколько ждём ответ /api/driver/auth, прежде чем сдаться (см. пояснение у
+// ROLE_FETCH_TIMEOUT_MS в UserRoleProvider — та же причина).
+const DRIVER_AUTH_TIMEOUT_MS = 12_000;
 
 type DriverMixerOption = { number: string; model: string | null; driver: string };
 type LoginStep = 'phone' | 'password' | 'driver-mixer' | 'choose-role';
@@ -53,40 +60,69 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
 
   // ==================== 1. РОЛЬ СОТРУДНИКА ИЗ PROVIDER ====================
   const { user, loading: roleLoading, refreshRole, logout } = useUserRole();
-  const isStaffLoggedIn = !!user && !roleLoading;
+  // Достаточно наличия user (пусть даже пока из кэша, а не свежего сетевого
+  // ответа) — актуальность (в т.ч. force-logout) провайдер всё равно
+  // перепроверяет в фоне и сам разлогинит при необходимости (см. fetchRole).
+  const isStaffLoggedIn = !!user;
 
   // ==================== 2. СЕССИЯ ВОДИТЕЛЯ ====================
   // /mobile/driver остаётся рабочей ссылкой (редиректим на /mobile, см. её page.tsx),
   // но сама проверка и рендер дашборда водителя теперь живут здесь, в общем гейте.
+  // Начальное значение — null (одинаково на сервере и при первом клиентском
+  // рендере, иначе гидратация не совпадёт с SSR — см. пояснение у
+  // readCachedUser в UserRoleProvider.tsx). Кэш водителя подхватываем внутри
+  // useEffect ниже — это не блокирует интерфейс "Загрузкой" на время
+  // сетевого запроса и не требует повторного входа при кратковременном сбое
+  // сети/холодном старте сервера.
   const [checkingDriverSession, setCheckingDriverSession] = useState(true);
   const [driverMixer, setDriverMixer] = useState<DriverMixerInfo | null>(null);
 
   useEffect(() => {
+    const cachedMixer = getStoredDriverMixerCache();
+    if (cachedMixer) setDriverMixer(cachedMixer);
+
     const session = getStoredDriverSession();
     if (!session) {
       setCheckingDriverSession(false);
       return;
     }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), DRIVER_AUTH_TIMEOUT_MS);
+
     (async () => {
       try {
         const res = await fetch('/api/driver/auth', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(session),
+          signal: controller.signal,
         });
         const data = await res.json();
         if (data.success && data.mixer) {
           setDriverMixer(data.mixer);
+          storeDriverMixerCache(data.mixer);
         } else {
+          // Реальный отказ сервера (сессия недействительна) — а не сетевой
+          // сбой (он попадёт в catch ниже) — тут действительно выходим.
           clearDriverSession();
+          clearDriverMixerCache();
+          setDriverMixer(null);
         }
       } catch (err) {
+        // Сетевой сбой/таймаут — не разлогиниваем водителя "в слепую", просто
+        // остаёмся с тем, что уже показали из кэша (см. useState выше).
         console.error('Driver session check error:', err);
-        clearDriverSession();
       } finally {
+        clearTimeout(timeoutId);
         setCheckingDriverSession(false);
       }
     })();
+
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, []);
 
   // ==================== 3. УНИФИЦИРОВАННЫЙ ВХОД (телефон → пароль/миксер) ====================
@@ -238,6 +274,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   const handleSwitchUser = () => {
     if (!confirm('Выйти и войти как другой пользователь?')) return;
     clearDriverSession();
+    clearDriverMixerCache();
     setDriverMixer(null);
     if (user) {
       logout(); // очищает localStorage сотрудника и перезагружает страницу
@@ -254,7 +291,10 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   }, [isOldDriverLink, router]);
 
   // ==================== 10. ЗАГРУЗКА ====================
-  if (checkingDriverSession || roleLoading || isOldDriverLink) {
+  // Блокируем интерфейс спиннером только пока НЕТ вообще никаких данных
+  // (ни закэшированного водителя, ни закэшированной роли сотрудника) — если
+  // есть, показываем их сразу, а актуальность в фоне проверяют эффекты выше.
+  if ((checkingDriverSession && !driverMixer) || (roleLoading && !user) || isOldDriverLink) {
     return (
       <div
         style={{

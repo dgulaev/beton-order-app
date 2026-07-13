@@ -31,6 +31,37 @@ export function clearDriverSession() {
   localStorage.removeItem(STORAGE_KEYS.phone);
 }
 
+const MIXER_CACHE_KEY = 'driver_mixer_cache';
+
+/**
+ * Последние известные данные миксера водителя, закэшированные локально.
+ * Позволяют мгновенно показать дашборд при повторном открытии приложения,
+ * пока в фоне идёт проверка сессии через /api/driver/auth — без этого
+ * пользователь на время запроса (особенно на плохой мобильной сети или при
+ * холодном старте сервера) видел бы блокирующий экран "Загрузка...".
+ */
+export function getStoredDriverMixerCache(): DriverMixerInfo | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(MIXER_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as DriverMixerInfo) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function storeDriverMixerCache(mixer: DriverMixerInfo) {
+  try {
+    localStorage.setItem(MIXER_CACHE_KEY, JSON.stringify(mixer));
+  } catch {
+    // localStorage может быть недоступен — не критично.
+  }
+}
+
+export function clearDriverMixerCache() {
+  localStorage.removeItem(MIXER_CACHE_KEY);
+}
+
 export async function driverFetch(url: string, options: RequestInit = {}) {
   const session = getStoredDriverSession();
   const headers = new Headers(options.headers || {});

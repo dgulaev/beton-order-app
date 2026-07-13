@@ -26,11 +26,48 @@ interface UserRoleContextType {
 // не нагружать сервер лишними запросами.
 const FORCE_LOGOUT_POLL_MS = 60 * 60_000;
 
+// Сколько ждём ответ /api/user/role, прежде чем сдаться — без этого при
+// холодном старте сервера (Vercel cold start) или плохой мобильной сети
+// запрос мог "висеть" очень долго, а вместе с ним и весь экран за
+// блокирующим "Загрузка..." (см. app/mobile/layout.tsx).
+const ROLE_FETCH_TIMEOUT_MS = 12_000;
+const ROLE_CACHE_KEY = 'userRoleCache';
+
 const UserRoleContext = createContext<UserRoleContextType | undefined>(undefined);
 
+/**
+ * Читает последнюю известную роль из localStorage.
+ *
+ * ⚠️ НЕЛЬЗЯ использовать как ленивое начальное значение useState (было так
+ * раньше и ломало гидратацию): при SSR/самом первом клиентском рендере
+ * (до того как React "сверил" его с серверной версией) `window` уже
+ * определён на клиенте, но не на сервере — та же самая функция вернёт null
+ * на сервере и реальные данные на клиенте. Разное содержимое между
+ * сервером и первым клиентским рендером — это ровно случай "if (typeof
+ * window !== 'undefined')" из ошибки "Hydration failed...". Поэтому читаем
+ * кэш только внутри useEffect (см. ниже) — эффекты гарантированно не
+ * выполняются при SSR и при сверке гидратации, только после неё.
+ */
+function readCachedUser(): UserRole | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const savedUserId = localStorage.getItem('userId');
+    if (!savedUserId) return null;
+    const cachedRaw = localStorage.getItem(ROLE_CACHE_KEY);
+    return cachedRaw ? (JSON.parse(cachedRaw) as UserRole) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function UserRoleProvider({ children }: { children: ReactNode }) {
+  // Начальное значение — одинаковое на сервере и при первом клиентском
+  // рендере (null/true), чтобы не расходиться с SSR-версией. Кэш из
+  // localStorage подхватываем чуть ниже, в самом первом useEffect — это
+  // происходит сразу после маунта (доли миллисекунды), поэтому "Загрузка..."
+  // мелькает практически незаметно, а не висит на время сетевого запроса.
   const [user, setUser] = useState<UserRole | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchRole = useCallback(async (force = false) => {
@@ -44,6 +81,9 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), ROLE_FETCH_TIMEOUT_MS);
+
       const res = await fetch('/api/user/role', {
         method: 'POST',
         headers: {
@@ -52,13 +92,19 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
         },
         body: JSON.stringify({}),
         cache: 'no-store',
-      });
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timeoutId));
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const data = await res.json();
       setUser(data);
       setError(null);
+      try {
+        localStorage.setItem(ROLE_CACHE_KEY, JSON.stringify(data));
+      } catch {
+        // localStorage может быть недоступен (приватный режим) — не критично.
+      }
 
       // Проверка принудительного выхода
       const currentVersion = data?.force_logout_version || 0;
@@ -79,12 +125,16 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
 
     } catch (err: any) {
       // fetch кидает TypeError ("Failed to fetch"), когда сервер временно
-      // недоступен (перезапуск дев-сервера, потеря сети, уход со страницы) —
-      // это не ошибка приложения, а обычный сетевой сбой. Следующий тик
+      // недоступен (перезапуск дев-сервера, потеря сети, уход со страницы), а
+      // AbortError — когда сами прервали запрос по таймауту (см. выше). Оба
+      // случая — обычный сетевой сбой, а не ошибка приложения: следующий тик
       // интервала/возврат на вкладку всё исправит сам, поэтому не шумим в
       // консоль на каждый такой случай — предупреждаем только на реальные
       // ошибки API (не-network, например неожиданный HTTP-статус).
-      if (!(err instanceof TypeError)) {
+      // Важно: НЕ обнуляем user при сетевом сбое — если роль уже была
+      // известна (из кэша или предыдущего успешного запроса), пусть
+      // приложение продолжает работать с ней, а не выкидывает на экран входа.
+      if (!(err instanceof TypeError) && err?.name !== 'AbortError') {
         console.warn('Role fetch error:', err);
       }
       setError(err.message);
@@ -108,7 +158,15 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
 
   // === При загрузке + при возврате на вкладку + периодически ===
   useEffect(() => {
-    fetchRole();
+    // Подхватываем кэш сразу после маунта (безопасно для гидратации — эффекты
+    // не участвуют в сверке SSR/клиент), не дожидаясь ответа сети.
+    const cached = readCachedUser();
+    if (cached) {
+      setUser(cached);
+      setLoading(false);
+    }
+
+    fetchRole(true);
 
     // Проверяем роль, когда пользователь возвращается на вкладку
     const handleVisibilityChange = () => {

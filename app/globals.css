@@ -41,6 +41,14 @@ h1, h2, h3 {
   20%, 40%, 60%, 80% { transform: translateX(4px); }
 }
 
+/* Используется всеми "крутящимися" Loader2-иконками по приложению
+   (inline style="animation: spin 1s linear infinite") — без этого правила
+   иконка просто стоит на месте, ничего не подсказывая о загрузке. */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .notification {
   animation: slideIn 0.4s ease forwards;
 }

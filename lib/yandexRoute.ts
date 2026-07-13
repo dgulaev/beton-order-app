@@ -122,8 +122,44 @@ function buildYandexMapsRouteUrlByCoords(destLat: number, destLon: number): stri
   return `https://yandex.ru/maps/?${params.toString()}`;
 }
 
+type Coords = { lat: number; lon: number };
+
+// Кэш результатов геокодирования на время сессии (вкладки). Один и тот же
+// адрес доставки часто встречается сразу в нескольких местах (список заявок
+// водителя, дашборд, модалка заказа) и может перерендериваться много раз —
+// без кэша каждый такой рендер заново дёргал бы /api/geocode → DaData.
+// - geocodeMemoryCache — быстрый доступ в рамках текущей загрузки страницы.
+// - sessionStorage — переживает переход между страницами/вкладками мобильного
+//   приложения в рамках одной сессии браузера (адреса заявок не меняются).
+// - geocodeInFlight — если несколько компонентов одновременно запросили один
+//   и тот же адрес (например, две карточки заявки с одинаковым адресом),
+//   не шлём дублирующие запросы, а ждём один общий promise.
+const geocodeMemoryCache = new Map<string, Coords | null>();
+const geocodeInFlight = new Map<string, Promise<Coords | null>>();
+const SESSION_CACHE_PREFIX = 'yandexGeocode:';
+
+function readSessionCache(key: string): Coords | null | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_CACHE_PREFIX + key);
+    if (raw === null) return undefined;
+    return JSON.parse(raw) as Coords | null;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeSessionCache(key: string, value: Coords | null) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(SESSION_CACHE_PREFIX + key, JSON.stringify(value));
+  } catch {
+    // sessionStorage может быть недоступен (приватный режим и т.п.) — не критично.
+  }
+}
+
 /** Геокодирует адрес через сервер (DaData) в координаты. null, если не удалось. */
-async function geocodeAddress(address: string): Promise<{ lat: number; lon: number } | null> {
+async function fetchGeocode(address: string): Promise<Coords | null> {
   try {
     const res = await fetch('/api/geocode', {
       method: 'POST',
@@ -141,6 +177,46 @@ async function geocodeAddress(address: string): Promise<{ lat: number; lon: numb
   }
 }
 
+/** Геокодирует адрес с кэшированием (память вкладки → sessionStorage → сеть). */
+async function geocodeAddressCached(address: string): Promise<Coords | null> {
+  if (geocodeMemoryCache.has(address)) return geocodeMemoryCache.get(address) ?? null;
+
+  const fromSession = readSessionCache(address);
+  if (fromSession !== undefined) {
+    geocodeMemoryCache.set(address, fromSession);
+    return fromSession;
+  }
+
+  let inFlight = geocodeInFlight.get(address);
+  if (!inFlight) {
+    inFlight = fetchGeocode(address).finally(() => geocodeInFlight.delete(address));
+    geocodeInFlight.set(address, inFlight);
+  }
+
+  const result = await inFlight;
+  geocodeMemoryCache.set(address, result);
+  writeSessionCache(address, result);
+  return result;
+}
+
+// Сколько ждём координаты, прежде чем разрешить клик по ссылке с текстовым
+// (менее надёжным) фолбэком — чтобы кнопка не оставалась заблокированной
+// навечно, если геокодирование почему-то не отвечает.
+const GEOCODE_READY_TIMEOUT_MS = 6000;
+
+export interface YandexRouteLink {
+  /** Готовая ссылка на маршрут — координатная, если успели геокодировать, иначе текстовый фолбэк. */
+  href: string;
+  /**
+   * true — координаты уже подтянуты (или геокодирование гарантированно не
+   * удастся/зависло дольше таймаута), ссылку безопасно открывать даже в
+   * Яндекс.Браузере. false — координаты ещё "летят": в Яндекс.Браузере клик
+   * по текстовому fallback-адресу откроет приложение БЕЗ построения
+   * маршрута, поэтому пока ссылку лучше не отпускать (см. компоненты кнопок).
+   */
+  ready: boolean;
+}
+
 /**
  * Хук для кнопки/ссылки «Маршрут»: сразу отдаёт текстовую ссылку (работает
  * почти везде), а как только в фоне подтягиваются координаты — переключает
@@ -156,8 +232,16 @@ async function geocodeAddress(address: string): Promise<{ lat: number; lon: numb
  * Обычная ссылка <a href> с уже готовым URL (даже если он "дозревает"
  * асинхронно и подставляется только когда пользователь ещё не успел
  * кликнуть) браузер обрабатывает штатно, без побочных эффектов.
+ *
+ * ⚠️ Но если пользователь успевает кликнуть РАНЬШЕ, чем подтянутся
+ * координаты, href в момент клика — ещё текстовый. В обычном браузере это не
+ * страшно (веб-версия Карт сама геокодирует текст), но Яндекс.Браузер
+ * перехватывает ссылку и передаёт её приложению В ОБХОД геокодера — маршрут
+ * не строится. Поэтому кроме href хук отдаёт `ready`: пока координаты не
+ * готовы (и не истёк таймаут), кнопки блокируют клик, показывая, что ссылка
+ * ещё "дозревает" (см. `RouteButton` и другие места использования).
  */
-export function useYandexRouteHref(rawAddress: string | null | undefined): string {
+export function useYandexRouteHref(rawAddress: string | null | undefined): YandexRouteLink {
   // Синхронный текстовый фолбэк — пересчитывается прямо при рендере, без
   // setState в эффекте (это и держит href актуальным сразу при смене адреса,
   // до того как подтянутся координаты).
@@ -167,6 +251,12 @@ export function useYandexRouteHref(rawAddress: string | null | undefined): strin
   // получен: если rawAddress уже сменился, а старый результат ещё "летит",
   // просто игнорируем его (сравнение ниже), не сбрасывая state вручную.
   const [resolved, setResolved] = useState<{ address: string | null | undefined; href: string } | null>(null);
+  // Храним адрес, для которого истёк таймаут (а не просто boolean) — по той
+  // же причине, что и с `resolved` выше: так при смене rawAddress "просрочен"
+  // автоматически перестаёт быть true без отдельного сброса синхронным
+  // setState прямо в теле эффекта (setState нужен только внутри callback'ов —
+  // тогда, когда таймер/геокодирование реально что-то узнали).
+  const [timedOutAddress, setTimedOutAddress] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
     if (!rawAddress) return;
@@ -174,15 +264,26 @@ export function useYandexRouteHref(rawAddress: string | null | undefined): strin
     let cancelled = false;
     const destination = normalizeDeliveryAddress(rawAddress);
 
-    geocodeAddress(destination).then((coords) => {
+    geocodeAddressCached(destination).then((coords) => {
       if (cancelled || !coords) return;
       setResolved({ address: rawAddress, href: buildYandexMapsRouteUrlByCoords(coords.lat, coords.lon) });
     });
 
+    const timer = setTimeout(() => {
+      if (!cancelled) setTimedOutAddress(rawAddress);
+    }, GEOCODE_READY_TIMEOUT_MS);
+
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [rawAddress]);
 
-  return resolved && resolved.address === rawAddress ? resolved.href : fallbackHref;
+  const isResolved = !!resolved && resolved.address === rawAddress;
+  const isTimedOut = timedOutAddress === rawAddress;
+
+  return {
+    href: isResolved ? resolved!.href : fallbackHref,
+    ready: isResolved || isTimedOut,
+  };
 }
