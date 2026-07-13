@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
-import MobileLayout from '@/app/mobile/layout';
 import MobileDashboardOrderModal from './components/MobileDashboardOrderModal';
 import MobileCalendar from './components/MobileCalendar';
+import MobileExitButton from './components/MobileExitButton';
 
 // 🔥 Подключаем хуки авторизации и real-time
 import { useUserRole } from '../providers/UserRoleProvider';
@@ -193,8 +193,7 @@ useEffect(() => {
   // ==============================================
 
   return (
-    <MobileLayout>
-      <div style={{
+    <div style={{
         backgroundColor: '#0F172A',
         minHeight: '100vh',
         width: '100%',
@@ -266,27 +265,30 @@ useEffect(() => {
           />
         </h1>
 
-        <button
-          onClick={() => setShowCalendar(true)}
-          style={{
-            background: '#1E2937',
-            color: '#60A5FA',
-            border: '1px solid #334155',
-            borderRadius: '12px',
-            padding: '8px 16px',
-            fontSize: '15px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
-          }}
-        >
-          📅 {selectedDate.toLocaleDateString('ru-RU', { 
-            weekday: 'short', 
-            day: '2-digit', 
-            month: 'short' 
-          })}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <button
+            onClick={() => setShowCalendar(true)}
+            style={{
+              background: '#1E2937',
+              color: '#60A5FA',
+              border: '1px solid #334155',
+              borderRadius: '12px',
+              padding: '8px 16px',
+              fontSize: '15px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
+            }}
+          >
+            📅 {selectedDate.toLocaleDateString('ru-RU', { 
+              weekday: 'short', 
+              day: '2-digit', 
+              month: 'short' 
+            })}
+          </button>
+          <MobileExitButton />
+        </div>
       </div>
 
         {/* KPI */}
@@ -563,6 +565,5 @@ useEffect(() => {
         </div>
       )}
     </div>
-    </MobileLayout>
   );
 }

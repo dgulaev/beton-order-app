@@ -30,6 +30,9 @@ export async function GET(request: NextRequest) {
         volume,
         status,
         created_at,
+        on_site_at,
+        unloaded_at,
+        downtime_minutes,
         orders (
           id,
           organization_name,
@@ -51,10 +54,14 @@ export async function GET(request: NextRequest) {
       id: item.id,
       orderId: item.order_id,
       number: item.mixer_name,
+      mixerName: item.mixer_name,
       time: item.time,
       volume: Number(item.volume || 0),
       status: item.status || 'Загрузка',
-      client: item.orders?.organization_name || item.orders?.full_name || '—'
+      client: item.orders?.organization_name || item.orders?.full_name || '—',
+      onSiteAt: item.on_site_at || null,
+      unloadedAt: item.unloaded_at || null,
+      downtimeMinutes: item.downtime_minutes ?? null
     }));
 
    // console.log(`✅ Загружено ${formatted.length} записей order_mixers`);

@@ -32,6 +32,7 @@ const getRoleDisplayName = (role: string): string => {
     case 'logistic': return 'Логист';
     case 'operator': return 'Оператор';
     case 'accountant': return 'Бухгалтер';
+    case 'driver': return 'Водитель';
     default: return role;
   }
 };
@@ -216,6 +217,18 @@ const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
       throw new Error(data.message || 'Не удалось изменить статус миксера');
     }
 
+    // Подтягиваем фактическое время на объекте / простой, посчитанные сервером
+    if (data.data) {
+      setMixerAssignments(prev =>
+        prev.map(m => m.id === mixerId ? {
+          ...m,
+          onSiteAt: data.data.onSiteAt ?? m.onSiteAt,
+          unloadedAt: data.data.unloadedAt ?? m.unloadedAt,
+          downtimeMinutes: data.data.downtimeMinutes ?? m.downtimeMinutes,
+        } : m)
+      );
+    }
+
     // Обновляем историю сразу — сервер уже записал нужные записи
     if (typeof setHistory === 'function' && order?.id) {
       const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
@@ -242,6 +255,17 @@ const currentMixers = mixerAssignments
     return timeA - timeB;   // ← новые внизу
   });
 
+// ==================== 6.2 ПРОСТОЙ: ПО РЕЙСАМ И ИТОГО ПО ЗАЯВКЕ ====================
+const totalDowntimeMinutes = currentMixers.reduce((sum, m) => sum + Number(m.downtimeMinutes || 0), 0);
+
+const formatOnSiteDuration = (mixer: any): string | null => {
+  if (!mixer.onSiteAt) return null;
+  const endTime = mixer.unloadedAt ? new Date(mixer.unloadedAt) : new Date();
+  const minutes = Math.round((endTime.getTime() - new Date(mixer.onSiteAt).getTime()) / 60000);
+  if (minutes < 0) return null;
+  return `${minutes} мин`;
+};
+
   // ==================== 7. ИЗМЕНЕНИЕ ВРЕМЕНИ ЗАГРУЗКИ ====================
 const handleMixerTimeChange = async (mixerId: number, newTime: string) => {
   // Оптимистическое обновление
@@ -266,147 +290,6 @@ const handleMixerTimeChange = async (mixerId: number, newTime: string) => {
     }
   } catch (err) {
     console.error('Ошибка сохранения времени:', err);
-  }
-};
-
-  // ==================== ПЕЧАТЬ ТТН (ВОДИТЕЛЬ ИЗ СПИСКА МИКСЕРОВ) ====================
-const printTTN = (mixerId: number) => {
-  const currentMixer = mixerAssignments.find(m => m.id === mixerId);
-  if (!currentMixer || !order) {
-    alert('Не удалось найти данные для ТТН');
-    return;
-  }
-
-  // === ИЩЕМ ПОЛНЫЕ ДАННЫЕ МИКСЕРА ИЗ ГЛОБАЛЬНОГО СПИСКА ===
-  const fullMixerData = allMixers?.find(m => 
-    m.number === currentMixer.number || 
-    m.mixer_name === currentMixer.number || 
-    m.id === currentMixer.id
-  );
-
-  const driverName = fullMixerData?.driver || 
-                     fullMixerData?.driverName || 
-                     fullMixerData?.full_name || 
-                     fullMixerData?.FIO || 
-                     currentMixer.driver || 
-                     'Не указан';
-
-  const plate = fullMixerData?.plate || currentMixer.plate || '—';
-
-  const ttnNumber = `ТТН-${order.id}-${currentMixer.id}`;
-  const currentDate = new Date().toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  const currentDateTime = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-
-  const ttnHTML = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <title>ТТН № ${ttnNumber}</title>
-      <style>
-        @page { size: A4 portrait; margin: 8mm; }
-        body { font-family: Arial, sans-serif; font-size: 10.8px; line-height: 1.22; margin:0; }
-        .page { width: 100%; min-height: 100vh; page-break-after: always; padding: 12px; box-sizing: border-box; }
-        table { width: 100%; border-collapse: collapse; margin: 5px 0; }
-        td, th { border: 1px solid #000; padding: 4px 6px; vertical-align: top; }
-        .section { background: #f0f0f0; font-weight: bold; text-align: center; }
-      </style>
-    </head>
-    <body>
-
-      <!-- СТРАНИЦА 1 -->
-      <div class="page">
-        <div style="text-align:center;font-size:12px;margin-bottom:5px;">Приложение № 4 к Правилам перевозок грузов автомобильным транспортом</div>
-        <div style="text-align:center;font-size:11px;margin-bottom:12px;">(в редакции постановления Правительства Российской Федерации от 30 ноября 2021 г. № 2116)</div>
-        
-        <div style="text-align:center;font-size:16px;font-weight:bold;margin:15px 0;">Транспортная накладная</div>
-
-        <table>
-          <tr><td>Транспортная накладная</td><td>Заказ (заявка)</td></tr>
-          <tr><td>Дата: ${currentDate}<br>№ ${ttnNumber}</td><td>Дата: ${currentDate}<br>№ ${order.id}</td></tr>
-        </table>
-
-        <table>
-          <tr><td colspan="2" class="section">1. Грузоотправитель</td></tr>
-          <tr><td colspan="2">ООО "ТРЕЙДКОМ", ИНН 3257056152, 241022, Брянская область, г.о. город Брянск, г Брянск, туп Орловский, стр. 6А, помещ. 4, тел.: +7 (906) 500-21-55</td></tr>
-
-          <tr><td colspan="2" class="section">2. Грузополучатель</td></tr>
-          <tr><td colspan="2">${order.organization_name || order.full_name || '—'}</td></tr>
-          <tr><td colspan="2">${order.address || '—'}</td></tr>
-
-          <tr><td colspan="2" class="section">3. Груз</td></tr>
-          <tr><td>Наименование груза</td><td>Бетон ${order.grade || '—'}</td></tr>
-          <tr><td>Объём</td><td>${Number(currentMixer.volume).toFixed(1)} м³</td></tr>
-          <tr><td>Миксер</td><td>${currentMixer.number || currentMixer.mixer_name || '—'}</td></tr>
-        </table>
-
-        <table>
-          <tr><td colspan="2" class="section">6. Перевозчик</td></tr>
-          <tr><td colspan="2">ООО "ТРЕЙДКОМ", ИНН 3257056152, 241022, Брянская область, г.о. город Брянск, г Брянск, туп Орловский, стр. 6А, помещ. 4</td></tr>
-          <tr><td>Водитель</td><td>${driverName}</td></tr>
-        </table>
-
-        <table>
-          <tr><td colspan="2" class="section">7. Транспортное средство</td></tr>
-          <tr><td>Марка, модель</td><td>${currentMixer.number || currentMixer.mixer_name || '—'}</td></tr>
-          <tr><td>Гос. номер</td><td>${plate}</td></tr>
-        </table>
-      </div>
-
-      <!-- СТРАНИЦА 2 — ОБОРОТНАЯ -->
-      <div class="page">
-        <div class="header">Оборотная сторона</div>
-
-        <table>
-          <tr><td colspan="2" class="section">8. Прием груза</td></tr>
-          <tr><td>Наименование (ИНН) владельца пункта погрузки</td><td>ООО "ТРЕЙДКОМ" ИНН 3257056152</td></tr>
-          <tr><td>Адрес места погрузки</td><td>241022, Брянская область, г.о. город Брянск, г Брянск, туп Орловский, стр. 6А, помещ. 4</td></tr>
-          <tr><td>Фактические дата и время прибытия под погрузку</td><td>${currentDate} ${currentMixer.time || currentDateTime}</td></tr>
-          <tr><td>Фактические дата и время убытия</td><td>${currentDate} ${currentDateTime}</td></tr>
-          <tr><td>Масса груза</td><td>${Number(currentMixer.volume).toFixed(1)} м³</td></tr>
-        </table>
-
-        <table>
-          <tr><td colspan="2" class="section">9. Переадресовка (при наличии)</td></tr>
-          <tr><td colspan="2">—</td></tr>
-        </table>
-
-        <table>
-          <tr><td colspan="2" class="section">10. Выдача груза</td></tr>
-          <tr><td>Адрес места выгрузки</td><td>${order.address || '—'}</td></tr>
-          <tr><td>Фактические дата и время прибытия</td><td>${currentDate}</td></tr>
-          <tr><td>Фактические дата и время убытия</td><td>${currentDate}</td></tr>
-          <tr><td>Масса груза</td><td>${Number(currentMixer.volume).toFixed(1)} м³</td></tr>
-        </table>
-
-        <table>
-          <tr><td colspan="2" class="section">11. Отметки грузоотправителей, грузополучателей, перевозчиков</td></tr>
-          <tr><td colspan="2" style="height:85px;">—</td></tr>
-        </table>
-
-        <table>
-          <tr><td colspan="2" class="section">12. Стоимость перевозки груза</td></tr>
-          <tr><td>Стоимость перевозки без налога - всего</td><td>— ₽</td></tr>
-          <tr><td>Сумма налога</td><td>— ₽</td></tr>
-          <tr><td>Стоимость с налогом - всего</td><td>— ₽</td></tr>
-        </table>
-
-        <div style="margin-top:35px; text-align:center; font-size:11px;">
-          Подпись грузоотправителя _______________________ &nbsp;&nbsp;&nbsp;&nbsp;
-          Подпись водителя _______________________ &nbsp;&nbsp;&nbsp;&nbsp;
-          Подпись грузополучателя _______________________
-        </div>
-      </div>
-
-    </body>
-    </html>
-  `;
-
-  const win = window.open('', '_blank', 'width=1100,height=950');
-  if (win) {
-    win.document.write(ttnHTML);
-    win.document.close();
-    setTimeout(() => win.print(), 700);
   }
 };
 
@@ -626,6 +509,19 @@ const formatVolume = (value: number | string) => {
       : `Осталось ${formatVolume(orderVolume - assignedVolume)} м³`
     }
   </div>
+
+  <div style={{
+    marginTop: '14px',
+    paddingTop: '14px',
+    borderTop: '1px solid #334155',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px'
+  }}>
+    <span style={{ color: '#94A3B8', fontSize: '13.5px' }}>Общий простой по заявке:</span>
+    <span style={{ color: totalDowntimeMinutes > 0 ? '#F97316' : '#10B981', fontWeight: '700', fontSize: '16px' }}>{totalDowntimeMinutes} мин</span>
+  </div>
 </div>
 
                   {/* ==================== СПИСОК НАЗНАЧЕННЫХ МИКСЕРОВ ==================== */}
@@ -729,36 +625,20 @@ const formatVolume = (value: number | string) => {
             <option value="Проблема">🔴 Проблема</option>
           </select>
 
-          {/* Кнопка ТТН — уменьшенная */}
-<button 
-  onClick={() => printTTN(mixer.id)} 
-  style={{ 
-    padding: '3px 9px', 
-    background: 'rgba(148, 163, 184, 0.15)',   
-    color: '#94A3B8',                          
-    border: '1px solid rgba(148, 163, 184, 0.3)',
-    borderRadius: '6px', 
-    fontSize: '11.5px',        // уменьшено
-    fontWeight: '500',
-    cursor: 'pointer',
-    transition: 'all 0.2s',
-    minWidth: 'auto',
-    height: '26px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center'
-  }}
-  onMouseEnter={(e) => {
-    e.currentTarget.style.background = 'rgba(148, 163, 184, 0.25)';
-    e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.5)';
-  }}
-  onMouseLeave={(e) => {
-    e.currentTarget.style.background = 'rgba(148, 163, 184, 0.15)';
-    e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.3)';
-  }}
->
-  ТТН
-</button>
+          {/* Время на объекте / простой — видно всегда; до "На объекте" данных нет, показываем 0 */}
+          <div style={{
+            fontSize: '12px',
+            padding: '3px 9px',
+            borderRadius: '6px',
+            whiteSpace: 'nowrap',
+            background: Number(mixer.downtimeMinutes) > 0 ? 'rgba(249, 115, 22, 0.15)' : 'rgba(148, 163, 184, 0.15)',
+            color: Number(mixer.downtimeMinutes) > 0 ? '#F97316' : '#94A3B8'
+          }}
+            title="Время на объекте / простой сверх нормы"
+          >
+            ⏱ {formatOnSiteDuration(mixer) || '0 мин'}
+            {mixer.status === 'Разгружен' && ` (простой ${Number(mixer.downtimeMinutes || 0)} мин)`}
+          </div>
 
           <button 
             onClick={() => deleteMixer(mixer.id, index)} 

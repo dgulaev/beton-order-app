@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
 
 interface Mixer {
   id: number;
@@ -13,6 +14,7 @@ interface Mixer {
   status: string;
   location?: string;
   created_at?: string;
+  unload_allowance_min?: number | null;
 }
 
 export default function MixersPage() {
@@ -31,7 +33,8 @@ export default function MixersPage() {
     phone: '',
     volume: 10,
     type: 'own' as 'own' | 'rented',
-    status: 'Доступен'
+    status: 'Доступен',
+    unload_allowance_min: 50 as number | ''
   });
 
   // ==================== ЗАГРУЗКА МИКСЕРОВ ====================
@@ -61,19 +64,38 @@ export default function MixersPage() {
   // ==================== ФУНКЦИИ МОДАЛЬНОГО ОКНА ====================
   const openAddModal = () => {
     setEditingMixer(null);
-    setFormData({ number: '', model: '', driver: '', phone: '', volume: 10, type: 'own', status: 'Доступен' });
+    setFormData({ number: '', model: '', driver: '', phone: '', volume: 10, type: 'own', status: 'Доступен', unload_allowance_min: 50 });
     setShowModal(true);
   };
 
   const openEditModal = (mixer: Mixer) => {
     setEditingMixer(mixer);
-    setFormData({ ...mixer });
+    setFormData({
+      number: mixer.number,
+      model: mixer.model,
+      driver: mixer.driver,
+      phone: mixer.phone,
+      volume: mixer.volume,
+      type: mixer.type,
+      status: mixer.status,
+      unload_allowance_min: mixer.unload_allowance_min ?? 50
+    });
     setShowModal(true);
   };
 
   const saveMixer = async () => {
     if (!formData.number || !formData.driver) {
       alert('Номер миксера и водитель обязательны');
+      return;
+    }
+
+    if (!formData.phone?.trim()) {
+      alert('Телефон водителя обязателен — по нему водитель входит в мобильное приложение');
+      return;
+    }
+
+    if (formData.type === 'rented' && (formData.unload_allowance_min === '' || formData.unload_allowance_min === null || Number(formData.unload_allowance_min) <= 0)) {
+      alert('Укажите норму разгрузки (мин) для наёмного миксера');
       return;
     }
 
@@ -331,6 +353,11 @@ export default function MixersPage() {
                       </div>
                     </div>
 
+                    {/* Норма простоя */}
+                    <div style={{ color: '#64748B', fontSize: '13px', marginTop: '-10px', marginBottom: '12px' }}>
+                      Норма разгрузки: {mixer.type === 'own' ? OWN_UNLOAD_ALLOWANCE_MIN : (mixer.unload_allowance_min ?? '—')} мин
+                    </div>
+
                     {/* Модель */}
                     <div style={{ color: '#CBD5E1', fontSize: '16.5px', marginBottom: '12px' }}>
                       {mixer.model}
@@ -564,8 +591,8 @@ export default function MixersPage() {
               style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} 
             />
             <input 
-              type="text" 
-              placeholder="Телефон" 
+              type="tel" 
+              placeholder="Телефон водителя *" 
               value={formData.phone} 
               onChange={(e) => setFormData({...formData, phone: e.target.value})} 
               style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} 
@@ -598,6 +625,27 @@ export default function MixersPage() {
                 </button>
               </div>
             </div>
+
+            {formData.type === 'rented' ? (
+              <div style={{ marginBottom: '24px' }}>
+                <label>Норма разгрузки, мин *</label>
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="Например, 50"
+                  value={formData.unload_allowance_min}
+                  onChange={(e) => setFormData({ ...formData, unload_allowance_min: e.target.value === '' ? '' : Number(e.target.value) })}
+                  style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginTop: '8px' }}
+                />
+                <div style={{ color: '#64748B', fontSize: '13px', marginTop: '6px' }}>
+                  Время разгрузки сверх этой нормы будет считаться простоем у водителя этого миксера
+                </div>
+              </div>
+            ) : (
+              <div style={{ marginBottom: '24px', color: '#64748B', fontSize: '13px' }}>
+                Норма разгрузки для своих миксеров — {OWN_UNLOAD_ALLOWANCE_MIN} мин (общая для всех своих)
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: '12px' }}>
               <button 

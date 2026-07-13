@@ -28,17 +28,31 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { id, number, model, driver, phone, volume, type, status } = body;
+    const { id, number, model, driver, phone, volume, type, status, unload_allowance_min } = body;
 
     if (!number || !driver) {
       return NextResponse.json({ error: 'Номер и водитель обязательны' }, { status: 400 });
+    }
+
+    if (!phone || !String(phone).trim()) {
+      return NextResponse.json({ error: 'Телефон водителя обязателен — по нему водитель входит в мобильное приложение' }, { status: 400 });
+    }
+
+    // Норма простоя из БД имеет смысл только для наёмных миксеров — для своих
+    // используется фиксированная константа 50 мин из кода (см. lib/orderMixers.ts).
+    if (type === 'rented' && (unload_allowance_min === undefined || unload_allowance_min === null || unload_allowance_min === '')) {
+      return NextResponse.json({ error: 'Для наёмного миксера укажите норму разгрузки в минутах' }, { status: 400 });
+    }
+    const normalizedAllowance = type === 'rented' ? Number(unload_allowance_min) : null;
+    if (type === 'rented' && (!Number.isFinite(normalizedAllowance) || normalizedAllowance! <= 0)) {
+      return NextResponse.json({ error: 'Норма разгрузки для наёмного миксера должна быть больше 0' }, { status: 400 });
     }
 
     if (id) {
       // Обновление существующего
       const { data, error } = await supabase
         .from('mixers')
-        .update({ number, model, driver, phone, volume, type, status, updated_at: new Date().toISOString() })
+        .update({ number, model, driver, phone, volume, type, status, unload_allowance_min: normalizedAllowance, updated_at: new Date().toISOString() })
         .eq('id', id)
         .select()
         .single();
@@ -49,7 +63,7 @@ export async function POST(request: NextRequest) {
       // Создание нового
       const { data, error } = await supabase
         .from('mixers')
-        .insert([{ number, model, driver, phone, volume, type, status }])
+        .insert([{ number, model, driver, phone, volume, type, status, unload_allowance_min: normalizedAllowance }])
         .select()
         .single();
 

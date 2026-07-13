@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import MobileLayout from '@/app/mobile/layout';
 import MobileNewOrderModal from '../components/MobileNewOrderModal';
 import MobileOrderDetailModal from '../components/MobileOrderDetailModal';
+import MobileExitButton from '../components/MobileExitButton';
 import { Package, Plus, MapPin } from 'lucide-react';
 import { useUserRole } from '../../providers/UserRoleProvider';
 
@@ -178,28 +178,31 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   };
 
   return (
-    <MobileLayout>
+    <>
       <div style={{ padding: '16px', paddingBottom: '100px' }}>
         
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <h1 style={{ fontSize: '26px', fontWeight: '700', margin: 0 }}>Заявки</h1>
-          <button 
-            onClick={() => setShowNewOrderModal(true)}
-            style={{
-              background: '#10B981',
-              color: 'white',
-              border: 'none',
-              borderRadius: '9999px',
-              padding: '12px 20px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              fontWeight: '600'
-            }}
-          >
-            <Plus size={20} /> Новая
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <button 
+              onClick={() => setShowNewOrderModal(true)}
+              style={{
+                background: '#10B981',
+                color: 'white',
+                border: 'none',
+                borderRadius: '9999px',
+                padding: '12px 20px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                fontWeight: '600'
+              }}
+            >
+              <Plus size={20} /> Новая
+            </button>
+            <MobileExitButton />
+          </div>
         </div>
 
        {/* ==================== KPI КАРТОЧКИ ==================== */}
@@ -366,6 +369,6 @@ const { user } = useUserRole();   // ← Берём роль из провайд
         currentRole={currentRole}
         currentUserName={userFullName}
       />
-    </MobileLayout>
+    </>
   );
 }

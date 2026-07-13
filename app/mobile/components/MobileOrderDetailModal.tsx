@@ -54,7 +54,12 @@ export default function MobileOrderDetailModal({
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      try {
+        channel.teardown();
+      } catch {
+        // ignore
+      }
+      void supabase.removeChannel(channel);
     };
   }, [isOpen, order?.id]);
 

@@ -47,31 +47,55 @@ const MAX_RETRY_DELAY_MS = 30_000;
 // removeChannel → тот триггерит CLOSED → обработчик планирует новый reconnect → ...
 const intentionallyClosingChannels = new WeakSet<RealtimeChannel>();
 
+function getChannelTopic(channelKey: string): string {
+  return `realtime:${channelKey}`;
+}
+
+/**
+ * Вычищает «зомби»-каналы Supabase с тем же topic, которые остались
+ * подписанными после неудачного teardown (типичный сценарий — быстрый
+ * переход между страницами, когда наш channelRegistry уже пуст, а клиент
+ * Supabase всё ещё держит старый канал → .on() после subscribe() бросает
+ * "cannot add postgres_changes callbacks ... after subscribe()").
+ */
+function purgeOrphanSupabaseChannels(channelKey: string): void {
+  const targetTopic = getChannelTopic(channelKey);
+
+  for (const ch of supabase.getChannels()) {
+    if (ch.topic !== targetTopic) continue;
+
+    intentionallyClosingChannels.add(ch);
+    try {
+      ch.unsubscribe();
+    } catch {
+      // канал мог уже быть мёртвым
+    }
+    try {
+      ch.teardown();
+    } catch {
+      // ignore
+    }
+    try {
+      void supabase.removeChannel(ch);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 async function removeChannelIntentionally(channel: RealtimeChannel) {
   intentionallyClosingChannels.add(channel);
+  // Сначала синхронно снимаем bindings — иначе removeChannel может
+  // не вызвать teardown (unsubscribe → timed out) и канал останется зомби.
+  try {
+    channel.teardown();
+  } catch {
+    // ignore
+  }
   try {
     await supabase.removeChannel(channel);
   } catch {
     // канал мог уже быть невалиден — игнорируем
-  } finally {
-    // ⚠️ ЕЩЁ ОДИН КЛЮЧЕВОЙ ФИКС: supabase.removeChannel() внутри вызывает
-    // channel.teardown() ТОЛЬКО если channel.unsubscribe() разрешился со
-    // статусом 'ok'. Если канал уже был в состоянии ERROR/CLOSED (а это ровно
-    // наш случай — мы вызываем это именно при реконнекте после сбоя),
-    // unsubscribe() почти всегда резолвится как 'timed out' или 'error'
-    // (серверу некому подтверждать leave), и teardown() пропускается.
-    // Канал остаётся «зомби» во внутреннем списке RealtimeClient.channels.
-    // Следующий supabase.channel(тот же topic) находит этот зомби-канал
-    // (уже прошедший subscribe()) и возвращает ЕГО ЖЕ вместо нового —
-    // а вызов .on('postgres_changes', ...) на уже подписанном канале бросает
-    // "cannot add `postgres_changes` callbacks ... after `subscribe()`",
-    // и весь realtime для этой таблицы обрывается без восстановления.
-    // Поэтому подчищаем канал сами, безусловно, не полагаясь на unsubscribe().
-    try {
-      channel.teardown();
-    } catch {
-      // игнорируем — например, если метод недоступен в другой версии клиента
-    }
   }
 }
  
@@ -124,6 +148,7 @@ async function reconnectChannel(channelKey: string, table: string, event: Change
     }
 
     channelRegistry.delete(channelKey);
+    purgeOrphanSupabaseChannels(channelKey);
     const newEntry = ensureChannel(channelKey, table, event, filter);
     newEntry.retryCount = preservedRetryCount;
 
@@ -177,11 +202,30 @@ function ensureChannel(channelKey: string, table: string, event: ChangeEvent, fi
 
   const existing = channelRegistry.get(channelKey);
   if (existing) return existing;
- 
+
+  // Реестр пуст, но в Supabase-клиенте мог остаться подписанный канал
+  // с тем же topic после предыдущего unmount/reconnect.
+  purgeOrphanSupabaseChannels(channelKey);
+
+  // Пока чистили — другой вызов ensureChannel мог успеть создать канал.
+  const raced = channelRegistry.get(channelKey);
+  if (raced) return raced;
+
   const listeners = new Set<Listener>();
- 
-  const channel = supabase
-    .channel(channelKey)
+  const channel = supabase.channel(channelKey);
+
+  const entry: ChannelEntry = {
+    channel,
+    listeners,
+    status: 'CONNECTING',
+    retryCount: 0,
+    table,
+    event,
+    filter,
+  };
+  channelRegistry.set(channelKey, entry);
+
+  channel
     .on(
       'postgres_changes',
       {
@@ -193,8 +237,7 @@ function ensureChannel(channelKey: string, table: string, event: ChangeEvent, fi
       (payload: any) => {
         const recordId = payload.new?.id ?? payload.old?.id ?? '—';
         console.log(`🔴 [Realtime] ${table} → ${payload.eventType} (id: ${recordId})`);
- 
-        
+
         listeners.forEach((l) => {
           l.onAny?.(payload);
           if (payload.eventType === 'INSERT') l.onInsert?.(payload.new);
@@ -207,36 +250,22 @@ function ensureChannel(channelKey: string, table: string, event: ChangeEvent, fi
       if (status === 'SUBSCRIBED') {
         console.log(`✅ [Realtime] Подписка активна → ${table}`);
         const e = channelRegistry.get(channelKey);
-        if (e) e.retryCount = 0; // сбрасываем счётчик попыток после успеха
+        if (e) e.retryCount = 0;
         notifyStatus(channelKey, 'SUBSCRIBED');
       }
- 
+
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        // console.warn, а не console.error: это ожидаемое временное событие
-        // (например, мобильный браузер обрывает соединение в фоне — код 1006),
-        // а не баг приложения. Само переподключение уже реализовано ниже.
-        // console.error в dev-режиме Next.js триггерит блокирующий оверлей
-        // "Console Error" на весь экран — на мобильном это выглядит как
-        // сломанное приложение, хотя реконнект отрабатывает штатно.
         console.warn(`⚠️ [Realtime] ${status} → ${table}`, err);
         notifyStatus(channelKey, 'ERROR');
         scheduleReconnect(channelKey, table, event, filter);
       }
- 
+
       if (status === 'CLOSED') {
-        // Если МЫ САМИ только что попросили этот канал закрыться (реконнект или
-        // unmount-cleanup) — это ожидаемое событие, а не разрыв связи. Оно уже
-        // обрабатывается тем кодом, который вызвал removeChannel — здесь просто
-        // выходим, чтобы не запустить дублирующий/самоподдерживающийся реконнект.
         if (intentionallyClosingChannels.has(channel)) {
           return;
         }
 
         const e = channelRegistry.get(channelKey);
-        // Если запись всё ещё в реестре — это неожиданное закрытие (например, разрыв
-        // сокета из-за простоя вкладки), а не наша штатная отписка при unmount
-        // (та удаляет запись из реестра ДО вызова removeChannel). В этом случае
-        // тоже планируем переподключение, а не оставляем канал висеть закрытым.
         if (e) {
           console.warn(`⚠️ [Realtime] Канал неожиданно закрыт → ${table}, планируем переподключение`);
           notifyStatus(channelKey, 'CLOSED');
@@ -244,13 +273,11 @@ function ensureChannel(channelKey: string, table: string, event: ChangeEvent, fi
         }
       }
     });
- 
-  const entry: ChannelEntry = { channel, listeners, status: 'CONNECTING', retryCount: 0, table, event, filter };
-  channelRegistry.set(channelKey, entry);
+
   console.log(`🟢 [Realtime] Создан канал → ${channelKey}`);
   return entry;
 }
- 
+
 interface UseRealtimeOptions {
   table: string;
   event?: ChangeEvent;
@@ -342,8 +369,9 @@ export function useRealtime({
           if (channelRegistry.get(channelKey) === currentEntry) {
             channelRegistry.delete(channelKey);
           }
+          purgeOrphanSupabaseChannels(channelKey);
           console.log(`🔌 [Realtime] Канал закрыт (нет подписчиков) → ${channelKey}`);
-        }, 0);
+        }, 50);
       }
     };
    
@@ -405,6 +433,9 @@ export function formatOrderMixer(record: any, orders?: any[]) {
     updated_at: record.updated_at,
     loading_started_at: record.loading_started_at ?? record.loadingStartedAt ?? null,
     podvizhnost: record.podvizhnost,
+    onSiteAt: record.on_site_at ?? record.onSiteAt ?? null,
+    unloadedAt: record.unloaded_at ?? record.unloadedAt ?? null,
+    downtimeMinutes: record.downtime_minutes ?? record.downtimeMinutes ?? null,
     delivery_date: order?.delivery_date ?? record.delivery_date ?? null,
     delivery_time: order?.delivery_time ?? record.delivery_time ?? null,
     organization_name: order?.organization_name ?? record.organization_name ?? null,

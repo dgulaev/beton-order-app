@@ -71,6 +71,17 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
   const orderVolume = Number(order.volume || 0);
   const isFullyReady = assignedVolume >= orderVolume && assignedVolume > 0;
 
+  // ==================== ПРОСТОЙ: ПО РЕЙСАМ И ИТОГО ПО ЗАЯВКЕ ====================
+  const totalDowntimeMinutes = currentMixers.reduce((sum, m) => sum + Number(m.downtimeMinutes || 0), 0);
+
+  const formatOnSiteDuration = (mixer: any): string | null => {
+    if (!mixer.onSiteAt) return null;
+    const endTime = mixer.unloadedAt ? new Date(mixer.unloadedAt) : new Date();
+    const minutes = Math.round((endTime.getTime() - new Date(mixer.onSiteAt).getTime()) / 60000);
+    if (minutes < 0) return null;
+    return `${minutes} мин`;
+  };
+
   const getStatusRussian = (status: string): string => {
     const map: Record<string, string> = {
       'new': 'Новая', 'processing': 'В работе', 'completed': 'Выполнена', 'cancelled': 'Отменена'
@@ -298,28 +309,60 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
             <h3 style={{ color: '#94A3B8', marginBottom: '14px', fontSize: '17px' }}>
               Назначенные миксеры ({currentMixers.length})
             </h3>
+
+            {currentMixers.length > 0 && (
+              <div style={{
+                marginBottom: '14px',
+                padding: '12px 16px',
+                borderRadius: '12px',
+                background: totalDowntimeMinutes > 0 ? 'rgba(249, 115, 22, 0.12)' : 'rgba(16, 185, 129, 0.12)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px'
+              }}>
+                <span style={{ color: '#94A3B8', fontSize: '13.5px' }}>Общий простой по заявке:</span>
+                <span style={{ color: totalDowntimeMinutes > 0 ? '#F97316' : '#10B981', fontWeight: '700', fontSize: '16px' }}>{totalDowntimeMinutes} мин</span>
+              </div>
+            )}
             
             {currentMixers.length > 0 ? (
-              currentMixers.map(mixer => (
-                <div key={mixer.id} style={{ 
-                  background: '#25334A', 
-                  padding: '16px', 
-                  borderRadius: '12px', 
-                  marginBottom: '12px',
-                  color: '#ffffff'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <strong>{mixer.mixerName || mixer.number || 'Миксер'}</strong>
-                      <div style={{ fontSize: '14px', color: '#94A3B8' }}>{mixer.time}</div>
+              currentMixers.map(mixer => {
+                const onSiteDuration = formatOnSiteDuration(mixer);
+                return (
+                  <div key={mixer.id} style={{ 
+                    background: '#25334A', 
+                    padding: '16px', 
+                    borderRadius: '12px', 
+                    marginBottom: '12px',
+                    color: '#ffffff'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <strong>{mixer.mixerName || mixer.number || 'Миксер'}</strong>
+                        <div style={{ fontSize: '14px', color: '#94A3B8' }}>{mixer.time}</div>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontWeight: '600' }}>{Number(mixer.volume).toFixed(1)} м³</div>
+                        <div style={{ fontSize: '13.5px', color: '#10B981' }}>{mixer.status || 'Загрузка'}</div>
+                      </div>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: '600' }}>{Number(mixer.volume).toFixed(1)} м³</div>
-                      <div style={{ fontSize: '13.5px', color: '#10B981' }}>{mixer.status || 'Загрузка'}</div>
+
+                    <div style={{
+                      marginTop: '10px',
+                      fontSize: '13px',
+                      padding: '6px 10px',
+                      borderRadius: '8px',
+                      display: 'inline-block',
+                      background: Number(mixer.downtimeMinutes) > 0 ? 'rgba(249, 115, 22, 0.15)' : 'rgba(148, 163, 184, 0.15)',
+                      color: Number(mixer.downtimeMinutes) > 0 ? '#F97316' : '#94A3B8'
+                    }}>
+                      ⏱ {onSiteDuration || '0 мин'}
+                      {mixer.status === 'Разгружен' && ` (простой ${Number(mixer.downtimeMinutes || 0)} мин)`}
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             ) : (
               <div style={{ 
                 background: '#25334A', 

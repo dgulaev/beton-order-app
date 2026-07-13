@@ -15,6 +15,7 @@ export default function ZayavkiPage() {
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
   const [newOrderInitialData, setNewOrderInitialData] = useState<any>(null);
   const [orderHistory, setOrderHistory] = useState<any[]>([]);
+  const [orderMixers, setOrderMixers] = useState<any[]>([]);
   const [userFullName, setUserFullName] = useState<string>('');
   const [currentRole, setCurrentRole] = useState<string>('');
  
@@ -82,16 +83,32 @@ const getStatusConfig = (status: string) => {
     }
   }, []);
 
+  // ==================== ЗАГРУЗКА НАЗНАЧЕННЫХ МИКСЕРОВ (для отображения простоя) ====================
+  const loadOrderMixers = useCallback(async (orderId: number) => {
+    try {
+      const res = await fetch(`/api/adminCifra/order-mixers?orderId=${orderId}`);
+      if (res.ok) {
+        setOrderMixers(await res.json());
+      } else {
+        setOrderMixers([]);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки миксеров заявки:', err);
+      setOrderMixers([]);
+    }
+  }, []);
+
   // ==================== ОТКРЫТИЕ ЗАЯВКИ С ИСТОРИЕЙ ====================
   const handleOpenOrder = useCallback((order: Order) => {
     setSelectedOrder(order);
     const orderId = order.id ? Number(order.id) : null;
     if (orderId) {
       loadOrderHistory(orderId);
+      loadOrderMixers(orderId);
     } else {
       console.error('У заявки отсутствует id:', order);
     }
-  }, [loadOrderHistory]);
+  }, [loadOrderHistory, loadOrderMixers]);
 
                   // ==================== ЗАГРУЗКА РОЛИ И РЕАЛЬНОГО ИМЕНИ ====================
 useEffect(() => {
@@ -1478,6 +1495,79 @@ ${order.customer_type?.includes('Юридическое')
                     Google
                   </a>
                 </div>
+
+                {/* ==================== НАЗНАЧЕННЫЕ МИКСЕРЫ + ПРОСТОЙ ==================== */}
+                {orderMixers.length > 0 && (() => {
+                  const totalDowntime = orderMixers.reduce((sum, m) => sum + Number(m.downtimeMinutes || 0), 0);
+                  const formatOnSiteDuration = (m: any): string | null => {
+                    if (!m.onSiteAt) return null;
+                    const end = m.unloadedAt ? new Date(m.unloadedAt) : new Date();
+                    const minutes = Math.round((end.getTime() - new Date(m.onSiteAt).getTime()) / 60000);
+                    return minutes >= 0 ? `${minutes} мин` : null;
+                  };
+
+                  return (
+                    <div style={{ marginBottom: '32px' }}>
+                      <h3 style={{ marginBottom: '12px', color: '#94A3B8' }}>
+                        Назначенные миксеры ({orderMixers.length})
+                      </h3>
+
+                      <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
+                        <div style={{
+                          marginBottom: '14px',
+                          paddingBottom: '14px',
+                          borderBottom: '1px solid #334155',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '8px'
+                        }}>
+                          <span style={{ color: '#94A3B8', fontSize: '13.5px' }}>Общий простой по заявке:</span>
+                          <span style={{ color: totalDowntime > 0 ? '#F97316' : '#10B981', fontWeight: '700', fontSize: '16px' }}>{totalDowntime} мин</span>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          {orderMixers.map((mixer: any) => {
+                            const duration = formatOnSiteDuration(mixer);
+                            return (
+                              <div
+                                key={mixer.id}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  gap: '12px',
+                                  background: '#1E2937',
+                                  borderRadius: '10px',
+                                  padding: '10px 14px',
+                                }}
+                              >
+                                <div>
+                                  <div style={{ fontWeight: '700', fontSize: '14.5px' }}>
+                                    {mixer.mixerName || mixer.number} <span style={{ color: '#64748B', fontWeight: 400 }}>· {mixer.time}</span>
+                                  </div>
+                                  <div style={{ color: '#94A3B8', fontSize: '13px' }}>{Number(mixer.volume).toFixed(1)} м³</div>
+                                </div>
+
+                                <div style={{ textAlign: 'right' }}>
+                                  <div style={{ fontSize: '13px', color: '#10B981', fontWeight: 600 }}>{mixer.status || 'Загрузка'}</div>
+                                  <div style={{
+                                    marginTop: '4px',
+                                    fontSize: '12px',
+                                    color: Number(mixer.downtimeMinutes) > 0 ? '#F97316' : '#94A3B8'
+                                  }}>
+                                    ⏱ {duration || '0 мин'}
+                                    {mixer.status === 'Разгружен' && ` (простой ${Number(mixer.downtimeMinutes || 0)} мин)`}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                                                {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ ==================== */}
 <div>
