@@ -123,6 +123,17 @@ export default function MixersPage() {
     }
   };
 
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '14px',
+    background: '#25334A',
+    border: 'none',
+    borderRadius: '12px',
+    color: '#fff',
+    marginBottom: '16px',
+    boxSizing: 'border-box'
+  };
+
   const getStatusStyle = (status: string) => {
     if (status === 'В пути') return { color: '#3B82F6', bg: '#3B82F620' };
     if (status === 'На объекте') return { color: '#10B981', bg: '#10B98120' };
@@ -131,25 +142,35 @@ export default function MixersPage() {
   };
 
   return (
-    <div style={{ background: '#0F172A', minHeight: '100vh', color: '#fff', padding: '32px 40px' }}>
+    <div style={{ 
+      color: '#fff', 
+      flex: 1,
+      minHeight: 0,
+      width: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      boxSizing: 'border-box'
+    }}>
       
       {/* ==================== ЗАГОЛОВОК + КНОПКА ДОБАВИТЬ ==================== */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexShrink: 0 }}>
         <h1 style={{
-          fontSize: '32px',
+          fontSize: '24px',
           fontWeight: '700',
+          marginTop: 0,
           display: 'flex',
           alignItems: 'flex-end',
-          gap: '12px'
+          gap: '10px'
         }}>
           <img 
             src="/icons/mixer-truck.png" 
             alt="Миксер" 
             style={{ 
-              width: '52px', 
-              height: '52px', 
+              width: '38px', 
+              height: '38px', 
               objectFit: 'contain',
-              marginBottom: '-4px'
+              marginBottom: '-2px'
             }} 
           />
           Миксеры
@@ -158,13 +179,13 @@ export default function MixersPage() {
         <button 
           onClick={openAddModal} 
           style={{ 
-            padding: '14px 28px', 
+            padding: '10px 22px', 
             background: '#10B981', 
             color: 'white', 
             border: 'none', 
             borderRadius: '9999px', 
             fontWeight: '600',
-            fontSize: '16px'
+            fontSize: '14.5px'
           }}
         >
           + Добавить миксер
@@ -178,7 +199,8 @@ export default function MixersPage() {
         alignItems: 'center',
         flexWrap: 'wrap',
         gap: '16px',
-        marginBottom: '32px'
+        marginBottom: '14px',
+        flexShrink: 0
       }}>
         
         {/* Левая группа — фильтры */}
@@ -186,7 +208,7 @@ export default function MixersPage() {
           <button 
             onClick={() => setFilter('all')} 
             style={{
-              padding: '12px 28px',
+              padding: '10px 20px',
               background: 'transparent',
               border: 'none',
               color: filter === 'all' ? '#10B981' : '#64748B',
@@ -201,7 +223,7 @@ export default function MixersPage() {
           <button 
             onClick={() => setFilter('own')} 
             style={{
-              padding: '12px 28px',
+              padding: '10px 20px',
               background: 'transparent',
               border: 'none',
               color: filter === 'own' ? '#10B981' : '#64748B',
@@ -216,7 +238,7 @@ export default function MixersPage() {
           <button 
             onClick={() => setFilter('rented')} 
             style={{
-              padding: '12px 28px',
+              padding: '10px 20px',
               background: 'transparent',
               border: 'none',
               color: filter === 'rented' ? '#10B981' : '#64748B',
@@ -235,7 +257,7 @@ export default function MixersPage() {
           <button 
             onClick={() => setViewMode('grid')} 
             style={{
-              padding: '12px 24px',
+              padding: '10px 20px',
               background: 'transparent',
               border: 'none',
               color: viewMode === 'grid' ? '#10B981' : '#64748B',
@@ -269,7 +291,7 @@ export default function MixersPage() {
           <button 
             onClick={() => setViewMode('list')} 
             style={{
-              padding: '12px 24px',
+              padding: '10px 20px',
               background: 'transparent',
               border: 'none',
               color: viewMode === 'list' ? '#10B981' : '#64748B',
@@ -303,6 +325,7 @@ export default function MixersPage() {
       </div>
 
       {/* ==================== ОСНОВНОЙ КОНТЕНТ (СПИСОК / ПЛИТКА) ==================== */}
+      <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
       {loading ? (
         <div style={{ textAlign: 'center', padding: '100px', color: '#94A3B8' }}>Загрузка миксеров...</div>
       ) : (
@@ -311,8 +334,9 @@ export default function MixersPage() {
           {viewMode === 'grid' && (
             <div style={{ 
               display: 'grid', 
-              gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', 
-              gap: '20px' 
+              gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
+              gap: '16px',
+              paddingBottom: '4px'
             }}>
               {filteredMixers.map((mixer) => {
                 const statusStyle = getStatusStyle(mixer.status);
@@ -321,11 +345,13 @@ export default function MixersPage() {
                     key={mixer.id} 
                     style={{ 
                       background: '#1E2937', 
-                      borderRadius: '18px', 
-                      padding: '20px',
+                      borderRadius: '16px', 
+                      padding: '16px',
                       transition: 'all 0.25s ease',
                       border: '1px solid #334155',
-                      height: 'fit-content'
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignSelf: 'start'
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.transform = 'translateY(-3px)';
@@ -337,8 +363,8 @@ export default function MixersPage() {
                     }}
                   >
                     {/* Номер + Тип */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
-                      <div style={{ fontSize: '22px', fontWeight: '700' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '16px' }}>
+                      <div style={{ fontSize: '22px', fontWeight: '700', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
                         {mixer.number}
                       </div>
                       <div style={{ 
@@ -346,6 +372,8 @@ export default function MixersPage() {
                         borderRadius: '9999px', 
                         fontSize: '13.5px',
                         fontWeight: '600',
+                        whiteSpace: 'nowrap',
+                        flexShrink: 0,
                         background: mixer.type === 'own' ? '#10B98120' : '#FACC1520', 
                         color: mixer.type === 'own' ? '#10B981' : '#FACC15'
                       }}>
@@ -354,23 +382,34 @@ export default function MixersPage() {
                     </div>
 
                     {/* Норма простоя */}
-                    <div style={{ color: '#64748B', fontSize: '13px', marginTop: '-10px', marginBottom: '12px' }}>
+                    <div style={{ color: '#64748B', fontSize: '13px', marginTop: '-10px', marginBottom: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       Норма разгрузки: {mixer.type === 'own' ? OWN_UNLOAD_ALLOWANCE_MIN : (mixer.unload_allowance_min ?? '—')} мин
                     </div>
 
                     {/* Модель */}
-                    <div style={{ color: '#CBD5E1', fontSize: '16.5px', marginBottom: '12px' }}>
+                    <div style={{ color: '#CBD5E1', fontSize: '16.5px', marginBottom: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {mixer.model}
                     </div>
 
                     {/* Водитель + Телефон */}
                     <div style={{ marginBottom: '20px' }}>
-                      <div style={{ fontWeight: '600', fontSize: '16px' }}>{mixer.driver}</div>
-                      <div style={{ color: '#94A3B8', fontSize: '14.5px' }}>{mixer.phone}</div>
+                      <div style={{ 
+                        fontWeight: '600', 
+                        fontSize: '16px',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical' as any,
+                        overflow: 'hidden',
+                        lineHeight: '19px',
+                        height: '38px'
+                      }}>
+                        {mixer.driver}
+                      </div>
+                      <div style={{ color: '#94A3B8', fontSize: '14.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: '17px', height: '17px', marginTop: '3px' }}>{mixer.phone}</div>
                     </div>
 
                     {/* Объём + Статус */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', marginTop: 'auto' }}>
                       <div>
                         <div style={{ fontSize: '32px', fontWeight: '700', lineHeight: 1 }}>
                           {mixer.volume} <span style={{ fontSize: '18px', color: '#94A3B8' }}>м³</span>
@@ -383,25 +422,29 @@ export default function MixersPage() {
                         background: statusStyle.bg, 
                         color: statusStyle.color, 
                         fontWeight: '600',
-                        fontSize: '14px'
+                        fontSize: '14px',
+                        whiteSpace: 'nowrap'
                       }}>
                         {mixer.status}
                       </div>
                     </div>
 
                     {/* Тонкие кнопки в стиле списка */}
-                    <div style={{ display: 'flex', gap: '10px' }}>
+                    <div style={{ display: 'flex', gap: '8px' }}>
                       <button 
                         onClick={() => openEditModal(mixer)} 
                         style={{ 
                           flex: 1, 
-                          padding: '10px 16px',
+                          padding: '8px 12px',
                           background: '#334155',
                           color: '#E2E8F0',
                           border: 'none', 
                           borderRadius: '9999px', 
                           fontWeight: '500',
-                          fontSize: '14.5px',
+                          fontSize: '13.5px',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
                           transition: 'all 0.2s ease'
                         }}
                         onMouseEnter={(e) => {
@@ -418,13 +461,16 @@ export default function MixersPage() {
                       <button 
                         style={{ 
                           flex: 1, 
-                          padding: '10px 16px',
+                          padding: '8px 12px',
                           background: '#334155',
                           color: '#E2E8F0',
                           border: 'none', 
                           borderRadius: '9999px', 
                           fontWeight: '500',
-                          fontSize: '14.5px'
+                          fontSize: '13.5px',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
                         }}
                       >
                         📍 На карте
@@ -452,58 +498,60 @@ export default function MixersPage() {
                     style={{ 
                       display: 'flex', 
                       alignItems: 'center', 
-                      padding: '18px 28px',
+                      padding: '8px 28px',
                       borderBottom: '1px solid #334155',
                       transition: 'background 0.2s ease',
-                      minHeight: '72px'
+                      minHeight: '46px'
                     }}
                     onMouseEnter={(e) => e.currentTarget.style.background = '#25334A'}
                     onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
                     {/* Номер миксера */}
-                    <div style={{ width: '140px', fontWeight: '700', fontSize: '18px', color: '#fff' }}>
+                    <div style={{ width: '140px', fontWeight: '700', fontSize: '15.5px', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {mixer.number}
                     </div>
 
                     {/* Модель */}
-                    <div style={{ flex: 1, color: '#CBD5E1', fontSize: '16px' }}>
+                    <div style={{ flex: 1, color: '#CBD5E1', fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {mixer.model}
                     </div>
 
                     {/* Водитель + телефон */}
-                    <div style={{ flex: 1.4 }}>
-                      <div style={{ fontWeight: '600' }}>{mixer.driver}</div>
-                      <div style={{ color: '#94A3B8', fontSize: '14.5px' }}>{mixer.phone}</div>
+                    <div style={{ flex: 1.4, minWidth: 0, overflow: 'hidden' }}>
+                      <div style={{ fontWeight: '600', fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mixer.driver}</div>
+                      <div style={{ color: '#94A3B8', fontSize: '12.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mixer.phone}</div>
                     </div>
 
                     {/* Объём */}
-                    <div style={{ width: '110px', fontSize: '18px', fontWeight: '700', textAlign: 'center' }}>
+                    <div style={{ width: '90px', fontSize: '15px', fontWeight: '700', textAlign: 'center', whiteSpace: 'nowrap' }}>
                       {mixer.volume} м³
                     </div>
 
                     {/* Статус */}
-                    <div style={{ width: '160px' }}>
+                    <div style={{ width: '150px' }}>
                       <span style={{ 
-                        padding: '6px 18px', 
+                        padding: '4px 14px', 
                         borderRadius: '9999px', 
                         background: statusStyle.bg, 
                         color: statusStyle.color, 
                         fontWeight: '600',
-                        fontSize: '14px'
+                        fontSize: '13px',
+                        whiteSpace: 'nowrap'
                       }}>
                         {mixer.status}
                       </span>
                     </div>
 
                     {/* Тип */}
-                    <div style={{ width: '130px' }}>
+                    <div style={{ width: '120px' }}>
                       <span style={{ 
-                        padding: '6px 18px', 
+                        padding: '4px 14px', 
                         borderRadius: '9999px', 
                         background: mixer.type === 'own' ? '#10B98120' : '#FACC1520', 
                         color: mixer.type === 'own' ? '#10B981' : '#FACC15',
                         fontWeight: '600',
-                        fontSize: '14px'
+                        fontSize: '13px',
+                        whiteSpace: 'nowrap'
                       }}>
                         {mixer.type === 'own' ? 'Свой' : 'Наемный'}
                       </span>
@@ -513,13 +561,14 @@ export default function MixersPage() {
                     <button 
                       onClick={() => openEditModal(mixer)} 
                       style={{ 
-                        padding: '9px 20px',
+                        padding: '6px 16px',
                         background: '#334155',
                         color: '#E2E8F0',
                         border: 'none', 
                         borderRadius: '9999px', 
                         fontWeight: '500',
-                        fontSize: '14.5px',
+                        fontSize: '13.5px',
+                        whiteSpace: 'nowrap',
                         marginLeft: 'auto',
                         transition: 'all 0.2s ease'
                       }}
@@ -541,6 +590,7 @@ export default function MixersPage() {
           )}
         </>
       )}
+      </div>
 
       {/* ==================== МОДАЛЬНОЕ ОКНО ==================== */}
       {showModal && (
@@ -552,16 +602,23 @@ export default function MixersPage() {
             zIndex: 9999, 
             display: 'flex', 
             alignItems: 'center', 
-            justifyContent: 'center' 
+            justifyContent: 'center',
+            padding: '16px'
           }} 
           onClick={() => setShowModal(false)}
         >
           <div 
+            className="scroll-hidden"
             style={{ 
               background: '#1E2937', 
-              width: '520px', 
+              width: '100%',
+              maxWidth: '520px', 
+              maxHeight: '90vh',
+              overflowY: 'auto',
               borderRadius: '20px', 
-              padding: '32px' 
+              padding: '28px',
+              boxSizing: 'border-box',
+              margin: '0 16px'
             }} 
             onClick={e => e.stopPropagation()}
           >
@@ -574,28 +631,28 @@ export default function MixersPage() {
               placeholder="Номер миксера *" 
               value={formData.number} 
               onChange={(e) => setFormData({...formData, number: e.target.value})} 
-              style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} 
+              style={inputStyle} 
             />
             <input 
               type="text" 
               placeholder="Модель" 
               value={formData.model} 
               onChange={(e) => setFormData({...formData, model: e.target.value})} 
-              style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} 
+              style={inputStyle} 
             />
             <input 
               type="text" 
               placeholder="ФИО водителя *" 
               value={formData.driver} 
               onChange={(e) => setFormData({...formData, driver: e.target.value})} 
-              style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} 
+              style={inputStyle} 
             />
             <input 
               type="tel" 
               placeholder="Телефон водителя *" 
               value={formData.phone} 
               onChange={(e) => setFormData({...formData, phone: e.target.value})} 
-              style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginBottom: '16px' }} 
+              style={inputStyle} 
             />
 
             <div style={{ marginBottom: '16px' }}>
@@ -604,7 +661,7 @@ export default function MixersPage() {
                 type="number" 
                 value={formData.volume} 
                 onChange={(e) => setFormData({...formData, volume: Number(e.target.value)})} 
-                style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff' }} 
+                style={{ ...inputStyle, marginBottom: 0, marginTop: '8px' }} 
               />
             </div>
 
@@ -613,13 +670,13 @@ export default function MixersPage() {
               <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
                 <button 
                   onClick={() => setFormData({...formData, type: 'own'})} 
-                  style={{ flex: 1, padding: '12px', background: formData.type === 'own' ? '#10B981' : '#25334A', borderRadius: '12px', color: 'white' }}
+                  style={{ flex: 1, padding: '12px', background: formData.type === 'own' ? '#10B981' : '#25334A', borderRadius: '12px', color: 'white', border: 'none', boxSizing: 'border-box' }}
                 >
                   Свой
                 </button>
                 <button 
                   onClick={() => setFormData({...formData, type: 'rented'})} 
-                  style={{ flex: 1, padding: '12px', background: formData.type === 'rented' ? '#FACC15' : '#25334A', borderRadius: '12px', color: 'white' }}
+                  style={{ flex: 1, padding: '12px', background: formData.type === 'rented' ? '#FACC15' : '#25334A', borderRadius: '12px', color: 'white', border: 'none', boxSizing: 'border-box' }}
                 >
                   Наемный
                 </button>
@@ -635,7 +692,7 @@ export default function MixersPage() {
                   placeholder="Например, 50"
                   value={formData.unload_allowance_min}
                   onChange={(e) => setFormData({ ...formData, unload_allowance_min: e.target.value === '' ? '' : Number(e.target.value) })}
-                  style={{ width: '100%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', marginTop: '8px' }}
+                  style={{ ...inputStyle, marginBottom: 0, marginTop: '8px' }}
                 />
                 <div style={{ color: '#64748B', fontSize: '13px', marginTop: '6px' }}>
                   Время разгрузки сверх этой нормы будет считаться простоем у водителя этого миксера
@@ -650,13 +707,13 @@ export default function MixersPage() {
             <div style={{ display: 'flex', gap: '12px' }}>
               <button 
                 onClick={() => setShowModal(false)} 
-                style={{ flex: 1, padding: '14px', background: '#334155', borderRadius: '9999px', color: 'white' }}
+                style={{ flex: 1, padding: '14px', background: '#334155', borderRadius: '9999px', color: 'white', border: 'none', boxSizing: 'border-box' }}
               >
                 Отмена
               </button>
               <button 
                 onClick={saveMixer} 
-                style={{ flex: 1, padding: '14px', background: '#10B981', borderRadius: '9999px', fontWeight: '600', color: 'white' }}
+                style={{ flex: 1, padding: '14px', background: '#10B981', borderRadius: '9999px', fontWeight: '600', color: 'white', border: 'none', boxSizing: 'border-box' }}
               >
                 {editingMixer ? 'Сохранить изменения' : 'Добавить миксер'}
               </button>

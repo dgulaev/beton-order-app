@@ -688,68 +688,64 @@ const removeLastCube = (index: number) => {
   // ==================== 7. ОСНОВНОЙ РЕНДЕР ====================
   return (
     <div style={{ 
-      backgroundColor: '#0F172A', 
-      minHeight: '100vh', 
       color: '#E2E8F0', 
-      padding: '24px',
+      padding: '0 0 24px 0',
       fontFamily: 'system-ui, sans-serif'
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
-      </div>
 
                  {/* ==================== МЕТРИКИ РАСХОДА СЕГОДНЯ ==================== */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '20px', marginBottom: '48px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px', marginBottom: '24px' }}>
         
         {/* Цемент */}
         <div style={{ 
           background: '#1E2937', 
-          padding: '28px 32px', 
-          borderRadius: '20px',
+          padding: '18px 22px', 
+          borderRadius: '18px',
           border: '1px solid #334155'
         }}>
-          <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>
+          <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>
             Расход цемента сегодня
           </div>
-          <div style={{ fontSize: '52px', fontWeight: '700', color: '#10B981', lineHeight: '1' }}>
-            {todayConsumption.cement} <span style={{ fontSize: '26px', color: '#64748B' }}>т</span>
+          <div style={{ fontSize: '38px', fontWeight: '700', color: '#10B981', lineHeight: '1' }}>
+            {todayConsumption.cement} <span style={{ fontSize: '20px', color: '#64748B' }}>т</span>
           </div>
         </div>
 
         {/* ПФМ-НЛК */}
         <div style={{ 
           background: '#1E2937', 
-          padding: '28px 32px', 
-          borderRadius: '20px',
+          padding: '18px 22px', 
+          borderRadius: '18px',
           border: '1px solid #334155'
         }}>
-          <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>
+          <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>
             Расход ПФМ-НЛК сегодня
           </div>
-          <div style={{ fontSize: '52px', fontWeight: '700', color: '#C084FC', lineHeight: '1' }}>
-            {todayConsumption.pfm} <span style={{ fontSize: '26px', color: '#64748B' }}>кг</span>
+          <div style={{ fontSize: '38px', fontWeight: '700', color: '#C084FC', lineHeight: '1' }}>
+            {todayConsumption.pfm} <span style={{ fontSize: '20px', color: '#64748B' }}>кг</span>
           </div>
         </div>
 
         {/* Линомикс ТипР */}
         <div style={{ 
           background: '#1E2937', 
-          padding: '28px 32px', 
-          borderRadius: '20px',
+          padding: '18px 22px', 
+          borderRadius: '18px',
           border: '1px solid #334155'
         }}>
-          <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>
+          <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>
             Расход Линомикс ТипР сегодня
           </div>
-          <div style={{ fontSize: '52px', fontWeight: '700', color: '#60A5FA', lineHeight: '1' }}>
-            {todayConsumption.linomix} <span style={{ fontSize: '26px', color: '#64748B' }}>кг</span>
+          <div style={{ fontSize: '38px', fontWeight: '700', color: '#60A5FA', lineHeight: '1' }}>
+            {todayConsumption.linomix} <span style={{ fontSize: '20px', color: '#64748B' }}>кг</span>
           </div>
         </div>
 
       </div>
 
             {/* ==================== 8. ВЕРТИКАЛЬНЫЕ СИЛОСЫ ==================== */}
-      <h2 style={{ fontSize: '24px', marginBottom: '24px', color: '#CBD5E1' }}>Силосы цемента</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '32px' }}>
+      <h2 style={{ fontSize: '20px', marginBottom: '16px', color: '#CBD5E1' }}>Силосы цемента</h2>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
         {silos.map((silo: any) => {
           const current = Number(silo.current || 0);
           const max = Number(silo.max || 1);
@@ -831,19 +827,19 @@ const removeLastCube = (index: number) => {
                 }} />
               </div>
 
-              <h3 style={{ fontSize: '21px', marginBottom: '6px' }}>{silo.name}</h3>
+              <h3 style={{ fontSize: '19px', marginBottom: '4px' }}>{silo.name}</h3>
               <div style={{ 
-                fontSize: '26px', 
+                fontSize: '23px', 
                 fontWeight: '700', 
                 color: textColor 
               }}>
                 {formatCement(current)} / {silo.max} т
               </div>
-              <div style={{ fontSize: '14px', color: '#64748B', marginTop: '4px' }}>
+              <div style={{ fontSize: '13px', color: '#64748B', marginTop: '4px' }}>
                 {percent.toFixed(0)}% заполнено
               </div>
 
-              <div style={{ marginTop: '20px', display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <div style={{ marginTop: '14px', display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
                 <button onClick={() => handleAddCement(silo.silo_id)} 
                   style={{ padding: '12px 20px', background: '#3B82F6', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>
                   + Внести
@@ -862,12 +858,12 @@ const removeLastCube = (index: number) => {
         })}
       </div>
                                 {/* ==================== 9. ЁМКОСТИ ДОБАВОК ==================== */}
-      <h2 style={{ fontSize: '24px', margin: '48px 0 24px', color: '#CBD5E1' }}>Ёмкости добавок</h2>
+      <h2 style={{ fontSize: '20px', margin: '28px 0 16px', color: '#CBD5E1' }}>Ёмкости добавок</h2>
 
       {/* Добавка 1 — ПФМ-НЛК */}
-      <div style={{ marginBottom: '48px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
-          <h3 style={{ fontSize: '22px', margin: 0, color: '#E2E8F0' }}>ПФМ-НЛК</h3>
+      <div style={{ marginBottom: '28px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '14px' }}>
+          <h3 style={{ fontSize: '19px', margin: 0, color: '#E2E8F0' }}>ПФМ-НЛК</h3>
           <div style={{ fontSize: '18px', color: '#94A3B8' }}>
             {(additives[0]?.current || 0).toFixed(0)} / {(additives[0]?.max || 9000)} литров
           </div>
@@ -889,17 +885,17 @@ const removeLastCube = (index: number) => {
 
             return (
               <div key={`pfm-${idx}`} style={{
-                width: '130px',
-                height: '130px',
+                width: '104px',
+                height: '104px',
                 background: '#1E2937',
-                border: '5px solid #64748B',
-                borderRadius: '18px',
+                border: '4px solid #64748B',
+                borderRadius: '16px',
                 position: 'relative',
                 overflow: 'hidden',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: '28px',
+                fontSize: '22px',
                 fontWeight: '700',
                 color: fillPercent > 25 ? 'white' : '#94A3B8',
                 boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
@@ -920,7 +916,7 @@ const removeLastCube = (index: number) => {
         </div>
 
         {/* Кнопки для ПФМ */}
-        <div style={{ marginTop: '24px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+        <div style={{ marginTop: '16px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
           <button onClick={() => handleAddAdditive(0)} style={{ padding: '12px 24px', background: '#3B82F6', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>+ Внести</button>
           <button onClick={() => handleSubtractAdditive(0)} style={{ padding: '12px 24px', background: '#EF4444', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>− Списать</button>
           <button onClick={() => resetAdditive(0)} style={{ padding: '12px 24px', background: '#475569', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>Обнулить</button>
@@ -930,9 +926,9 @@ const removeLastCube = (index: number) => {
       </div>
 
       {/* Добавка 2 — Линомикс ТипР */}
-      <div style={{ marginBottom: '48px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
-          <h3 style={{ fontSize: '22px', margin: 0, color: '#E2E8F0' }}>Линомикс ТипР</h3>
+      <div style={{ marginBottom: '28px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '14px' }}>
+          <h3 style={{ fontSize: '19px', margin: 0, color: '#E2E8F0' }}>Линомикс ТипР</h3>
           <div style={{ fontSize: '18px', color: '#94A3B8' }}>
             {(additives[1]?.current || 0).toFixed(0)} / {(additives[1]?.max || 1000)} литров
           </div>
@@ -954,17 +950,17 @@ const removeLastCube = (index: number) => {
 
             return (
               <div key={`lin-${idx}`} style={{
-                width: '130px',
-                height: '130px',
+                width: '104px',
+                height: '104px',
                 background: '#1E2937',
-                border: '5px solid #64748B',
-                borderRadius: '18px',
+                border: '4px solid #64748B',
+                borderRadius: '16px',
                 position: 'relative',
                 overflow: 'hidden',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: '28px',
+                fontSize: '22px',
                 fontWeight: '700',
                 color: fillPercent > 25 ? 'white' : '#94A3B8',
                 boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
@@ -984,7 +980,7 @@ const removeLastCube = (index: number) => {
           })}
         </div>
 
-        <div style={{ marginTop: '24px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+        <div style={{ marginTop: '16px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
           <button onClick={() => handleAddAdditive(1)} style={{ padding: '12px 24px', background: '#3B82F6', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>+ Внести</button>
           <button onClick={() => handleSubtractAdditive(1)} style={{ padding: '12px 24px', background: '#EF4444', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>− Списать</button>
           <button onClick={() => resetAdditive(1)} style={{ padding: '12px 24px', background: '#475569', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>Обнулить</button>
@@ -1077,15 +1073,12 @@ const removeLastCube = (index: number) => {
       </div>
       */}
 
-      {/* Пустое место вместо истории */}
-      <div style={{ marginTop: '60px' }}></div>
-
    {/* ==================== БЛОКИ ФБС НА СКЛАДЕ ==================== */}
-<div className="mt-10">
-  <h2 className="text-2xl font-semibold text-white mb-6">Блоки ФБС на складе</h2>
+<div className="mt-4">
+  <h2 className="text-xl font-semibold text-white mb-4">Блоки ФБС на складе</h2>
 
   {/* Кнопка Добавить выше с нормальным отступом */}
-  <div style={{ marginBottom: '40px' }}>
+  <div style={{ marginBottom: '20px' }}>
     <select 
       value={selectedFBSId || ''} 
       onChange={(e) => setSelectedFBSId(Number(e.target.value))}
@@ -1124,11 +1117,11 @@ const removeLastCube = (index: number) => {
   </div>
 
   {/* Карточки в одну линию */}
-<div style={{ 
+<div className="scroll-hidden" style={{ 
   display: 'flex', 
   gap: '20px', 
   overflowX: 'auto', 
-  paddingBottom: '20px' 
+  paddingBottom: '8px' 
 }}>
   {fbsBlocks.map((block: any) => {
     const qty = Number(block.current || 0);

@@ -361,9 +361,9 @@ export default function ReportsPage() {
 
 
   return (
-    <div style={{ padding: '5px 40px 40px 40px' }}>
+    <div style={{ padding: '0 0 24px 0' }}>
       {/* ====================== КНОПКА ЗАГРУЗКИ НОВОГО ОТЧЕТА ====================== */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '32px' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
         <label style={{
     color: '#10B981',
     padding: '10px 20px',
@@ -485,29 +485,29 @@ export default function ReportsPage() {
           {/* ==================== СТАТИСТИКА СВЕРХУ ==================== */}
 <div style={{ 
   display: 'grid', 
-  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', 
-  gap: '20px',
-  marginBottom: '32px'
+  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', 
+  gap: '14px',
+  marginBottom: '18px'
 }}>
   
   {/* Всего отчётов */}
   <div style={{ 
     background: '#1E2937', 
-    borderRadius: '20px', 
-    padding: '24px 28px' 
+    borderRadius: '18px', 
+    padding: '16px 20px' 
   }}>
-    <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>Всего отчётов</div>
-    <div style={{ fontSize: '48px', fontWeight: '700' }}>{stats.reports}</div>
+    <div style={{ color: '#94A3B8', fontSize: '13.5px', marginBottom: '6px' }}>Всего отчётов</div>
+    <div style={{ fontSize: '32px', fontWeight: '700' }}>{stats.reports}</div>
   </div>
 
   {/* Общий объём */}
   <div style={{ 
     background: '#1E2937', 
-    borderRadius: '20px', 
-    padding: '24px 28px' 
+    borderRadius: '18px', 
+    padding: '16px 20px' 
   }}>
-    <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>Общий объём</div>
-    <div style={{ fontSize: '48px', fontWeight: '700', color: '#10B981' }}>
+    <div style={{ color: '#94A3B8', fontSize: '13.5px', marginBottom: '6px' }}>Общий объём</div>
+    <div style={{ fontSize: '32px', fontWeight: '700', color: '#10B981' }}>
       {stats.volume} м³
     </div>
   </div>
@@ -515,11 +515,11 @@ export default function ReportsPage() {
   {/* Цемент */}
   <div style={{ 
     background: '#1E2937', 
-    borderRadius: '20px', 
-    padding: '24px 28px' 
+    borderRadius: '18px', 
+    padding: '16px 20px' 
   }}>
-    <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>Цемент израсходовано</div>
-    <div style={{ fontSize: '48px', fontWeight: '700', color: '#F59E0B' }}>
+    <div style={{ color: '#94A3B8', fontSize: '13.5px', marginBottom: '6px' }}>Цемент израсходовано</div>
+    <div style={{ fontSize: '32px', fontWeight: '700', color: '#F59E0B' }}>
       {stats.cement} т
     </div>
   </div>
@@ -527,11 +527,11 @@ export default function ReportsPage() {
   {/* Добавка 1 */}
   <div style={{ 
     background: '#1E2937', 
-    borderRadius: '20px', 
-    padding: '24px 28px' 
+    borderRadius: '18px', 
+    padding: '16px 20px' 
   }}>
-    <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>Добавка 1 (ПФМ-НЛК)</div>
-    <div style={{ fontSize: '48px', fontWeight: '700', color: '#8B5CF6' }}>
+    <div style={{ color: '#94A3B8', fontSize: '13.5px', marginBottom: '6px' }}>Добавка 1 (ПФМ-НЛК)</div>
+    <div style={{ fontSize: '32px', fontWeight: '700', color: '#8B5CF6' }}>
       {stats.additive1} кг
     </div>
   </div>
@@ -539,11 +539,11 @@ export default function ReportsPage() {
   {/* Добавка 2 */}
   <div style={{ 
     background: '#1E2937', 
-    borderRadius: '20px', 
-    padding: '24px 28px' 
+    borderRadius: '18px', 
+    padding: '16px 20px' 
   }}>
-    <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>Добавка 2 (Линомикс)</div>
-    <div style={{ fontSize: '48px', fontWeight: '700', color: '#EC4899' }}>
+    <div style={{ color: '#94A3B8', fontSize: '13.5px', marginBottom: '6px' }}>Добавка 2 (Линомикс)</div>
+    <div style={{ fontSize: '32px', fontWeight: '700', color: '#EC4899' }}>
       {stats.additive2} кг
     </div>
   </div>
@@ -551,7 +551,7 @@ export default function ReportsPage() {
 </div>
 
           {/* Фильтры */}
-          <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap', alignItems: 'end' }}>
+          <div style={{ display: 'flex', gap: '16px', marginBottom: '18px', flexWrap: 'wrap', alignItems: 'end' }}>
             <div>
               <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>Поиск</div>
               <input 
@@ -622,11 +622,11 @@ export default function ReportsPage() {
           </div>
 
          {/* Графики */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '24px', marginBottom: '40px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginBottom: '20px' }}>
 
                      {/* 1. Объём производства — с переключением */}
-            <div style={{ backgroundColor: '#1E2937', padding: '24px', borderRadius: '20px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            <div style={{ backgroundColor: '#1E2937', padding: '18px', borderRadius: '18px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                 <h3 style={{ color: '#E2E8F0' }}>Объём производства</h3>
                 
                 <div style={{ display: 'flex', backgroundColor: '#334155', borderRadius: '9999px', padding: '4px' }}>
@@ -663,7 +663,7 @@ export default function ReportsPage() {
                 </div>
               </div>
 
-              <ResponsiveContainer width="100%" height={340}>
+              <ResponsiveContainer width="100%" height={300}>
                 <BarChart 
   data={viewMode === 'month' ? monthlyVolume : dailyVolume}
   barCategoryGap={viewMode === 'month' ? 80 : 18}
@@ -687,17 +687,17 @@ export default function ReportsPage() {
             </div>
 
             {/* ТОП РЕЦЕПТОВ */}
-<div style={{ background: '#1E2937', borderRadius: '20px', padding: '28px' }}>
-  <h3 style={{ marginBottom: '20px', color: '#94A3B8' }}>Топ рецептов</h3>
+<div style={{ background: '#1E2937', borderRadius: '18px', padding: '18px' }}>
+  <h3 style={{ marginBottom: '14px', color: '#94A3B8' }}>Топ рецептов</h3>
   
-  <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '30px' }}>
-    <PieChart width={340} height={340}>
+  <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '18px' }}>
+    <PieChart width={280} height={280}>
       <Pie
         data={topRecipes}
         cx="50%"
         cy="50%"
-        innerRadius={110}
-        outerRadius={150}
+        innerRadius={85}
+        outerRadius={120}
         dataKey="value"
         nameKey="name"
       >
@@ -713,9 +713,9 @@ export default function ReportsPage() {
   <div style={{ 
     display: 'flex', 
     flexWrap: 'wrap', 
-    gap: '24px 40px', 
+    gap: '14px 24px', 
     justifyContent: 'center',
-    marginTop: '20px'
+    marginTop: '12px'
   }}>
     {topRecipes.map((recipe, index) => (
       <div key={index} style={{ 
@@ -743,8 +743,8 @@ export default function ReportsPage() {
 </div>
 
          {/* ==================== РАСХОД МАТЕРИАЛОВ С ПЕРЕКЛЮЧАТЕЛЕМ ==================== */}
-<div style={{ background: '#1E2937', borderRadius: '20px', padding: '28px' }}>
-  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+<div style={{ background: '#1E2937', borderRadius: '18px', padding: '18px' }}>
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
     <h3 style={{ margin: 0, color: '#94A3B8' }}>Расход материалов</h3>
     
     {/* Красивый переключатель */}
@@ -789,7 +789,7 @@ export default function ReportsPage() {
     </div>
   </div>
   
-  <ResponsiveContainer width="100%" height={380}>
+  <ResponsiveContainer width="100%" height={300}>
     <BarChart data={materialConsumption} barCategoryGap={40}>
       <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
       <XAxis 
@@ -814,9 +814,9 @@ export default function ReportsPage() {
   <div style={{ 
     display: 'flex', 
     flexWrap: 'wrap', 
-    gap: '20px 40px', 
+    gap: '12px 24px', 
     justifyContent: 'center',
-    marginTop: '20px'
+    marginTop: '12px'
   }}>
     {[
       { color: '#F59E0B', label: 'Цемент' },
@@ -835,7 +835,7 @@ export default function ReportsPage() {
             </div>
 
                               {/* ====================== ИСТОРИЯ ====================== */}
-          <h3 style={{ marginBottom: '16px', color: '#94A3B8' }}>
+          <h3 style={{ marginBottom: '12px', color: '#94A3B8' }}>
             История загруженных отчётов ({filteredHistory.length})
           </h3>
 
@@ -974,12 +974,13 @@ export default function ReportsPage() {
 
           {/* Текущий отчёт */}
           {reportData.length > 0 && (
-            <div style={{ marginTop: '60px' }}>
-              <h3 style={{ marginBottom: '20px', color: '#10B981' }}>
+            <div style={{ marginTop: '28px' }}>
+              <h3 style={{ marginBottom: '14px', color: '#10B981' }}>
                 ✅ Текущий отчёт • {reportData.length} партий
               </h3>
 
-              <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: '#25334A', borderRadius: '16px', overflow: 'hidden' }}>
+              <div className="scroll-hidden" style={{ overflowX: 'auto', borderRadius: '16px' }}>
+              <table style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', backgroundColor: '#25334A', overflow: 'hidden' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#334155' }}>
                     <th style={{ padding: '14px', textAlign: 'left' }}>NO</th>
@@ -1050,6 +1051,7 @@ export default function ReportsPage() {
                   </tr>
                 </tfoot>
               </table>
+              </div>
             </div>
           )}
     </div>

@@ -90,16 +90,11 @@ export default function Calendar({ onClose, orders: externalOrders }: CalendarPr
   const currentDay = today.getDate();
 
   return (
-    <div style={{
+    <div className="w-full max-w-[1280px] overflow-hidden flex flex-col" style={{
       backgroundColor: '#1E2937',
       borderRadius: '24px',
       padding: '32px',
-      width: '1280px',
-      height: '820px',
-      overflow: 'hidden',
       boxShadow: '0 25px 70px rgba(0,0,0,0.7)',
-      display: 'flex',
-      flexDirection: 'column'
     }}>
       {/* Шапка календаря */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>

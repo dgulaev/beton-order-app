@@ -18,6 +18,36 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
   const [isCollapsed, setIsCollapsed] = useState(true);
 
+  // Реальная высота окна в пикселях (100%/100vh ненадёжны в цепочке flex-родителей —
+  // считаем сами и передаём вниз конкретное число, а не проценты)
+  const [viewportH, setViewportH] = useState<number>(() =>
+    typeof window !== 'undefined' ? window.innerHeight : 1080
+  );
+
+  useEffect(() => {
+    const updateViewportHeight = () => setViewportH(window.innerHeight);
+    updateViewportHeight();
+    window.addEventListener('resize', updateViewportHeight);
+    return () => window.removeEventListener('resize', updateViewportHeight);
+  }, []);
+
+  // Админка — это фиксированный "каркас" приложения (свой скролл внутри),
+  // а не обычная скроллящаяся страница. Если из-за округления пикселей/масштаба
+  // на 1-2px "вылезет" за пределы экрана — скрываем это на уровне html/body,
+  // а не даём странице целиком скроллиться.
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+    };
+  }, []);
+
   // ==================== 1.1 СОСТОЯНИЯ АВТОРИЗАЦИИ ====================
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -510,30 +540,37 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   // ==================== 8. ГЛОБАЛЬНЫЙ МАСШТАБ ====================
   const getGlobalScale = () => {
     const width = window.innerWidth;
-    if (width >= 2560) return 1.00;
-    if (width >= 1920) return 0.82;
-    if (width >= 1680) return 0.79;
-    if (width >= 1440) return 0.77;
-    return 0.74;
+    if (width >= 1920) return 1.00;
+    if (width >= 1680) return 0.88;
+    if (width >= 1440) return 0.84;
+    return 0.80;
   };
 
   const scale = getGlobalScale();
+  // Страницы-"каркасы": без скролла страницы целиком, со своим внутренним
+  // скроллом по зонам (как дашборд) — сейчас это дашборд, заявки, оператор БСУ и миксеры.
+  const isFrameLayout = pathname === '/adminCifra/dashboard' || pathname === '/adminCifra/zayavki' || pathname === '/adminCifra/operator' || pathname === '/adminCifra/mixers';
+  const isDashboard = isFrameLayout;
+  // Высота ДО применения transform: scale — после масштабирования визуально
+  // она станет равна ровно viewportH (реальной высоте окна браузера).
+  const preScaleHeight = viewportH / scale;
 
   return (
     <div 
-      style={{ 
+      style={{
         transform: `scale(${scale})`, 
         transformOrigin: 'top left',
         width: `${100 / scale}%`,
-        height: `${100 / scale}%`,
+        height: `${preScaleHeight}px`,
         overflow: 'hidden',
-        minHeight: '100vh'
       }}
       className="admin-layout"
     >
       <div style={{ 
         display: 'flex', 
-        minHeight: '100vh', 
+        alignItems: 'stretch',
+        height: '100%',
+        overflow: 'hidden',
         backgroundColor: '#0F172A',
         color: '#fff'
       }}>
@@ -553,6 +590,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
           borderRight: '1px solid #334155',
           transition: 'width 0.3s ease',
           flexShrink: 0,
+          height: '100%',
           overflow: 'hidden'
         }}>
 
@@ -714,15 +752,14 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
         {/* ==================== 14. ОСНОВНОЙ КОНТЕНТ ==================== */}
         <div style={{ 
           flex: 1, 
-          overflow: 'auto', 
-          padding: '20px 32px', 
-          minHeight: '80vh',
+          minHeight: 0,
+          alignSelf: 'stretch',
+          boxSizing: 'border-box',
+          overflow: isDashboard ? 'hidden' : 'auto', 
+          padding: isDashboard ? '14px 20px' : '20px 32px', 
+          display: isDashboard ? 'flex' : 'block',
+          flexDirection: 'column',
           backgroundColor: '#0F172A',
-          ...(pathname === '/adminCifra/zayavki' && {
-            padding: '20px 40px',
-            minHeight: '920px',
-            overflow: 'visible'
-          })
         }}>
           {children}
         </div>

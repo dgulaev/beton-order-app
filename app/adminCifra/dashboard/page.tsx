@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Calendar from '../Calendar';
 import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders, useRealtimeOrderMixers, formatOrderMixer } from '../../../hooks/useRealtimeOrders';
@@ -45,6 +45,13 @@ export default function AdminCifraDashboard() {
  const [showCalendar, setShowCalendar] = useState(false);
  const [history, setHistory] = useState<any[]>([]);
  const [currentUser, setCurrentUser] = useState<{ id: number; name?: string; role: string } | null>(null);
+
+ // ==================== СВОЙ ИНДИКАТОР СКРОЛЛА ТАЙМЛАЙНА (серый, полупрозрачный) ====================
+ // Нативный скролл на macOS/Chrome — "overlay" и гаснет через секунду после остановки,
+ // из-за чего сотрудники могут не заметить, что заявки не влезли. Рисуем свою полосу,
+ // которая видна постоянно, пока список не влезает целиком.
+ const timelineScrollRef = useRef<HTMLDivElement>(null);
+ const [timelineThumb, setTimelineThumb] = useState<{ top: number; height: number } | null>(null);
 
     // ==================== 3. ДОБАВЛЕНИЕ В ИСТОРИЮ (финальная улучшенная версия) ====================
 const addToHistory = async (action: string, details?: any) => {
@@ -143,29 +150,7 @@ const getStatusRussian = (status: string): string => {
 
     // ==================== 4. (убрано) Дублировало блок 22 — начальная загрузка mixerAssignments уже там ====================
 
-    // ==================== 5. РЕАКТИВНЫЙ МАСШТАБ =================================
-  const [scale, setScale] = useState(1);
-
-  useEffect(() => {
-    const updateScale = () => {
-      const width = window.innerWidth;
-      let newScale = 1;
-
-      if (width >= 2560) newScale = 1.00;
-      else if (width >= 1920) newScale = 0.92;   // ← меняй здесь
-      else if (width >= 1680) newScale = 0.88;
-      else if (width >= 1440) newScale = 0.84;
-      else if (width >= 1366) newScale = 0.79;
-      else newScale = 0.74;
-
-      setScale(newScale);
-    };
-
-    updateScale();
-    window.addEventListener('resize', updateScale);
-
-    return () => window.removeEventListener('resize', updateScale);
-  }, []);
+    // ==================== 5. (убрано) Масштаб уже применяется в layout.tsx ====================
 
   // ==================== 5.1 СОХРАНЁННЫЙ ОТЧЁТ =====================================
   const [savedReport, setSavedReport] = useState<string>('');
@@ -320,6 +305,42 @@ const todayOrders = allOrders
   );
 
 // console.log(`Выбрана дата: ${selectedDateStr} | Найдено заказов: ${todayOrders.length}`);
+
+// ==================== РАСЧЁТ ПОЛОЖЕНИЯ СВОЕГО ИНДИКАТОРА СКРОЛЛА ====================
+useEffect(() => {
+  const el = timelineScrollRef.current;
+  if (!el) return;
+
+  const MIN_THUMB_HEIGHT = 32;
+
+  const updateThumb = () => {
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    if (scrollHeight <= clientHeight + 1) {
+      setTimelineThumb(null);
+      return;
+    }
+    const rawHeight = (clientHeight / scrollHeight) * clientHeight;
+    const height = Math.max(rawHeight, MIN_THUMB_HEIGHT);
+    const maxTop = clientHeight - height;
+    const top = Math.min(maxTop, (scrollTop / (scrollHeight - clientHeight)) * maxTop);
+    setTimelineThumb({ top, height });
+  };
+
+  updateThumb();
+  el.addEventListener('scroll', updateThumb);
+  window.addEventListener('resize', updateThumb);
+
+  // Пересчитываем ещё раз на следующий тик — высота контента могла измениться
+  // после рендера (новые строки заявок), а ResizeObserver надёжнее ловит это сразу.
+  const ro = new ResizeObserver(updateThumb);
+  ro.observe(el);
+
+  return () => {
+    el.removeEventListener('scroll', updateThumb);
+    window.removeEventListener('resize', updateThumb);
+    ro.disconnect();
+  };
+}, [todayOrders.length, selectedDateStr]);
 
 // ==================== 10. РАСЧЁТ ЗАДЕРЖЕК ОТГРУЗОК (реал-тайм) ====================
 const now = new Date();
@@ -764,41 +785,40 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
 
 
   return (
-  <div style={{ 
-      transform: `scale(${scale})`, 
-      transformOrigin: 'top left',
-      width: `${100 / scale}%`,        // ← возвращаем этот вариант
-      height: `${100 / scale}%`,
-      overflow: 'hidden',
-      minHeight: '100vh'
-    }}>
-
       <div style={{ 
         background: '#0F172A', 
-        minHeight: '100vh', 
         color: '#fff',
-        padding: '16px'
+        flex: 1,
+        minHeight: 0,
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        boxSizing: 'border-box'
       }}>
 
         {/* ==================== 32. ОСНОВНОЙ GRID ==================== */}
         <div style={{ 
           display: 'grid',
-          gridTemplateColumns: 'minmax(820px, 1fr) minmax(430px, 510px)', 
+          gridTemplateColumns: 'minmax(0, 1fr) minmax(320px, 480px)', 
+          gridTemplateRows: 'minmax(0, 1fr)',
           gap: '32px',
           maxWidth: '100%', 
           width: '100%', 
+          flex: 1,
           margin: '0 auto',
-          minHeight: 'calc(100vh - 80px)'
+          alignItems: 'stretch',
+          minHeight: 0
         }}>
 
       {/* ==================== 33. ЛЕВАЯ КОЛОНКА ( KPI) ==================== */}
       <div style={{ 
-          flex: 1, 
-          minWidth: '950px',
+          minWidth: 0,
+          minHeight: 0,
           display: 'flex', 
           flexDirection: 'column', 
-          gap: '20px',
-          minHeight: '100%'
+          gap: '16px',
+          height: '100%'
         }}>
         
         {/* Topbar — адаптив */}
@@ -871,14 +891,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
 </div>
 
        {/* ==================== 34. KPI — РЕАЛЬНЫЕ ДАННЫЕ ==================== */}
-        <div style={{ 
-               display: 'grid', 
-               gridTemplateColumns: 'repeat(4, 1fr)', 
-               gap: '20px',
-               minWidth: '1100px',           // ← Важно! Не даёт сжиматься меньше 4 колонок
-               overflowX: 'auto',            // ← Добавляет горизонтальный скролл при необходимости
-               paddingBottom: '8px'
-         }}>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 pb-2">
           
        {/* ==================== 35. ЗАЯВКИ СЕГОДНЯ (точно как Миксеры) ==================== */}
 <div style={{ 
@@ -1119,7 +1132,8 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
       {/* ==================== 38. ТАЙМЛАЙН (УЛУЧШЕННЫЙ — В СТИЛЕ ЦИФРА.AI) ==================== */}
        <div style={{ 
             flex: 1, 
-            minWidth: '680px',
+            minWidth: 0,
+            minHeight: 0,
             background: '#1E2937', 
             borderRadius: '24px', 
             padding: '24px 28px', 
@@ -1271,19 +1285,19 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
   </div>
 </div>
 
-  {/* Основная область таймлайна с горизонтальным скроллом */}
+  {/* Область заказов (скролл) + фиксированная линия времени */}
+  <div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
   <div 
     id="timeline-container"
+    ref={timelineScrollRef}
+    className="scroll-hidden"
     style={{ 
-      flex: 1, 
+      height: '100%',
       position: 'relative', 
       overflowX: 'auto',
       overflowY: 'auto',
       paddingRight: '20px',
-      paddingBottom: '30px',
-      minHeight: '420px',
-      scrollbarWidth: 'thin',
-      scrollbarColor: '#475569 #1E2937'
+      paddingBottom: '8px',
     }}
   >
     {todayOrders.length > 0 ? todayOrders.map((order: Order) => {
@@ -1505,43 +1519,82 @@ const generateDailyReport = () => {
   </div>
 )}
 
-    {/* Вертикальная линия текущего времени */}
-<div style={{
-  position: 'absolute',
-  left: `${currentHourPercent}%`,
-  top: '0',
-  bottom: '0',
-  width: '3px',
-  background: 'linear-gradient(180deg, #3B82F6, #60A5FA)',
-  boxShadow: '0 0 12px #3B82F6',
-  zIndex: 50,
-  pointerEvents: 'none'
-}} />
+  </div>
 
-{/* Плашка с текущим временем — СНИЗУ линии */}
-<div style={{
-  position: 'absolute',
-  left: `${currentHourPercent}%`,
-  bottom: '1px',                    // ← Основной параметр для регулировки
-  transform: 'translateX(-50%)',
-  background: '#1E40AF',
-  color: 'white',
-  padding: '5px 14px',
-  borderRadius: '9999px',
-  fontSize: '13.5px',
-  fontWeight: '700',
-  zIndex: 60,
-  boxShadow: '0 4px 12px rgba(59, 130, 246, 0.5)',
-  whiteSpace: 'nowrap',
-  border: '2px solid #60A5FA',
-  textAlign: 'center',
-  minWidth: '62px'
-}}>
-  {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
-</div>
+    {/* Вертикальная линия и плашка времени — фиксированы, не скроллятся */}
+    <div style={{
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: '20px',
+      bottom: 0,
+      pointerEvents: 'none',
+      zIndex: 50,
+    }}>
+      <div style={{
+        position: 'absolute',
+        left: `${currentHourPercent}%`,
+        top: 0,
+        bottom: 0,
+        width: '3px',
+        background: 'linear-gradient(180deg, #3B82F6, #60A5FA)',
+        boxShadow: '0 0 12px #3B82F6',
+        transform: 'translateX(-50%)',
+      }} />
+      <div style={{
+        position: 'absolute',
+        left: `${currentHourPercent}%`,
+        bottom: '1px',
+        transform: 'translateX(-50%)',
+        background: '#1E40AF',
+        color: 'white',
+        padding: '5px 14px',
+        borderRadius: '9999px',
+        fontSize: '13.5px',
+        fontWeight: '700',
+        zIndex: 60,
+        boxShadow: '0 4px 12px rgba(59, 130, 246, 0.5)',
+        whiteSpace: 'nowrap',
+        border: '2px solid #60A5FA',
+        textAlign: 'center',
+        minWidth: '62px'
+      }}>
+        {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+      </div>
+    </div>
+
+    {/* Свой ненавязчивый серый индикатор скролла — лежит в самом гаттере (paddingRight
+        контейнера), а не над строками заказов, поэтому не перекрывает статус-плашки.
+        Виден постоянно, пока список не влезает, тонкий и прижат к правому краю. */}
+    {timelineThumb && (
+      <>
+        <div style={{
+          position: 'absolute',
+          right: '5px',
+          top: 0,
+          bottom: 0,
+          width: '4px',
+          borderRadius: '9999px',
+          background: 'rgba(148, 163, 184, 0.12)',
+          pointerEvents: 'none',
+          zIndex: 50,
+        }} />
+        <div style={{
+          position: 'absolute',
+          right: '5px',
+          top: `${timelineThumb.top}px`,
+          height: `${timelineThumb.height}px`,
+          width: '4px',
+          borderRadius: '9999px',
+          background: 'rgba(148, 163, 184, 0.55)',
+          pointerEvents: 'none',
+          zIndex: 50,
+        }} />
+      </>
+    )}
+  </div>
     </div>
    </div>
-  </div>
             {/* ==================== 45. МИКСЕРЫ В РАБОТЕ ==================== */}
 <div style={{ 
   width: '100%', 
@@ -1551,10 +1604,11 @@ const generateDailyReport = () => {
   padding: '24px', 
   display: 'flex', 
   flexDirection: 'column',
-  height: 'auto',
-  maxHeight: '92vh',
-  minHeight: '1400px',
-  overflow: 'hidden'
+  height: '100%',
+  alignSelf: 'stretch',
+  minHeight: 0,
+  overflow: 'hidden',
+  boxSizing: 'border-box'
 }}>
   
   {/* Заголовок + счётчик */}
@@ -1598,7 +1652,7 @@ const generateDailyReport = () => {
     </div>
   </div>
 
-  <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+  <div className="scroll-hidden" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px', minHeight: 0 }}>
     {groupedMixers.length > 0 ? (
       groupedMixers.map((group) => (
         <div key={group.orderId} style={{ 
@@ -1904,7 +1958,6 @@ const generateDailyReport = () => {
           </div>
         </div>
       )}
-    </div>
     </div>
     
   );

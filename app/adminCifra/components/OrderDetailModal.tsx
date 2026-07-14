@@ -322,16 +322,12 @@ const formatVolume = (value: number | string) => {
     onClick={onClose}
   >
     <div 
+    className="w-full max-w-[1300px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
   style={{ 
     background: '#1E2937', 
-    width: '1300px', 
     borderRadius: '24px', 
     padding: '32px', 
-    height: '1300px',                    // ← Фиксированная высота в пикселях
-    maxHeight: '1400px',                 // ← Ограничиваем
-    overflow: 'auto',                   // ← Скролл если контент не помещается
     boxShadow: '0 30px 80px rgba(0,0,0,0.7)',
-    margin: '40px auto'
   }}
         onClick={e => e.stopPropagation()}
       >

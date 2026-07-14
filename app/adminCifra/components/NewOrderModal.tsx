@@ -321,7 +321,7 @@ const handleSubmit = async (e: React.FormEvent) => {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.94)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ background: '#1E2937', width: '920px', borderRadius: '24px', padding: '32px', maxHeight: '92vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+      <div className="w-full max-w-[920px] max-h-[90vh] overflow-auto mx-auto scroll-hidden" style={{ background: '#1E2937', borderRadius: '24px', padding: '32px' }} onClick={e => e.stopPropagation()}>
         
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
           <h2 style={{ margin: 0, fontSize: '28px' }}>Новая заявка на бетон</h2>

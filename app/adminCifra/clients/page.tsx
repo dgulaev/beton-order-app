@@ -6,6 +6,7 @@ import NewOrderModal from './NewOrderModal';
 
 import { supabase } from '@/lib/supabaseClient';   // ← Правильный импорт
 import { useYandexRouteHref } from '@/lib/yandexRoute';
+import { formatPhoneInput } from '@/lib/phone';
 
 // ==================== 0.1 ГЛОБАЛЬНЫЕ ТИПЫ ДЛЯ WINDOW ===============
 declare global {
@@ -45,6 +46,9 @@ export default function ClientsPage() {
   const [staffProfiles, setStaffProfiles] = useState<any[]>([]);
   const [isStaffEditModalOpen, setIsStaffEditModalOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<any>(null);
+  const [isNewStaff, setIsNewStaff] = useState(false);
+  const [staffPasswordInput, setStaffPasswordInput] = useState('');
+  const [savingStaff, setSavingStaff] = useState(false);
 
   // ==================== DEBOUNCE ДЛЯ ПОИСКА ====================
   useEffect(() => {
@@ -82,7 +86,9 @@ export default function ClientsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalClients, setTotalClients] = useState(0);
-  const itemsPerPage = 18;
+  // В режиме списка строки выше карточек — показываем меньше на странице,
+  // чтобы всё влезало в рамку экрана без скролла (остальное — на след. странице).
+  const itemsPerPage = viewMode === 'table' ? 10 : 18;
 
   const [activeTab, setActiveTab] = useState<'clients' | 'staff' | 'efficiency'>('clients');
   
@@ -167,11 +173,19 @@ useEffect(() => {
   // Первая загрузка и смена страницы + поиск
   useEffect(() => {
     fetchClientsPage(currentPage);
-  }, [currentPage, debouncedSearch, activeTab]);
+  }, [currentPage, debouncedSearch, activeTab, itemsPerPage]);
+
+  // При смене вида отображения (карточки/список) размер страницы меняется —
+  // сбрасываем на первую страницу, чтобы не оказаться на "несуществующей" странице.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [viewMode]);
 
   // ==================== 2.0.1 ЗАГРУЗКА ДАННЫХ ДЛЯ ВКЛАДКИ СТАФФ ====================
-useEffect(() => {
-  if (activeTab === 'staff') {
+  // Вынесено в отдельную функцию — вызывается и при переключении на вкладку,
+  // и после создания/редактирования сотрудника (чтобы список сразу обновился,
+  // без перезагрузки страницы).
+  const loadStaffList = () => {
     fetch('/api/adminCifra/staff/stats')
       .then(res => res.json())
       .then(data => {
@@ -202,8 +216,11 @@ useEffect(() => {
         console.error('Ошибка загрузки стаффа:', err);
         setStaffProfiles([]);
       });
-  }
-}, [activeTab]);
+  };
+
+  useEffect(() => {
+    if (activeTab === 'staff') loadStaffList();
+  }, [activeTab]);
 
 
   // ==================== 2.0.2 ЗАГРУЗКА РОЛИ + РЕАЛЬНОГО ИМЕНИ ====================
@@ -249,6 +266,19 @@ useEffect(() => {
 
     loadRoleAndName();
   }, []);
+
+  // currentUserRole (гейтит "Добавить сотрудника"/"Сменить пароль"/"Изменить"
+  // в вкладке "Стафф") раньше вычислялся отдельно и криво — по хардкод-id
+  // "главного" админа и/или последнему значению из localStorage, по
+  // умолчанию 'manager'. Из-за этого ЛЮБОЙ реальный админ (кроме одного
+  // хардкод-id) не видел admin-только функции. currentRole — настоящая роль
+  // из базы (см. loadRoleAndName выше) — теперь считается источником правды.
+  useEffect(() => {
+    if (currentRole) {
+      setCurrentUserRole(currentRole);
+      localStorage.setItem('currentUserRole', currentRole);
+    }
+  }, [currentRole]);
 
 
 // ==================== 2.0.3 ОБРАБОТКА КЛИКА ПО КАРТОЧКЕ ====================
@@ -1192,8 +1222,72 @@ window.callClient = (clientId: number | string) => {
 
 // ==================== ФУНКЦИЯ РЕДАКТИРОВАНИЯ СОТРУДНИКА ====================
 const editStaff = (staffMember: any) => {
+  setIsNewStaff(false);
+  setStaffPasswordInput('');
   setEditingStaff(staffMember);        // новая переменная состояния
   setIsStaffEditModalOpen(true);
+};
+
+// ==================== ФУНКЦИЯ СОЗДАНИЯ НОВОГО СОТРУДНИКА ====================
+// Раньше единственный способ дать доступ новому сотруднику — сначала попросить
+// его зайти на "/" и зарегистрироваться как клиент (телефон+ФИО), а потом найти
+// его в списке клиентов и вручную назначить роль/пароль. Теперь админ может
+// сразу завести учётку прямо здесь — сотрудник ни разу не открывает публичную
+// форму входа, а сразу заходит по телефону+паролю в /adminCifra или /mobile.
+const addNewStaff = () => {
+  setIsNewStaff(true);
+  setStaffPasswordInput('');
+  setEditingStaff({ full_name: '', phone: '+7', role: 'manager' });
+  setIsStaffEditModalOpen(true);
+};
+
+// ==================== СОХРАНЕНИЕ СОТРУДНИКА (СОЗДАНИЕ/РЕДАКТИРОВАНИЕ) ====================
+const saveStaff = async () => {
+  if (!editingStaff?.full_name || editingStaff.full_name.trim().length < 2) {
+    alert('Укажите ФИО сотрудника');
+    return;
+  }
+  if (!editingStaff?.phone || editingStaff.phone.replace(/\D/g, '').length < 11) {
+    alert('Укажите корректный номер телефона');
+    return;
+  }
+  if (isNewStaff && staffPasswordInput.length < 6) {
+    alert('Укажите пароль (минимум 6 символов) для нового сотрудника');
+    return;
+  }
+
+  setSavingStaff(true);
+  try {
+    const res = await fetch('/api/adminCifra/staff', {
+      method: isNewStaff ? 'POST' : 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: editingStaff.user_id,
+        fullName: editingStaff.full_name.trim(),
+        phone: editingStaff.phone,
+        role: editingStaff.role || 'manager',
+        password: staffPasswordInput || undefined,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      alert('Ошибка: ' + (data.error || 'Не удалось сохранить сотрудника'));
+      return;
+    }
+
+    alert(isNewStaff ? '✅ Сотрудник успешно создан' : '✅ Изменения сохранены');
+    setIsStaffEditModalOpen(false);
+    setEditingStaff(null);
+    setStaffPasswordInput('');
+    loadStaffList();
+  } catch (err) {
+    console.error('Ошибка сохранения сотрудника:', err);
+    alert('Ошибка соединения с сервером');
+  } finally {
+    setSavingStaff(false);
+  }
 };
 
 // ==================== СМЕНА ПАРОЛЯ ДЛЯ СОТРУДНИКА ====================
@@ -1243,11 +1337,11 @@ const changeStaffPassword = async (staffMember: any) => {
 
 
   return (
-    <div style={{ background: '#0F172A', minHeight: '100vh', color: '#fff', padding: '32px 40px' }}>
-      <h1 style={{ fontSize: '32px', fontWeight: '700', marginBottom: '32px' }}>Клиенты CRM</h1>
+    <div style={{ background: '#0F172A', minHeight: '100%', color: '#fff', padding: '0 32px 12px', boxSizing: 'border-box' }}>
+      <h1 style={{ fontSize: '26px', fontWeight: '700', marginTop: 0, marginBottom: '10px' }}>Клиенты CRM</h1>
 
       {/* ====================== ВЕРХНЯЯ ПАНЕЛЬ УПРАВЛЕНИЯ ====================== */}
-<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
 
   {/* Левая группа — Табы + Кнопки действий */}
 <div style={{ display: 'flex', gap: '8px' }}>
@@ -1344,27 +1438,52 @@ const changeStaffPassword = async (staffMember: any) => {
     Показать дубли
   </button>
 
-  {/* Кнопка Новый клиент */}
-  <button 
-    onClick={() => setIsNewClientModalOpen(true)}
-    style={{
-      padding: '12px 24px',
-      background: 'transparent',
-      border: 'none',
-      color: '#34D399',
-      fontSize: '17px',
-      fontWeight: '600',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px',
-      position: 'relative',
-      transition: 'color 0.25s ease',
-      cursor: 'pointer',
-    }}
-  >
-    <span style={{ fontSize: '22px' }}>➕</span>
-    Новый клиент
-  </button>
+  {/* Кнопка Новый клиент / Новый сотрудник — меняется в зависимости от вкладки */}
+  {activeTab === 'clients' && (
+    <button 
+      onClick={() => setIsNewClientModalOpen(true)}
+      style={{
+        padding: '12px 24px',
+        background: 'transparent',
+        border: 'none',
+        color: '#34D399',
+        fontSize: '17px',
+        fontWeight: '600',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        position: 'relative',
+        transition: 'color 0.25s ease',
+        cursor: 'pointer',
+      }}
+    >
+      <span style={{ fontSize: '22px' }}>➕</span>
+      Новый клиент
+    </button>
+  )}
+
+  {activeTab === 'staff' && currentUserRole === 'admin' && (
+    <button 
+      onClick={addNewStaff}
+      style={{
+        padding: '12px 24px',
+        background: 'transparent',
+        border: 'none',
+        color: '#34D399',
+        fontSize: '17px',
+        fontWeight: '600',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        position: 'relative',
+        transition: 'color 0.25s ease',
+        cursor: 'pointer',
+      }}
+    >
+      <span style={{ fontSize: '22px' }}>➕</span>
+      Новый сотрудник
+    </button>
+  )}
 
   {/* ==================== Кнопка Эффективность (отключена) ==================== */}
 {/* 
@@ -1480,24 +1599,26 @@ const changeStaffPassword = async (staffMember: any) => {
 )}
 </div>
 
-{/* ==================== ПОЛЕ ПОИСКА — С DEBOUNCE ==================== */}
-{(activeTab === 'clients' || activeTab === 'staff') && (
-  <div style={{ position: 'relative', width: '100%', maxWidth: '720px', marginBottom: '32px' }}>
-    <input
-      type="text"
-      placeholder="Поиск по имени, организации, телефону, ИНН..."
-      value={searchTerm}
-      onChange={(e) => setSearchTerm(e.target.value)}
-      style={{ 
-        width: '100%', 
-        padding: '12px 16px', 
-        borderRadius: '12px', 
-        background: '#1E2937', 
-        border: '1px solid #334155', 
-        color: '#fff',
-        fontSize: '16px'
-      }}
-    />
+{/* ==================== ПОЛЕ ПОИСКА — С DEBOUNCE (только для клиентов, у стаффа их немного) ==================== */}
+{activeTab === 'clients' && (
+  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', width: '100%', marginBottom: '12px' }}>
+    <div style={{ position: 'relative', width: '100%', maxWidth: '720px' }}>
+      <input
+        type="text"
+        placeholder="Поиск по имени, организации, телефону, ИНН..."
+        value={searchTerm}
+        onChange={(e) => setSearchTerm(e.target.value)}
+        style={{ 
+          width: '100%', 
+          padding: '12px 16px', 
+          borderRadius: '12px', 
+          background: '#1E2937', 
+          border: '1px solid #334155', 
+          color: '#fff',
+          fontSize: '16px'
+        }}
+      />
+    </div>
   </div>
 )}
 
@@ -1508,8 +1629,8 @@ const changeStaffPassword = async (staffMember: any) => {
       /* ==================== КАРТОЧКИ ==================== */
       <div style={{ 
         display: 'grid', 
-        gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', 
-        gap: '16px'
+        gridTemplateColumns: 'repeat(6, 1fr)', 
+        gap: '12px'
       }}>
         {activeTab === 'staff' ? (
           // ==================== КАРТОЧКИ СОТРУДНИКОВ (НОВАЯ ЛОГИКА) ====================
@@ -1520,10 +1641,10 @@ const changeStaffPassword = async (staffMember: any) => {
               style={{ 
                 background: '#1E2937', 
                 borderRadius: '16px', 
-                padding: '20px',
+                padding: '16px',
                 cursor: 'pointer',
                 border: selectedProfile?.user_id === person.user_id ? '2px solid #10B981' : '1px solid #334155',
-                minHeight: '190px',
+                minHeight: '158px',
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'space-between'
@@ -1577,13 +1698,13 @@ const changeStaffPassword = async (staffMember: any) => {
                   style={{ 
                     background: '#1E2937', 
                     borderRadius: '16px', 
-                    padding: '16px 18px',
+                    padding: '14px 16px',
                     cursor: 'pointer',
                     border: selectedProfile?.groupId === client.groupId || 
                             selectedProfile?.user_id === client.user_id 
                       ? '2px solid #10B981' 
                       : '1px solid #334155',
-                    minHeight: '152px',
+                    minHeight: '126px',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between'
@@ -1683,7 +1804,7 @@ const changeStaffPassword = async (staffMember: any) => {
   return (
     <div
       key={item.user_id}
-      onClick={() => setSelectedProfile(item)}
+      onClick={() => handleSelectProfile(item)}
       style={{
         display: 'grid',
         gridTemplateColumns: currentUserRole === 'admin' 
@@ -1823,7 +1944,7 @@ const changeStaffPassword = async (staffMember: any) => {
     justifyContent: 'center', 
     alignItems: 'center', 
     gap: '16px', 
-    marginTop: '40px' 
+    marginTop: '16px' 
   }}>
     <button 
       onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
@@ -1860,36 +1981,41 @@ const changeStaffPassword = async (staffMember: any) => {
     top: 0, 
     right: 0, 
     width: '760px', 
-    height: '100vh',
+    maxWidth: '100vw',
+    height: '100%',
     background: '#1E2937', 
     borderLeft: '1px solid #334155', 
     zIndex: 1000, 
+    boxSizing: 'border-box',
     overflow: 'auto' 
-  }}>
-    <div style={{ padding: '32px' }}>
+  }} className="scroll-hidden">
+    <div style={{ padding: '32px', height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
 
-      <button 
-        onClick={() => setSelectedProfile(null)} 
-        style={{ float: 'right', fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8' }}
-      >
-        ×
-      </button>
-
-      <h2 style={{ marginBottom: '4px' }}>{selectedProfile.full_name}</h2>
-      <div style={{ color: '#10B981', fontSize: '17px', fontWeight: '600', marginBottom: '32px' }}>
-        {selectedProfile.role?.toUpperCase() || 'СОТРУДНИК'}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexShrink: 0 }}>
+        <div>
+          <h2 style={{ marginBottom: '4px' }}>{selectedProfile.full_name}</h2>
+          <div style={{ color: '#10B981', fontSize: '17px', fontWeight: '600', marginBottom: '4px' }}>
+            {selectedProfile.role?.toUpperCase() || 'СОТРУДНИК'}
+          </div>
+        </div>
+        <button 
+          onClick={() => setSelectedProfile(null)} 
+          style={{ fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8', lineHeight: 1, cursor: 'pointer' }}
+        >
+          ×
+        </button>
       </div>
 
       {/* Основная статистика */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '40px' }}>
-        <div style={{ background: '#25334A', padding: '28px 20px', borderRadius: '16px', textAlign: 'center' }}>
-          <div style={{ fontSize: '48px', fontWeight: '700', color: '#60A5FA' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px', flexShrink: 0 }}>
+        <div style={{ background: '#25334A', padding: '16px 20px', borderRadius: '16px', textAlign: 'center' }}>
+          <div style={{ fontSize: '40px', fontWeight: '700', color: '#60A5FA' }}>
             {selectedProfile.clients_count || 0}
           </div>
           <div style={{ color: '#94A3B8', fontSize: '15px' }}>Клиентов на кураторстве</div>
         </div>
-        <div style={{ background: '#25334A', padding: '28px 20px', borderRadius: '16px', textAlign: 'center' }}>
-          <div style={{ fontSize: '48px', fontWeight: '700' }}>
+        <div style={{ background: '#25334A', padding: '16px 20px', borderRadius: '16px', textAlign: 'center' }}>
+          <div style={{ fontSize: '40px', fontWeight: '700' }}>
             {selectedProfile.total_volume || 0}
           </div>
           <div style={{ color: '#94A3B8', fontSize: '15px' }}>м³ всего продано</div>
@@ -1899,18 +2025,18 @@ const changeStaffPassword = async (staffMember: any) => {
 
 {/* ==================== БЛОК ЭФФЕКТИВНОСТЬ КУРАТОРА ==================== */}
 {selectedProfile.isStaff && (
-  <div style={{ marginBottom: '24px' }}>
-    <h3 style={{ marginBottom: '16px', color: '#94A3B8', fontSize: '15px' }}>
+  <div style={{ marginBottom: '16px', flexShrink: 0 }}>
+    <h3 style={{ marginBottom: '10px', color: '#94A3B8', fontSize: '15px' }}>
       Эффективность куратора
     </h3>
     
     <div style={{ 
       background: '#25334A', 
       borderRadius: '16px', 
-      padding: '20px',
+      padding: '16px',
       display: 'grid',
       gridTemplateColumns: 'repeat(2, 1fr)',
-      gap: '16px'
+      gap: '12px'
     }}>
       <div>
         <div style={{ fontSize: '26px', fontWeight: '700', color: '#34D399' }}>
@@ -1945,10 +2071,10 @@ const changeStaffPassword = async (staffMember: any) => {
 
         {/* Главная метрика */}
     <div style={{ 
-      marginTop: '12px', 
+      marginTop: '8px', 
       background: '#25334A', 
       borderRadius: '12px', 
-      padding: '14px 20px', 
+      padding: '10px 16px', 
       display: 'flex', 
       justifyContent: 'space-between', 
       alignItems: 'center' 
@@ -1961,17 +2087,17 @@ const changeStaffPassword = async (staffMember: any) => {
   </div>
 )}
 
-{/* Список клиентов */}
+{/* Список клиентов — растягивается до низа бокового окна */}
 {selectedProfile.clients && selectedProfile.clients.length > 0 ? (
-  <div>
-    <h3 style={{ marginBottom: '16px', color: '#94A3B8' }}>
+  <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <h3 style={{ marginBottom: '10px', color: '#94A3B8', flexShrink: 0 }}>
       Клиенты куратора ({selectedProfile.clients.length})
     </h3>
-    <div style={{ maxHeight: '520px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+    <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
       {selectedProfile.clients.map((client: any) => (
         <div key={client.user_id} style={{ 
           background: '#25334A', 
-          padding: '16px', 
+          padding: '12px 16px', 
           borderRadius: '12px',
           display: 'flex',
           justifyContent: 'space-between',
@@ -2011,14 +2137,14 @@ const changeStaffPassword = async (staffMember: any) => {
     top: 0, 
     right: 0, 
     width: '720px', 
-    height: '95vh',
-    minHeight: '1400px',
+    maxWidth: '100vw',
+    height: '100%',
     background: '#1E2937', 
     borderLeft: '1px solid #334155', 
     zIndex: 1000, 
-
+    boxSizing: 'border-box',
     overflow: 'auto' 
-  }}>
+  }} className="scroll-hidden">
     <div style={{ padding: '32px' }}>
 
       {/* 9.1 Кнопка закрытия */}
@@ -2582,8 +2708,8 @@ const changeStaffPassword = async (staffMember: any) => {
     backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 1300,
     display: 'flex', alignItems: 'center', justifyContent: 'center'
   }}>
-    <div style={{
-      background: '#1E2937', width: '720px', borderRadius: '20px', padding: '32px', color: '#fff', maxHeight: '90vh', overflow: 'auto'
+    <div className="w-full max-w-[720px] max-h-[90vh] overflow-auto mx-auto scroll-hidden" style={{
+      background: '#1E2937', borderRadius: '20px', padding: '32px', color: '#fff'
     }}>
       <h2 style={{ marginBottom: '8px' }}>
         Редактирование {editingClient.length > 1 ? 'группы клиентов' : 'клиента'}
@@ -2717,8 +2843,8 @@ const changeStaffPassword = async (staffMember: any) => {
 {/* ==================== МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ СОТРУДНИКА ==================== */}
 {isStaffEditModalOpen && editingStaff && (
   <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 1300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-    <div style={{ background: '#1E2937', width: '620px', borderRadius: '20px', padding: '32px', color: '#fff' }}>
-      <h2 style={{ marginBottom: '24px' }}>Редактирование сотрудника</h2>
+    <div className="w-full max-w-[620px] max-h-[90vh] overflow-auto mx-auto scroll-hidden" style={{ background: '#1E2937', borderRadius: '20px', padding: '32px', color: '#fff' }}>
+      <h2 style={{ marginBottom: '24px' }}>{isNewStaff ? 'Новый сотрудник' : 'Редактирование сотрудника'}</h2>
 
       <div style={{ display: 'grid', gap: '16px' }}>
         <div>
@@ -2733,8 +2859,10 @@ const changeStaffPassword = async (staffMember: any) => {
         <div>
           <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Телефон</label>
           <input 
+            type="tel"
             value={editingStaff.phone || ''} 
-            onChange={(e) => setEditingStaff({...editingStaff, phone: e.target.value})}
+            onChange={(e) => setEditingStaff({...editingStaff, phone: formatPhoneInput(e.target.value)})}
+            placeholder="+7 (___) ___-__-__"
             style={{ width: '95%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '10px', color: '#fff' }} 
           />
         </div>
@@ -2750,29 +2878,37 @@ const changeStaffPassword = async (staffMember: any) => {
             <option value="manager">Менеджер</option>
             <option value="dispatcher">Диспетчер</option>
             <option value="operator">Оператор</option>
+            <option value="guest">Гость (демо-доступ)</option>
           </select>
+        </div>
+
+        <div>
+          <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>
+            {isNewStaff ? 'Пароль' : 'Новый пароль (оставьте пустым, чтобы не менять)'}
+          </label>
+          <input 
+            type="text"
+            value={staffPasswordInput} 
+            onChange={(e) => setStaffPasswordInput(e.target.value)}
+            placeholder={isNewStaff ? 'Минимум 6 символов' : '••••••'}
+            style={{ width: '95%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '10px', color: '#fff' }} 
+          />
         </div>
       </div>
 
       <div style={{ display: 'flex', gap: '12px', marginTop: '32px' }}>
         <button 
-          onClick={() => { setIsStaffEditModalOpen(false); setEditingStaff(null); }} 
+          onClick={() => { setIsStaffEditModalOpen(false); setEditingStaff(null); setStaffPasswordInput(''); }} 
           style={{ flex: 1, padding: '16px', background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}
         >
           Отмена
         </button>
         <button 
-          onClick={() => {
-            // Здесь будет сохранение в Supabase
-            console.log('Сохраняем сотрудника:', editingStaff);
-            alert('Изменения сохранены (пока заглушка)');
-            setIsStaffEditModalOpen(false);
-            setEditingStaff(null);
-            // window.location.reload(); // или обновить список staff
-          }} 
-          style={{ flex: 1, padding: '16px', background: '#10B981', border: 'none', borderRadius: '12px', color: '#fff', fontWeight: '600' }}
+          onClick={saveStaff}
+          disabled={savingStaff}
+          style={{ flex: 1, padding: '16px', background: savingStaff ? '#475569' : '#10B981', border: 'none', borderRadius: '12px', color: '#fff', fontWeight: '600', cursor: savingStaff ? 'not-allowed' : 'pointer' }}
         >
-          Сохранить
+          {savingStaff ? 'Сохранение...' : 'Сохранить'}
         </button>
       </div>
     </div>
@@ -2824,9 +2960,9 @@ const changeStaffPassword = async (staffMember: any) => {
     backgroundColor: 'rgba(0,0,0,0.9)', zIndex: 1400,
     display: 'flex', alignItems: 'center', justifyContent: 'center'
   }}>
-    <div style={{
-      background: '#1E2937', width: '780px', borderRadius: '20px', 
-      padding: '32px', color: '#fff', maxHeight: '88vh', overflow: 'auto'
+    <div className="w-full max-w-[780px] max-h-[88vh] overflow-auto mx-auto scroll-hidden" style={{
+      background: '#1E2937', borderRadius: '20px', 
+      padding: '32px', color: '#fff'
     }}>
       <h2 style={{ marginBottom: '12px' }}>Группы дублей</h2>
       <p style={{ color: '#94A3B8', marginBottom: '24px' }}>
@@ -2875,8 +3011,8 @@ const changeStaffPassword = async (staffMember: any) => {
     backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 1300,
     display: 'flex', alignItems: 'center', justifyContent: 'center'
   }}>
-    <div style={{
-      background: '#1E2937', width: '540px', borderRadius: '20px', padding: '32px', color: '#fff'
+    <div className="w-full max-w-[540px] max-h-[90vh] overflow-auto mx-auto scroll-hidden" style={{
+      background: '#1E2937', borderRadius: '20px', padding: '32px', color: '#fff'
     }}>
       <h2 style={{ marginBottom: '24px' }}>Новый клиент</h2>
 
@@ -3043,13 +3179,11 @@ const changeStaffPassword = async (staffMember: any) => {
     onClick={() => setSelectedOrder(null)}
   >
     <div 
+      className="w-full max-w-[1080px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
       style={{ 
         background: '#1E2937', 
-        width: '1080px', 
         borderRadius: '24px', 
         padding: '32px', 
-        maxHeight: '94vh', 
-        overflow: 'auto',
         boxShadow: '0 30px 80px rgba(0,0,0,0.7)'
       }} 
        onClick={e => e.stopPropagation()}

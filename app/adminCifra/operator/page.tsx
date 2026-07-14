@@ -15,6 +15,17 @@ export default function OperatorBSUPage() {
   const [selectedTrip, setSelectedTrip] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'zayavki' | 'warehouse' | 'reports' | 'recipes'>('zayavki');
 
+  // ==================== ЧАСЫ РЕАЛЬНОГО ВРЕМЕНИ В ШАПКЕ ====================
+  const [clockNow, setClockNow] = useState(() => new Date());
+  useEffect(() => {
+    const interval = setInterval(() => setClockNow(new Date()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+  const clockHours = String(clockNow.getHours()).padStart(2, '0');
+  const clockMinutes = String(clockNow.getMinutes()).padStart(2, '0');
+  const clockSeconds = String(clockNow.getSeconds()).padStart(2, '0');
+  const clockDateLabel = clockNow.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+
   // ==================== ИДЕНТИЧНОСТЬ ОПЕРАТОРА (для записи в историю) ====================
   const { user } = useUserRole();
   const operatorName = user?.full_name || user?.username || 'Оператор';
@@ -559,55 +570,94 @@ export default function OperatorBSUPage() {
 
   return (
     <div style={{ 
-      backgroundColor: '#0F172A', 
-      minHeight: '100vh', 
       color: '#fff',
-      fontFamily: 'system-ui, -apple-system, sans-serif'
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      flex: 1,
+      minHeight: 0,
+      width: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      boxSizing: 'border-box'
     }}>
 
       {/* ==================== 2. ВЕРХНЯЯ ПАНЕЛЬ ==================== */}
       <div style={{
         backgroundColor: '#1E2937',
-        padding: '20px 40px',
-        borderBottom: '1px solid #334155',
+        padding: '14px 32px',
+        borderRadius: '20px 20px 0 0',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-between'
+        justifyContent: 'space-between',
+        flexShrink: 0
       }}>
         <div>
-          <div style={{ fontSize: '32px', fontWeight: '700' }}>Бетонный завод</div>
-          <div style={{ color: '#94A3B8', fontSize: '15px' }}>Оператор БСУ • Реальное время</div>
+          <div style={{ fontSize: '24px', fontWeight: '700' }}>Бетонный завод</div>
+          <div style={{ color: '#94A3B8', fontSize: '14px' }}>Оператор БСУ • Реальное время</div>
         </div>
-        <div style={{ backgroundColor: '#25334A', padding: '12px 24px', borderRadius: '9999px', fontSize: '16px' }}>
+
+        {/* ==================== ЧАСЫ РЕАЛЬНОГО ВРЕМЕНИ ==================== */}
+        <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            backgroundColor: '#25334A',
+            border: '1px solid #334155',
+            borderRadius: '16px',
+            padding: '6px 26px'
+          }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: '2px',
+              fontFamily: "'SF Mono', 'Consolas', 'Menlo', monospace",
+              lineHeight: 1
+            }}>
+              <span style={{ fontSize: '30px', fontWeight: '700', color: '#fff', letterSpacing: '0.5px' }}>
+                {clockHours}:{clockMinutes}
+              </span>
+              <span style={{ fontSize: '16px', fontWeight: '600', color: '#10B981', marginLeft: '4px' }}>
+                {clockSeconds}
+              </span>
+            </div>
+            <div style={{ fontSize: '11.5px', color: '#94A3B8', marginTop: '2px', textTransform: 'capitalize' }}>
+              {clockDateLabel}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ backgroundColor: '#25334A', padding: '10px 20px', borderRadius: '9999px', fontSize: '15px' }}>
           Смена: <span style={{ color: '#10B981', fontWeight: '600' }}>{currentShift}</span>
         </div>
       </div>
 
-      <div style={{ padding: '20px 40px 40px 40px' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '14px 32px', boxSizing: 'border-box', overflow: 'hidden' }}>
 
              {/* ==================== 2. БЛОК СТАТИСТИКИ (только на вкладке Заявки) ==================== */}
 {activeTab === 'zayavki' && (
   <div style={{ 
     display: 'grid', 
     gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
-    gap: '16px',
-    marginBottom: '24px'
+    gap: '14px',
+    marginBottom: '14px',
+    flexShrink: 0
   }}>
     {stats.map((stat, index) => (
       <div key={index} style={{
         backgroundColor: '#1E2937',
-        borderRadius: '20px',
-        padding: '20px 24px',
+        borderRadius: '18px',
+        padding: '14px 18px',
         border: '1px solid #334155'
       }}>
-        <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
+        <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '6px' }}>
           {stat.label}
         </div>
         <div style={{ 
-          fontSize: '32px', 
+          fontSize: '26px', 
           fontWeight: '700', 
           color: stat.color,
-          marginBottom: '4px'
+          marginBottom: '2px'
         }}>
           {stat.value}
         </div>
@@ -624,9 +674,10 @@ export default function OperatorBSUPage() {
   display: 'flex', 
   alignItems: 'center',
   justifyContent: 'space-between',
-  marginBottom: '32px',
+  marginBottom: '14px',
   borderBottom: '1px solid #334155',
-  paddingBottom: '8px'
+  paddingBottom: '8px',
+  flexShrink: 0
 }}>
   
   {/* Табы слева */}
@@ -673,14 +724,15 @@ export default function OperatorBSUPage() {
   
 
         {/* ==================== 4. ОСНОВНОЙ КОНТЕНТ ==================== */}
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {activeTab === 'zayavki' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 750px', gap: '24px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '20px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
             
                                                 {/* ==================== 4.1 ОЧЕРЕДЬ НА ЗАГРУЗКУ ==================== */}
-            <div style={{ backgroundColor: '#1E2937', borderRadius: '24px', padding: '24px' }}>
+            <div style={{ backgroundColor: '#1E2937', borderRadius: '24px', padding: '20px', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box' }}>
               
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <h2 style={{ fontSize: '21px', fontWeight: '600' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexShrink: 0 }}>
+                <h2 style={{ fontSize: '19px', fontWeight: '600' }}>
                   📋 Очередь на загрузку ({queueTrips.length})
                 </h2>
 
@@ -703,7 +755,8 @@ export default function OperatorBSUPage() {
                 fontSize: '13.5px',
                 fontWeight: '500',
                 borderBottom: '1px solid #334155',
-                marginBottom: '10px'
+                marginBottom: '10px',
+                flexShrink: 0
               }}>
                 <div>Время</div>
                 <div>№ заявки</div>
@@ -715,7 +768,7 @@ export default function OperatorBSUPage() {
                 <div></div>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
+              <div className="scroll-hidden" style={{ display: 'flex', flexDirection: 'column', gap: '9px', flex: 1, minHeight: 0, overflowY: 'auto' }}>
                 {queueTrips.map((trip) => {
                   const client = trip.organization_name || trip.client_name || '—';
                   const isLoading = loadingTrips[trip.id];
@@ -867,12 +920,12 @@ export default function OperatorBSUPage() {
             </div>
 
                         {/* ==================== 4.2 ОТГРУЖЕНО СЕГОДНЯ ==================== */}
-            <div style={{ backgroundColor: '#1E2937', borderRadius: '24px', padding: '24px' }}>
-              <h2 style={{ fontSize: '21px', fontWeight: '600', marginBottom: '20px', color: '#10B981' }}>
+            <div style={{ backgroundColor: '#1E2937', borderRadius: '24px', padding: '20px', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box' }}>
+              <h2 style={{ fontSize: '19px', fontWeight: '600', marginBottom: '14px', color: '#10B981', flexShrink: 0 }}>
                 🚚 Отгружено сегодня ({filteredCompletedTrips.length})
               </h2>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
+              <div className="scroll-hidden" style={{ display: 'flex', flexDirection: 'column', gap: '9px', flex: 1, minHeight: 0, overflowY: 'auto' }}>
                 {filteredCompletedTrips.length > 0 ? filteredCompletedTrips.map((trip) => (
                   <div 
                     key={trip.id}
@@ -955,11 +1008,24 @@ export default function OperatorBSUPage() {
           </div>
         )}
         {/* ==================== СКЛАД ==================== */}
-        {activeTab === 'warehouse' && <WarehousePage recipes={recipes} />}
+        {activeTab === 'warehouse' && (
+          <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            <WarehousePage recipes={recipes} />
+          </div>
+        )}
         {/* ==================== ОТЧЕТЫ ==================== */}
-        {activeTab === 'reports' && <ReportsPage />}
+        {activeTab === 'reports' && (
+          <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            <ReportsPage />
+          </div>
+        )}
         {/* ==================== РЕЦЕПТЫ ==================== */}
-        {activeTab === 'recipes' && <RecipesPage />}
+        {activeTab === 'recipes' && (
+          <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            <RecipesPage />
+          </div>
+        )}
+        </div>
       </div>    
 
    {/* ==================== 5. МОДАЛЬНОЕ ОКНО ==================== */}
@@ -977,14 +1043,18 @@ export default function OperatorBSUPage() {
           onClick={() => setSelectedTrip(null)}
         >
           <div 
+            className="scroll-hidden"
             style={{ 
               background: '#1E2937', 
               padding: '32px', 
               borderRadius: '24px', 
-              width: '680px',
-              maxHeight: '92vh',
+              width: '100%',
+              maxWidth: '680px',
+              maxHeight: '90vh',
               overflowY: 'auto',
-              color: '#fff'
+              color: '#fff',
+              margin: '0 16px',
+              boxSizing: 'border-box'
             }} 
             onClick={e => e.stopPropagation()}
           >

@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import Image from 'next/image';
 import { useSearchParams } from 'next/navigation';
+import { formatPhoneInput, normalizePhone } from '@/lib/phone';
 
 declare const WebApp: any;
 
@@ -663,21 +664,9 @@ const loadReferrals = async () => {
           type="tel"
           placeholder="+7 (___) ___-__-__"
           value={phone}
-          onChange={(e) => {
-            let value = e.target.value.replace(/\D/g, '');
-            if (value.length > 0 && !value.startsWith('7')) value = '7' + value;
-            if (value.length > 11) value = value.substring(0, 11);
-            
-            let formatted = '+7';
-            if (value.length > 1) formatted += ' (' + value.substring(1, 4);
-            if (value.length > 4) formatted += ') ' + value.substring(4, 7);
-            if (value.length > 7) formatted += '-' + value.substring(7, 9);
-            if (value.length > 9) formatted += '-' + value.substring(9, 11);
-
-            setPhone(formatted);
-          }}
+          onChange={(e) => setPhone(formatPhoneInput(e.target.value))}
           style={{
-            width: '100%',
+            width: '90%',
             maxWidth: '420px',
             margin: '0 auto 16px',
             padding: '16px',
@@ -695,7 +684,7 @@ const loadReferrals = async () => {
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
            style={{
-             width: '100%',
+             width: '90%',
              maxWidth: '420px',
              margin: '0 auto 12px',
              padding: '16px',
@@ -707,13 +696,13 @@ const loadReferrals = async () => {
 
         <button 
           onClick={() => phone && registerByPhone(phone)}
-          disabled={!phone || phone.length < 12}
+          disabled={normalizePhone(phone).length !== 11}
           style={{
             width: '100%',
             maxWidth: '420px',
             margin: '0 auto',
             padding: '16px',
-            backgroundColor: (phone && phone.length >= 12) ? '#2563eb' : '#9ca3af',
+            backgroundColor: (normalizePhone(phone).length === 11) ? '#2563eb' : '#9ca3af',
             color: 'white',
             border: 'none',
             borderRadius: '12px',
@@ -1132,22 +1121,7 @@ const loadReferrals = async () => {
           <input
             type="tel"
             value={form.phone}
-            onChange={(e) => {
-              let digits = e.target.value.replace(/\D/g, '');
-              if (digits.length > 0 && !digits.startsWith('7')) {
-                digits = '7' + digits;
-              }
-              if (digits.length > 11) {
-                digits = digits.substring(0, 11);
-              }
-              let formatted = '+7';
-              if (digits.length > 1) formatted += ' (' + digits.substring(1, 4);
-              if (digits.length > 4) formatted += ') ' + digits.substring(4, 7);
-              if (digits.length > 7) formatted += '-' + digits.substring(7, 9);
-              if (digits.length > 9) formatted += '-' + digits.substring(9, 11);
-
-              setForm({ ...form, phone: formatted });
-            }}
+            onChange={(e) => setForm({ ...form, phone: formatPhoneInput(e.target.value) })}
             style={{ 
               width: '90%', 
               padding: '14px', 

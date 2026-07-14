@@ -562,26 +562,28 @@ ${order.customer_type?.includes('Юридическое')
 
   return (
     <div style={{ 
-      padding: '32px 40px', 
-      width: '100%',                    // занимает всю ширину
-      maxWidth: '96%',                  // ← Здесь регулируй ширину (в процентах)
-      margin: '0 auto', 
       color: '#fff',
-      minHeight: 'calc(100vh - 80px)'
+      flex: 1,
+      minHeight: 0,
+      width: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      boxSizing: 'border-box'
     }}>
     
     {/* Header */}
     <div style={{ 
       background: '#1E2937', 
-      padding: '20px 40px', 
-      borderBottom: '1px solid #334155', 
+      padding: '14px 32px', 
+      borderRadius: '20px 20px 0 0',
       display: 'flex', 
       alignItems: 'center', 
       justifyContent: 'space-between',
       flexShrink: 0
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '40px' }}>
-        <div style={{ fontSize: '32px', fontWeight: '700' }}>Заявки</div>
+        <div style={{ fontSize: '28px', fontWeight: '700' }}>Заявки</div>
         
         
       </div>
@@ -589,13 +591,16 @@ ${order.customer_type?.includes('Юридическое')
 
                               {/* ==================== KPI БАР ==================== */}
       <div style={{ 
-        padding: '24px 40px', 
+        padding: '14px 32px', 
         background: '#1E2937', 
         display: 'flex', 
         gap: '60px', 
-        borderBottom: '1px solid #334155',
+        borderTop: '1px solid #334155',
+        borderRadius: '0 0 20px 20px',
         alignItems: 'center',
-        flexWrap: 'wrap'
+        flexWrap: 'wrap',
+        flexShrink: 0,
+        marginBottom: '16px'
       }}>
         
         {/* Выполнено сегодня */}
@@ -638,26 +643,29 @@ ${order.customer_type?.includes('Юридическое')
 
       </div>
 
-      <div style={{ padding: '32px 40px', display: 'flex', gap: '28px' }}>
+      <div style={{ display: 'flex', gap: '24px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
         
                 {/* ==================== ЛЕВАЯ КОЛОНКА — ЗАЯВКИ НА НЕДЕЛЮ ==================== */}
         <div style={{ 
           width: '340px', 
-          flexShrink: 0 
+          flexShrink: 0,
+          height: '100%',
+          minHeight: 0,
+          boxSizing: 'border-box',
+          overflow: 'hidden'
         }}>
           <div style={{ 
             background: '#1E2937', 
             borderRadius: '20px', 
-            padding: '24px',
-            minHeight: '1100px',                    // минимальная комфортная высота для 1920
-            height: 'calc(100vh - 180px)',         // основная высота
-            maxHeight: 'calc(80vh - 120px)',      // ограничение сверху на 4K
+            padding: '20px',
+            height: '100%',
+            boxSizing: 'border-box',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden'
           }}>
             
-            <h3 style={{ marginBottom: '20px', color: '#94A3B8', fontSize: '18px' }}>
+            <h3 style={{ marginBottom: '10px', color: '#94A3B8', fontSize: '16px', flexShrink: 0 }}>
               ЗАЯВКИ НА НЕДЕЛЮ
             </h3>
 
@@ -666,7 +674,7 @@ ${order.customer_type?.includes('Юридическое')
               display: 'flex', 
               justifyContent: 'space-between', 
               alignItems: 'center', 
-              marginBottom: '20px',
+              marginBottom: '10px',
               color: '#CBD5E1',
               flexShrink: 0,
               gap: '16px'
@@ -727,11 +735,15 @@ ${order.customer_type?.includes('Юридическое')
               </button>
             </div>
 
-            {/* ==================== СПИСОК ДНЕЙ НЕДЕЛИ ==================== */}
+            {/* ==================== СПИСОК ДНЕЙ НЕДЕЛИ (все 7 всегда видны, без скролла; на больших экранах не растягиваются выше меры) ==================== */}
 <div style={{ 
   flex: 1, 
-  overflowY: 'auto', 
-  paddingRight: '8px'
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'flex-start',
+  gap: '6px',
+  overflow: 'hidden'
 }}>
   {weekDays.map((d: Date) => {
     const dateStr = d.toISOString().split('T')[0];
@@ -752,20 +764,23 @@ ${order.customer_type?.includes('Юридическое')
         key={dateStr}
         onClick={() => setSelectedDate(d)}
         style={{
-          padding: '16px 20px',
-          marginBottom: '8px',
+          flex: 1,
+          minHeight: 0,
+          maxHeight: '58px',
+          padding: '0 16px',
           background: isSelected ? '#3B82F620' : '#25334A',
-          borderRadius: '16px',
+          borderRadius: '10px',
           cursor: 'pointer',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           border: isSelected ? '2px solid #3B82F6' : 'none',
           transition: 'all 0.2s ease',
-          userSelect: 'none'
+          userSelect: 'none',
+          overflow: 'hidden'
         }}
       >
-        <div style={{ fontWeight: '600' }}>
+        <div style={{ fontWeight: '600', fontSize: '14px', whiteSpace: 'nowrap' }}>
           {d.toLocaleDateString('ru-RU', { 
             weekday: 'short', 
             day: 'numeric', 
@@ -774,15 +789,15 @@ ${order.customer_type?.includes('Юридическое')
           {isToday && <span style={{ color: '#60A5FA', marginLeft: '6px' }}>●</span>}
         </div>
         
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
           {/* Бейдж отменённых заявок — теперь СЛЕВА */}
           {cancelledCount > 0 && (
             <div style={{
               background: '#EF444420',
               color: '#EF4444',
-              padding: '4px 10px',
+              padding: '3px 9px',
               borderRadius: '9999px',
-              fontSize: '13px',
+              fontSize: '12px',
               fontWeight: '600',
               border: '1px solid #EF444440'
             }}>
@@ -794,11 +809,11 @@ ${order.customer_type?.includes('Юридическое')
           <div style={{ 
             background: '#334155', 
             color: '#CBD5E1', 
-            padding: '4px 12px', 
+            padding: '3px 11px', 
             borderRadius: '9999px',
-            fontSize: '14px',
+            fontSize: '13px',
             fontWeight: '600',
-            minWidth: '28px',
+            minWidth: '26px',
             textAlign: 'center'
           }}>
             {count}
@@ -813,16 +828,18 @@ ${order.customer_type?.includes('Юридическое')
 <div style={{ 
   background: '#1E2937', 
   borderRadius: '16px', 
-  padding: '20px 24px',
+  padding: '12px 20px',
+  marginTop: '10px',
   marginBottom: '5px',
-  height: '200px',
+  height: '165px',
+  flexShrink: 0,
   position: 'relative'
 }}>
-  <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '12px', fontWeight: '600' }}>
+  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '6px', fontWeight: '600' }}>
     Объём по дням недели (м³)
   </div>
 
-  <svg width="100%" height="120" viewBox="0 0 280 110" style={{ overflow: 'visible' }}>
+  <svg width="100%" height="105" viewBox="0 0 280 110" style={{ overflow: 'visible' }}>
     {/* Сетка */}
     {[0, 30, 60, 90, 120].map(y => (
       <line key={y} x1="0" y1={y} x2="280" y2={y} stroke="#334155" strokeWidth="1" />
@@ -919,17 +936,17 @@ ${order.customer_type?.includes('Юридическое')
 </div>
 
                                     {/* ==================== РАЗДЕЛИТЕЛЬ + СВОДКА ЗА НЕДЕЛЮ ==================== */}
-            <div style={{ marginTop: '12px', paddingTop: '16px', borderTop: '1px solid #334155' }}>
+            <div style={{ marginTop: '8px', paddingTop: '10px', borderTop: '1px solid #334155', flexShrink: 0 }}>
               <div style={{ 
                 background: '#25334A', 
                 borderRadius: '16px', 
-                padding: '16px 18px',
+                padding: '12px 16px',
                 fontSize: '15px'
               }}>
-                <div style={{ color: '#94A3B8', marginBottom: '12px', fontWeight: '600' }}>Итого за неделю</div>
+                <div style={{ color: '#94A3B8', marginBottom: '8px', fontWeight: '600' }}>Итого за неделю</div>
                 
                 {/* 1. Количество заявок */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <span style={{ fontSize: '15px' }}>Всего заявок:</span>
                   <strong style={{ fontSize: '17px' }}>
                     {weekDays.reduce((sum, d) => sum + getOrdersCountForDate(d), 0)}
@@ -937,7 +954,7 @@ ${order.customer_type?.includes('Юридическое')
                 </div>
                 
                 {/* 2. Запланировано */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <span style={{ fontSize: '15px' }}>Запланировано:</span>
                   <strong style={{ fontSize: '17px' }}>
                     {Math.round(weekDays.reduce((sum, d) => {
@@ -979,8 +996,8 @@ ${order.customer_type?.includes('Юридическое')
                 onClick={() => setShowNewOrderModal(true)}
                 style={{
                   width: '100%',
-                  marginTop: '12px',
-                  padding: '14px',
+                  marginTop: '8px',
+                  padding: '12px',
                   background: '#10B981',
                   color: 'white',
                   border: 'none',
@@ -999,9 +1016,9 @@ ${order.customer_type?.includes('Юридическое')
         </div>
 
         {/* ==================== ПРАВАЯ КОЛОНКА — ОСНОВНОЙ СПИСОК ==================== */}
-<div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+<div style={{ flex: 1, minHeight: 0, height: '100%', boxSizing: 'border-box', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
 
-  <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
+  <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
     <h2 style={{ margin: 0 }}>
       Заявки на {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
     </h2>
@@ -1027,7 +1044,7 @@ ${order.customer_type?.includes('Юридическое')
   </div>
 
   {/* Поиск и фильтры */}
-  <div style={{ display: 'flex', gap: '16px', marginBottom: '24px' }}>
+  <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', flexShrink: 0 }}>
     <input
       type="text"
       placeholder="Поиск по клиенту, № заявки или ИНН..."
@@ -1068,21 +1085,22 @@ ${order.customer_type?.includes('Юридическое')
     {/* ==================== СПИСОК ЗАЯВОК СО СКРОЛЛОМ ==================== */}
 <div style={{ 
   flex: 1,
+  minHeight: 0,
+  boxSizing: 'border-box',
   background: '#1E2937', 
   borderRadius: '24px', 
   padding: '24px 32px',
   display: 'flex',
   flexDirection: 'column',
-  minHeight: '620px',
   overflow: 'hidden'
 }}>
   
-  <div style={{ 
+  <div className="scroll-hidden" style={{ 
     flex: 1, 
     overflowY: 'auto', 
     display: 'flex', 
     flexDirection: 'column', 
-    gap: '10px',
+    gap: '7px',
     paddingRight: '8px'
   }}>
     {loading ? (
@@ -1093,40 +1111,39 @@ ${order.customer_type?.includes('Юридическое')
   onClick={() => handleOpenOrder(order)}
   style={{
     background: '#25334A',
-    borderRadius: '16px',
-    padding: '16px 20px',
+    borderRadius: '14px',
+    padding: '9px 20px',
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     gap: '20px',
     transition: 'all 0.2s',
-    minHeight: '14px',           // ← основная регулировка высоты строки
     flexShrink: 0
   }}
 >
         {/* Порядковый номер */}
         <div style={{ 
-          width: '50px', 
+          width: '38px', 
           textAlign: 'center',
           color: '#64748B',
           fontWeight: '700',
-          fontSize: '18px',
+          fontSize: '15px',
           userSelect: 'none'
         }}>
           {index + 1}
         </div>
 
         {/* Время */}
-        <div style={{ width: '90px', fontWeight: '700', fontSize: '17px' }}>
+        <div style={{ width: '76px', fontWeight: '700', fontSize: '15px' }}>
           {order.delivery_time}
         </div>
 
         {/* Информация о заявке */}
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: '600', fontSize: '17px' }}>
+        <div style={{ flex: 1, lineHeight: 1.25 }}>
+          <div style={{ fontWeight: '600', fontSize: '15px' }}>
             #{order.id} — {order.organization_name || order.full_name || '—'}
           </div>
-          <div style={{ color: '#94A3B8' }}>
+          <div style={{ color: '#94A3B8', fontSize: '13px' }}>
             {order.grade} • {order.volume} м³
           </div>
         </div>
@@ -1134,10 +1151,10 @@ ${order.customer_type?.includes('Юридическое')
         {/* БЕЙДЖ "ПОД ВОПРОСОМ" */}
 {(order as any).is_questionable && (
   <div style={{
-    padding: '6px 14px',
+    padding: '4px 12px',
     background: '#EF4444',
     color: 'white',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: '700',
     borderRadius: '9999px',
     display: 'inline-flex',
@@ -1151,12 +1168,12 @@ ${order.customer_type?.includes('Юридическое')
 
         {/* Статус */}
         <div style={{ 
-          padding: '8px 20px', 
+          padding: '5px 16px', 
           borderRadius: '9999px', 
           background: getStatusColor(order.status) + '20', 
           color: getStatusColor(order.status),
           fontWeight: '600',
-          fontSize: '15px'
+          fontSize: '13.5px'
         }}>
           {order.status === 'new' && 'Новая'}
           {order.status === 'processing' && 'В работе'}
@@ -1181,13 +1198,11 @@ ${order.customer_type?.includes('Юридическое')
     
   >
     <div 
+      className="w-full max-w-[1080px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
       style={{ 
         background: '#1E2937', 
-        width: '1080px', 
         borderRadius: '24px', 
         padding: '32px', 
-        maxHeight: '94vh', 
-        overflow: 'auto',
         boxShadow: '0 30px 80px rgba(0,0,0,0.7)'
       }} 
       onClick={e => e.stopPropagation()}
