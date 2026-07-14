@@ -551,6 +551,19 @@ export function useRealtimeProductionLogs(
     onInsert: (newRecord) => {
       setLogs((prev) => {
         if (prev.some((l) => String(l.id) === String(newRecord.id))) return prev;
+
+        // Если уже есть строка (в т.ч. оптимистичный плейсхолдер с временным
+        // отрицательным id) для того же рейса order_mixer_id — не добавляем
+        // вторую. Актуально для оператора БСУ: строка "Загружен" переносится
+        // в ленту мгновенно на клиенте, а это INSERT по realtime — то же
+        // самое событие, просто с настоящим id.
+        if (
+          newRecord.order_mixer_id != null &&
+          prev.some((l) => String(l.order_mixer_id) === String(newRecord.order_mixer_id))
+        ) {
+          return prev;
+        }
+
         return [newRecord, ...prev];
       });
     },

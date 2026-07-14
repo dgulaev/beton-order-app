@@ -195,98 +195,6 @@ export default function OperatorBSUPage() {
     }
   };
 
-       // ==================== 1.2 ЗАВЕРШИТЬ ЗАГРУЗКУ ====================
-  // ⚠️ Защита от повторного клика: кнопка "Загружен" оставалась активной всё
-  // время выполнения запросов (loadingTrips[trip.id] сбрасывается только
-  // через 600мс ПОСЛЕ завершения), поэтому быстрый повторный/двойной клик
-  // запускал completeLoading ещё раз параллельно — это и создавало
-  // дублирующиеся записи в production_logs (по 2-3 одинаковые строки в
-  // "Отгружено сегодня" на один и тот же рейс).
-  const [completingTripIds, setCompletingTripIds] = useState<Set<number>>(new Set());
-
-  const completeLoading = async (trip: any) => {
-    if (completingTripIds.has(trip.id)) return; // уже в процессе — игнорируем повторный клик
-
-    const startTime = tripStartTimes[trip.id] || trip.loading_started_at;
-    if (!startTime) {
-      alert('❗ Сначала нажмите кнопку "Начать"');
-      return;
-    }
-
-    setCompletingTripIds(prev => new Set(prev).add(trip.id));
-
-    const endTime = new Date().toISOString();
-    const durationMinutes = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000);
-
-    try {
-      await fetch('/api/adminCifra/production-log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          order_id: trip.order_id || trip.orderId,
-          order_mixer_id: trip.id,
-          mixer_name: trip.mixer_name || trip.number,
-          concrete_grade: trip.concrete_grade,
-          volume: parseFloat(trip.volume || 0),
-          podvizhnost: trip.podvizhnost || 'П3',
-          start_time: startTime
-        })
-      });
-
-      await fetch('/api/adminCifra/order-mixers/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: trip.id,
-          status: 'В пути',
-          userName: operatorName,
-          userRole: operatorRole
-        })
-      });
-
-      // ✅ МГНОВЕННОЕ УДАЛЕНИЕ ИЗ ОЧЕРЕДИ (оптимистично, до прихода realtime)
-      const tripIdStr = String(trip.id);
-      setOptimisticallyRemovedIds(prev => {
-        const next = new Set(prev);
-        next.add(tripIdStr);
-        return next;
-      });
-
-      // Страховка: если realtime-обновление по какой-то причине не придёт
-      // (обрыв связи и т.п.), через 20с снимаем принудительное скрытие —
-      // список покажет актуальное состояние сервера, а не "зависшую" пустоту.
-      setTimeout(() => {
-        setOptimisticallyRemovedIds(prev => {
-          if (!prev.has(tripIdStr)) return prev;
-          const next = new Set(prev);
-          next.delete(tripIdStr);
-          return next;
-        });
-      }, 20000);
-
-      // 🔥 Ручной рефетч убран — новая запись production_logs придёт через realtime
-      // (useRealtimeProductionLogs) и другим операторам, и текущему, без лишнего запроса
-
-      setTimeout(() => {
-        setLoadingTrips(prev => {
-          const copy = { ...prev };
-          delete copy[trip.id];
-          return copy;
-        });
-      }, 600);
-
-    } catch (err) {
-      console.error(err);
-      alert('Ошибка при сохранении производства');
-    } finally {
-      setCompletingTripIds(prev => {
-        const next = new Set(prev);
-        next.delete(trip.id);
-        return next;
-      });
-    }
-  };
-
         // ==================== 1.2 ОТГРУЖЕНО СЕГОДНЯ (загрузка из базы) ====================
   const [completedTrips, setCompletedTrips] = useState<any[]>([]);
 
@@ -309,6 +217,191 @@ export default function OperatorBSUPage() {
 
   // Live-обновление ленты "Отгружено сегодня" — подхватывает записи от любого оператора
   useRealtimeProductionLogs(setCompletedTrips);
+
+       // ==================== 1.2 ЗАВЕРШИТЬ ЗАГРУЗКУ ====================
+  // ⚠️ ГАРАНТИРОВАННЫЙ ПЕРЕНОС: строка сразу и безусловно переезжает в
+  // "Отгружено сегодня" и мгновенно скрывается из очереди — не дожидаясь
+  // ответа сервера. Так оператор никогда не видит "зависшую" строку в
+  // очереди и не может нажать на неё повторно (именно это было причиной
+  // дублей 13-14.07 — строка временно "телепортировалась" обратно из-за
+  // задержки записи в базе, и оператор жал "Начать"/"Загружен" второй раз).
+  // Реальное сохранение (production_logs + смена статуса миксера на
+  // "В пути") идёт в фоне с повторами — пока статус не подтверждён сервером,
+  // на строке горит красная точка (см. _pending).
+  const [completingTripIds, setCompletingTripIds] = useState<Set<number>>(new Set());
+
+  const completeLoading = (trip: any) => {
+    if (completingTripIds.has(trip.id)) return; // защита от двойного клика в первый момент
+
+    const startTime = tripStartTimes[trip.id] || trip.loading_started_at;
+    if (!startTime) {
+      alert('❗ Сначала нажмите кнопку "Начать"');
+      return;
+    }
+
+    setCompletingTripIds(prev => new Set(prev).add(trip.id));
+
+    const endTime = new Date().toISOString();
+    const durationMinutes = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000);
+    // Отрицательный временный id — чтобы не пересекаться с реальными id из базы,
+    // до тех пор пока production-log не ответит настоящим id записи.
+    const tempId = -(Date.now() * 1000 + Math.floor(Math.random() * 1000));
+
+    const optimisticLog = {
+      id: tempId,
+      order_id: trip.order_id || trip.orderId,
+      order_mixer_id: trip.id,
+      mixer_name: trip.mixer_name || trip.number,
+      concrete_grade: trip.concrete_grade,
+      volume: trip.volume,
+      podvizhnost: trip.podvizhnost || 'П3',
+      start_time: startTime,
+      end_time: endTime,
+      duration_minutes: durationMinutes,
+      created_at: endTime,
+      _pending: true, // статус миксера ещё не подтверждён сервером — красная точка на строке
+    };
+
+    // 1) Мгновенно и безусловно — в "Отгружено сегодня"
+    setCompletedTrips(prev => [optimisticLog, ...prev]);
+
+    // 2) Мгновенно и безусловно — прочь из "Очередь на загрузку"
+    const tripIdStr = String(trip.id);
+    setOptimisticallyRemovedIds(prev => new Set(prev).add(tripIdStr));
+
+    setLoadingTrips(prev => {
+      const copy = { ...prev };
+      delete copy[trip.id];
+      return copy;
+    });
+
+    // 3) Фоновое сохранение с повторами — интерфейс это не блокирует
+    void persistCompletion(trip, tempId, startTime, tripIdStr);
+  };
+
+  // Отдельный таймаут на каждую попытку (не ждём "вечно" зависший запрос к
+  // Supabase — именно так выглядела сегодняшняя задержка с heartbeat) плюс
+  // растущая пауза между попытками. Обе ручки ниже безопасны для повтора:
+  // у production-log есть сервер-side дедуп по order_mixer_id за последнюю
+  // минуту, а order-mixers/status просто перезапишет тот же статус повторно
+  // без лишней записи в историю (см. lib/orderMixers.ts — история пишется
+  // только если статус реально меняется).
+  const fetchWithRetry = async (
+    url: string,
+    init: RequestInit,
+    opts: { attempts?: number; timeoutMs?: number; baseDelayMs?: number } = {}
+  ): Promise<Response> => {
+    const { attempts = 5, timeoutMs = 8000, baseDelayMs = 1500 } = opts;
+    let lastError: any;
+
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const res = await fetch(url, { ...init, signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res;
+      } catch (err) {
+        clearTimeout(timeoutId);
+        lastError = err;
+        if (attempt < attempts - 1) {
+          await new Promise(r => setTimeout(r, baseDelayMs * Math.pow(1.8, attempt)));
+        }
+      }
+    }
+
+    throw lastError;
+  };
+
+  const persistCompletion = async (trip: any, tempId: number, startTime: string, tripIdStr: string) => {
+    // Шаг 1: запись рейса в production_logs
+    try {
+      const res = await fetchWithRetry('/api/adminCifra/production-log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order_id: trip.order_id || trip.orderId,
+          order_mixer_id: trip.id,
+          mixer_name: trip.mixer_name || trip.number,
+          concrete_grade: trip.concrete_grade,
+          volume: parseFloat(trip.volume || 0),
+          podvizhnost: trip.podvizhnost || 'П3',
+          start_time: startTime
+        })
+      });
+      const json = await res.json().catch(() => null);
+      const realId = json?.data?.id;
+      if (realId) {
+        setCompletedTrips(prev => prev.map(l => (l.id === tempId ? { ...l, id: realId } : l)));
+      }
+    } catch (err) {
+      console.error(`❌ [Оператор] Не удалось записать отгрузку миксера ${trip.mixer_name || trip.number || trip.id} после всех попыток:`, err);
+    }
+
+    // Шаг 2: смена статуса миксера на "В пути" — это главное, повторяем настойчивее
+    try {
+      await fetchWithRetry(
+        '/api/adminCifra/order-mixers/status',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: trip.id,
+            status: 'В пути',
+            userName: operatorName,
+            userRole: operatorRole
+          })
+        },
+        { attempts: 6, timeoutMs: 8000, baseDelayMs: 2000 }
+      );
+
+      // ✅ подтверждено — снимаем красную точку у соответствующей строки
+      setCompletedTrips(prev =>
+        prev.map(l => (String(l.order_mixer_id) === String(trip.id) ? { ...l, _pending: false } : l))
+      );
+    } catch (err) {
+      console.error(`🔴 [Оператор] Статус миксера ${trip.mixer_name || trip.number || trip.id} НЕ подтверждён после всех попыток — нужна ручная проверка:`, err);
+
+      // Все повторы исчерпаны — это уже не гонка, а настоящий сигнал "нужно
+      // вмешательство". Возвращаем строку в очередь, чтобы её было видно и
+      // можно было провести заново, но красная точка в "Отгружено сегодня"
+      // остаётся — рейс не потерян, просто не подтверждён.
+      setOptimisticallyRemovedIds(prev => {
+        if (!prev.has(tripIdStr)) return prev;
+        const next = new Set(prev);
+        next.delete(tripIdStr);
+        return next;
+      });
+    } finally {
+      setCompletingTripIds(prev => {
+        const next = new Set(prev);
+        next.delete(trip.id);
+        return next;
+      });
+    }
+  };
+
+  // Доп. страховка: если статус миксера подтвердился по realtime (пришло
+  // обновление order_mixers с новым статусом) — снимаем красную точку, даже
+  // если наш собственный fetch-ответ потерялся в сети (запрос мог выполниться
+  // на сервере, а ответ до клиента не долетел).
+  useEffect(() => {
+    setCompletedTrips(prev => {
+      let changed = false;
+      const next = prev.map(l => {
+        if (!l._pending) return l;
+        const mixer = rawMixers.find((m: any) => String(m.id) === String(l.order_mixer_id));
+        if (mixer && mixer.status && mixer.status !== 'Загрузка') {
+          changed = true;
+          return { ...l, _pending: false };
+        }
+        return l;
+      });
+      return changed ? next : prev;
+    });
+  }, [rawMixers]);
 
     // ==================== 1.3 ЛОКАЛЬНЫЕ ИЗМЕНЕНИЯ ПОДВИЖНОСТИ ====================
  const [podvizhnostOverrides, setPodvizhnostOverrides] = useState<Record<number, string>>({});
@@ -801,7 +894,21 @@ export default function OperatorBSUPage() {
                       <div style={{ fontWeight: '700', color: '#60A5FA', minWidth: '70px' }}>
                         #{trip.order_id || trip.orderId}
                       </div>
-                      <div style={{ fontWeight: '700', minWidth: '120px' }}>
+                      <div style={{ fontWeight: '700', minWidth: '120px', display: 'flex', alignItems: 'center', gap: '7px' }}>
+                        {trip._pending && (
+                          <span
+                            title="Статус миксера пока не подтверждён сервером — рейс не потерян, идёт сохранение"
+                            style={{
+                              width: '8px',
+                              height: '8px',
+                              borderRadius: '50%',
+                              backgroundColor: '#EF4444',
+                              display: 'inline-block',
+                              flexShrink: 0,
+                              animation: 'pulse 1.4s ease-in-out infinite'
+                            }}
+                          />
+                        )}
                         {trip.mixer_name || trip.number || '—'}
                       </div>
                       
@@ -821,9 +928,15 @@ export default function OperatorBSUPage() {
                       <div style={{ fontWeight: '600' }}>
                         {trip.volume} м³
                       </div>
-                      <div style={{ color: '#10B981', fontWeight: '600' }}>
-                        ✓ Загружен • {trip.loadedTime || '—'}
-                      </div>
+                      {trip._pending ? (
+                        <div style={{ color: '#F59E0B', fontWeight: '600' }} title="Сохраняется, статус миксера подтверждается">
+                          ⏳ Сохранение…
+                        </div>
+                      ) : (
+                        <div style={{ color: '#10B981', fontWeight: '600' }}>
+                          ✓ Загружен • {trip.loadedTime || '—'}
+                        </div>
+                      )}
                     </div>
                     <div style={{ color: '#64748B' }}>В пути</div>
                   </div>
