@@ -5,7 +5,7 @@ import { useTodayLoadingMixers } from '../hooks/useTodayLoadingMixers';
 import { useRealtimeProductionLogs } from '@/hooks/useRealtimeOrders';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import WarehousePage from '../warehouse/page';
-import ReportsPage from '../reports/page';
+import ReportsPage, { preloadReportsData } from '../reports/page';
 import RecipesPage from '../recipes/page';
 
 
@@ -108,6 +108,14 @@ export default function OperatorBSUPage() {
     });
   }, [rawMixers, optimisticallyRemovedIds]);
 
+
+  // ==================== 0.3 ФОНОВАЯ ПРЕДЗАГРУЗКА ДАННЫХ ОТЧЁТОВ ====================
+  // Запускается сразу при открытии страницы оператора — пока пользователь смотрит
+  // на вкладку «Заявки», данные отчётов грузятся в фоне и кешируются.
+  // Когда он кликнет «Отчёты» — диаграмма появится мгновенно.
+  useEffect(() => {
+    preloadReportsData();
+  }, []);
 
   // ==================== 0.4 ЗАГРУЗКА РЕЦЕПТОВ ИЗ БАЗЫ ====================
   const [recipes, setRecipes] = useState<any[]>([]);

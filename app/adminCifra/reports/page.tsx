@@ -11,6 +11,21 @@ const COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'
 // Кеш данных между переключениями вкладок — не нужно рефетчить каждый раз
 let _historyCache: any[] | null = null;
 
+// Вызывается из operator/page.tsx при его монтировании — загружает данные фоново,
+// пока пользователь ещё смотрит на вкладку «Заявки». К моменту клика на «Отчёты»
+// данные уже в кеше и диаграмма появляется мгновенно без скелетона.
+export async function preloadReportsData(): Promise<void> {
+  if (_historyCache) return;
+  try {
+    const res = await fetch('/api/adminCifra/meka-report');
+    if (res.ok) {
+      _historyCache = await res.json();
+    }
+  } catch {
+    // некритично — при первом заходе просто покажем скелетон
+  }
+}
+
 export default function ReportsPage() {
   const [history, setHistory] = useState<any[]>(_historyCache || []);
   const [isLoading, setIsLoading] = useState(!_historyCache);
@@ -733,25 +748,30 @@ export default function ReportsPage() {
         opacity: 0.6,
       }} />
     ) : (
-      <PieChart width={280} height={280}>
-        <Pie
-          data={topRecipes}
-          cx="50%"
-          cy="50%"
-          innerRadius={85}
-          outerRadius={120}
-          dataKey="value"
-          nameKey="name"
-          animationDuration={600}
-          animationEasing="ease-out"
-          isAnimationActive={true}
-        >
-          {topRecipes.map((entry, index) => (
-            <Cell key={`cell-${index}`} fill={entry.fill} />
-          ))}
-        </Pie>
-        <Tooltip content={<CustomPieTooltip />} />
-      </PieChart>
+      <div style={{
+        animation: topRecipes.length > 0
+          ? 'chartReveal 0.65s cubic-bezier(0.34, 1.56, 0.64, 1) forwards'
+          : 'none',
+        transformOrigin: 'center',
+      }}>
+        <PieChart width={280} height={280}>
+          <Pie
+            data={topRecipes}
+            cx="50%"
+            cy="50%"
+            innerRadius={85}
+            outerRadius={120}
+            dataKey="value"
+            nameKey="name"
+            isAnimationActive={false}
+          >
+            {topRecipes.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={entry.fill} />
+            ))}
+          </Pie>
+          <Tooltip content={<CustomPieTooltip />} />
+        </PieChart>
+      </div>
     )}
   </div>
 
