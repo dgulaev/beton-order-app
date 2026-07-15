@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
+import MixerHistoryDrawer from './MixerHistoryDrawer';
 
 interface Mixer {
   id: number;
@@ -25,6 +26,7 @@ export default function MixersPage() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showModal, setShowModal] = useState(false);
   const [editingMixer, setEditingMixer] = useState<Mixer | null>(null);
+  const [historyMixer, setHistoryMixer] = useState<Mixer | null>(null);
 
   const [formData, setFormData] = useState({
     number: '',
@@ -431,6 +433,25 @@ export default function MixersPage() {
 
                     {/* Тонкие кнопки в стиле списка */}
                     <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => setHistoryMixer(mixer)}
+                        style={{
+                          flex: 1,
+                          padding: '8px 12px',
+                          background: 'rgba(74,222,128,0.1)',
+                          color: '#4ADE80',
+                          border: '1px solid rgba(74,222,128,0.3)',
+                          borderRadius: '9999px',
+                          fontWeight: '500',
+                          fontSize: '13.5px',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        📋 История
+                      </button>
                       <button 
                         onClick={() => openEditModal(mixer)} 
                         style={{ 
@@ -557,32 +578,56 @@ export default function MixersPage() {
                       </span>
                     </div>
 
-                    {/* Кнопка Редактировать */}
-                    <button 
-                      onClick={() => openEditModal(mixer)} 
-                      style={{ 
-                        padding: '6px 16px',
-                        background: '#334155',
-                        color: '#E2E8F0',
-                        border: 'none', 
-                        borderRadius: '9999px', 
-                        fontWeight: '500',
-                        fontSize: '13.5px',
-                        whiteSpace: 'nowrap',
-                        marginLeft: 'auto',
-                        transition: 'all 0.2s ease'
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.background = '#3B82F6';
-                        e.currentTarget.style.color = 'white';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.background = '#334155';
-                        e.currentTarget.style.color = '#E2E8F0';
-                      }}
-                    >
-                      Редактировать
-                    </button>
+                    {/* Кнопки действий */}
+                    <div style={{ display: 'flex', gap: '6px', marginLeft: 'auto' }}>
+                      <button
+                        onClick={() => setHistoryMixer(mixer)}
+                        style={{
+                          padding: '6px 14px',
+                          background: 'rgba(74,222,128,0.1)',
+                          color: '#4ADE80',
+                          border: '1px solid rgba(74,222,128,0.3)',
+                          borderRadius: '9999px',
+                          fontWeight: '500',
+                          fontSize: '13px',
+                          whiteSpace: 'nowrap',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'rgba(74,222,128,0.2)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'rgba(74,222,128,0.1)';
+                        }}
+                      >
+                        📋 История
+                      </button>
+                      <button 
+                        onClick={() => openEditModal(mixer)} 
+                        style={{ 
+                          padding: '6px 16px',
+                          background: '#334155',
+                          color: '#E2E8F0',
+                          border: 'none', 
+                          borderRadius: '9999px', 
+                          fontWeight: '500',
+                          fontSize: '13.5px',
+                          whiteSpace: 'nowrap',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = '#3B82F6';
+                          e.currentTarget.style.color = 'white';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = '#334155';
+                          e.currentTarget.style.color = '#E2E8F0';
+                        }}
+                      >
+                        Редактировать
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -591,6 +636,12 @@ export default function MixersPage() {
         </>
       )}
       </div>
+
+      {/* ==================== ИСТОРИЯ РЕЙСОВ МИКСЕРА ==================== */}
+      <MixerHistoryDrawer
+        mixer={historyMixer}
+        onClose={() => setHistoryMixer(null)}
+      />
 
       {/* ==================== МОДАЛЬНОЕ ОКНО ==================== */}
       {showModal && (

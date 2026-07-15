@@ -7,6 +7,7 @@ import { useEffect, useState, useRef } from 'react';
 import Image from 'next/image';
 import { useUserRole } from '../providers/UserRoleProvider';
 import { useOrderChangeNotifications } from '@/hooks/useRealtimeOrders';
+import { reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
 import { formatPhoneInput } from '@/lib/phone';
 
 // ==================== PERSISTENTНЫЕ УВЕДОМЛЕНИЯ (localStorage) ====================
@@ -792,7 +793,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 justifyContent: isCollapsed ? 'center' : 'flex-start',
                 cursor: realtimeStatus !== 'SUBSCRIBED' ? 'pointer' : 'default',
               }}
-              onClick={() => realtimeStatus !== 'SUBSCRIBED' && window.location.reload()}
+              onClick={() => realtimeStatus !== 'SUBSCRIBED' && reconnectAllBroadcastChannels()}
             >
               <span style={{
                 width: '8px',
@@ -815,9 +816,9 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   whiteSpace: 'nowrap',
                   letterSpacing: '0.02em',
                 }}>
-                  {realtimeStatus === 'SUBSCRIBED' ? 'Уведомления ●' :
+                  {realtimeStatus === 'SUBSCRIBED' ? 'Уведомления' :
                    realtimeStatus === 'CONNECTING' ? 'Подключение...' :
-                   'Нет связи — обновить'}
+                   'Нет связи — кликни'}
                 </span>
               )}
             </div>

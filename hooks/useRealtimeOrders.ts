@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient'; // ← общий клиент, не создаём новый
+import { useRealtimeBroadcast } from './useRealtimeBroadcast';
  
 type ChangeEvent = '*' | 'INSERT' | 'UPDATE' | 'DELETE';
  
@@ -100,7 +101,12 @@ async function removeChannelIntentionally(channel: RealtimeChannel) {
 }
  
 function buildChannelKey(table: string, event: ChangeEvent, filter?: string) {
-  return `realtime:${table}:${event}:${filter ?? 'nofilter'}`;
+  // Кодируем все не-ASCII символы (например, кириллица в filter-значении миксера)
+  // чтобы имя Phoenix-канала оставалось ASCII-safe и не отвергалось Supabase Realtime.
+  const safeFilter = filter
+    ? filter.replace(/[^\x20-\x7E]/g, (ch) => encodeURIComponent(ch))
+    : 'nofilter';
+  return `rt:${table}:${event}:${safeFilter}`;
 }
  
 function scheduleReconnect(channelKey: string, table: string, event: ChangeEvent, filter?: string) {
@@ -169,15 +175,26 @@ async function reconnectChannel(channelKey: string, table: string, event: Change
 // которые сейчас в статусе ERROR/CLOSED, минуя оставшуюся задержку backoff.
 let forceReconnectListenerAttached = false;
 
+// Публичная функция — вызывается из UI (индикатор в sidebar) при клике
+export function triggerForceReconnect() {
+  channelRegistry.forEach((entry, channelKey) => {
+    if (entry.status !== 'SUBSCRIBED') {
+      console.log(`🔁 [Realtime] Ручной реконнект → ${entry.table} (статус: ${entry.status})`);
+      entry.retryCount = 0;
+      reconnectChannel(channelKey, entry.table, entry.event, entry.filter);
+    }
+  });
+}
+
 function attachForceReconnectListeners() {
   if (forceReconnectListenerAttached || typeof document === 'undefined') return;
   forceReconnectListenerAttached = true;
 
   const forceReconnectAll = (reason: string) => {
     channelRegistry.forEach((entry, channelKey) => {
-      if (entry.status === 'ERROR' || entry.status === 'CLOSED') {
-        console.log(`🔁 [Realtime] Форс-переподключение (${reason}) → ${entry.table}`);
-        entry.retryCount = 0; // не ждём полный backoff — пробуем сразу
+      if (entry.status !== 'SUBSCRIBED') {
+        console.log(`🔁 [Realtime] Форс-переподключение (${reason}) → ${entry.table} (статус: ${entry.status})`);
+        entry.retryCount = 0;
         reconnectChannel(channelKey, entry.table, entry.event, entry.filter);
       }
     });
@@ -188,6 +205,32 @@ function attachForceReconnectListeners() {
   });
 
   window.addEventListener('online', () => forceReconnectAll('сеть восстановлена'));
+
+  // ==================== ПЕРИОДИЧЕСКИЙ KEEPALIVE ====================
+  // Supabase WebSocket может тихо умереть без отправки CLOSED/ERROR —
+  // тогда наш backoff-реконнект не срабатывает вообще. Проверяем каждые
+  // 30 секунд: любой канал не в SUBSCRIBED → переподключаем сразу.
+  // Нагрузка минимальна: проверка — просто итерация по Map, реальный
+  // сетевой запрос только если канал реально сломан.
+  setInterval(() => {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+
+    let unhealthy = 0;
+    channelRegistry.forEach((entry, channelKey) => {
+      // CONNECTING — не трогаем: подписка могла ещё не завершиться (Supabase отвечает до 25с).
+      // Прерывание CONNECTING создаёт вечный цикл реконнекта.
+      // ERROR/CLOSED — переподключаем сразу.
+      if (entry.status === 'ERROR' || entry.status === 'CLOSED') {
+        unhealthy++;
+        entry.retryCount = 0;
+        reconnectChannel(channelKey, entry.table, entry.event, entry.filter);
+      }
+    });
+
+    if (unhealthy > 0) {
+      console.warn(`⏰ [Realtime] Keepalive: обнаружено ${unhealthy} нездоровых каналов, переподключаемся`);
+    }
+  }, 20_000);
 }
  
 function notifyStatus(channelKey: string, status: RealtimeStatus) {
@@ -383,15 +426,22 @@ export function useRealtime({
  
 export function useRealtimeOrders(
   setOrders: React.Dispatch<React.SetStateAction<any[]>>,
-  options?: { filter?: string; onStatusChange?: (status: RealtimeStatus) => void; enabled?: boolean }
+  options?: {
+    /** Клиентский фильтр: вернуть false — запись игнорируется при INSERT */
+    clientFilter?: (record: any) => boolean;
+    onStatusChange?: (status: RealtimeStatus) => void;
+    enabled?: boolean;
+  }
 ) {
-  const { status } = useRealtime({
-    table: 'orders',
-    event: '*',
-    filter: options?.filter,
+  const clientFilter = options?.clientFilter;
+
+  const { status } = useRealtimeBroadcast({
+    topic: 'orders:all',
     enabled: options?.enabled,
     onStatusChange: options?.onStatusChange,
     onInsert: (newRecord) => {
+      if (!newRecord) return;
+      if (clientFilter && !clientFilter(newRecord)) return;
       setOrders((prev) => {
         // защита от дублей, если INSERT прилетит одновременно с ручным fetch
         if (prev.some((o) => String(o.id) === String(newRecord.id))) return prev;
@@ -399,11 +449,13 @@ export function useRealtimeOrders(
       });
     },
     onUpdate: (newRecord) => {
+      if (!newRecord) return;
       setOrders((prev) =>
         prev.map((o) => (String(o.id) === String(newRecord.id) ? { ...o, ...newRecord } : o))
       );
     },
     onDelete: (oldRecord) => {
+      if (!oldRecord) return;
       setOrders((prev) => prev.filter((o) => String(o.id) !== String(oldRecord.id)));
     },
   });
@@ -477,10 +529,8 @@ export function useRealtimeOrderMixers(
 ) {
   const orders = options?.orders;
 
-  const { status } = useRealtime({
-    table: 'order_mixers',
-    event: '*',
-    filter: options?.filter,
+  const { status } = useRealtimeBroadcast({
+    topic: 'order_mixers:all',
     enabled: options?.enabled,
     onStatusChange: options?.onStatusChange,
     onInsert: (newRecord) => {
@@ -543,9 +593,8 @@ export function useRealtimeProductionLogs(
   setLogs: React.Dispatch<React.SetStateAction<any[]>>,
   options?: { enabled?: boolean; onStatusChange?: (status: RealtimeStatus) => void }
 ) {
-  return useRealtime({
-    table: 'production_logs',
-    event: 'INSERT',
+  return useRealtimeBroadcast({
+    topic: 'production_logs:all',
     enabled: options?.enabled,
     onStatusChange: options?.onStatusChange,
     onInsert: (newRecord) => {
@@ -578,12 +627,12 @@ export function useOrderChangeNotifications(options: {
   onVolumeChange?: (order: any, oldOrder: any) => void;
   onDateTimeChange?: (order: any) => void;
 }) {
-  return useRealtime({
-    table: 'orders',
+  return useRealtimeBroadcast({
+    topic: 'orders:all',
     enabled: options.enabled,
-    onInsert: (newRecord) => options.onNewOrder?.(newRecord),
+    onInsert: (newRecord) => newRecord && options.onNewOrder?.(newRecord),
     onUpdate: (newRecord, oldRecord) => {
-      if (!oldRecord) return;
+      if (!oldRecord || !newRecord) return;
       if (oldRecord.status !== newRecord.status) options.onStatusChange?.(newRecord);
       if (oldRecord.volume !== newRecord.volume) options.onVolumeChange?.(newRecord, oldRecord);
       if (

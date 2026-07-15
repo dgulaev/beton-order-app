@@ -95,6 +95,7 @@ export interface DriverTrip {
   volume: number;
   status: string;
   createdAt: string;
+  loadingStartedAt: string | null;
   onSiteAt: string | null;
   unloadedAt: string | null;
   downtimeMinutes: number | null;

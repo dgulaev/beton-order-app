@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Image from 'next/image';
-import { useRealtime } from '@/hooks/useRealtimeOrders';
+import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 
 import { supabase } from '@/lib/supabaseClient';
 
@@ -287,9 +287,8 @@ const loadTodayConsumption = async () => {
   // JOIN-запроса каждые 8с на КАЖДОЙ открытой странице склада, постоянная
   // фоновая нагрузка на Vercel/Supabase. Теперь пересчитываем расход только
   // когда реально появляется новая запись отгрузки (INSERT в production_logs).
-  useRealtime({
-    table: 'production_logs',
-    event: 'INSERT',
+  useRealtimeBroadcast({
+    topic: 'production_logs:all',
     onInsert: () => loadTodayConsumption(),
   });
 

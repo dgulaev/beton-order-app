@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, type CSSProperties } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 
 const fieldStyle: CSSProperties = {
   width: '100%',
@@ -40,39 +40,17 @@ export default function MobileOrderDetailModal({
   const [editedOrder, setEditedOrder] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-    // ==================== REALTIME ОБНОВЛЕНИЕ В МОДАЛКЕ ====================
-  useEffect(() => {
-    if (!isOpen || !order?.id) return;
-
-    const channel = supabase
-      .channel(`modal-order-${order.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'orders',
-          filter: `id=eq.${order.id}`
-        },
-        (payload) => {
-          console.log('🔄 Обновление в открытой модалке!', payload.new);
-          setEditedOrder({ ...payload.new });
-          
-          // Опционально: уведомление внутри модалки
-          // alert('Данные заявки обновлены!');
-        }
-      )
-      .subscribe();
-
-    return () => {
-      try {
-        channel.teardown();
-      } catch {
-        // ignore
+  // ==================== REALTIME ОБНОВЛЕНИЕ В МОДАЛКЕ (broadcast) ====================
+  // Слушаем общий broadcast-топик orders:all и фильтруем по id открытой заявки.
+  useRealtimeBroadcast({
+    topic: 'orders:all',
+    enabled: isOpen && !!order?.id,
+    onUpdate: (record) => {
+      if (record && String(record.id) === String(order?.id)) {
+        setEditedOrder({ ...record });
       }
-      void supabase.removeChannel(channel);
-    };
-  }, [isOpen, order?.id]);
+    },
+  });
 
   // ==================== 2. СИНХРОНИЗАЦИЯ ДАННЫХ ====================
   useEffect(() => {

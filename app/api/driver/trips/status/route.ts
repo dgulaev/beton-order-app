@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'Доступ запрещён' }, { status: 403 });
     }
 
-    const { tripId, status } = await request.json();
+    const { tripId, status, timestamp } = await request.json();
 
     if (!tripId || !status) {
       return NextResponse.json({ success: false, message: 'tripId и status обязательны' }, { status: 400 });
@@ -57,6 +57,7 @@ export async function POST(request: NextRequest) {
       userName: driver.driver,
       userRole: 'driver',
       allowedStatusesOverride: DRIVER_ALLOWED_STATUSES,
+      timestampOverride: typeof timestamp === 'string' ? timestamp : undefined,
     });
 
     return NextResponse.json(result.body, { status: result.httpStatus });

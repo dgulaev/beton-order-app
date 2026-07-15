@@ -37,6 +37,12 @@ export interface UpdateOrderMixerStatusParams {
   userRole?: string;
   /** Ограничить набор статусов, которые разрешено ставить (например, водителю — только 2 статуса) */
   allowedStatusesOverride?: readonly string[];
+  /**
+   * Переопределить временную метку для on_site_at / unloaded_at.
+   * Используется при offline-синхронизации: водитель мог нажать кнопку без сети,
+   * timestamp зафиксирован на устройстве и передаётся при повторной отправке.
+   */
+  timestampOverride?: string;
 }
 
 export interface UpdateOrderMixerStatusResult {
@@ -73,7 +79,7 @@ export async function resolveUnloadAllowanceMinutes(mixerName: string | null | u
 }
 
 export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParams): Promise<UpdateOrderMixerStatusResult> {
-  const { id, status, loading_started_at, podvizhnost, userName, userRole } = params;
+  const { id, status, loading_started_at, podvizhnost, userName, userRole, timestampOverride } = params;
 
   if (!id) {
     return { httpStatus: 400, body: { success: false, message: 'id обязателен' } };
@@ -110,7 +116,10 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   }
 
   const updateData: any = { updated_at: new Date().toISOString() };
-  const now = new Date().toISOString();
+  // timestampOverride — фактическое время действия водителя (из offline-очереди)
+  const now = (timestampOverride && !isNaN(Date.parse(timestampOverride)))
+    ? timestampOverride
+    : new Date().toISOString();
 
   if (status) updateData.status = status;
   if (status === 'Загрузка' && loading_started_at) {

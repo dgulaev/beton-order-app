@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { DriverTrip } from '../driverClient';
 import RouteButton from './RouteButton';
 
@@ -25,18 +26,33 @@ export default function DriverTripDetailModal({ trip, onClose }: Props) {
   const onSiteDuration = formatMinutesOnSite(trip);
   const downtime = trip.downtimeMinutes;
 
+  // Блокируем скролл body пока модалка открыта (iOS Safari игнорирует overflow:hidden на body)
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.width = '100%';
+    return () => {
+      document.body.style.overflow = prev;
+      document.body.style.position = '';
+      document.body.style.width = '';
+    };
+  }, []);
+
   return (
     <div
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.9)',
+        background: 'rgba(0,0,0,0.75)',
         zIndex: 100000,
         display: 'flex',
-        alignItems: 'flex-end',
+        alignItems: 'flex-start',
         justifyContent: 'center',
+        touchAction: 'none',
       }}
       onClick={onClose}
+      onTouchMove={(e) => e.target === e.currentTarget && e.preventDefault()}
     >
       <div
         style={{
@@ -44,12 +60,19 @@ export default function DriverTripDetailModal({ trip, onClose }: Props) {
           width: '100%',
           maxWidth: '560px',
           boxSizing: 'border-box',
-          borderRadius: '20px 20px 0 0',
-          padding: '24px 20px 32px',
-          maxHeight: '85vh',
+          borderRadius: '0 0 20px 20px',
+          paddingTop: 'max(24px, env(safe-area-inset-top, 24px))',
+          paddingLeft: '20px',
+          paddingRight: '20px',
+          paddingBottom: '32px',
+          maxHeight: '88dvh',
           overflowY: 'auto',
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehavior: 'contain',
+          touchAction: 'pan-y',
         }}
         onClick={(e) => e.stopPropagation()}
+        onTouchMove={(e) => e.stopPropagation()}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <h2 style={{ margin: 0, fontSize: '20px', color: '#fff' }}>Рейс — заявка #{trip.orderId}</h2>

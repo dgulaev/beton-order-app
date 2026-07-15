@@ -59,10 +59,6 @@ export default function MobileDashboard() {
   const daysInMonth = new Date(selectedYearNum, selectedMonthNum, 0).getDate();
   const monthEnd = `${selectedYearNum}-${String(selectedMonthNum).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
 
-  // Realtime поддерживает несколько условий через запятую (AND), поэтому можно
-  // ограничить канал тем же месяцем, что и в /api/adminCifra/orders
-  const deliveryDateFilter = `delivery_date=gte.${monthStart},delivery_date=lte.${monthEnd}`;
-
   // 🔥 Realtime подключаем ТОЛЬКО после того, как основные данные (заявки за
   // месяц) уже отрисованы обычным fetch'ем — иначе на слабой мобильной сети
   // WebSocket-подключение конкурирует за канал/CPU с самим первым рендером и
@@ -71,13 +67,15 @@ export default function MobileDashboard() {
   // месяца), просто НЕ участвует в самой первой, самой критичной загрузке.
   const [initialOrdersLoaded, setInitialOrdersLoaded] = useState(false);
 
-  // 🔥 Подписка на все изменения в таблице ORDERS.
-  // Хук возвращает только { status } — сам список заказов приходит через setAllOrders,
-  // поэтому деструктурировать orders/loading отсюда было ошибкой (их там никогда не было).
+  // 🔥 Подписка на все изменения в таблице ORDERS через broadcast (топик orders:all).
+  // Клиентский фильтр ограничивает INSERT текущим месяцем (тем же, что и в fetch).
   const { status: ordersRealtimeStatus } = useRealtimeOrders(
     setAllOrders,
     {
-      filter: deliveryDateFilter,
+      clientFilter: (o: any) => {
+        const d = String(o.delivery_date || '').slice(0, 10);
+        return d >= monthStart && d <= monthEnd;
+      },
       enabled: Boolean(userId) && initialOrdersLoaded
     }
   );
