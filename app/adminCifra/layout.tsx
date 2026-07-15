@@ -9,6 +9,44 @@ import { useUserRole } from '../providers/UserRoleProvider';
 import { useOrderChangeNotifications } from '@/hooks/useRealtimeOrders';
 import { formatPhoneInput } from '@/lib/phone';
 
+// ==================== PERSISTENTНЫЕ УВЕДОМЛЕНИЯ (localStorage) ====================
+const NOTIF_STORAGE_KEY = 'persistentOrderNotifications';
+const NOTIF_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 часа
+
+interface PersistedNotif {
+  id: string;
+  emoji: string;
+  title: string;
+  message: string;
+  timestamp: number;
+}
+
+function loadPersistedNotifs(): PersistedNotif[] {
+  try {
+    if (typeof window === 'undefined') return [];
+    const raw = localStorage.getItem(NOTIF_STORAGE_KEY);
+    if (!raw) return [];
+    const all: PersistedNotif[] = JSON.parse(raw);
+    return all.filter(n => Date.now() - n.timestamp < NOTIF_MAX_AGE_MS);
+  } catch { return []; }
+}
+
+function savePersistedNotif(notif: PersistedNotif) {
+  try {
+    const existing = loadPersistedNotifs();
+    if (existing.some(n => n.id === notif.id)) return;
+    const updated = [notif, ...existing].slice(0, 30);
+    localStorage.setItem(NOTIF_STORAGE_KEY, JSON.stringify(updated));
+  } catch {}
+}
+
+function deletePersistedNotif(id: string) {
+  try {
+    const existing = loadPersistedNotifs();
+    localStorage.setItem(NOTIF_STORAGE_KEY, JSON.stringify(existing.filter(n => n.id !== id)));
+  } catch {}
+}
+
 export default function AdminCifraLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isActive = (path: string) => pathname === path;
@@ -135,6 +173,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   // ==================== 2. СОСТОЯНИЯ УВЕДОМЛЕНИЙ ====================
   const [newOrdersCount, setNewOrdersCount] = useState(0);
   const [lastNotificationId, setLastNotificationId] = useState<number | null>(null);
+
+  // Ref для функции создания тоста — позволяет вызывать её из mount-эффекта
+  // без проблем с замыканиями (всегда последняя версия функции)
+  const createToastRef = useRef<((id: string, emoji: string, title: string, message: string) => void) | null>(null);
 
   // ==================== 2.1 СОСТОЯНИЕ УВЕДОМЛЕНИЙ ПО КЛИЕНТАМ ====================
   const [clientReminders, setClientReminders] = useState<any[]>([]);
@@ -280,65 +322,11 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     return container;
   };
 
-  // ==================== 4.2 УЛУЧШЕННОЕ ВСПЛЫВАЮЩЕЕ УВЕДОМЛЕНИЕ ====================
-  const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', orderData?: any, oldData?: any) => {
-    const orderId = orderData?.id || '—';
-
-    let title = '';
-    let message = '';
-    let emoji = '';
-
-    const formatDate = (dateStr: string) => {
-      if (!dateStr) return '';
-      const date = new Date(dateStr);
-      const day = String(date.getDate()).padStart(2, '0');
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const year = date.getFullYear();
-      return `${day}-${month}-${year}`;
-    };
-
-    if (type === 'new') {
-      emoji = '🆕';
-      title = 'Новая заявка!';
-      const deliveryStr = formatDate(orderData?.delivery_date);
-      message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} м³`;
-      if (deliveryStr) message += ` — на ${deliveryStr}`;
-    } 
-    else if (type === 'status') {
-      emoji = '🔄';
-      title = 'Статус изменён';
-
-      const statusMap: Record<string, string> = {
-        'new': 'Новая',
-        'NEW': 'Новая',
-        'processing': 'В работе',
-        'completed': 'Выполнена',
-        'cancelled': 'Отменена'
-      };
-
-      const rawStatus = (orderData?.status || '').toString().toLowerCase();
-      const statusText = statusMap[rawStatus] || orderData?.status || '—';
-      
-      message = `Заявка №${orderId} → ${statusText}`;
-    } 
-    else if (type === 'volume') {
-      emoji = '📦';
-      title = 'Изменён объём';
-      message = `Заявка №${orderId} — было ${oldData?.volume || '?'} → стало ${orderData?.volume} м³`;
-    } 
-    else if (type === 'datetime') {
-      emoji = '🕒';
-      title = 'Изменены дата и время';
-      const deliveryStr = formatDate(orderData?.delivery_date);
-      message = `Заявка №${orderId} — ${deliveryStr}`;
-      if (orderData?.delivery_time) {
-        message += ` ${orderData.delivery_time}`;
-      }
-    }
-
-    playNotificationSound();
-
+  // ==================== 4.2 СОЗДАНИЕ DOM-ТОСТА (не зависит от sound/storage) ====================
+  // Обновляем ref на каждом рендере — mount-эффект восстановления всегда вызовет актуальную версию
+  createToastRef.current = (id: string, emoji: string, title: string, message: string) => {
     const notif = document.createElement('div');
+    notif.dataset.notifId = id;
     notif.style.cssText = `
       position: relative;
       background: linear-gradient(135deg, #22c55e, #86efac);
@@ -368,6 +356,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
     const closeNotification = () => {
       notif.remove();
+      deletePersistedNotif(id);
       setNewOrdersCount(prev => Math.max(0, prev - 1));
     };
 
@@ -385,9 +374,83 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       }
     });
 
-    // Новый баннер добавляется в начало стека — самые свежие уведомления сверху,
-    // старые автоматически сдвигаются вниз (flex-контейнер), а не перекрываются.
     getNotificationContainer().prepend(notif);
+  };
+
+  // ==================== 4.3A ВОССТАНОВЛЕНИЕ УВЕДОМЛЕНИЙ ПРИ ЗАГРУЗКЕ СТРАНИЦЫ ====================
+  useEffect(() => {
+    const saved = loadPersistedNotifs();
+    if (saved.length === 0) return;
+    // Небольшая задержка чтобы контейнер успел смонтироваться в DOM
+    const timer = setTimeout(() => {
+      saved.forEach(n => {
+        createToastRef.current?.(n.id, n.emoji, n.title, n.message);
+      });
+      // Обновляем счётчик
+      setNewOrdersCount(prev => prev + saved.length);
+    }, 300);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ==================== 4.2.1 ВЫСОКОУРОВНЕВАЯ ФУНКЦИЯ — ПРИШЛО НОВОЕ СОБЫТИЕ ====================
+  const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', orderData?: any, oldData?: any) => {
+    const orderId = orderData?.id || '—';
+
+    let title = '';
+    let message = '';
+    let emoji = '';
+
+    const formatDate = (dateStr: string) => {
+      if (!dateStr) return '';
+      const date = new Date(dateStr);
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}-${month}-${year}`;
+    };
+
+    if (type === 'new') {
+      emoji = '🆕';
+      title = 'Новая заявка!';
+      const deliveryStr = formatDate(orderData?.delivery_date);
+      message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} м³`;
+      if (deliveryStr) message += ` — на ${deliveryStr}`;
+    } 
+    else if (type === 'status') {
+      emoji = '🔄';
+      title = 'Статус изменён';
+      const statusMap: Record<string, string> = {
+        'new': 'Новая', 'NEW': 'Новая',
+        'processing': 'В работе',
+        'completed': 'Выполнена',
+        'cancelled': 'Отменена'
+      };
+      const rawStatus = (orderData?.status || '').toString().toLowerCase();
+      const statusText = statusMap[rawStatus] || orderData?.status || '—';
+      message = `Заявка №${orderId} → ${statusText}`;
+    } 
+    else if (type === 'volume') {
+      emoji = '📦';
+      title = 'Изменён объём';
+      message = `Заявка №${orderId} — было ${oldData?.volume || '?'} → стало ${orderData?.volume} м³`;
+    } 
+    else if (type === 'datetime') {
+      emoji = '🕒';
+      title = 'Изменены дата и время';
+      const deliveryStr = formatDate(orderData?.delivery_date);
+      message = `Заявка №${orderId} — ${deliveryStr}`;
+      if (orderData?.delivery_time) {
+        message += ` ${orderData.delivery_time}`;
+      }
+    }
+
+    // Сохраняем в localStorage — переживёт перезагрузку страницы
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    savePersistedNotif({ id, emoji, title, message, timestamp: Date.now() });
+
+    playNotificationSound();
+    createToastRef.current?.(id, emoji, title, message);
   };
 
   // ==================== 4.3 HEARTBEAT — ОБНОВЛЕНИЕ АКТИВНОСТИ (каждые 5 минут) ====================
@@ -422,7 +485,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
   // ==================== БЛОК 5. REALTIME-УВЕДОМЛЕНИЯ О ЗАЯВКАХ ====================
   const staffRoles = ['admin', 'manager', 'dispatcher', 'operator'];
-  useOrderChangeNotifications({
+  const { status: realtimeStatus } = useOrderChangeNotifications({
     enabled: !!userRole && staffRoles.includes(userRole),
     onNewOrder: (order) => {
       setNewOrdersCount((prev) => prev + 1);
@@ -709,6 +772,54 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               }}>
                 ТрейдКом • ДИСПЕТЧЕРИЗАЦИЯ
               </p>
+            </div>
+          )}
+
+          {/* ==================== ИНДИКАТОР REALTIME ==================== */}
+          {staffRoles.includes(userRole || '') && (
+            <div
+              title={
+                realtimeStatus === 'SUBSCRIBED' ? 'Уведомления подключены' :
+                realtimeStatus === 'CONNECTING' ? 'Подключение...' :
+                'Уведомления отключены — обновите страницу'
+              }
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: isCollapsed ? '4px 0' : '4px 12px',
+                marginBottom: '8px',
+                justifyContent: isCollapsed ? 'center' : 'flex-start',
+                cursor: realtimeStatus !== 'SUBSCRIBED' ? 'pointer' : 'default',
+              }}
+              onClick={() => realtimeStatus !== 'SUBSCRIBED' && window.location.reload()}
+            >
+              <span style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                flexShrink: 0,
+                background:
+                  realtimeStatus === 'SUBSCRIBED' ? '#4ADE80' :
+                  realtimeStatus === 'CONNECTING' ? '#FACC15' : '#F87171',
+                boxShadow:
+                  realtimeStatus === 'SUBSCRIBED' ? '0 0 6px rgba(74,222,128,0.8)' :
+                  realtimeStatus === 'CONNECTING' ? '0 0 6px rgba(250,204,21,0.8)' : '0 0 6px rgba(248,113,113,0.8)',
+              }} />
+              {!isCollapsed && (
+                <span style={{
+                  fontSize: '11px',
+                  color:
+                    realtimeStatus === 'SUBSCRIBED' ? '#4ADE80' :
+                    realtimeStatus === 'CONNECTING' ? '#FACC15' : '#F87171',
+                  whiteSpace: 'nowrap',
+                  letterSpacing: '0.02em',
+                }}>
+                  {realtimeStatus === 'SUBSCRIBED' ? 'Уведомления ●' :
+                   realtimeStatus === 'CONNECTING' ? 'Подключение...' :
+                   'Нет связи — обновить'}
+                </span>
+              )}
             </div>
           )}
 
