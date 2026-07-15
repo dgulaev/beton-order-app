@@ -638,18 +638,23 @@ useEffect(() => {
   }, []);
 
     // ==================== 24. ЗАГРУЗКА МИКСЕРОВ ДЛЯ ОТКРЫТОЙ МОДАЛКИ ==========================
+    // ⚠️ mixerAssignments — ОБЩИЙ список назначений всех заказов (нужен для меток
+    // логистики в таймлайне). Модалка фильтрует его по order.id, поэтому здесь
+    // НЕЛЬЗЯ затирать список миксерами одного заказа и НЕЛЬЗЯ очищать при закрытии —
+    // иначе после любого открытия/закрытия заявки все метки логистики гаснут (серые).
+    // Вместо этого подмешиваем свежие данные выбранного заказа, не трогая остальные.
         useEffect(() => {
-    if (!selectedOrder?.id) {
-      setMixerAssignments([]);        // очищаем при закрытии
-      return;
-    }
+    if (!selectedOrder?.id) return;   // при закрытии модалки общий список не трогаем
 
     const loadOrderMixers = async () => {
       try {
         const res = await fetch(`/api/adminCifra/order-mixers?orderId=${selectedOrder.id}`);
         if (res.ok) {
           const data = await res.json();
-          setMixerAssignments(data); 
+          setMixerAssignments((prev) => {
+            const others = prev.filter((m) => String(m.orderId) !== String(selectedOrder.id));
+            return [...others, ...data];
+          });
           console.log(`📥 Загружено ${data.length} миксеров для заказа #${selectedOrder.id}`);
         }
       } catch (err) {
