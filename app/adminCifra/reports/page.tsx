@@ -8,22 +8,34 @@ import {
 
 const COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
 
+// Кеш данных между переключениями вкладок — не нужно рефетчить каждый раз
+let _historyCache: any[] | null = null;
+
 export default function ReportsPage() {
-  const [history, setHistory] = useState<any[]>([]);
+  const [history, setHistory] = useState<any[]>(_historyCache || []);
+  const [isLoading, setIsLoading] = useState(!_historyCache);
   const [reportData, setReportData] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [viewMode, setViewMode] = useState<'month' | 'day'>('day');
   const [currentPage, setCurrentPage] = useState(1);
-    const [scaleMode, setScaleMode] = useState<'linear' | 'log'>('linear');
+  const [scaleMode, setScaleMode] = useState<'linear' | 'log'>('linear');
   const itemsPerPage = 10;
 
-  const loadHistory = async () => {
+  const loadHistory = async (force = false) => {
+    // Если данные уже есть в кеше и не форс — показываем мгновенно
+    if (_historyCache && !force) {
+      setHistory(_historyCache);
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
     try {
       const res = await fetch('/api/adminCifra/meka-report');
       if (res.ok) {
         const data = await res.json();
+        _historyCache = data;
         setHistory(data);
         setCurrentPage(1);
       } else {
@@ -31,6 +43,8 @@ export default function ReportsPage() {
       }
     } catch (err) {
       console.error('Ошибка fetch:', err);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -688,57 +702,100 @@ export default function ReportsPage() {
 
             {/* ТОП РЕЦЕПТОВ */}
 <div style={{ background: '#1E2937', borderRadius: '18px', padding: '18px' }}>
-  <h3 style={{ marginBottom: '14px', color: '#94A3B8' }}>Топ рецептов</h3>
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+    <h3 style={{ margin: 0, color: '#94A3B8' }}>Топ рецептов</h3>
+    {isLoading && (
+      <span style={{ fontSize: '12px', color: '#475569', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span style={{
+          display: 'inline-block',
+          width: '10px',
+          height: '10px',
+          borderRadius: '50%',
+          border: '2px solid #334155',
+          borderTopColor: '#10B981',
+          animation: 'spin 0.8s linear infinite',
+        }} />
+        Загрузка...
+      </span>
+    )}
+  </div>
   
   <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '18px' }}>
-    <PieChart width={280} height={280}>
-      <Pie
-        data={topRecipes}
-        cx="50%"
-        cy="50%"
-        innerRadius={85}
-        outerRadius={120}
-        dataKey="value"
-        nameKey="name"
-      >
-        {topRecipes.map((entry, index) => (
-          <Cell key={`cell-${index}`} fill={entry.fill} />
-        ))}
-      </Pie>
-      <Tooltip content={<CustomPieTooltip />} />
-    </PieChart>
+    {isLoading && topRecipes.length === 0 ? (
+      /* Скелетон — кольцо-заглушка пока грузятся данные */
+      <div style={{
+        width: '240px',
+        height: '240px',
+        borderRadius: '50%',
+        border: '35px solid #263040',
+        borderTopColor: '#1E3A5F',
+        animation: 'spin 1.4s linear infinite',
+        opacity: 0.6,
+      }} />
+    ) : (
+      <PieChart width={280} height={280}>
+        <Pie
+          data={topRecipes}
+          cx="50%"
+          cy="50%"
+          innerRadius={85}
+          outerRadius={120}
+          dataKey="value"
+          nameKey="name"
+          animationDuration={600}
+          animationEasing="ease-out"
+          isAnimationActive={true}
+        >
+          {topRecipes.map((entry, index) => (
+            <Cell key={`cell-${index}`} fill={entry.fill} />
+          ))}
+        </Pie>
+        <Tooltip content={<CustomPieTooltip />} />
+      </PieChart>
+    )}
   </div>
 
-    {/* Легенда в одну строку с переносом */}
+  {/* Легенда в одну строку с переносом */}
   <div style={{ 
     display: 'flex', 
     flexWrap: 'wrap', 
     gap: '14px 24px', 
     justifyContent: 'center',
-    marginTop: '12px'
+    marginTop: '12px',
+    minHeight: isLoading && topRecipes.length === 0 ? '44px' : 'auto',
   }}>
-    {topRecipes.map((recipe, index) => (
-      <div key={index} style={{ 
-        display: 'flex', 
-        alignItems: 'center', 
-        gap: '10px',
-        whiteSpace: 'nowrap'
-      }}>
-        <div style={{ 
-          width: '18px', 
-          height: '18px', 
-          backgroundColor: recipe.fill, 
-          borderRadius: '4px',
-          flexShrink: 0
-        }} />
-        <div>
-          <span style={{ fontWeight: '600' }}>{recipe.name}</span>
-          <span style={{ color: '#10B981', marginLeft: '8px', fontWeight: '700' }}>
-            {Math.round(recipe.value)} м³
-          </span>
+    {isLoading && topRecipes.length === 0 ? (
+      /* Скелетон легенды */
+      [0,1,2,3,4,5].map(i => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ width: '18px', height: '18px', borderRadius: '4px', background: '#263040' }} />
+          <div style={{ width: `${60 + (i % 3) * 20}px`, height: '14px', borderRadius: '4px', background: '#263040' }} />
         </div>
-      </div>
-    ))}
+      ))
+    ) : (
+      topRecipes.map((recipe, index) => (
+        <div key={index} style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '10px',
+          whiteSpace: 'nowrap'
+        }}>
+          <div style={{ 
+            width: '18px', 
+            height: '18px', 
+            backgroundColor: recipe.fill, 
+            borderRadius: '4px',
+            flexShrink: 0
+          }} />
+          <div>
+            <span style={{ fontWeight: '600' }}>{recipe.name}</span>
+            <span style={{ color: '#10B981', marginLeft: '8px', fontWeight: '700' }}>
+              {Math.round(recipe.value)} м³
+            </span>
+          </div>
+        </div>
+      ))
+    )}
   </div>
 </div>
 

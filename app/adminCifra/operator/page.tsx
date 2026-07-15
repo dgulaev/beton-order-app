@@ -158,9 +158,6 @@ export default function OperatorBSUPage() {
         const newStartTimes: Record<number, string> = {};
 
         data.forEach((trip: any) => {
-          // Таймер идёт только у миксеров со статусом "Загрузка"
-          // ("В работе" — это статус заявки, а не миксера, тут был лишний
-          // мёртвый кейс, который никогда не мог сработать для order_mixers).
           if (trip.status === 'Загрузка' && (trip.loading_started_at || trip.loadingStartedAt)) {
             newLoading[trip.id] = true;
             newStartTimes[trip.id] = trip.loading_started_at || trip.loadingStartedAt;
@@ -178,6 +175,50 @@ export default function OperatorBSUPage() {
 
     loadLoadingState();
   }, []);
+
+  // ==================== 1.0A REALTIME-СИНХРОНИЗАЦИЯ ТАЙМЕРОВ ====================
+  // Когда rawMixers обновляется по Supabase Realtime (оператор нажал «Начать»
+  // на ДРУГОМ устройстве), синхронизируем loadingTrips / tripStartTimes на ЭТОМ
+  // устройстве. Без этого менеджеры и администраторы видели кнопку «Начать»
+  // вместо «В работе • N мин» и не видели смены статуса без перезагрузки.
+  useEffect(() => {
+    if (rawMixers.length === 0) return;
+
+    setLoadingTrips(prev => {
+      const next = { ...prev };
+      let changed = false;
+      rawMixers.forEach((m: any) => {
+        const startTime = m.loading_started_at || m.loadingStartedAt;
+        if (m.status === 'Загрузка' && startTime && !next[m.id]) {
+          // Миксер начал загрузку — добавляем таймер
+          next[m.id] = true;
+          changed = true;
+        } else if (m.status !== 'Загрузка' && next[m.id] !== undefined) {
+          // Миксер ушёл из «Загрузки» — убираем таймер
+          delete next[m.id];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+
+    setTripStartTimes(prev => {
+      const next = { ...prev };
+      let changed = false;
+      rawMixers.forEach((m: any) => {
+        const startTime = m.loading_started_at || m.loadingStartedAt;
+        if (m.status === 'Загрузка' && startTime && !next[m.id]) {
+          next[m.id] = startTime;
+          changed = true;
+        } else if (m.status !== 'Загрузка' && next[m.id] !== undefined) {
+          delete next[m.id];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawMixers]);
 
     // ==================== 1.1 НАЧАТЬ ЗАГРУЗКУ ====================
   const startLoading = async (trip: any) => {
