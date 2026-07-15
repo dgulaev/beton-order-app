@@ -40,11 +40,57 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     const body = document.body;
     const prevHtmlOverflow = html.style.overflow;
     const prevBodyOverflow = body.style.overflow;
+    const prevHtmlOverscroll = html.style.overscrollBehavior;
+    const prevBodyOverscroll = body.style.overscrollBehavior;
     html.style.overflow = 'hidden';
     body.style.overflow = 'hidden';
+    // overscroll-behavior отключает "резиновый" bounce-эффект трекпада на macOS —
+    // без него страница визуально "тянется" вверх/вниз при прокрутке колесом/трекпадом,
+    // даже когда html/body overflow:hidden и скроллить формально нечего.
+    html.style.overscrollBehavior = 'none';
+    body.style.overscrollBehavior = 'none';
+
+    // Ищем ближайший реально скроллящийся контейнер над курсором — по
+    // computed-стилю overflowY, а не по классу .scroll-hidden. Так находятся
+    // и вложенные зоны без этого класса (например «История изменений» внутри
+    // модалки заказа), у которых своя внутренняя прокрутка внутри внешней.
+    const findScrollableAncestor = (el: HTMLElement | null): HTMLElement | null => {
+      let node: HTMLElement | null = el;
+      while (node && node !== document.body) {
+        const overflowY = window.getComputedStyle(node).overflowY;
+        if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) {
+          return node;
+        }
+        node = node.parentElement;
+      }
+      return null;
+    };
+
+    // На macOS (мышь Magic Mouse/трекпад) даже с overflow:hidden и
+    // overscroll-behavior:none браузер иногда всё равно даёт "резиновое"
+    // визуальное оттягивание страницы вверх/вниз колесом. Жёстко блокируем
+    // само событие wheel на уровне окна — но только когда курсор НЕ над
+    // внутренней скролл-зоной, у которой ещё есть куда скроллить в эту
+    // сторону, чтобы не поломать скролл списков/модалок (в т.ч. вложенных).
+    const blockPageBounce = (e: WheelEvent) => {
+      const target = e.target as HTMLElement | null;
+      const scrollable = findScrollableAncestor(target);
+      if (scrollable) {
+        const atTop = scrollable.scrollTop <= 0;
+        const atBottom = scrollable.scrollTop + scrollable.clientHeight >= scrollable.scrollHeight - 1;
+        const canScroll = (e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBottom);
+        if (canScroll) return;
+      }
+      e.preventDefault();
+    };
+    window.addEventListener('wheel', blockPageBounce, { passive: false });
+
     return () => {
       html.style.overflow = prevHtmlOverflow;
       body.style.overflow = prevBodyOverflow;
+      html.style.overscrollBehavior = prevHtmlOverscroll;
+      body.style.overscrollBehavior = prevBodyOverscroll;
+      window.removeEventListener('wheel', blockPageBounce);
     };
   }, []);
 
@@ -549,7 +595,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const scale = getGlobalScale();
   // Страницы-"каркасы": без скролла страницы целиком, со своим внутренним
   // скроллом по зонам (как дашборд) — сейчас это дашборд, заявки, оператор БСУ и миксеры.
-  const isFrameLayout = pathname === '/adminCifra/dashboard' || pathname === '/adminCifra/zayavki' || pathname === '/adminCifra/operator' || pathname === '/adminCifra/mixers';
+  const isFrameLayout = pathname === '/adminCifra/dashboard' || pathname === '/adminCifra/zayavki' || pathname === '/adminCifra/operator' || pathname === '/adminCifra/mixers' || pathname === '/adminCifra/tasks';
   const isDashboard = isFrameLayout;
   // Высота ДО применения transform: scale — после масштабирования визуально
   // она станет равна ровно viewportH (реальной высоте окна браузера).
@@ -558,11 +604,20 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   return (
     <div 
       style={{
+        // position: fixed выводит каркас из нормального потока документа —
+        // если из-за округления пикселей/DPI/шрифтов реальная высота контента
+        // на 1-2px отличается от расчётной, это больше не может "просочиться"
+        // в скролл страницы через родителей (html/body overflow:hidden тогда
+        // не нужен как единственная защита, а служит подстраховкой).
+        position: 'fixed',
+        top: 0,
+        left: 0,
         transform: `scale(${scale})`, 
         transformOrigin: 'top left',
         width: `${100 / scale}%`,
         height: `${preScaleHeight}px`,
         overflow: 'hidden',
+        overscrollBehavior: 'none',
       }}
       className="admin-layout"
     >
@@ -571,6 +626,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
         alignItems: 'stretch',
         height: '100%',
         overflow: 'hidden',
+        overscrollBehavior: 'none',
         backgroundColor: '#0F172A',
         color: '#fff'
       }}>
@@ -579,28 +635,31 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
         
         {/* ==================== 9. СВОРАЧИВАЕМОЕ МЕНЮ ==================== */}
         <div 
-        className="sidebar-menu"
-        style={{
-          width: isCollapsed ? '72px' : '280px',
-          backgroundColor: '#1E2937',
-          color: '#fff',
-          padding: '24px 12px',
-          display: 'flex',
-          flexDirection: 'column',
-          borderRight: '1px solid #334155',
-          transition: 'width 0.3s ease',
-          flexShrink: 0,
-          height: '100%',
-          overflow: 'hidden'
-        }}>
+          className="sidebar-menu"
+          style={{
+            width: isCollapsed ? '68px' : '280px',
+            backgroundColor: '#1E2937',
+            color: '#fff',
+            padding: '24px 0',
+            display: 'flex',
+            flexDirection: 'column',
+            borderRight: '1px solid #334155',
+            // cubic-bezier даёт более «упругий» эффект раскрытия по сравнению с linear ease
+            transition: 'width 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+            flexShrink: 0,
+            height: '100%',
+            overflow: 'hidden',
+            overscrollBehavior: 'none',
+          }}>
 
-          
-          {/* Кнопка сворачивания */}
+          {/* Кнопка сворачивания — центрирована в collapsed, прижата вправо в expanded */}
           <div style={{ 
             display: 'flex', 
-            justifyContent: 'flex-end', 
-            marginBottom: '20px',
-            paddingRight: '13px'
+            justifyContent: isCollapsed ? 'center' : 'flex-end', 
+            marginBottom: '16px',
+            paddingRight: isCollapsed ? 0 : '16px',
+            paddingLeft: isCollapsed ? 0 : '16px',
+            transition: 'padding 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
           }}>
             <button 
               onClick={() => setIsCollapsed(!isCollapsed)}
@@ -610,129 +669,129 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 color: '#94A3B8',
                 cursor: 'pointer',
                 padding: '8px',
-                borderRadius: '8px'
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'color 0.2s',
               }}
+              onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
+              onMouseLeave={e => (e.currentTarget.style.color = '#94A3B8')}
             >
-              {isCollapsed ? <Menu size={23} /> : <X size={20} />}
+              {isCollapsed ? <Menu size={22} /> : <X size={20} />}
             </button>
           </div>
 
-      {/* ==================== 9.1 ЛОГОТИП TRADECOM ==================== */}
-          <div style={{ 
-            padding: '0 12px', 
-            marginBottom: '40px', 
-            textAlign: 'center',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center'
-          }}>
-            <Image 
-              src={isCollapsed ? "/logo-tradecom-circle.png" : "/logo-tradecom-white.png"} 
-              alt="TRADECOM" 
-              width={isCollapsed ? 82 : 270} 
-              height={isCollapsed ? 82 : 130} 
-              style={{ 
-                objectFit: 'contain',
-                borderRadius: isCollapsed ? '50%' : '8px',
-                transition: 'all 0.3s ease'
-              }} 
-              priority
-            />
-            
-            {!isCollapsed && (
+          {/* ==================== 9.1 ЛОГОТИП — только в развёрнутом виде ==================== */}
+          {!isCollapsed && (
+            <div style={{ 
+              padding: '0 20px', 
+              marginBottom: '28px', 
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+            }}>
+              <Image 
+                src="/logo-tradecom-white.png"
+                alt="TRADECOM" 
+                width={220}
+                height={106}
+                style={{ objectFit: 'contain', borderRadius: '8px' }} 
+                priority
+              />
               <p style={{ 
-                fontSize: '13px', 
+                fontSize: '12px', 
                 color: '#64748B', 
-                marginTop: '8px',
-                letterSpacing: '0.5px'
+                marginTop: '6px',
+                letterSpacing: '0.5px',
+                whiteSpace: 'nowrap',
               }}>
                 ТрейдКом • ДИСПЕТЧЕРИЗАЦИЯ
               </p>
-            )}
-          </div>
+            </div>
+          )}
 
-                    <nav style={{ flex: 1 }}>
+          <nav style={{ flex: 1, paddingLeft: '8px', paddingRight: '8px' }}>
 
             <Link href="/adminCifra/dashboard" style={navLinkStyle(isActive('/adminCifra/dashboard'), isCollapsed)}>
-              <Home size={22} /> {!isCollapsed && <span>Дашборд</span>}
+              <Home size={22} />
+              <span style={navTextStyle(isCollapsed)}>Дашборд</span>
             </Link>
 
             {/* ==================== БЛОК 10: ПУНКТ МЕНЮ "ЗАЯВКИ" ==================== */}
-            <div>
-              <Link 
-                href="/adminCifra/zayavki" 
-                style={navLinkStyle(isActive('/adminCifra/zayavki'), isCollapsed)}
-                onClick={() => setNewOrdersCount(0)}
-              >
-                <Package size={22} /> 
-                {!isCollapsed && <span>Заявки</span>}
-              </Link>
-            </div>
+            <Link 
+              href="/adminCifra/zayavki" 
+              style={navLinkStyle(isActive('/adminCifra/zayavki'), isCollapsed)}
+              onClick={() => setNewOrdersCount(0)}
+            >
+              <Package size={22} />
+              <span style={navTextStyle(isCollapsed)}>Заявки</span>
+            </Link>
 
             {/* ==================== БЛОК 11: ОГРАНИЧЕНИЕ МЕНЮ ==================== */}
             {userRole === 'operator' ? (
               <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
-                <UserCog size={22} /> {!isCollapsed && <span>Оператор БСУ</span>}
+                <UserCog size={22} />
+                <span style={navTextStyle(isCollapsed)}>Оператор БСУ</span>
               </Link>
             ) : (
               <>
                 <Link href="/adminCifra/tasks" style={navLinkStyle(isActive('/adminCifra/tasks'), isCollapsed)}>
-                  <CheckCircle size={22} /> {!isCollapsed && <span>Задачи</span>}
+                  <CheckCircle size={22} />
+                  <span style={navTextStyle(isCollapsed)}>Задачи</span>
                 </Link>
 
                 <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
-                  <FlaskConical size={22} /> {!isCollapsed && <span>Рецепты</span>}
+                  <FlaskConical size={22} />
+                  <span style={navTextStyle(isCollapsed)}>Рецепты</span>
                 </Link>
 
                 <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers'), isCollapsed)}>
-                  <Truck size={22} /> {!isCollapsed && <span>Миксеры</span>}
+                  <Truck size={22} />
+                  <span style={navTextStyle(isCollapsed)}>Миксеры</span>
                 </Link>
 
                 <Link href="/adminCifra/clients" style={navLinkStyle(isActive('/adminCifra/clients'), isCollapsed)}>
-                  <Users size={22} /> {!isCollapsed && <span>Клиенты</span>}
+                  <Users size={22} />
+                  <span style={navTextStyle(isCollapsed)}>Клиенты</span>
                 </Link>
 
                 <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
-                  <UserCog size={22} /> {!isCollapsed && <span>Оператор БСУ</span>}
+                  <UserCog size={22} />
+                  <span style={navTextStyle(isCollapsed)}>Оператор БСУ</span>
                 </Link>
-
-                
 
                 {/* ==================== БЛОК 12 ССЫЛКА "КТО В ОНЛАЙН" ==================== */}
-                 {(userRole === 'admin') && (
-                 <Link 
-                    href="/adminCifra/online" 
-                    style={navLinkStyle(false, isCollapsed)}   // ← точно как у разлогина
-                 >
-                <Globe size={22} /> 
-                   {!isCollapsed && <span>Кто в онлайн</span>}
-                </Link>
+                {(userRole === 'admin') && (
+                  <Link href="/adminCifra/online" style={navLinkStyle(false, isCollapsed)}>
+                    <Globe size={22} />
+                    <span style={navTextStyle(isCollapsed)}>Кто в онлайн</span>
+                  </Link>
                 )}
 
                 {(userRole === 'admin') && (
                   <Link href="/adminCifra/withdrawals" style={navLinkStyle(isActive('/adminCifra/withdrawals'), isCollapsed)}>
-                    <DollarSign size={22} /> {!isCollapsed && <span>Вывод баллов</span>}
+                    <DollarSign size={22} />
+                    <span style={navTextStyle(isCollapsed)}>Вывод баллов</span>
                   </Link>
                 )}
 
                 {/* ==================== БЛОК 13 ССЫЛКА "ВЫКИНУТЬ ВСЕХ" ==================== */}
                 {(userRole === 'admin') && (
-                <Link 
+                  <Link 
                     href="#" 
-                    onClick={(e) => {
-                    e.preventDefault();
-                    forceLogoutAll();
-                }}
+                    onClick={(e) => { e.preventDefault(); forceLogoutAll(); }}
                     style={navLinkStyle(false, isCollapsed)}
-                 >
-               <LogOut size={22} /> 
-                   {!isCollapsed && <span>Разлогинить всех</span>}
-               </Link>
-               )}
+                  >
+                    <LogOut size={22} />
+                    <span style={navTextStyle(isCollapsed)}>Разлогинить всех</span>
+                  </Link>
+                )}
               </>
             )}
 
-            {/* ==================== БЛОК 13.1 ЛИЧНЫЙ ВЫХОД (не для главного админа — у него есть "Разлогинить всех") ==================== */}
+            {/* ==================== БЛОК 13.1 ЛИЧНЫЙ ВЫХОД ==================== */}
             {userRole !== 'admin' && (
               <Link
                 href="#"
@@ -743,7 +802,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 style={navLinkStyle(false, isCollapsed)}
               >
                 <LogOut size={22} />
-                {!isCollapsed && <span>Выйти</span>}
+                <span style={navTextStyle(isCollapsed)}>Выйти</span>
               </Link>
             )}
           </nav>
@@ -756,6 +815,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
           alignSelf: 'stretch',
           boxSizing: 'border-box',
           overflow: isDashboard ? 'hidden' : 'auto', 
+          overscrollBehavior: 'none',
           padding: isDashboard ? '14px 20px' : '20px 32px', 
           display: isDashboard ? 'flex' : 'block',
           flexDirection: 'column',
@@ -768,19 +828,39 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   );
 }
 
-// ==================== 15. СТИЛЬ ДЛЯ ССЫЛОК ====================
-const navLinkStyle = (active: boolean, collapsed: boolean) => ({
+// ==================== 15. СТИЛИ ДЛЯ ССЫЛОК ====================
+const ACCENT = '#4ADE80'; // Tailwind green-400 — «салатовый» акцент
+
+const navLinkStyle = (active: boolean, collapsed: boolean): React.CSSProperties => ({
   display: 'flex',
   alignItems: 'center',
-  gap: '16px',
-  padding: '14px 16px',
+  gap: 0,
+  padding: collapsed ? '13px 0' : '13px 14px',
   borderRadius: '12px',
-  backgroundColor: active ? '#3B82F6' : 'transparent',
-  color: active ? '#fff' : '#94A3B8',
-  marginBottom: '6px',
+  // Активный пункт: прозрачный фон с лёгким зелёным оттенком + контур + мягкое свечение
+  backgroundColor: active ? 'rgba(74,222,128,0.12)' : 'transparent',
+  color: active ? ACCENT : '#94A3B8',
+  border: active ? `1px solid rgba(74,222,128,0.45)` : '1px solid transparent',
+  boxShadow: active ? `0 0 14px rgba(74,222,128,0.22)` : 'none',
+  marginBottom: '4px',
   textDecoration: 'none',
-  fontSize: '16px',
-  fontWeight: '500' as const,
+  fontSize: '15px',
+  fontWeight: active ? '600' : '500',
   justifyContent: collapsed ? 'center' : 'flex-start',
-  transition: 'all 0.2s',
-} as React.CSSProperties);
+  transition: 'background-color 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s, padding 0.35s cubic-bezier(0.4,0,0.2,1)',
+  overflow: 'hidden',
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
+});
+
+// Текстовая метка пункта меню — всегда в DOM, но плавно скрывается через
+// max-width + opacity, чтобы не было резкого «мигания» при сворачивании.
+const navTextStyle = (collapsed: boolean): React.CSSProperties => ({
+  maxWidth: collapsed ? 0 : '200px',
+  paddingLeft: collapsed ? 0 : '14px',
+  opacity: collapsed ? 0 : 1,
+  overflow: 'hidden',
+  whiteSpace: 'nowrap',
+  transition: 'max-width 0.35s cubic-bezier(0.4,0,0.2,1), padding-left 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease',
+  flexShrink: 0,
+});

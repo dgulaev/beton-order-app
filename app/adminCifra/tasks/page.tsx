@@ -1,7 +1,24 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, CheckCircle } from 'lucide-react';
+import { CheckCircle } from 'lucide-react';
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '14px',
+  background: '#25334A',
+  border: 'none',
+  borderRadius: '12px',
+  color: '#fff',
+  marginBottom: '16px',
+  boxSizing: 'border-box'
+};
+
+const getTaskStatusStyle = (status: string) => {
+  if (status === 'in_progress') return { label: 'В работе', color: '#3B82F6', bg: '#3B82F620' };
+  if (status === 'completed') return { label: 'Выполнена', color: '#10B981', bg: '#10B98120' };
+  return { label: 'Новая', color: '#94A3B8', bg: '#33415560' };
+};
 
 export default function TasksPage() {
 
@@ -294,123 +311,299 @@ const showVisualNotification = (type: string, data: any) => {
 
   // ==================== БЛОК 6: РЕНДЕР ====================
   return (
-    <div style={{ padding: '20px 40px', backgroundColor: '#0F172A', minHeight: '100vh', color: '#fff' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
-        <h1 style={{ fontSize: '28px', fontWeight: '700' }}>Задачи</h1>
-        <button onClick={() => setShowForm(true)} style={{background: '#3B82F6', color: 'white', padding: '12px 24px', borderRadius: '12px', border: 'none', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '16px', cursor: 'pointer'}}>
-          <Plus size={20} /> Новая задача
-        </button>
-      </div>
+    <div style={{
+      color: '#fff',
+      flex: 1,
+      minHeight: 0,
+      width: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      overscrollBehavior: 'none',
+      boxSizing: 'border-box'
+    }}>
 
-      {/* Фильтры */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '32px', flexWrap: 'wrap' }}>
-        {['all', 'my_created', 'assigned_to_me', 'created_by_me'].map(f => (
-          <button key={f} onClick={() => setFilter(f as any)} style={{ padding: '12px 28px', background: 'transparent', border: 'none', color: filter === f ? '#10B981' : '#64748B', fontSize: '17px', fontWeight: '600', cursor: 'pointer' }}>
-            {f === 'all' && 'Все'}
-            {f === 'my_created' && 'Созданные мной'}
-            {f === 'assigned_to_me' && 'Назначенные мне'}
-            {f === 'created_by_me' && 'Мои задачи'}
+      {/* ==================== ШАПКА: ЗАГОЛОВОК + ФИЛЬТРЫ (жёстко закреплены сверху,
+          position: sticky — доп. подстраховка сверх flexShrink:0, чтобы шапка
+          никогда не могла "уехать" вместе со скроллом области задач) ==================== */}
+      <div style={{
+        flexShrink: 0,
+        position: 'sticky',
+        top: 0,
+        zIndex: 5,
+        background: '#0F172A',
+        borderBottom: '1px solid #334155',
+        paddingBottom: '14px',
+        marginBottom: '14px'
+      }}>
+        {/* ==================== ЗАГОЛОВОК + КНОПКА ДОБАВИТЬ ==================== */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+          <h1 style={{
+            fontSize: '24px',
+            fontWeight: '700',
+            margin: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px'
+          }}>
+            <CheckCircle size={26} color="#10B981" />
+            Задачи
+          </h1>
+
+          <button
+            onClick={() => setShowForm(true)}
+            style={{
+              padding: '10px 22px',
+              background: '#10B981',
+              color: 'white',
+              border: 'none',
+              borderRadius: '9999px',
+              fontWeight: '600',
+              fontSize: '14.5px'
+            }}
+          >
+            + Новая задача
           </button>
-        ))}
+        </div>
+
+        {/* ==================== ПАНЕЛЬ ФИЛЬТРОВ ==================== */}
+        <div style={{
+          display: 'flex',
+          gap: '8px',
+          flexWrap: 'wrap'
+        }}>
+          {(['all', 'my_created', 'assigned_to_me', 'created_by_me'] as const).map(f => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              style={{
+                padding: '10px 20px',
+                background: 'transparent',
+                border: 'none',
+                color: filter === f ? '#10B981' : '#64748B',
+                fontSize: '17px',
+                fontWeight: '600',
+                transition: 'color 0.25s ease',
+                cursor: 'pointer',
+              }}
+            >
+              {f === 'all' && 'Все'}
+              {f === 'my_created' && 'Созданные мной'}
+              {f === 'assigned_to_me' && 'Назначенные мне'}
+              {f === 'created_by_me' && 'Мои задачи'}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Модальная форма */}
+      {/* ==================== СПИСОК ЗАДАЧ (СКРОЛЛИРУЕМАЯ ЗОНА, тянется до самого низа) ==================== */}
+      <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: '4px' }}>
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '100px', color: '#94A3B8' }}>Загрузка задач...</div>
+        ) : filteredTasks.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '80px', color: '#64748B', fontSize: '18px' }}>Нет задач по выбранному фильтру</div>
+        ) : (
+          <div style={{ display: 'grid', gap: '12px', paddingBottom: '4px' }}>
+            {filteredTasks.map((task: any) => {
+              const statusStyle = getTaskStatusStyle(task.status);
+              return (
+                <div key={task.id} style={{
+                  background: '#1E2937',
+                  padding: '18px 22px',
+                  borderRadius: '16px',
+                  border: '1px solid #334155',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '20px'
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+                      <div style={{ fontSize: '17px', fontWeight: '600' }}>{task.title}</div>
+                      <span style={{
+                        padding: '4px 14px',
+                        borderRadius: '9999px',
+                        background: statusStyle.bg,
+                        color: statusStyle.color,
+                        fontWeight: '600',
+                        fontSize: '12.5px',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        {statusStyle.label}
+                      </span>
+                    </div>
+
+                    {task.description && (
+                      <div style={{ color: '#94A3B8', fontSize: '14.5px', marginBottom: '10px' }}>{task.description}</div>
+                    )}
+
+                    <div style={{ fontSize: '13.5px', color: '#64748B', display: 'flex', gap: '20px', marginBottom: '6px', flexWrap: 'wrap' }}>
+                      <div>
+                        От: <strong style={{ color: '#CBD5E1' }}>
+                          {task.creator?.organization_name || task.creator?.full_name || 'Неизвестно'}
+                        </strong>
+                      </div>
+                      <div>
+                        Кому: <strong style={{ color: '#CBD5E1' }}>
+                          {task.assignee?.organization_name || task.assignee?.full_name || 'Не назначен'}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div style={{ fontSize: '12.5px', color: '#64748B', lineHeight: '1.5' }}>
+                      Создано: {new Date(task.created_at).toLocaleString('ru-RU')}
+                      {task.due_date && <> · Срок: {new Date(task.due_date).toLocaleString('ru-RU')}</>}
+                      {task.updated_at && task.updated_at !== task.created_at && <> · Изменено: {new Date(task.updated_at).toLocaleString('ru-RU')}</>}
+                      {task.completed_at && (
+                        <span style={{ color: '#10B981' }}>
+                          {' '}· Выполнено: {new Date(task.completed_at).toLocaleString('ru-RU')}
+                          {task.completion_note && ` — ${task.completion_note}`}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {task.status !== 'completed' && (
+                      <>
+                        {task.status !== 'in_progress' && (
+                          <button
+                            onClick={() => updateTaskStatus(task.id, 'in_progress')}
+                            style={{ padding: '8px 16px', background: '#334155', color: '#E2E8F0', border: 'none', borderRadius: '9999px', fontWeight: '500', fontSize: '13.5px', whiteSpace: 'nowrap', cursor: 'pointer', transition: 'all 0.2s ease' }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = '#3B82F6'; e.currentTarget.style.color = 'white'; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = '#334155'; e.currentTarget.style.color = '#E2E8F0'; }}
+                          >
+                            В работу
+                          </button>
+                        )}
+                        <button
+                          onClick={() => {
+                            const note = prompt('Что было сделано для выполнения задачи?');
+                            updateTaskStatus(task.id, 'completed', note || '');
+                          }}
+                          style={{ padding: '8px 16px', background: '#10B981', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600', fontSize: '13.5px', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                        >
+                          Выполнено
+                        </button>
+                      </>
+                    )}
+
+                    {String(task.created_by) === userId && (
+                      <>
+                        <button
+                          onClick={() => openEditModal(task)}
+                          style={{ padding: '8px 16px', background: '#334155', color: '#E2E8F0', border: 'none', borderRadius: '9999px', fontWeight: '500', fontSize: '13.5px', whiteSpace: 'nowrap', cursor: 'pointer', transition: 'all 0.2s ease' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = '#3B82F6'; e.currentTarget.style.color = 'white'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = '#334155'; e.currentTarget.style.color = '#E2E8F0'; }}
+                        >
+                          Изменить
+                        </button>
+                        <button
+                          onClick={() => deleteTask(task.id)}
+                          style={{ padding: '8px 16px', background: '#334155', color: '#E2E8F0', border: 'none', borderRadius: '9999px', fontWeight: '500', fontSize: '13.5px', whiteSpace: 'nowrap', cursor: 'pointer', transition: 'all 0.2s ease' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = '#ef4444'; e.currentTarget.style.color = 'white'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = '#334155'; e.currentTarget.style.color = '#E2E8F0'; }}
+                        >
+                          Удалить
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ==================== МОДАЛЬНОЕ ОКНО ==================== */}
       {showForm && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowForm(false)}>
-          <div style={{ background: '#1E2937', width: '920px', borderRadius: '20px', padding: '32px', maxHeight: '90vh', height: '620px', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
-            <h2 style={{ marginBottom: '24px', fontSize: '24px' }}>{editingTaskId ? 'Редактировать задачу' : 'Новая задача'}</h2>
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.9)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px'
+          }}
+          onClick={() => { setShowForm(false); setEditingTaskId(null); }}
+        >
+          <div
+            className="scroll-hidden"
+            style={{
+              background: '#1E2937',
+              width: '100%',
+              maxWidth: '560px',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              borderRadius: '20px',
+              padding: '28px',
+              boxSizing: 'border-box',
+              margin: '0 16px'
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <h2 style={{ marginBottom: '24px' }}>{editingTaskId ? 'Редактировать задачу' : 'Новая задача'}</h2>
+
             <form onSubmit={createTask}>
-              <input type="text" placeholder="Название задачи *" value={formData.title} onChange={(e) => setFormData({...formData, title: e.target.value})} style={{width:'97%', padding:'16px', background:'#0F172A', border:'none', borderRadius:'12px', color:'#fff', marginBottom:'16px'}} required />
-              <textarea placeholder="Описание задачи" value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})} style={{width:'97%', padding:'16px', background:'#0F172A', border:'none', borderRadius:'12px', color:'#fff', height:'140px', marginBottom:'16px'}} />
-              <select value={formData.assigned_to} onChange={(e) => setFormData({...formData, assigned_to: e.target.value})} style={{width:'100%', padding:'16px', background:'#0F172A', border:'none', borderRadius:'12px', color:'#fff', marginBottom:'16px'}} required>
-                <option value="">Кому назначить задачу</option>
-                {employees.map((emp: any) => {
-                  const display = emp.organization_name && emp.organization_name.trim() !== '' ? emp.organization_name : (emp.full_name || 'Без имени');
-                  return <option key={emp.user_id} value={emp.user_id}>{display} ({emp.role})</option>;
-                })}
-              </select>
-              <input type="datetime-local" value={formData.due_date} onChange={(e) => setFormData({...formData, due_date: e.target.value})} style={{width:'97%', padding:'16px', background:'#0F172A', border:'none', borderRadius:'12px', color:'#fff', marginBottom:'24px'}} />
+              <input
+                type="text"
+                placeholder="Название задачи *"
+                value={formData.title}
+                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                style={inputStyle}
+                required
+              />
+              <textarea
+                placeholder="Описание задачи"
+                value={formData.description}
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                style={{ ...inputStyle, height: '92px', resize: 'vertical' }}
+              />
+              <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '12px' }}>
+                <select
+                  value={formData.assigned_to}
+                  onChange={(e) => setFormData({ ...formData, assigned_to: e.target.value })}
+                  style={inputStyle}
+                  required
+                >
+                  <option value="">Кому назначить задачу</option>
+                  {employees.map((emp: any) => {
+                    const display = emp.organization_name && emp.organization_name.trim() !== '' ? emp.organization_name : (emp.full_name || 'Без имени');
+                    return <option key={emp.user_id} value={emp.user_id}>{display} ({emp.role})</option>;
+                  })}
+                </select>
+                <input
+                  type="datetime-local"
+                  value={formData.due_date}
+                  onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
+                  style={inputStyle}
+                />
+              </div>
+              <div style={{ height: '8px' }} />
+
               <div style={{ display: 'flex', gap: '12px' }}>
-                <button type="button" onClick={() => {setShowForm(false); setEditingTaskId(null);}} style={{ flex: 1, padding: '14px', background: '#334155', borderRadius: '12px', color: '#fff', border: 'none', cursor: 'pointer' }}>Отмена</button>
-                <button type="submit" style={{ flex: 1, padding: '14px', background: '#22c55e', borderRadius: '12px', color: 'white', border: 'none', fontWeight: '600', cursor: 'pointer' }}>Сохранить</button>
+                <button
+                  type="button"
+                  onClick={() => { setShowForm(false); setEditingTaskId(null); }}
+                  style={{ flex: 1, padding: '14px', background: '#334155', borderRadius: '9999px', color: 'white', border: 'none', boxSizing: 'border-box' }}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="submit"
+                  style={{ flex: 1, padding: '14px', background: '#10B981', borderRadius: '9999px', fontWeight: '600', color: 'white', border: 'none', boxSizing: 'border-box' }}
+                >
+                  Сохранить
+                </button>
               </div>
             </form>
           </div>
         </div>
       )}
-
-      {/* ==================== БЛОК 9: СПИСОК ЗАДАЧ ==================== */}
-{loading ? (
-  <div style={{textAlign:'center', padding:'100px', color:'#94A3B8'}}>Загрузка задач...</div>
-) : (
-  <div style={{ display: 'grid', gap: '16px' }}>
-    {filteredTasks.length === 0 ? (
-      <div style={{ textAlign: 'center', padding: '80px', color: '#64748B', fontSize: '18px' }}>Нет задач по выбранному фильтру</div>
-    ) : (
-      filteredTasks.map((task: any) => (
-        <div key={task.id} style={{
-          background: '#1E2937',
-          padding: '24px',
-          borderRadius: '16px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: '18px', fontWeight: '600', marginBottom: '8px' }}>{task.title}</div>
-            {task.description && <div style={{ color: '#94A3B8', marginBottom: '12px' }}>{task.description}</div>}
-            
-            {/* Исправленное отображение От / Кому с приоритетом organization_name */}
-  <div style={{ fontSize: '14px', color: '#64748B', display: 'flex', gap: '20px', marginBottom: '8px' }}>
-    <div>
-      От: <strong>
-        {task.creator?.organization_name || task.creator?.full_name || 'Неизвестно'}
-      </strong>
-    </div>
-    <div>
-      Кому: <strong>
-        {task.assignee?.organization_name || task.assignee?.full_name || 'Не назначен'}
-      </strong>
-    </div>
-  </div>
-
-            {/* Времена */}
-            <div style={{ fontSize: '13px', color: '#94A3B8', lineHeight: '1.5' }}>
-              Создано: {new Date(task.created_at).toLocaleString('ru-RU')}<br/>
-              {task.due_date && `Срок: ${new Date(task.due_date).toLocaleString('ru-RU')}`}<br/>
-              {task.updated_at && task.updated_at !== task.created_at && `Изменено: ${new Date(task.updated_at).toLocaleString('ru-RU')}`}<br/>
-              {task.completed_at && (
-                <span style={{ color: '#22c55e' }}>
-                  Выполнено: {new Date(task.completed_at).toLocaleString('ru-RU')}
-                  {task.completion_note && ` — ${task.completion_note}`}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', gap: '10px' }}>
-            {task.status !== 'completed' && (
-              <>
-                <button onClick={() => updateTaskStatus(task.id, 'in_progress')} style={{ padding: '8px 16px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>В работу</button>
-                <button onClick={() => {
-                  const note = prompt('Что было сделано для выполнения задачи?');
-                  updateTaskStatus(task.id, 'completed', note || '');
-                }} style={{ padding: '8px 16px', background: '#22c55e', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Выполнено</button>
-              </>
-            )}
-
-            {String(task.created_by) === userId && (
-              <>
-                <button onClick={() => openEditModal(task)} style={{ padding: '8px 16px', background: '#64748B', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Изменить</button>
-                <button onClick={() => deleteTask(task.id)} style={{ padding: '8px 16px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>Удалить</button>
-              </>
-            )}
-          </div>
-        </div>
-      ))
-    )}
-  </div>
-)}
     </div>
   );
 }

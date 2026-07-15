@@ -314,7 +314,9 @@ const formatVolume = (value: number | string) => {
       position: 'fixed', 
       inset: 0, 
       background: 'rgba(0,0,0,0.94)', 
-      zIndex: 9999, 
+      // Выше, чем модалка календаря (zIndex 9999) — детальную карточку заказа,
+      // открытую кликом из календаря, всегда должно быть видно поверх него.
+      zIndex: 10000, 
       display: 'flex', 
       alignItems: 'center', 
       justifyContent: 'center' 

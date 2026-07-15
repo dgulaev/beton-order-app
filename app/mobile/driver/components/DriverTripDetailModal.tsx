@@ -43,6 +43,7 @@ export default function DriverTripDetailModal({ trip, onClose }: Props) {
           background: '#1E2937',
           width: '100%',
           maxWidth: '560px',
+          boxSizing: 'border-box',
           borderRadius: '20px 20px 0 0',
           padding: '24px 20px 32px',
           maxHeight: '85vh',

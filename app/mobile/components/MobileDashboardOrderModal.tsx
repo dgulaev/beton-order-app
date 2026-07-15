@@ -243,7 +243,8 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
                   borderRadius: '12px',
                   padding: '14px 16px',
                   fontSize: '16px',
-                  width: '100%'
+                  width: '100%',
+                  boxSizing: 'border-box'
                 }}
               >
                 <option value="new">Новая</option>

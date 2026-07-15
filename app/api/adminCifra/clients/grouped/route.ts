@@ -15,13 +15,12 @@ export async function GET(request: NextRequest) {
     let search = searchParams.get('search')?.trim() || '';
 
     const from = (page - 1) * limit;
-    const to = from + limit - 1;
 
     console.log(`🚀 [Загрузка] Страница ${page} | Поиск: "${search}"`);
 
     let query = supabase
       .from('users')
-      .select('*', { count: 'exact' })
+      .select('*')
       .eq('role', 'client')
       .order('created_at', { ascending: false });
 
@@ -33,15 +32,15 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const { data: clients, error, count } = await query.range(from, to);
+    // Загружаем ВСЕХ подходящих клиентов — группировка должна происходить
+    // по всей базе, а не по срезу страницы. Иначе клиенты одной компании
+    // (одинаковый ИНН) могут оказаться на разных страницах и не будут
+    // сгруппированы; также totalPages будет считаться по числу физических
+    // записей, а не по числу групп.
+    const { data: clients, error } = await query;
 
     if (error) throw error;
 
-    // Кураторы и объёмы заказов — раньше это было N+1 (отдельный await-запрос
-    // объёма заказов на КАЖДОГО клиента страницы, последовательно один за
-    // другим — 18 клиентов = 18 round-trip'ов к Supabase, отсюда наблюдаемые
-    // 2+ секунды на запрос). Теперь оба запроса батчатся по всем user_id сразу
-    // и идут параллельно.
     const createdByIds = [...new Set(clients?.map((c: any) => c.created_by).filter(Boolean) || [])];
     const clientUserIds = [...new Set(clients?.map((c: any) => c.user_id).filter(Boolean) || [])];
 
@@ -57,8 +56,6 @@ export async function GET(request: NextRequest) {
     const curatorsMap = new Map();
     curatorsRes.data?.forEach((c: any) => curatorsMap.set(c.user_id, c.full_name));
 
-    // Агрегируем объём/кол-во заказов на клиента одним проходом по уже
-    // полученным данным — вместо отдельного запроса на каждого клиента.
     const ordersByUser = new Map<number, { volume: number; count: number }>();
     ordersRes.data?.forEach((o: any) => {
       const entry = ordersByUser.get(o.user_id) || { volume: 0, count: 0 };
@@ -70,7 +67,7 @@ export async function GET(request: NextRequest) {
     const grouped = new Map();
 
     for (const client of clients || []) {
-      const key = client.inn 
+      const key = client.inn
         ? `${client.inn}_${(client.organization_name || '').toLowerCase().replace(/[^a-zа-я0-9]/g, '')}`
         : `no-inn_${client.user_id}`;
 
@@ -90,7 +87,7 @@ export async function GET(request: NextRequest) {
           predicted_next_order: client.predicted_next_order,
           created_by: client.created_by,
           curator_name: curatorName,
-          clients: []
+          clients: [],
         });
       }
 
@@ -106,19 +103,22 @@ export async function GET(request: NextRequest) {
 
       group.clients.push({
         ...client,
-        curator_name: curatorsMap.get(client.created_by) || null
+        curator_name: curatorsMap.get(client.created_by) || null,
       });
     }
 
-    const result = Array.from(grouped.values());
+    // Пагинируем группы, а не индивидуальных клиентов
+    const allGroups = Array.from(grouped.values());
+    const totalGroups = allGroups.length;
+    const paginatedGroups = allGroups.slice(from, from + limit);
 
-    console.log(`✅ Загружено ${result.length} групп`);
+    console.log(`✅ Всего групп: ${totalGroups}, страница ${page}: ${paginatedGroups.length} групп`);
 
     return NextResponse.json({
-      clients: result,
-      totalPages: Math.ceil((count || 0) / limit),
-      total: count || 0,
-      currentPage: page
+      clients: paginatedGroups,
+      totalPages: Math.ceil(totalGroups / limit),
+      total: totalGroups,
+      currentPage: page,
     });
 
   } catch (error: any) {

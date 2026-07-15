@@ -113,10 +113,14 @@ button, a, .clickable {
   -webkit-tap-highlight-color: rgba(0,0,0,0.1);
 }
 
-/* Скролл без видимой полосы (дашборд, модалки и т.д.) */
+/* Скролл без видимой полосы (дашборд, модалки и т.д.).
+   overscroll-behavior:none убирает "резиновое" оттягивание/bounce при прокрутке
+   мышью/трекпадом за пределы контента — особенно заметно, когда внутри мало
+   строк и любая прокрутка сразу достигает края зоны. */
 .scroll-hidden {
   scrollbar-width: none;
   -ms-overflow-style: none;
+  overscroll-behavior: none;
 }
 
 .scroll-hidden::-webkit-scrollbar {

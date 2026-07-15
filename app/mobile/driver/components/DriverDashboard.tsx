@@ -285,6 +285,7 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
             }}
             style={{
               width: '100%',
+              boxSizing: 'border-box',
               marginTop: '14px',
               padding: '13px',
               borderRadius: '12px',
@@ -370,6 +371,7 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
             style={{
               marginTop: '14px',
               width: '100%',
+              boxSizing: 'border-box',
               padding: '12px',
               borderRadius: '12px',
               border: '1px solid #334155',

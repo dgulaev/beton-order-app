@@ -111,6 +111,25 @@ export function buildYandexMapsRouteUrl(rawAddress: string | null | undefined): 
 // точка отправления не меняется от заявки к заявке.
 const ROUTE_ORIGIN_COORDS = { lat: 53.25347, lon: 34.416444 };
 
+/**
+ * Извлекает координаты прямо из текста адреса, если диспетчер вставил их
+ * в поле адреса (например "ул. Ленина 5\n52.735700, 34.774616").
+ * Это быстрее и точнее любого геокодирования — не нужен запрос к DaData.
+ */
+export function extractCoordsFromAddress(address: string | null | undefined): Coords | null {
+  if (!address) return null;
+  // Ищем пару чисел вида ДД.ДДД, ДД.ДДД — широта и долгота
+  const match = address.match(/(\d{2,3}\.\d{3,})[,\s]+(\d{2,3}\.\d{3,})/);
+  if (!match) return null;
+  const lat = parseFloat(match[1]);
+  const lon = parseFloat(match[2]);
+  // Санитарная проверка: диапазон координат для России
+  if (lat >= 41 && lat <= 82 && lon >= 19 && lon <= 170) {
+    return { lat, lon };
+  }
+  return null;
+}
+
 /** Ссылка на построение маршрута в Яндекс.Картах по КООРДИНАТАМ — работает
  * одинаково надёжно и в обычном браузере, и в Яндекс.Браузере (открывает
  * приложение и сразу строит маршрут). */
@@ -242,10 +261,16 @@ export interface YandexRouteLink {
  * ещё "дозревает" (см. `RouteButton` и другие места использования).
  */
 export function useYandexRouteHref(rawAddress: string | null | undefined): YandexRouteLink {
-  // Синхронный текстовый фолбэк — пересчитывается прямо при рендере, без
-  // setState в эффекте (это и держит href актуальным сразу при смене адреса,
-  // до того как подтянутся координаты).
-  const fallbackHref = useMemo(() => buildYandexMapsRouteUrl(rawAddress), [rawAddress]);
+  // Быстрый путь: если в адресе уже есть координаты — сразу строим ссылку,
+  // без запроса к DaData. Это точнее геокодирования и не требует ожидания.
+  const embeddedCoords = useMemo(() => extractCoordsFromAddress(rawAddress), [rawAddress]);
+
+  const fallbackHref = useMemo(() => {
+    if (embeddedCoords) {
+      return buildYandexMapsRouteUrlByCoords(embeddedCoords.lat, embeddedCoords.lon);
+    }
+    return buildYandexMapsRouteUrl(rawAddress);
+  }, [rawAddress, embeddedCoords]);
 
   // Результат геокодирования — храним вместе с адресом, для которого он
   // получен: если rawAddress уже сменился, а старый результат ещё "летит",
@@ -260,6 +285,9 @@ export function useYandexRouteHref(rawAddress: string | null | undefined): Yande
 
   useEffect(() => {
     if (!rawAddress) return;
+
+    // Координаты уже извлечены из текста — DaData не нужна, ссылка уже готова
+    if (embeddedCoords) return;
 
     let cancelled = false;
     const destination = normalizeDeliveryAddress(rawAddress);
@@ -277,7 +305,12 @@ export function useYandexRouteHref(rawAddress: string | null | undefined): Yande
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [rawAddress]);
+  }, [rawAddress, embeddedCoords]);
+
+  // Если координаты найдены в тексте — ссылка готова сразу, без ожидания
+  if (embeddedCoords) {
+    return { href: fallbackHref, ready: true };
+  }
 
   const isResolved = !!resolved && resolved.address === rawAddress;
   const isTimedOut = timedOutAddress === rawAddress;

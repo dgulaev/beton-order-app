@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import EfficiencyPage from '../efficiency/page';
 import NewOrderModal from './NewOrderModal';
 
-import { supabase } from '@/lib/supabaseClient';   // ← Правильный импорт
 import { useYandexRouteHref } from '@/lib/yandexRoute';
 import { formatPhoneInput } from '@/lib/phone';
 
@@ -50,32 +49,39 @@ export default function ClientsPage() {
   const [staffPasswordInput, setStaffPasswordInput] = useState('');
   const [savingStaff, setSavingStaff] = useState(false);
 
-  // ==================== DEBOUNCE ДЛЯ ПОИСКА ====================
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearch(searchTerm.trim());
-      if (searchTerm.trim() !== debouncedSearch) {
-        setCurrentPage(1);
-      }
-    }, 5000);
+  // ==================== СОСТОЯНИЯ МОДАЛЬНОГО ОКНА ЗВОНКА ====================
+  const [showCallModal, setShowCallModal] = useState(false);
+  const [callModalClient, setCallModalClient] = useState<any>(null);
+  const [callResult, setCallResult] = useState<'positive' | 'neutral' | 'negative'>('positive');
+  const [callComment, setCallComment] = useState('');
+  const [savingCall, setSavingCall] = useState(false);
 
-    return () => clearTimeout(timer);
-  }, [searchTerm]);
+  // ==================== ПОИСК — ТОЛЬКО ПО КНОПКЕ ====================
+  // debouncedSearch меняется только при явном нажатии кнопки «Найти» или Enter.
+  // Никакого автопоиска нет.
+  const handleSearch = () => {
+    setCurrentPage(1);
+    setDebouncedSearch(searchTerm.trim());
+  };
 
-    // ==================== ЗАГРУЗКА КУРАТОРОВ ====================
+    // ==================== ЗАГРУЗКА КУРАТОРОВ ЧЕРЕЗ API ====================
+  // Используем API с service role key — клиентский Supabase ограничен RLS
+  // и может вернуть пустой список.
   useEffect(() => {
     const loadCurators = async () => {
       try {
-        const { data } = await supabase
-          .from('users')
-          .select('user_id, full_name, role')
-          .in('role', ['admin', 'manager', 'dispatcher'])
-          .order('full_name');
-
-        setCurators(data || []);
-        console.log("Кураторы загружены:", data?.length);
+        const res = await fetch('/api/adminCifra/staff/stats');
+        if (!res.ok) return;
+        const data = await res.json();
+        const list = (Array.isArray(data) ? data : [])
+          .filter((u: any) =>
+            ['admin', 'manager', 'dispatcher'].includes((u.role || '').toLowerCase())
+          )
+          .sort((a: any, b: any) => (a.full_name || '').localeCompare(b.full_name || ''));
+        setCurators(list);
+        console.log('Кураторы загружены через API:', list.length);
       } catch (error) {
-        console.error("Ошибка загрузки кураторов:", error);
+        console.error('Ошибка загрузки кураторов:', error);
       }
     };
 
@@ -332,36 +338,33 @@ const handleSelectProfile = async (profile: any) => {
   else {
     const mainClient = profile.clients?.[0] || profile;
 
-    if (mainClient?.user_id) {
+    // curator_name уже приходит из grouped API — если данных нет,
+    // подтягиваем через clients endpoint (service role, без RLS).
+    if (mainClient?.user_id && !selected.curator_name) {
       try {
-        const { data: clientData } = await supabase
-          .from('users')
-          .select('created_by')
-          .eq('user_id', mainClient.user_id)
-          .single();
+        const res = await fetch(`/api/adminCifra/clients?userId=${mainClient.user_id}`);
+        if (res.ok) {
+          const clientData = await res.json();
+          if (clientData?.created_by) {
+            // Ищем куратора в уже загруженном списке кураторов
+            const curatorRecord = curators.find((c: any) => c.user_id === clientData.created_by);
+            const curatorName = curatorRecord?.full_name || null;
 
-        if (clientData?.created_by) {
-          const { data: curator } = await supabase
-            .from('users')
-            .select('full_name')
-            .eq('user_id', clientData.created_by)
-            .single();
-
-          if (curator?.full_name) {
-            selected.curator_name = curator.full_name;
-            selected.created_by = clientData.created_by;
-
-            if (selected.clients && selected.clients.length > 0) {
-              selected.clients = selected.clients.map((c: any) => ({
-                ...c,
-                curator_name: curator.full_name,
-                created_by: clientData.created_by
-              }));
+            if (curatorName) {
+              selected.curator_name = curatorName;
+              selected.created_by = clientData.created_by;
+              if (selected.clients && selected.clients.length > 0) {
+                selected.clients = selected.clients.map((c: any) => ({
+                  ...c,
+                  curator_name: curatorName,
+                  created_by: clientData.created_by,
+                }));
+              }
             }
           }
         }
       } catch (e) {
-        console.error("Ошибка загрузки куратора:", e);
+        console.error('Ошибка загрузки куратора:', e);
       }
     }
   }
@@ -437,32 +440,35 @@ const loadGroupOrders = async (group: any) => {
 
   setOrdersLoading(true);
   try {
-    const allOrders: any[] = [];
-    const allCalls: any[] = [];
+    const clientIds = group.clients
+      .map((c: any) => c.user_id || c.id)
+      .filter(Boolean);
 
-    for (const client of group.clients) {
-      const userId = client.user_id || client.id;
-      if (!userId) continue;
+    // Параллельные запросы для всех клиентов группы — вместо N+1 последовательных
+    const [ordersResults, callsResults] = await Promise.all([
+      Promise.all(
+        clientIds.map((id: any) =>
+          fetch(`/api/adminCifra/client-orders?userId=${id}`)
+            .then(r => r.ok ? r.json() : [])
+            .catch(() => [])
+        )
+      ),
+      Promise.all(
+        clientIds.map((id: any) =>
+          fetch(`/api/adminCifra/client-calls?clientId=${id}`)
+            .then(r => r.ok ? r.json() : [])
+            .catch(() => [])
+        )
+      ),
+    ]);
 
-      // Заказы
-      const resOrders = await fetch(`/api/adminCifra/client-orders?userId=${userId}`);
-      if (resOrders.ok) {
-        const orders = await resOrders.json();
-        allOrders.push(...orders);
-      }
-
-      // Звонки
-      const resCalls = await fetch(`/api/adminCifra/client-calls?clientId=${userId}`);
-      if (resCalls.ok) {
-        const calls = await resCalls.json();
-        allCalls.push(...calls);
-      }
-    }
+    const allOrders = ordersResults.flat();
+    const allCalls: any[] = (callsResults.flat() as any[]).sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
 
     setUserOrders(allOrders);
-    setCallHistory(allCalls.sort((a, b) => 
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    ));
+    setCallHistory(allCalls);
 
     console.log(`📦 Загружено ${allOrders.length} заказов и ${allCalls.length} звонков для группы`);
   } catch (err) {
@@ -824,6 +830,63 @@ const refreshClientData = async () => {
 };
 
       // ==================== 3.4 ТЕСТОВОЕ УВЕДОМЛЕНИЕ ====================
+// ==================== ОТКРЫТИЕ МОДАЛЬНОГО ОКНА ЗВОНКА ====================
+const openCallModal = (client: any) => {
+  const mainClient = client?.clients?.[0] || client;
+  setCallModalClient({
+    ...mainClient,
+    // Обеспечиваем наличие phone для всей группы
+    phone: mainClient.phone || client?.phones?.[0] || '',
+    organization_name: client.organization_name || mainClient.organization_name || '',
+    full_name: client.full_name || mainClient.full_name || '',
+    // Передаём всю группу для сохранения звонка по нужному user_id
+    _group: client,
+  });
+  setCallResult('positive');
+  setCallComment('');
+  setShowCallModal(true);
+};
+
+// ==================== СОХРАНЕНИЕ РЕЗУЛЬТАТА ЗВОНКА ====================
+const saveCallResult = async () => {
+  if (!callModalClient) return;
+
+  setSavingCall(true);
+  try {
+    const clientId =
+      callModalClient.user_id ||
+      callModalClient.id ||
+      callModalClient._group?.clients?.[0]?.user_id;
+
+    const res = await fetch('/api/adminCifra/client-call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: clientId, result: callResult, comment: callComment }),
+    });
+
+    if (!res.ok) throw new Error('Ошибка сервера');
+
+    setShowCallModal(false);
+    setCallComment('');
+    setCallResult('positive');
+
+    // Обновляем историю звонков в боковой панели без перезагрузки страницы
+    if (selectedProfile) {
+      if (selectedProfile.groupId) {
+        loadGroupOrders(selectedProfile);
+      } else {
+        const uid = selectedProfile.user_id || selectedProfile.id;
+        if (uid) loadUserOrders(uid);
+      }
+    }
+  } catch (err) {
+    console.error(err);
+    alert('Ошибка при сохранении результата звонка');
+  } finally {
+    setSavingCall(false);
+  }
+};
+
 const testClientReminder = () => {
   if (!selectedProfile) {
     alert('Сначала выберите клиента');
@@ -1155,69 +1218,26 @@ const showClientReminder = (client: any, isTest = false) => {
   if (loading) return <div style={{ padding: '120px', textAlign: 'center', color: '#94A3B8' }}>Загрузка CRM...</div>;
 
   // ==================== 7. ГЛОБАЛЬНАЯ ФУНКЦИЯ ЗВОНКА ====================
+  // Вызывается из DOM-уведомлений (showClientReminder). Открывает карточку
+  // клиента через URL — модальное окно звонка откроется из боковой панели.
 window.callClient = (clientId: number | string) => {
   if (!clientId) {
     alert('❌ Не удалось определить ID клиента');
     return;
   }
 
-  const phone = prompt("📞 Подтвердите или введите номер для звонка:", "+7");
-  if (!phone) return;
-
-  // Сразу открываем окно результата звонка
-  const resultInput = prompt(
-    "✅ Результат звонка:\n\n" +
-    "1 — Положительный (клиент заказал)\n" +
-    "2 — Нейтральный (скоро закажет)\n" +
-    "3 — Отрицательный (не нужен)\n\n" +
-    "Введите 1, 2 или 3:",
-    "1"
+  const found = profiles.find((p: any) =>
+    p.groupId === String(clientId) ||
+    String(p.user_id) === String(clientId) ||
+    p.clients?.some((c: any) => String(c.user_id) === String(clientId))
   );
 
-  if (resultInput === null) {
-    // Пользователь отменил — просто звоним
-    window.open(`tel:${phone}`, '_self');
-    return;
+  if (found) {
+    openCallModal(found);
+  } else {
+    // Fallback — переходим на страницу клиента
+    window.location.href = `/adminCifra/clients?openClient=${clientId}`;
   }
-
-  let result = 'neutral';
-  let comment = '';
-
-  if (resultInput === '1') { 
-    result = 'positive'; 
-    comment = 'Клиент заказал бетон'; 
-  } else if (resultInput === '2') { 
-    result = 'neutral'; 
-    comment = 'Клиент сказал, что скоро закажет'; 
-  } else if (resultInput === '3') { 
-    result = 'negative'; 
-    comment = 'Клиент отказался'; 
-  }
-
-  // Запускаем звонок
-  window.open(`tel:${phone}`, '_self');
-
-  // Сохраняем результат звонка
-  fetch('/api/adminCifra/client-call', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      client_id: clientId, 
-      result, 
-      comment 
-    })
-  })
-  .then(res => {
-    if (res.ok) {
-      alert('✅ Результат звонка успешно сохранён');
-    } else {
-      alert('⚠️ Звонок выполнен, но результат не сохранён');
-    }
-  })
-  .catch(err => {
-    console.error(err);
-    alert('Ошибка сохранения результата звонка');
-  });
 };
 
 // ==================== ФУНКЦИЯ РЕДАКТИРОВАНИЯ СОТРУДНИКА ====================
@@ -1599,26 +1619,62 @@ const changeStaffPassword = async (staffMember: any) => {
 )}
 </div>
 
-{/* ==================== ПОЛЕ ПОИСКА — С DEBOUNCE (только для клиентов, у стаффа их немного) ==================== */}
+{/* ==================== ПОЛЕ ПОИСКА — ТОЛЬКО ПО КНОПКЕ ==================== */}
 {activeTab === 'clients' && (
-  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', width: '100%', marginBottom: '12px' }}>
-    <div style={{ position: 'relative', width: '100%', maxWidth: '720px' }}>
-      <input
-        type="text"
-        placeholder="Поиск по имени, организации, телефону, ИНН..."
-        value={searchTerm}
-        onChange={(e) => setSearchTerm(e.target.value)}
-        style={{ 
-          width: '100%', 
-          padding: '12px 16px', 
-          borderRadius: '12px', 
-          background: '#1E2937', 
-          border: '1px solid #334155', 
-          color: '#fff',
-          fontSize: '16px'
+  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', marginBottom: '12px' }}>
+    <input
+      type="text"
+      placeholder="Поиск по имени, организации, телефону, ИНН..."
+      value={searchTerm}
+      onChange={(e) => setSearchTerm(e.target.value)}
+      onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+      style={{ 
+        flex: 1,
+        maxWidth: '680px',
+        padding: '12px 16px', 
+        borderRadius: '12px', 
+        background: '#1E2937', 
+        border: '1px solid #334155', 
+        color: '#fff',
+        fontSize: '16px',
+        outline: 'none',
+      }}
+    />
+    <button
+      onClick={handleSearch}
+      style={{
+        padding: '12px 28px',
+        background: 'rgba(74, 222, 128, 0.15)',
+        color: '#4ADE80',
+        border: '1px solid rgba(74, 222, 128, 0.3)',
+        borderRadius: '12px',
+        fontSize: '16px',
+        fontWeight: '600',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+      }}
+    >
+      🔍 Найти
+    </button>
+    {debouncedSearch && (
+      <button
+        onClick={() => { setSearchTerm(''); setDebouncedSearch(''); setCurrentPage(1); }}
+        style={{
+          padding: '12px 18px',
+          background: '#334155',
+          color: '#94A3B8',
+          border: 'none',
+          borderRadius: '12px',
+          fontSize: '15px',
+          cursor: 'pointer',
+          flexShrink: 0,
         }}
-      />
-    </div>
+        title="Сбросить поиск"
+      >
+        ✕
+      </button>
+    )}
   </div>
 )}
 
@@ -1680,14 +1736,10 @@ const changeStaffPassword = async (staffMember: any) => {
             </div>
           ))
         ) : (
-          // ==================== СТАРЫЕ КАРТОЧКИ КЛИЕНТОВ (без изменений) ====================
-          profiles
-            .filter((item: any) => {
-              const isStaffItem = item.isStaff || 
-                                 ['admin', 'manager', 'dispatcher', 'operator'].includes((item.role || '').toLowerCase());
-              return !isStaffItem;
-            })
-            .map((client: any) => {
+          // ==================== КАРТОЧКИ КЛИЕНТОВ ====================
+          // Используем `clients` — это уже отфильтрованный сервером и
+          // сгруппированный список. Повторная фильтрация profiles не нужна.
+          clients.map((client: any) => {
               const vol = client.total_volume || client.totalVolume || 0;
               const ordersCount = client.total_orders || client.totalOrders || 0;
 
@@ -1799,7 +1851,7 @@ const changeStaffPassword = async (staffMember: any) => {
         )}
 
         {/* Строки таблицы */}
-        {(activeTab === 'staff' ? staffProfiles : profiles).map((item: any) => {
+        {(activeTab === 'staff' ? staffProfiles : clients).map((item: any) => {
           if (activeTab === 'staff') {
   return (
     <div
@@ -1844,9 +1896,9 @@ const changeStaffPassword = async (staffMember: any) => {
             }}
             style={{
               padding: '8px 16px',
-              backgroundColor: '#8B5CF6',
-              color: 'white',
-              border: 'none',
+              backgroundColor: 'rgba(139, 92, 246, 0.15)',
+              color: '#A78BFA',
+              border: '1px solid rgba(139, 92, 246, 0.3)',
               borderRadius: '8px',
               fontSize: '14px',
               cursor: 'pointer',
@@ -1864,13 +1916,20 @@ const changeStaffPassword = async (staffMember: any) => {
       {/* 4. Роль */}
       <div style={{ textAlign: 'center' }}>
         <span style={{ 
-          padding: '6px 16px', 
+          padding: '5px 14px', 
           borderRadius: '9999px', 
           fontSize: '13px', 
-          background: item.role === 'admin' ? '#7C3AED' : 
-                      item.role === 'guest' ? '#475569' : '#334155', 
-          color: 'white',
-          display: 'inline-block'
+          background: item.role === 'admin'
+            ? 'rgba(124, 58, 237, 0.18)'
+            : item.role === 'guest'
+            ? 'rgba(71, 85, 105, 0.35)'
+            : 'rgba(51, 65, 85, 0.6)',
+          color: item.role === 'admin' ? '#A78BFA'
+            : item.role === 'guest' ? '#64748B'
+            : '#94A3B8',
+          border: `1px solid ${item.role === 'admin' ? 'rgba(167,139,250,0.25)' : 'rgba(100,116,139,0.2)'}`,
+          display: 'inline-block',
+          fontWeight: '500',
         }}>
           {item.role === 'admin' ? 'Администратор' : 
            item.role === 'dispatcher' ? 'Диспетчер' : 
@@ -1885,11 +1944,12 @@ const changeStaffPassword = async (staffMember: any) => {
           onClick={(e) => { e.stopPropagation(); editStaff(item); }}
           style={{ 
             padding: '8px 18px', 
-            background: '#3B82F6', 
-            border: 'none', 
+            background: 'rgba(96, 165, 250, 0.12)',
+            border: '1px solid rgba(96, 165, 250, 0.3)',
             borderRadius: '8px', 
-            color: 'white', 
-            cursor: 'pointer' 
+            color: '#60A5FA', 
+            cursor: 'pointer',
+            fontWeight: '500',
           }}
         >
           Изменить
@@ -1937,8 +1997,8 @@ const changeStaffPassword = async (staffMember: any) => {
   </>
 )}
 
-{/* ==================== ПАГИНАЦИЯ ==================== */}
-{totalPages > 1 && (
+{/* ==================== ПАГИНАЦИЯ (только для клиентов) ==================== */}
+{totalPages > 1 && activeTab === 'clients' && (
   <div style={{ 
     display: 'flex', 
     justifyContent: 'center', 
@@ -2188,9 +2248,7 @@ const changeStaffPassword = async (staffMember: any) => {
 
     {/* ==================== СЕЛЕКТ ВЫБОРА КУРАТОРА — ТОЛЬКО ДЛЯ АДМИНА ==================== */}
 
-{(window.localStorage.getItem('user_role') === 'admin' || 
-  window.localStorage.getItem('role') === 'admin' || 
-  window.localStorage.getItem('userRole') === 'admin') && (
+{currentRole === 'admin' && (
   <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid #334155' }}>
     <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
       Назначить куратора
@@ -2283,69 +2341,13 @@ const changeStaffPassword = async (staffMember: any) => {
   </div>
 )}
 
-      {/* 9.3 Действия (кнопки) — ВСЕ КНОПКИ СОХРАНЕНЫ */}
+      {/* 9.3 Действия (кнопки) */}
       <div style={{ display: 'flex', gap: '12px', margin: '28px 0', flexWrap: 'wrap' }}>
         <button 
-  onClick={() => {
-    const client = selectedProfile;
-    if (!client) return alert('Клиент не выбран');
-
-    const phone = prompt("📞 Подтвердите номер для звонка:", 
-      client.phones?.[0] || client.phone || "+7");
-
-    if (!phone) return;
-
-    // Сразу показываем окно результата
-    const resultInput = prompt(
-      "✅ Результат звонка:\n\n" +
-      "1 — Положительный (клиент заказал)\n" +
-      "2 — Нейтральный (скоро закажет)\n" +
-      "3 — Отрицательный (не нужен)\n\n" +
-      "Введите 1, 2 или 3:",
-      "1"
-    );
-
-    if (resultInput === null) return;
-
-    let result = 'neutral';
-    let comment = '';
-
-    if (resultInput === '1') { 
-      result = 'positive'; 
-      comment = 'Клиент заказал бетон'; 
-    } else if (resultInput === '2') { 
-      result = 'neutral'; 
-      comment = 'Клиент сказал, что скоро закажет'; 
-    } else if (resultInput === '3') { 
-      result = 'negative'; 
-      comment = 'Клиент отказался'; 
-    }
-
-    // Запускаем звонок
-    window.open(`tel:${phone}`, '_self');
-
-    // Сохраняем результат
-    fetch('/api/adminCifra/client-call', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        client_id: client.user_id || client.id || client.clients?.[0]?.user_id, 
-        result, 
-        comment 
-      })
-    })
-    .then(() => alert('✅ Результат звонка сохранён'))
-    .catch(() => alert('⚠️ Звонок выполнен, но результат не сохранён'));
-  }} 
-  style={{ flex: 1, padding: '14px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
->
-  📞 Позвонить
-</button>
-        <button 
-          onClick={() => alert('Открывается чат с Max')} 
-          style={{ flex: 1, padding: '14px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
+          onClick={() => openCallModal(selectedProfile)}
+          style={{ flex: 1, padding: '14px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600', cursor: 'pointer' }}
         >
-          💬 Написать в Max
+          📞 Позвонить
         </button>
         <button 
   onClick={() => {
@@ -3520,6 +3522,148 @@ const changeStaffPassword = async (staffMember: any) => {
 
 
 
+
+
+{/* ==================== МОДАЛЬНОЕ ОКНО ЗВОНКА ==================== */}
+{showCallModal && callModalClient && (
+  <div
+    style={{
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,0.75)',
+      zIndex: 10001,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+    }}
+    onClick={() => setShowCallModal(false)}
+  >
+    <div
+      style={{
+        background: '#1E2937',
+        borderRadius: '20px',
+        padding: '32px',
+        width: '480px',
+        maxWidth: '90vw',
+        boxShadow: '0 30px 80px rgba(0,0,0,0.7)',
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {/* Заголовок */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <h3 style={{ margin: 0, fontSize: '22px' }}>📞 Звонок клиенту</h3>
+        <button
+          onClick={() => setShowCallModal(false)}
+          style={{ background: 'none', border: 'none', color: '#94A3B8', fontSize: '32px', cursor: 'pointer', lineHeight: 1 }}
+        >
+          ×
+        </button>
+      </div>
+
+      {/* Имя клиента */}
+      <div style={{ fontSize: '18px', fontWeight: '700', marginBottom: '6px' }}>
+        {callModalClient.organization_name || callModalClient.full_name || 'Клиент'}
+      </div>
+
+      {/* Кнопка звонка */}
+      <a
+        href={`tel:${callModalClient.phone}`}
+        style={{
+          display: 'block',
+          padding: '14px',
+          background: '#10B981',
+          color: 'white',
+          borderRadius: '12px',
+          textAlign: 'center',
+          fontSize: '18px',
+          fontWeight: '700',
+          textDecoration: 'none',
+          marginBottom: '24px',
+          marginTop: '8px',
+        }}
+      >
+        📞 Позвонить: {callModalClient.phone || '—'}
+      </a>
+
+      {/* Результат звонка */}
+      <div style={{ marginBottom: '16px' }}>
+        <div style={{ color: '#94A3B8', marginBottom: '10px', fontSize: '14px', fontWeight: '600' }}>
+          Результат звонка:
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {(['positive', 'neutral', 'negative'] as const).map((r) => (
+            <button
+              key={r}
+              onClick={() => setCallResult(r)}
+              style={{
+                flex: 1,
+                padding: '10px 6px',
+                border: '2px solid',
+                borderColor: callResult === r
+                  ? (r === 'positive' ? '#10B981' : r === 'negative' ? '#EF4444' : '#F59E0B')
+                  : 'transparent',
+                borderRadius: '10px',
+                cursor: 'pointer',
+                fontWeight: '600',
+                background: callResult === r
+                  ? (r === 'positive' ? '#10B98120' : r === 'negative' ? '#EF444420' : '#F59E0B20')
+                  : '#334155',
+                color: callResult === r
+                  ? (r === 'positive' ? '#10B981' : r === 'negative' ? '#EF4444' : '#F59E0B')
+                  : '#94A3B8',
+                fontSize: '13px',
+                transition: 'all 0.15s',
+              }}
+            >
+              {r === 'positive' ? '✅ Положительный' : r === 'negative' ? '❌ Отрицательный' : '⚪ Нейтральный'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Комментарий */}
+      <textarea
+        value={callComment}
+        onChange={(e) => setCallComment(e.target.value)}
+        placeholder="Комментарий к звонку (необязательно)..."
+        style={{
+          width: '100%',
+          padding: '12px 14px',
+          background: '#334155',
+          border: 'none',
+          borderRadius: '10px',
+          color: 'white',
+          fontSize: '15px',
+          resize: 'vertical',
+          minHeight: '80px',
+          boxSizing: 'border-box',
+          marginBottom: '16px',
+          outline: 'none',
+        }}
+      />
+
+      {/* Сохранить */}
+      <button
+        onClick={saveCallResult}
+        disabled={savingCall}
+        style={{
+          width: '100%',
+          padding: '14px',
+          background: savingCall ? '#334155' : '#3B82F6',
+          color: 'white',
+          border: 'none',
+          borderRadius: '12px',
+          fontSize: '16px',
+          fontWeight: '700',
+          cursor: savingCall ? 'not-allowed' : 'pointer',
+          transition: 'background 0.15s',
+        }}
+      >
+        {savingCall ? 'Сохранение...' : '💾 Сохранить результат'}
+      </button>
+    </div>
+  </div>
+)}
 
     </div>
   );

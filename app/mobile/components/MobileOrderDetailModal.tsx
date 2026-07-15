@@ -1,7 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type CSSProperties } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+
+const fieldStyle: CSSProperties = {
+  width: '100%',
+  padding: '14px',
+  background: '#1E2937',
+  border: 'none',
+  borderRadius: '12px',
+  color: '#fff',
+  fontSize: '16px',
+  boxSizing: 'border-box',
+};
 
 interface MobileOrderDetailModalProps {
   isOpen: boolean;
@@ -264,7 +275,7 @@ ${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}
                 <input 
                   value={editedOrder.organization_name || editedOrder.full_name || ''} 
                   onChange={(e) => setEditedOrder({ ...editedOrder, organization_name: e.target.value })}
-                  style={{ width: '94%', padding: '14px', background: '#1E2937', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '16px' }}
+                  style={fieldStyle}
                 />
               </div>
 
@@ -273,7 +284,7 @@ ${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}
                 <input 
                   value={editedOrder.phone || ''} 
                   onChange={(e) => setEditedOrder({ ...editedOrder, phone: e.target.value })}
-                  style={{ width: '94%', padding: '14px', background: '#1E2937', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '16px' }}
+                  style={fieldStyle}
                 />
               </div>
 
@@ -282,7 +293,7 @@ ${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}
                 <input 
                   value={editedOrder.grade || ''} 
                   onChange={(e) => setEditedOrder({ ...editedOrder, grade: e.target.value })}
-                  style={{ width: '94%', padding: '14px', background: '#1E2937', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '16px' }}
+                  style={fieldStyle}
                 />
               </div>
 
@@ -293,7 +304,7 @@ ${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}
                     type="number" step="0.01"
                     value={editedOrder.volume || ''} 
                     onChange={(e) => setEditedOrder({ ...editedOrder, volume: e.target.value })}
-                    style={{ width: '85%', padding: '14px', background: '#1E2937', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '16px' }}
+                    style={fieldStyle}
                   />
                 </div>
                 <div>
@@ -302,7 +313,7 @@ ${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}
                     type="time"
                     value={editedOrder.delivery_time || ''} 
                     onChange={(e) => setEditedOrder({ ...editedOrder, delivery_time: e.target.value })}
-                    style={{ width: '86%', padding: '14px', background: '#1E2937', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '16px' }}
+                    style={fieldStyle}
                   />
                 </div>
               </div>
@@ -313,7 +324,7 @@ ${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}
                   type="date"
                   value={editedOrder.delivery_date || ''} 
                   onChange={(e) => setEditedOrder({ ...editedOrder, delivery_date: e.target.value })}
-                  style={{ width: '93%', padding: '14px', background: '#1E2937', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '16px' }}
+                  style={fieldStyle}
                 />
               </div>
 
@@ -323,7 +334,7 @@ ${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}
                   value={editedOrder.address || ''} 
                   onChange={(e) => setEditedOrder({ ...editedOrder, address: e.target.value })}
                   rows={3}
-                  style={{ width: '87%', padding: '24px', background: '#1E2937', border: 'none', borderRadius: '12px', color: '#fff', resize: 'vertical' }}
+                  style={{ ...fieldStyle, padding: '14px', resize: 'vertical' }}
                 />
               </div>
 
@@ -334,12 +345,7 @@ ${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}
                   onChange={(e) => setEditedOrder({ ...editedOrder, comment: e.target.value })}
                   rows={5}
                   style={{ 
-                    width: '92%', 
-                    padding: '16px', 
-                    background: '#1E2937', 
-                    border: 'none', 
-                    borderRadius: '12px', 
-                    color: '#fff',
+                    ...fieldStyle,
                     fontSize: '15.5px',
                     lineHeight: 1.5 
                   }}

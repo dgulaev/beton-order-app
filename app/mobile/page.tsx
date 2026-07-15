@@ -570,6 +570,7 @@ useEffect(() => {
             style={{ 
               width: '94%', 
               maxWidth: '420px',
+              boxSizing: 'border-box',
               background: '#1E2937',
               borderRadius: '20px',
               padding: '20px 16px',

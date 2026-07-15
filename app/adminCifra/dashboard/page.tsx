@@ -5,6 +5,7 @@ import Calendar from '../Calendar';
 import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders, useRealtimeOrderMixers, formatOrderMixer } from '../../../hooks/useRealtimeOrders';
 import OrderDetailModal from '../components/OrderDetailModal';
+import NewOrderModal from '../components/NewOrderModal';
 import Image from 'next/image';
 
 export default function AdminCifraDashboard() {
@@ -18,7 +19,7 @@ export default function AdminCifraDashboard() {
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const MINUTES_PER_CUBIC_METER = 2;
+  const MINUTES_PER_CUBIC_METER = 1;
 
   // ==================== 2. СТАТУСЫ ЗАКАЗОВ (глобальная функция) ====================
   const getStatusConfig = (status: string) => {
@@ -43,8 +44,13 @@ export default function AdminCifraDashboard() {
  const [activeMixers, setActiveMixers] = useState<any[]>([]);
  const [currentHourPercent, setCurrentHourPercent] = useState(42);
  const [showCalendar, setShowCalendar] = useState(false);
+ // Быстрое создание заявки на конкретную дату (ПКМ / долгое нажатие на день в календаре)
+ const [showQuickNewOrder, setShowQuickNewOrder] = useState(false);
+ const [quickNewOrderDate, setQuickNewOrderDate] = useState<string | undefined>(undefined);
  const [history, setHistory] = useState<any[]>([]);
  const [currentUser, setCurrentUser] = useState<{ id: number; name?: string; role: string } | null>(null);
+ // road_time_min: Map orderId → минут в пути (кэш, заполняется фоново)
+ const [roadTimes, setRoadTimes] = useState<Record<string, number>>({});
 
  // ==================== СВОЙ ИНДИКАТОР СКРОЛЛА ТАЙМЛАЙНА (серый, полупрозрачный) ====================
  // Нативный скролл на macOS/Chrome — "overlay" и гаснет через секунду после остановки,
@@ -234,6 +240,47 @@ useEffect(() => {
     fetchAllOrders();
   }, []);
 
+    // ==================== 7b. ФОНОВЫЙ РАСЧЁТ ВРЕМЕНИ В ПУТИ ДЛЯ СЕГОДНЯШНИХ ЗАКАЗОВ ====================
+  useEffect(() => {
+    if (!allOrders.length) return;
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const todayActive = allOrders.filter(
+      (o: any) => o.delivery_date === todayStr && (o.status === 'new' || o.status === 'processing')
+    );
+
+    const calcMissing = async () => {
+      for (const order of todayActive) {
+        const orderId = String(order.id);
+        // Уже есть в state или уже записано в поле заказа — пропускаем
+        if (roadTimes[orderId] !== undefined) continue;
+        if ((order as any).road_time_min !== null && (order as any).road_time_min !== undefined) {
+          setRoadTimes(prev => ({ ...prev, [orderId]: (order as any).road_time_min }));
+          continue;
+        }
+        // Считаем через API (геокодирование + Хаверсин)
+        try {
+          const res = await fetch('/api/adminCifra/travel-time', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ orderId: order.id, address: (order as any).address || '' }),
+          });
+          if (res.ok) {
+            const { road_time_min } = await res.json();
+            if (typeof road_time_min === 'number') {
+              setRoadTimes(prev => ({ ...prev, [orderId]: road_time_min }));
+            }
+          }
+        } catch {
+          // Не критично — при ошибке используется fallback 30 мин
+        }
+      }
+    };
+
+    calcMissing();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allOrders]);
+
     // ==================== 8. ЗАГРУЗКА АКТИВНЫХ МИКСЕРОВ ====================
   useEffect(() => {
     const fetchActiveMixers = async () => {
@@ -346,23 +393,51 @@ useEffect(() => {
 const now = new Date();
 const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
+// Статусы миксеров, при которых бетон уже в движении — заявка исполняется
+const ACTIVE_MIXER_STATUSES = ['В пути', 'На объекте', 'Разгружен', 'Возврат'];
+
 const delayedOrders = todayOrders
+  // Выполненные и отменённые заказы не считаются задержанными
+  .filter((order: Order) => order.status === 'new' || order.status === 'processing')
+  .filter((order: Order) => {
+    const orderMixers = activeMixers.filter(
+      (m: any) => String(m.orderId) === String(order.id)
+    );
+    // Если хотя бы один миксер уже в пути/на объекте/разгружается/возвращается — не задержка
+    const hasMovingMixer = orderMixers.some((m: any) => ACTIVE_MIXER_STATUSES.includes(m.status));
+    if (hasMovingMixer) return false;
+
+    // Если весь объём уже назначен на миксеры (даже в статусе Загрузка) — процесс идёт
+    const assignedVol = orderMixers.reduce((sum: number, m: any) => sum + Number(m.volume || 0), 0);
+    const orderVol = Number(order.volume || 0);
+    if (orderVol > 0 && assignedVol >= orderVol) return false;
+
+    return true;
+  })
   .map((order: Order) => {
     const [h, m] = (order.delivery_time || '00:00').split(':').map(Number);
     const plannedStart = h * 60 + m;
     const volume = Number(order.volume || 0);
-    const duration = volume * MINUTES_PER_CUBIC_METER;
+    // Время загрузки: ~2 мин/м³ (≈20 мин на миксер 10 м³)
+    const loadingTime = volume * 2;
+    // Время в пути: из кэша road_time_min, иначе fallback 30 мин
+    const travelTime = roadTimes[String(order.id)] ?? (order as any).road_time_min ?? 30;
 
-    const expectedEnd = plannedStart + duration;
-    const delayMinutes = Math.max(0, currentMinutes - expectedEnd);
+    // Ожидаемое время отправки = delivery_time − время_в_пути − загрузка
+    // То есть: чтобы доставить в 09:00, нужно выехать в 08:30 (если ехать 30 мин),
+    // а значит начать грузить в 08:10 (если 10 м³ = 20 мин).
+    // Если сейчас ещё нет миксеров, а это время уже прошло — задержка.
+    const expectedDeparture = plannedStart - travelTime - loadingTime;
+    const delayMinutes = Math.round(Math.max(0, currentMinutes - expectedDeparture));
 
     return { 
       ...order, 
       delayMinutes,
+      travelTime,
       delayText: delayMinutes > 0 ? `+${delayMinutes} мин` : '' 
     };
   })
-  .filter(order => order.delayMinutes > 15) // задержка больше 15 минут
+  .filter(order => order.delayMinutes > 15)
   .sort((a, b) => b.delayMinutes - a.delayMinutes);
 
   // ==================== 11. МИКСЕРЫ ЗА ДЕНЬ =========================================
@@ -464,11 +539,13 @@ useEffect(() => {
     if (userId && userRole) {
       setCurrentUser({
         id: userId,
-        name: 'Администратор',     // потом можно взять из профиля
+        // Реальное имя сотрудника (из профиля, см. 14.1), а не заглушка по роли —
+        // иначе в истории изменений заявки все действия подписывались "Администратор".
+        name: userFullName || undefined,
         role: userRole
       });
     }
-  }, [userId, userRole]);
+  }, [userId, userRole, userFullName]);
 
 // ==================== 15. ЗАГРУЗКА МИКСЕРОВ ====================
   useEffect(() => {
@@ -891,175 +968,160 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
 </div>
 
        {/* ==================== 34. KPI — РЕАЛЬНЫЕ ДАННЫЕ ==================== */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-5 pb-2">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pb-2">
           
-       {/* ==================== 35. ЗАЯВКИ СЕГОДНЯ (точно как Миксеры) ==================== */}
+       {/* ==================== 35. ЗАЯВКИ СЕГОДНЯ ==================== */}
 <div style={{ 
   background: '#25334A', 
-  borderRadius: '20px', 
-  padding: '20px', 
+  borderRadius: '18px', 
+  padding: '16px 20px', 
   flex: 1 
 }}>
-  <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px' }}>
+  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
     Заявки сегодня
   </div>
 
-  {/* Большое число */}
-  <div style={{ 
-    fontSize: '48px', 
-    fontWeight: '700', 
-    color: '#60A5FA',
-    marginBottom: '4px'
-  }}>
-    {totalToday}
-  </div>
-
-  {/* Дата */}
-  <div style={{ 
-    color: '#64748B', 
-    fontSize: '15px', 
-    marginBottom: '12px' 
-  }}>
-    {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}
-  </div>
-
-  {/* Статусы в одну строку */}
-  <div style={{ 
-    display: 'flex', 
-    justifyContent: 'space-between', 
-    fontSize: '13.5px',
-    marginBottom: '12px'
-  }}>
-    <div>
-      <span style={{ color: '#FACC15' }}>🟡</span> Новые: <strong>{todayOrders.filter(o => o.status === 'new').length}</strong>
+  <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '4px' }}>
+    <div style={{ fontSize: '52px', fontWeight: '700', color: '#60A5FA', lineHeight: 1 }}>
+      {totalToday}
     </div>
-    <div>
-      <span style={{ color: '#3B82F6' }}>→</span> В работе: <strong>{todayOrders.filter(o => o.status === 'processing').length}</strong>
-    </div>
-    <div>
-      <span style={{ color: '#10B981' }}>✓</span> Выполнены: <strong>{completedOrders}</strong>
+    <div style={{ color: '#64748B', fontSize: '13px' }}>
+      {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
     </div>
   </div>
 
-  {/* Разделитель */}
-  <div style={{ height: '1px', background: '#334155', margin: '0 -8px 10px' }} />
+  <div style={{ height: '1px', background: '#334155', margin: '10px 0' }} />
 
-  {/* Отменённые — уменьшенный значок */}
-  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-      <span style={{ 
-        color: '#EF4444', 
-        fontSize: '13px',     // ← уменьшили значок
-        lineHeight: '1' 
-      }}>❌</span>
-      <span style={{ color: '#EF4444', fontSize: '15px' }}>Отменены</span>
+  {/* Статусы */}
+  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '13px' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+      <span style={{ color: '#94A3B8' }}>🟡 Новые</span>
+      <strong style={{ color: '#FACC15' }}>{todayOrders.filter(o => o.status === 'new').length}</strong>
     </div>
-    <strong style={{ color: '#EF4444', fontSize: '17px' }}>
-      {todayOrders.filter(o => o.status === 'cancelled').length}
-    </strong>
+    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+      <span style={{ color: '#94A3B8' }}>→ В работе</span>
+      <strong style={{ color: '#60A5FA' }}>{todayOrders.filter(o => o.status === 'processing').length}</strong>
+    </div>
+    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+      <span style={{ color: '#94A3B8' }}>✓ Выполнены</span>
+      <strong style={{ color: '#10B981' }}>{completedOrders}</strong>
+    </div>
+    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+      <span style={{ color: '#94A3B8' }}>❌ Отменены</span>
+      <strong style={{ color: '#EF4444' }}>{todayOrders.filter(o => o.status === 'cancelled').length}</strong>
+    </div>
   </div>
 </div>
 
   {/* ==================== 36. ВЫПОЛНЕНИЕ ПЛАНА ==================== */}
 <div style={{ 
   background: '#25334A', 
-  borderRadius: '20px', 
-  padding: '24px', 
+  borderRadius: '18px', 
+  padding: '16px 20px', 
   flex: 1 
 }}>
-  <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
+  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
     Выполнение плана
   </div>
-  
-  <div style={{ fontSize: '42px', fontWeight: '700', marginBottom: '4px' }}>
-    {Math.round(completedVolume)} <span style={{ fontSize: '28px', color: '#64748B' }}>/ {Math.round(planToday)}</span> м³
+
+  <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginBottom: '2px', flexWrap: 'wrap' }}>
+    <span style={{ fontSize: '48px', fontWeight: '700', lineHeight: 1 }}>
+      {Math.round(completedVolume)}
+    </span>
+    <span style={{ fontSize: '22px', color: '#64748B' }}>/ {Math.round(planToday)} м³</span>
   </div>
 
-  <div style={{ 
-    fontSize: '17px', 
-    fontWeight: '600',
-    color: completionPercent >= 90 ? '#10B981' : 
-           completionPercent >= 70 ? '#FACC15' : '#EF4444'
-  }}>
-    {completionPercent}% от плана
-  </div>
+  <div style={{ height: '1px', background: '#334155', margin: '10px 0' }} />
 
-  <div style={{ color: '#64748B', fontSize: '14px', marginTop: '6px' }}>
-    {completedOrders} из {totalToday} заявок
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div style={{ 
+      fontSize: '26px', 
+      fontWeight: '700',
+      color: completionPercent >= 90 ? '#10B981' : 
+             completionPercent >= 70 ? '#FACC15' : '#EF4444'
+    }}>
+      {completionPercent}%
+    </div>
+    <div style={{ color: '#64748B', fontSize: '13px', textAlign: 'right' }}>
+      {completedOrders} из {totalToday}<br/>заявок
+    </div>
   </div>
 </div>
 
-   {/* ==================== 37.  ЗАДЕРЖКИ ОТГРУЗОК ==================== */}
+   {/* ==================== 37. ЗАДЕРЖКИ ОТГРУЗОК ==================== */}
+{/* Логика: заявки new/processing, у которых НЕТ миксеров в движении (В пути/На объекте/
+    Разгружен/Возврат) и НЕ покрыт весь объём назначенными миксерами, при этом
+    прошло > 15 мин от (delivery_time + время загрузки 2мин×м³). */}
 <div style={{ 
   background: '#25334A', 
-  borderRadius: '20px', 
-  padding: '24px', 
-  minHeight: '180px',           
-  height: 'fit-content',        
+  borderRadius: '18px', 
+  padding: '16px 20px', 
   display: 'flex',
   flexDirection: 'column'
 }}>
-  <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '12px' }}>
+  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
     Задержки отгрузок
   </div>
 
   {delayedOrders.length > 0 ? (
     <>
-      <div style={{ 
-        fontSize: '48px', 
-        fontWeight: '700', 
-        color: '#EF4444',
-        marginBottom: '8px'
-      }}>
-        {delayedOrders.length}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '2px' }}>
+        <span style={{ fontSize: '52px', fontWeight: '700', color: '#EF4444', lineHeight: 1 }}>
+          {delayedOrders.length}
+        </span>
+        <span style={{ color: '#F87171', fontSize: '13px' }}>
+          {delayedOrders.length === 1 ? 'заявка' : delayedOrders.length <= 4 ? 'заявки' : 'заявок'}
+        </span>
       </div>
 
-      <div style={{ color: '#F87171', fontSize: '15px', marginBottom: '16px' }}>
-        отгрузка(и) задерживается
-      </div>
+      <div style={{ height: '1px', background: '#334155', margin: '10px 0' }} />
 
-      {/* Скроллируемая область списка */}
-      <div style={{ 
-        flex: 1, 
-        overflowY: 'auto', 
-        maxHeight: '52px',           
-        marginTop: '8px',
-        paddingRight: '8px'
-      }}>
-        {delayedOrders.slice(0, 6).map((order, index) => (
+      {/* Список задержанных — компактный */}
+      <div className="scroll-hidden" style={{ overflowY: 'auto', maxHeight: '80px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {delayedOrders.slice(0, 5).map((order, index) => (
           <div key={index} style={{ 
             display: 'flex', 
             justifyContent: 'space-between', 
             alignItems: 'center',
-            padding: '8px 0',
-            borderBottom: index < delayedOrders.length - 1 ? '1px solid #334155' : 'none'
+            fontSize: '12.5px',
           }}>
-            <div style={{ fontSize: '14px' }}>
-              #{order.id} • {order.delivery_time}
-            </div>
-            <div style={{ 
-              color: '#EF4444', 
+            <span style={{ color: '#CBD5E1', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              #{order.id} · {order.delivery_time}
+              {(order as any).travelTime ? (
+                <span style={{ color: '#475569', marginLeft: '4px', fontWeight: '400' }}>
+                  ~{(order as any).travelTime}м пути
+                </span>
+              ) : null}
+            </span>
+            <span style={{ 
+              color: order.delayMinutes > 60 ? '#F87171' : '#FCA5A5', 
               fontWeight: '600',
-              fontSize: '15px'
+              flexShrink: 0,
+              marginLeft: '6px',
             }}>
-              +{order.delayMinutes} мин
-            </div>
+              +{order.delayMinutes >= 60 
+                ? `${Math.floor(order.delayMinutes/60)}ч ${order.delayMinutes%60}м`
+                : `${order.delayMinutes} мин`}
+            </span>
           </div>
         ))}
+        {delayedOrders.length > 5 && (
+          <div style={{ color: '#64748B', fontSize: '11px', textAlign: 'right' }}>
+            ещё {delayedOrders.length - 5}...
+          </div>
+        )}
       </div>
     </>
   ) : (
     <div style={{ 
-      flex: 1,
+      paddingTop: '8px',
       display: 'flex',
-      flexDirection: 'column',
       alignItems: 'center',
-      justifyContent: 'center',
+      gap: '10px',
       color: '#10B981',
-      textAlign: 'center'
     }}>
-      <div style={{ fontSize: '48px', marginBottom: '12px' }}>✓</div>
-      <div style={{ fontSize: '17px' }}>Все отгрузки по графику</div>
+      <span style={{ fontSize: '28px' }}>✓</span>
+      <span style={{ fontSize: '14px', fontWeight: '500' }}>Все по графику</span>
     </div>
   )}
 </div>
@@ -1069,66 +1131,42 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
   onClick={() => window.location.href = '/adminCifra/mixers'}
   style={{ 
     background: '#1E2937', 
-    borderRadius: '20px', 
-    padding: '24px', 
+    borderRadius: '18px', 
+    padding: '16px 20px', 
     cursor: 'pointer',
-    transition: 'all 0.2s'
+    transition: 'background 0.2s'
   }}
   onMouseEnter={e => e.currentTarget.style.background = '#25334A'}
   onMouseLeave={e => e.currentTarget.style.background = '#1E2937'}
 >
-  <div style={{ color: '#94A3B8', fontSize: '14px' }}>Миксеры в работе</div>
+  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Миксеры в работе</div>
   
-  <div style={{ fontSize: '42px', fontWeight: '700', color: '#3B82F6', marginTop: '8px' }}>
-    {activeMixersToday.length}
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '2px' }}>
+    <span style={{ fontSize: '52px', fontWeight: '700', color: '#60A5FA', lineHeight: 1 }}>
+      {activeMixersToday.length}
+    </span>
+    <span style={{ fontSize: '13px', color: '#64748B' }}>
+      {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
+    </span>
   </div>
 
-  <div style={{ fontSize: '13px', color: '#64748B', marginTop: '4px' }}>
-    {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
-  </div>
+  <div style={{ height: '1px', background: '#334155', margin: '10px 0' }} />
 
-  {/* Статусы в одну строку */}
-  <div style={{ 
-    marginTop: '16px', 
-    display: 'flex', 
-    gap: '20px', 
-    fontSize: '13.5px',
-    flexWrap: 'wrap'
-  }}>
-    <div>Загрузка: <strong style={{ color: '#FACC15' }}>{activeMixersToday.filter(m => m.status === 'Загрузка').length}</strong></div>
-    <div>В пути: <strong style={{ color: '#3B82F6' }}>{activeMixersToday.filter(m => m.status === 'В пути').length}</strong></div>
-    <div>На объекте: <strong style={{ color: '#10B981' }}>{activeMixersToday.filter(m => m.status === 'На объекте').length}</strong></div>
+  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '13px' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+      <span style={{ color: '#94A3B8' }}>🟡 Загрузка</span>
+      <strong style={{ color: '#FACC15' }}>{activeMixersToday.filter(m => m.status === 'Загрузка').length}</strong>
+    </div>
+    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+      <span style={{ color: '#94A3B8' }}>→ В пути</span>
+      <strong style={{ color: '#60A5FA' }}>{activeMixersToday.filter(m => m.status === 'В пути').length}</strong>
+    </div>
+    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+      <span style={{ color: '#94A3B8' }}>📍 На объекте</span>
+      <strong style={{ color: '#10B981' }}>{activeMixersToday.filter(m => m.status === 'На объекте').length}</strong>
+    </div>
   </div>
-
-  {/* Свои / Наёмные — максимально надёжный поиск */}
-  <div style={{ 
-    marginTop: '12px', 
-    paddingTop: '10px', 
-    borderTop: '1px solid #334155',
-    fontSize: '13.5px'
-  }}>
-    Свои: <strong style={{ color: '#10B981' }}>
-      {activeMixersToday.filter(m => 
-        m.type === 'own' || 
-        m.type === 'Own' || 
-        m.is_own === true ||
-        m.mixer_type === 'own' ||
-        String(m.number || '').startsWith('К') ||   // временно, если свои начинаются с К
-        m.driver?.includes('Свой') 
-      ).length}
-    </strong> | 
-    Наёмные: <strong style={{ color: '#FACC15' }}>
-      {activeMixersToday.filter(m => 
-        m.type === 'rented' || 
-        m.type === 'Rented' || 
-        m.is_rented === true ||
-        m.mixer_type === 'rented' ||
-        String(m.number || '').startsWith('О')
-      ).length}
-    </strong>
-  </div>
-</div>
-      </div>
+</div>      </div>
       {/* ==================== 38. ТАЙМЛАЙН (УЛУЧШЕННЫЙ — В СТИЛЕ ЦИФРА.AI) ==================== */}
        <div style={{ 
             flex: 1, 
@@ -1176,16 +1214,18 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
           return d;
         })}
         style={{
-          padding: '8px 18px',
-          background: '#334155',
-          color: '#fff',
+          padding: '6px 16px',
+          background: 'transparent',
+          color: '#94A3B8',
           border: 'none',
           borderRadius: '9999px',
           fontSize: '14px',
           cursor: 'pointer',
           whiteSpace: 'nowrap',
-          transition: 'all 0.2s'
+          transition: 'color 0.2s',
         }}
+        onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
+        onMouseLeave={e => (e.currentTarget.style.color = '#94A3B8')}
       >
         ← Пред. день
       </button>
@@ -1193,17 +1233,19 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
       <button 
         onClick={() => setSelectedDate(new Date())}
         style={{
-          padding: '8px 22px',
-          background: '#3B82F6',
-          color: '#fff',
+          padding: '6px 16px',
+          background: 'transparent',
+          color: '#4ADE80',
           border: 'none',
           borderRadius: '9999px',
           fontSize: '14px',
           fontWeight: '600',
           cursor: 'pointer',
           whiteSpace: 'nowrap',
-          boxShadow: '0 0 0 3px rgba(59, 130, 246, 0.3)'
+          transition: 'color 0.2s',
         }}
+        onMouseEnter={e => (e.currentTarget.style.color = '#86EFAC')}
+        onMouseLeave={e => (e.currentTarget.style.color = '#4ADE80')}
       >
         Сегодня
       </button>
@@ -1215,73 +1257,124 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
           return d;
         })}
         style={{
-          padding: '8px 18px',
-          background: '#334155',
-          color: '#fff',
+          padding: '6px 16px',
+          background: 'transparent',
+          color: '#94A3B8',
           border: 'none',
           borderRadius: '9999px',
           fontSize: '14px',
           cursor: 'pointer',
           whiteSpace: 'nowrap',
-          transition: 'all 0.2s'
+          transition: 'color 0.2s',
         }}
+        onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
+        onMouseLeave={e => (e.currentTarget.style.color = '#94A3B8')}
       >
         След. день →
       </button>
     </div>
   </div>
 
-  {/* ==================== 39. УЛУЧШЕННАЯ ШКАЛА ВРЕМЕНИ ==================== */}
-<div style={{ marginBottom: '16px', position: 'relative' }}>
-  
-  {/* Основные метки (каждый час) */}
-  <div style={{ 
-    display: 'flex', 
-    justifyContent: 'space-between', 
-    fontSize: '12.5px', 
-    color: '#94A3B8', 
-    padding: '0 8px',
-    userSelect: 'none',
-    marginBottom: '4px'
-  }}>
-    {Array.from({ length: 25 }, (_, i) => (
-      <div 
-        key={i} 
-        style={{ 
-          textAlign: 'center', 
-          width: '32px',
-          fontWeight: i % 4 === 0 ? '600' : '400',
-          color: i % 4 === 0 ? '#CBD5E1' : '#64748B'
-        }}
-      >
-        {String(i).padStart(2, '0')}:00
-      </div>
-    ))}
-  </div>
+  {/* ==================== 39. ТОЧНАЯ ШКАЛА ВРЕМЕНИ ====================
+      paddingRight: 20px совпадает с контейнером заказов.
+      left: (i/24)*100% = точное совпадение с leftPercent плашек. */}
+<div style={{ marginBottom: '10px', paddingRight: '20px', userSelect: 'none' }}>
+  <div style={{ display: 'contents' }}>
+    <div style={{ position: 'relative', height: '42px' }}>
 
-  {/* Основная линия + деления */}
-  <div style={{ 
-    height: '6px', 
-    background: '#334155', 
-    position: 'relative', 
-    borderRadius: '4px',
-    margin: '0 8px'
-  }}>
-    {/* Тонкие линии каждые 30 минут */}
-    {Array.from({ length: 48 }, (_, i) => (
-      <div 
-        key={i} 
-        style={{
-          position: 'absolute',
-          left: `${i * 2.083}%`,
-          top: '-1px',
-          width: i % 2 === 0 ? '2px' : '1px',
-          height: i % 2 === 0 ? '10px' : '6px',
-          background: i % 2 === 0 ? '#475569' : '#334155',
-          transform: 'translateX(-50%)'
-        }} 
-      />
-    ))}
+      {/* Базовая линия шкалы */}
+      <div style={{
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: '2px',
+        background: '#2D3F55',
+        borderRadius: '1px',
+      }} />
+
+      {/* Зелёная точка — текущее время */}
+      <div style={{
+        position: 'absolute',
+        bottom: '-3px',
+        left: `${currentHourPercent}%`,
+        width: '8px',
+        height: '8px',
+        background: '#4ADE80',
+        borderRadius: '50%',
+        transform: 'translateX(-50%)',
+        boxShadow: '0 0 8px rgba(74,222,128,0.9)',
+        zIndex: 5,
+      }} />
+
+      {/* Деления и подписи 0..24 */}
+      {Array.from({ length: 25 }, (_, i) => {
+        const isMajor = i % 6 === 0;                      // 0 6 12 18 24
+        const isMedium = i % 3 === 0 && !isMajor;         // 3 9 15 21
+        const isMinor = !isMajor && !isMedium;             // каждый час
+        const pct = `${(i / 24) * 100}%`;
+        return (
+          <div key={i} style={{ position: 'absolute', left: pct, bottom: 0, transform: 'translateX(-50%)' }}>
+            {/* Засечка */}
+            <div style={{
+              position: 'absolute',
+              bottom: '2px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: isMajor ? '2px' : '1px',
+              height: isMajor ? '16px' : isMedium ? '10px' : '5px',
+              background: isMajor ? '#64748B' : isMedium ? '#4A6080' : '#3D5268',
+            }} />
+            {/* Подпись */}
+            {isMajor && (
+              <div style={{
+                position: 'absolute',
+                bottom: '20px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                fontSize: '12px',
+                fontWeight: '700',
+                color: '#94A3B8',
+                whiteSpace: 'nowrap',
+                lineHeight: 1,
+              }}>
+                {String(i).padStart(2, '0')}:00
+              </div>
+            )}
+            {isMedium && (
+              <div style={{
+                position: 'absolute',
+                bottom: '13px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                fontSize: '10.5px',
+                fontWeight: '600',
+                color: '#56708A',
+                whiteSpace: 'nowrap',
+                lineHeight: 1,
+              }}>
+                {String(i).padStart(2, '0')}
+              </div>
+            )}
+            {isMinor && i < 24 && (
+              <div style={{
+                position: 'absolute',
+                bottom: '9px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                fontSize: '9.5px',
+                fontWeight: '500',
+                color: '#3E5470',
+                whiteSpace: 'nowrap',
+                lineHeight: 1,
+              }}>
+                {String(i).padStart(2, '0')}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   </div>
 </div>
 
@@ -1297,7 +1390,7 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
       overflowX: 'auto',
       overflowY: 'auto',
       paddingRight: '20px',
-      paddingBottom: '8px',
+      paddingBottom: '36px', // запас для плашки текущего времени внизу
     }}
   >
     {todayOrders.length > 0 ? todayOrders.map((order: Order) => {
@@ -1314,15 +1407,25 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
   const endMinutes = startMinutes + durationMinutes;
 
   const leftPercent = (startMinutes / 1440) * 100;
-  let widthPercent = (durationMinutes / 1440) * 100;
+  // Логарифмическое сжатие длины плашки: для малых объёмов полоса не исчезает,
+  // для больших не «съедает» весь таймлайн. log(1+x)/log(1+maxX) × maxWidth.
+  // Минимальная ширина 5% = ~72 мин экранных = всегда читаемый статус.
+  const MAX_DURATION = 240; // минут — «насыщение» шкалы при ~120 м³
+  const logWidth = (Math.log(1 + Math.min(durationMinutes, MAX_DURATION)) / Math.log(1 + MAX_DURATION)) * 30;
+  let widthPercent = Math.max(logWidth, 5); // минимум 5% (~72px на Full HD) чтобы влезал текст
   let isOverflow = false;
   let overflowMinutes = 0;
 
   if (endMinutes > 1440) {
-    widthPercent = ((1440 - startMinutes) / 1440) * 100;
+    const linearW = ((1440 - startMinutes) / 1440) * 100;
+    widthPercent = Math.max(linearW, 5);
     isOverflow = true;
     overflowMinutes = Math.round(endMinutes - 1440);
   }
+
+  const overflowLabel = overflowMinutes >= 60
+    ? `+${Math.floor(overflowMinutes / 60)}ч ${overflowMinutes % 60 > 0 ? `${overflowMinutes % 60}м` : ''} завтра`
+    : `+${overflowMinutes}м завтра`;
 
   // ==================== 40. ДИНАМИЧЕСКИЙ ПЛАН НА ДЕНЬ ====================
 const planToday = todayOrders.reduce((sum, o) => sum + Number(o.volume || 0), 0);
@@ -1407,6 +1510,14 @@ const generateDailyReport = () => {
 };
 
 
+  {/* Плашка перекрывает текст если leftPercent мал (ранние заказы).
+      Порог ~33% ≈ 08:00. Ниже — полупрозрачная плашка, текст просвечивает.
+      Чем раньше заказ, тем прозрачнее: от 0.35 (00:00) до 0.88 (порог). */}
+  const pillAlpha = leftPercent < 33
+    ? Math.round((0.35 + (leftPercent / 33) * 0.53) * 255).toString(16).padStart(2, '0')
+    : 'CC';
+  const pillShadowAlpha = leftPercent < 33 ? '22' : '55';
+
   return (
     <div 
       key={order.id} 
@@ -1414,96 +1525,82 @@ const generateDailyReport = () => {
       style={{
         display: 'flex',
         alignItems: 'center',
-        marginBottom: '8px',
+        marginBottom: '7px',
         background: '#25334A',
         borderRadius: '10px',
-        padding: '8px 16px',
+        padding: '7px 14px',
         position: 'relative',
-        minHeight: '46px',
+        minHeight: '44px',
         cursor: 'pointer',
-        transition: 'all 0.2s'
+        transition: 'background 0.15s',
       }}
       onMouseEnter={e => e.currentTarget.style.background = '#2A3A52'}
       onMouseLeave={e => e.currentTarget.style.background = '#25334A'}
     >
-   {/* ==================== 44. МЕТКА ЛОГИСТИКИ ==================== */}
-<div style={{
-    width: '20px',
-    height: '20px',
-    minWidth: '20px',
-    borderRadius: '9999px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: '13px',
-    marginRight: '14px',
-    flexShrink: 0,
-    background: isLogisticsReady 
-      ? '#10B98120' 
-      : (assignedVolume > 0 ? '#F59E0B20' : '#47556920'),
-    color: isLogisticsReady 
-      ? '#10B981' 
-      : (assignedVolume > 0 ? '#F59E0B' : '#E2E8F0'),
-    border: `2px solid ${isLogisticsReady 
-      ? '#10B981' 
-      : (assignedVolume > 0 ? '#F59E0B' : '#64748B')}`
-  }}>
-    {isLogisticsReady || assignedVolume === 0 ? '✓' : '⚠️'}
-  </div>
+      {/* Метка логистики */}
+      <div style={{
+        width: '20px', height: '20px', minWidth: '20px',
+        borderRadius: '9999px', display: 'flex', alignItems: 'center',
+        justifyContent: 'center', fontSize: '13px', marginRight: '14px', flexShrink: 0,
+        background: isLogisticsReady ? '#10B98120' : (assignedVolume > 0 ? '#F59E0B20' : '#47556920'),
+        color: isLogisticsReady ? '#10B981' : (assignedVolume > 0 ? '#F59E0B' : '#E2E8F0'),
+        border: `2px solid ${isLogisticsReady ? '#10B981' : (assignedVolume > 0 ? '#F59E0B' : '#64748B')}`,
+        zIndex: 15,
+      }}>
+        {isLogisticsReady || assignedVolume === 0 ? '✓' : '⚠️'}
+      </div>
 
       {/* Время */}
-      <div style={{ width: '100px', fontWeight: '600', color: '#E2E8F0', fontSize: '15px' }}>
+      <div style={{ width: '100px', fontWeight: '600', color: '#E2E8F0', fontSize: '15px', flexShrink: 0, zIndex: 15 }}>
         {time}
       </div>
-      
-      {/* Информация */}
-      <div style={{ flex: 1, lineHeight: '1.25' }}>
-        <div style={{ fontWeight: '600', color: '#F1F5F9' }}>
+
+      {/* Информация (z-index выше плашки — текст всегда читаем) */}
+      <div style={{ flex: 1, lineHeight: '1.25', zIndex: 15, minWidth: 0 }}>
+        <div style={{ fontWeight: '600', color: '#F1F5F9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           #{order.id} — {client}
         </div>
         <div style={{ color: '#94A3B8', fontSize: '13px' }}>
           {order.grade} • {volume} м³
           {isOverflow && (
-            <span style={{ color: '#FACC15', marginLeft: '6px' }}>
-              +{overflowMinutes} мин завтра
-            </span>
+            <span style={{ color: '#FACC15', marginLeft: '6px', fontWeight: '600' }}>{overflowLabel}</span>
           )}
         </div>
       </div>
 
-      {/* Полоса заказа */}
+      {/* Плашка заказа — автопрозрачность при наезде на текст */}
       <div style={{
         position: 'absolute',
         left: `${leftPercent}%`,
         width: `${widthPercent}%`,
-        height: '32px',
-        background: statusColor,
-        borderRadius: '9999px',
+        height: '28px',
+        background: `${statusColor}${pillAlpha}`,
+        borderRadius: isOverflow ? '9999px 4px 4px 9999px' : '9999px',
         display: 'flex',
         alignItems: 'center',
-        paddingLeft: '14px',
+        paddingLeft: '12px',
+        paddingRight: '6px',
         color: '#fff',
         fontWeight: '600',
-        fontSize: '13px',
+        fontSize: '12px',
         overflow: 'hidden',
         whiteSpace: 'nowrap',
-        boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
-        zIndex: 10
+        boxShadow: `0 0 10px ${statusColor}${pillShadowAlpha}, 0 2px 6px rgba(0,0,0,0.25)`,
+        zIndex: 10,
+        minWidth: '90px',
+        transition: 'background 0.3s',
+        ...(isOverflow ? {
+          backgroundImage: `linear-gradient(to right, ${statusColor}${pillAlpha}, ${statusColor}${pillAlpha} 70%, rgba(0,0,0,0))`,
+        } : {}),
       }}>
-
         {statusText}
-
         {isOverflow && (
-          <span style={{ 
-            marginLeft: 'auto', 
-            marginRight: '10px', 
-            background: 'rgba(0,0,0,0.35)',
-            padding: '2px 8px',
-            borderRadius: '9999px',
-            fontSize: '12px'
-          }}>
-            → завтра
-          </span>
+          <span style={{
+            marginLeft: 'auto', marginRight: '6px', flexShrink: 0,
+            color: '#FDE68A',
+            fontSize: '11px', fontWeight: '700',
+            letterSpacing: '0.02em',
+          }}>→→</span>
         )}
       </div>
     </div>
@@ -1531,33 +1628,36 @@ const generateDailyReport = () => {
       pointerEvents: 'none',
       zIndex: 50,
     }}>
+      {/* Линия не доходит до плашки — bottom: 32px оставляет место для badge */}
       <div style={{
         position: 'absolute',
         left: `${currentHourPercent}%`,
         top: 0,
-        bottom: 0,
-        width: '3px',
-        background: 'linear-gradient(180deg, #3B82F6, #60A5FA)',
-        boxShadow: '0 0 12px #3B82F6',
+        bottom: '32px',
+        width: '2px',
+        background: 'linear-gradient(180deg, #4ADE80, #86EFAC)',
+        boxShadow: '0 0 10px rgba(74,222,128,0.7)',
         transform: 'translateX(-50%)',
       }} />
+      {/* Badge выведен ниже линии, не клипируется */}
       <div style={{
         position: 'absolute',
         left: `${currentHourPercent}%`,
-        bottom: '1px',
+        bottom: '4px',
         transform: 'translateX(-50%)',
-        background: '#1E40AF',
-        color: 'white',
-        padding: '5px 14px',
+        background: 'rgba(74,222,128,0.18)',
+        color: '#4ADE80',
+        padding: '4px 12px',
         borderRadius: '9999px',
-        fontSize: '13.5px',
+        fontSize: '13px',
         fontWeight: '700',
         zIndex: 60,
-        boxShadow: '0 4px 12px rgba(59, 130, 246, 0.5)',
+        boxShadow: '0 0 14px rgba(74,222,128,0.45)',
         whiteSpace: 'nowrap',
-        border: '2px solid #60A5FA',
+        border: 'none',
         textAlign: 'center',
-        minWidth: '62px'
+        minWidth: '56px',
+        backdropFilter: 'blur(4px)',
       }}>
         {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
       </div>
@@ -1706,70 +1806,86 @@ const generateDailyReport = () => {
                  }}
                  style={{ 
                    background: '#1E2937', 
-                   padding: '6px 12px',
-                   borderRadius: '10px',
-                   marginBottom: '5px',
+                   padding: '4px 10px',
+                   borderRadius: '8px',
+                   marginBottom: '4px',
                    display: 'flex',
                    alignItems: 'center',
-                   gap: '12px',
-                   minHeight: '34px',
+                   gap: '8px',
+                   minHeight: '30px',
                    cursor: 'grab',
-                   userSelect: 'none'
+                   userSelect: 'none',
                  }}
                >
                  {/* Порядковый номер */}
                  <div style={{
-                   width: '24px',
-                   height: '24px',
+                   width: '20px',
+                   height: '20px',
                    background: '#334155',
                    borderRadius: '9999px',
                    display: 'flex',
                    alignItems: 'center',
                    justifyContent: 'center',
-                   fontWeight: '700',
+                   fontWeight: '600',
                    color: '#94A3B8',
-                   fontSize: '13px',
+                   fontSize: '11px',
                    flexShrink: 0
                  }}>
                    {index + 1}
                  </div>
 
                  {/* Номер миксера */}
-                 <div style={{ fontWeight: '700', fontSize: '14.5px', minWidth: '120px' }}>
+                 <div style={{ fontWeight: '700', fontSize: '13px', minWidth: '100px', whiteSpace: 'nowrap' }}>
                    {mixer.number || mixer.mixer_name}
                  </div>
 
-                 {/* ==================== 46. ВРЕМЯ + ОБЪЁМ (в одну строку справа) ==================== */}
+                 {/* ==================== 46. ВРЕМЯ + ОБЪЁМ (в одну строку, nowrap) ==================== */}
                  <div style={{ 
                    color: '#94A3B8', 
-                   fontSize: '13px',
+                   fontSize: '12.5px',
                    flex: 1,
-                   textAlign: 'left'
+                   whiteSpace: 'nowrap',
+                   overflow: 'hidden',
+                   textOverflow: 'ellipsis',
                  }}>
                    {mixer.time && mixer.time !== '—' ? mixer.time : '—'} • {mixer.volume} м³
                  </div>
 
-                 {/* Статус */}
-                 <select 
-                   value={mixer.status || 'Загрузка'}
-                   onChange={(e) => handleStatusChange(mixer.id, e.target.value)}
-                   style={{
-                     padding: '4px 8px',
-                     borderRadius: '9999px',
-                     background: '#0F172A',
-                     color: 'white',
-                     border: 'none',
-                     fontSize: '13px',
-                     minWidth: '125px'
-                   }}
-                 >
-                   <option value="Загрузка">🟡 Загрузка</option>
-                   <option value="В пути">🔵 В пути</option>
-                   <option value="На объекте">📍 На объекте</option>
-                   <option value="Разгружен">🟢 Разгружен</option>
-                   <option value="Возврат">↩️ Возврат</option>
-                   <option value="Проблема">🔴 Проблема</option>
-                 </select>
+                 {/* Статус — кастомный select с цветом по статусу */}
+                 {(() => {
+                   const st = mixer.status || 'Загрузка';
+                   const stColor =
+                     st === 'В пути' ? '#60A5FA' :
+                     st === 'На объекте' ? '#10B981' :
+                     st === 'Разгружен' ? '#34D399' :
+                     st === 'Возврат' ? '#94A3B8' :
+                     st === 'Проблема' ? '#EF4444' : '#FACC15';
+                   return (
+                     <select
+                       value={st}
+                       onChange={(e) => handleStatusChange(mixer.id, e.target.value)}
+                       style={{
+                         padding: '3px 8px',
+                         borderRadius: '9999px',
+                         background: `${stColor}18`,
+                         color: stColor,
+                         border: `1px solid ${stColor}55`,
+                         fontSize: '12px',
+                         minWidth: '110px',
+                         cursor: 'pointer',
+                         outline: 'none',
+                         fontWeight: '500',
+                       }}
+                     >
+                       <option value="Загрузка">🟡 Загрузка</option>
+                       <option value="В пути">🔵 В пути</option>
+                       <option value="На объекте">📍 На объекте</option>
+                       <option value="Разгружен">🟢 Разгружен</option>
+                       <option value="Возврат">↩️ Возврат</option>
+                       <option value="Проблема">🔴 Проблема</option>
+                     </select>
+                   );
+                 })()}
 
                  <button 
                    onClick={() => deleteMixer(mixer.id, index)}
@@ -1909,16 +2025,26 @@ const generateDailyReport = () => {
     }, 100);
   }}
   style={{
-    marginTop: '24px',
+    marginTop: '16px',
     width: '100%',
-    padding: '16px',
-    background: '#6366F1',
-    color: 'white',
-    border: 'none',
-    borderRadius: '16px',
-    fontSize: '16px',
-    fontWeight: '600',
-    cursor: 'pointer'
+    padding: '10px 16px',
+    background: 'rgba(99,102,241,0.15)',
+    color: '#A5B4FC',
+    border: '1px solid rgba(99,102,241,0.35)',
+    borderRadius: '12px',
+    fontSize: '14px',
+    fontWeight: '500',
+    cursor: 'pointer',
+    transition: 'background 0.2s, color 0.2s',
+    letterSpacing: '0.01em',
+  }}
+  onMouseEnter={e => {
+    e.currentTarget.style.background = 'rgba(99,102,241,0.28)';
+    e.currentTarget.style.color = '#C7D2FE';
+  }}
+  onMouseLeave={e => {
+    e.currentTarget.style.background = 'rgba(99,102,241,0.15)';
+    e.currentTarget.style.color = '#A5B4FC';
   }}
 >
   📋 Сформировать отчёт за день
@@ -1954,9 +2080,40 @@ const generateDailyReport = () => {
       {showCalendar && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowCalendar(false)}>
           <div onClick={e => e.stopPropagation()}>
-            <Calendar orders={allOrders} onClose={() => setShowCalendar(false)} />
+            <Calendar
+              orders={allOrders}
+              onClose={() => setShowCalendar(false)}
+              onSelectOrder={(order) => setSelectedOrder(order)}
+              onQuickCreateOrder={(dateStr) => {
+                setQuickNewOrderDate(dateStr);
+                setShowQuickNewOrder(true);
+              }}
+              getStatusConfig={getStatusConfig}
+            />
           </div>
         </div>
+      )}
+
+      {/* Быстрое создание заявки на дату, выбранную ПКМ/долгим нажатием в календаре */}
+      {showQuickNewOrder && (
+        <NewOrderModal
+          isOpen={showQuickNewOrder}
+          onClose={() => {
+            setShowQuickNewOrder(false);
+            setQuickNewOrderDate(undefined);
+          }}
+          onSuccess={(newOrder) => {
+            if (newOrder) {
+              setAllOrders(prev => {
+                if (prev.some(o => String(o.id) === String(newOrder.id))) return prev;
+                return [newOrder, ...prev];
+              });
+            }
+          }}
+          defaultDeliveryDate={quickNewOrderDate}
+          currentRole={userRole || 'admin'}
+          currentUserName={userFullName || 'Сотрудник'}
+        />
       )}
     </div>
     

@@ -19,11 +19,16 @@ export async function GET(
   }
 
   try {
+    // Записи, добавленные в рамках одного запроса (например, смена статуса миксера
+    // + автозавершение заявки), получают ОДИНАКОВЫЙ created_at — Postgres now()
+    // фиксируется на уровне транзакции. id как tie-breaker даёт стабильный порядок:
+    // запись, добавленная в коде позже (выше id), всегда показывается выше.
     const { data, error } = await supabase
       .from('order_history')
       .select('*')
       .eq('order_id', orderId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false });
 
     if (error) {
       console.error('History fetch error:', error);

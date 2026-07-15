@@ -78,9 +78,11 @@ export default function OrdersPage() {
       const res = await fetch('/api/adminCifra/orders/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          orderId: stringId, 
-          status: newStatus 
+        body: JSON.stringify({
+          orderId: stringId,
+          status: newStatus,
+          userName: localStorage.getItem('userName') || undefined,
+          userRole: localStorage.getItem('userRole') || undefined,
         }),
       });
 

@@ -1,11 +1,20 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, type CSSProperties } from 'react';
 import Image from 'next/image';
 import { useSearchParams } from 'next/navigation';
 import { formatPhoneInput, normalizePhone } from '@/lib/phone';
 
 declare const WebApp: any;
+
+const lightFieldStyle: CSSProperties = {
+  width: '100%',
+  padding: '14px',
+  border: '1px solid #d1d5db',
+  borderRadius: '12px',
+  fontSize: '16px',
+  boxSizing: 'border-box',
+};
 
 export default function ConcreteOrderPage() {
   const [isVerified, setIsVerified] = useState(false);
@@ -666,14 +675,15 @@ const loadReferrals = async () => {
           value={phone}
           onChange={(e) => setPhone(formatPhoneInput(e.target.value))}
           style={{
-            width: '90%',
+            width: '100%',
             maxWidth: '420px',
             margin: '0 auto 16px',
             padding: '16px',
             borderRadius: '12px',
             border: '1px solid #ddd',
             fontSize: '17px',
-            textAlign: 'center'
+            textAlign: 'center',
+            boxSizing: 'border-box'
           }}
           maxLength={18}
         />
@@ -684,13 +694,14 @@ const loadReferrals = async () => {
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
            style={{
-             width: '90%',
+             width: '100%',
              maxWidth: '420px',
              margin: '0 auto 12px',
              padding: '16px',
              borderRadius: '12px',
              border: '1px solid #ddd',
-             fontSize: '17px'
+             fontSize: '17px',
+             boxSizing: 'border-box'
          }}
          />
 
@@ -858,13 +869,7 @@ const loadReferrals = async () => {
             <select
               value={form.grade}
               onChange={(e) => setForm({ ...form, grade: e.target.value })}
-              style={{ 
-                width: '100%', 
-                padding: '14px', 
-                border: '1px solid #d1d5db', 
-                borderRadius: '12px', 
-                fontSize: '16px' 
-              }}
+              style={lightFieldStyle}
             >
               <option value="М100">М100</option>
               <option value="М150">М150</option>
@@ -884,13 +889,7 @@ const loadReferrals = async () => {
               type="number"
               value={form.volume}
               onChange={(e) => setForm({ ...form, volume: e.target.value })}
-              style={{ 
-                width: '80%', 
-                padding: '14px', 
-                border: '1px solid #d1d5db', 
-                borderRadius: '12px', 
-                fontSize: '16px' 
-              }}
+              style={lightFieldStyle}
               placeholder="20"
               min="1"
               step="0.5"
@@ -900,12 +899,13 @@ const loadReferrals = async () => {
 
 {volume > 0 && (
   <div style={{ 
-    width: '90%',
+    width: '100%',
     backgroundColor: '#f8fafc', 
     padding: '16px', 
     borderRadius: '16px', 
     border: '1px solid #e2e8f0',
-    marginTop: '8px'
+    marginTop: '8px',
+    boxSizing: 'border-box'
   }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
       <span style={{ color: '#475569' }}>Бетон:</span>
@@ -958,12 +958,13 @@ const loadReferrals = async () => {
         setRedeemAmount(val);
       }}
           style={{ 
-            width: '90%', 
+            width: '100%', 
             padding: '12px', 
             borderRadius: '10px', 
             border: '1px solid #86efac', 
             fontSize: '16px',
-            textAlign: 'center'
+            textAlign: 'center',
+            boxSizing: 'border-box'
           }}
           placeholder="0"
         />
@@ -997,25 +998,13 @@ const loadReferrals = async () => {
               type="date"
               value={form.deliveryDate}
               onChange={(e) => setForm({ ...form, deliveryDate: e.target.value })}
-              style={{ 
-                padding: '14px', 
-                border: '1px solid #d1d5db', 
-                borderRadius: '12px', 
-                fontSize: '16px',
-                width: '80%'
-              }}
+              style={lightFieldStyle}
             />
             <input
               type="time"
               value={form.deliveryTime}
               onChange={(e) => setForm({ ...form, deliveryTime: e.target.value })}
-              style={{ 
-                padding: '14px', 
-                border: '1px solid #d1d5db', 
-                borderRadius: '12px', 
-                fontSize: '16px',
-                width: '80%'
-              }}
+              style={lightFieldStyle}
             />
           </div>
         </div>
@@ -1026,13 +1015,10 @@ const loadReferrals = async () => {
             onChange={(e) => setForm({ ...form, address: e.target.value })}
             rows={3}
             style={{ 
-              width: '90%', 
-              padding: '14px', 
-              border: '1px solid #d1d5db', 
+              ...lightFieldStyle,
               borderRadius: '16px', 
               resize: 'vertical', 
               minHeight: '80px',
-              fontSize: '16px'
             }}
             placeholder="Укажите полный адрес"
           />
@@ -1046,12 +1032,11 @@ const loadReferrals = async () => {
               onClick={() => setForm({ ...form, customerType: 'physical' })}
               style={{ 
                 flex: 1,
-                minWidth: '150px',
-                maxWidth: '170px',
-                padding: '10px', 
+                padding: '10px 6px', 
                 borderRadius: '12px', 
                 fontWeight: '600', 
-                fontSize: '16px',
+                fontSize: '15px',
+                whiteSpace: 'nowrap',
                 background: form.customerType === 'physical' ? '#2563eb' : '#f3f4f6', 
                 color: form.customerType === 'physical' ? 'white' : '#374151',
                 border: 'none'
@@ -1064,12 +1049,11 @@ const loadReferrals = async () => {
               onClick={() => setForm({ ...form, customerType: 'legal' })}
               style={{ 
                 flex: 1,
-                minWidth: '150px',
-                maxWidth: '170px',
-                padding: '10px', 
+                padding: '10px 6px', 
                 borderRadius: '12px', 
                 fontWeight: '600', 
-                fontSize: '16px',
+                fontSize: '15px',
+                whiteSpace: 'nowrap',
                 background: form.customerType === 'legal' ? '#2563eb' : '#f3f4f6', 
                 color: form.customerType === 'legal' ? 'white' : '#374151',
                 border: 'none'
@@ -1087,13 +1071,7 @@ const loadReferrals = async () => {
               type="text"
               value={form.fullName}
               onChange={(e) => setForm({ ...form, fullName: e.target.value })}
-              style={{ 
-                width: '90%', 
-                padding: '14px', 
-                border: '1px solid #d1d5db', 
-                borderRadius: '12px', 
-                fontSize: '16px' 
-              }}
+              style={lightFieldStyle}
               placeholder="Иванов Иван Иванович"
             />
           </div>
@@ -1104,13 +1082,7 @@ const loadReferrals = async () => {
               type="text"
               value={form.organizationName}
               onChange={(e) => setForm({ ...form, organizationName: e.target.value })}
-              style={{ 
-                width: '90%', 
-                padding: '14px', 
-                border: '1px solid #d1d5db', 
-                borderRadius: '12px', 
-                fontSize: '16px' 
-              }}
+              style={lightFieldStyle}
               placeholder='ООО "Ваша организация"'
             />
           </div>
@@ -1122,13 +1094,7 @@ const loadReferrals = async () => {
             type="tel"
             value={form.phone}
             onChange={(e) => setForm({ ...form, phone: formatPhoneInput(e.target.value) })}
-            style={{ 
-              width: '90%', 
-              padding: '14px', 
-              border: '1px solid #d1d5db', 
-              borderRadius: '12px', 
-              fontSize: '17px' 
-            }}
+            style={{ ...lightFieldStyle, fontSize: '17px' }}
             placeholder="+7 (___) ___-__-__"
             maxLength={18}
           />
@@ -1141,13 +1107,10 @@ const loadReferrals = async () => {
             onChange={(e) => setForm({ ...form, comment: e.target.value })}
             rows={3}
             style={{ 
-              width: '90%', 
-              padding: '14px', 
-              border: '1px solid #d1d5db', 
+              ...lightFieldStyle,
               borderRadius: '16px', 
               resize: 'vertical', 
               minHeight: '90px',
-              fontSize: '16px'
             }}
             placeholder="Дополнительная информация. Например труба, насос (необязательно)"
           />
@@ -1157,7 +1120,7 @@ const loadReferrals = async () => {
           type="submit"
           disabled={isSubmitting}
           style={{ 
-            width: '97%', 
+            width: '100%', 
             background: isSubmitting ? '#9ca3af' : '#2563eb', 
             color: 'white', 
             padding: '16px', 
@@ -1165,7 +1128,8 @@ const loadReferrals = async () => {
             borderRadius: '16px', 
             fontSize: '18px', 
             fontWeight: '600',
-            marginTop: '12px'
+            marginTop: '12px',
+            boxSizing: 'border-box'
           }}
         >
           {isSubmitting ? 'Отправляем...' : 'Отправить заявку'}
@@ -1585,7 +1549,8 @@ const loadReferrals = async () => {
             textAlign: 'center', 
             border: '2px solid #e2e8f0', 
             borderRadius: '16px', 
-            marginBottom: '24px' 
+            marginBottom: '24px',
+            boxSizing: 'border-box'
           }}
         />
 

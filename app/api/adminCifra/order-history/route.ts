@@ -14,11 +14,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'orderId required' }, { status: 400 });
   }
 
+  // Записи, добавленные в рамках одного запроса (например, смена статуса миксера
+  // + автозавершение заявки), получают ОДИНАКОВЫЙ created_at — Postgres now()
+  // фиксируется на уровне транзакции. Без второго ключа сортировки порядок
+  // при равных timestamp у Postgres непредсказуем. id как tie-breaker даёт
+  // стабильный порядок: запись, добавленная в коде позже (у неё выше id),
+  // всегда показывается выше — то есть автозавершение всегда над триггером.
   const { data, error } = await supabase
     .from('order_history')
     .select('*')
     .eq('order_id', parseInt(orderId))
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false });
 
   if (error) {
     console.error('History fetch error:', error);

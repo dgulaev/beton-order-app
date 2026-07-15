@@ -387,7 +387,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
               <button
                 type="submit"
                 disabled={loginLoading}
-                style={{ width: '100%', padding: '16px', background: loginLoading ? '#475569' : '#22c55e', color: 'white', border: 'none', borderRadius: '12px', fontSize: '17px', fontWeight: 600, cursor: loginLoading ? 'not-allowed' : 'pointer' }}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '16px', background: loginLoading ? '#475569' : '#22c55e', color: 'white', border: 'none', borderRadius: '12px', fontSize: '17px', fontWeight: 600, cursor: loginLoading ? 'not-allowed' : 'pointer' }}
               >
                 {loginLoading ? 'Проверка...' : 'Продолжить'}
               </button>
@@ -399,13 +399,13 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <button
                 onClick={() => setStep('password')}
-                style={{ width: '100%', padding: '16px', background: '#22c55e', color: 'white', border: 'none', borderRadius: '12px', fontSize: '16px', fontWeight: 600, cursor: 'pointer' }}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '16px', background: '#22c55e', color: 'white', border: 'none', borderRadius: '12px', fontSize: '16px', fontWeight: 600, cursor: 'pointer' }}
               >
                 Войти как сотрудник
               </button>
               <button
                 onClick={() => setStep('driver-mixer')}
-                style={{ width: '100%', padding: '16px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontSize: '16px', fontWeight: 600, cursor: 'pointer' }}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '16px', background: '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontSize: '16px', fontWeight: 600, cursor: 'pointer' }}
               >
                 Войти как водитель
               </button>
@@ -428,7 +428,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
               <button
                 type="submit"
                 disabled={loginLoading}
-                style={{ width: '100%', padding: '16px', background: loginLoading ? '#475569' : '#22c55e', color: 'white', border: 'none', borderRadius: '12px', fontSize: '17px', fontWeight: 600, cursor: loginLoading ? 'not-allowed' : 'pointer' }}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '16px', background: loginLoading ? '#475569' : '#22c55e', color: 'white', border: 'none', borderRadius: '12px', fontSize: '17px', fontWeight: 600, cursor: loginLoading ? 'not-allowed' : 'pointer' }}
               >
                 {loginLoading ? 'Вход...' : 'Войти'}
               </button>
@@ -465,7 +465,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
               <button
                 type="submit"
                 disabled={loginLoading}
-                style={{ width: '100%', padding: '16px', background: loginLoading ? '#475569' : '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontSize: '17px', fontWeight: 600, cursor: loginLoading ? 'not-allowed' : 'pointer' }}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '16px', background: loginLoading ? '#475569' : '#10B981', color: 'white', border: 'none', borderRadius: '12px', fontSize: '17px', fontWeight: 600, cursor: loginLoading ? 'not-allowed' : 'pointer' }}
               >
                 {loginLoading ? 'Вход...' : 'Войти'}
               </button>

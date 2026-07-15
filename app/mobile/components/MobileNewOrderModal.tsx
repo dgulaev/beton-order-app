@@ -1,8 +1,19 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, type CSSProperties } from 'react';
 import { formatPhoneInput } from '@/lib/phone';
 
+
+const fieldStyle: CSSProperties = {
+  width: '100%',
+  padding: '14px',
+  background: '#25334A',
+  border: 'none',
+  borderRadius: '12px',
+  color: '#fff',
+  fontSize: '17px',
+  boxSizing: 'border-box',
+};
 
 interface MobileNewOrderModalProps {
   isOpen: boolean;
@@ -288,7 +299,7 @@ export default function MobileNewOrderModal({
                   value={form.organizationName} 
                   onChange={handleChange} 
                   required 
-                  style={{ width: '93%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '16px' }} 
+                  style={fieldStyle} 
                 />
               </div>
             )}
@@ -302,7 +313,7 @@ export default function MobileNewOrderModal({
                   value={form.fullName} 
                   onChange={handleChange} 
                   required 
-                  style={{ width: '93%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '16px' }} 
+                  style={fieldStyle} 
                 />
               </div>
             )}
@@ -317,7 +328,7 @@ export default function MobileNewOrderModal({
                 onChange={handlePhoneChange}
                 placeholder="+7 (___) ___-__-__"
                 required
-                style={{ width: '93%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '17px' }}
+                style={fieldStyle}
               />
             </div>
 
@@ -327,7 +338,7 @@ export default function MobileNewOrderModal({
                 name="grade" 
                 value={form.grade} 
                 onChange={handleChange} 
-                style={{ width: '80%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '17px' }}
+                style={fieldStyle}
               >
                 {recipes.map(r => (
                   <option key={r.code} value={r.code}>{r.name}</option>
@@ -345,7 +356,7 @@ export default function MobileNewOrderModal({
                   value={form.volume} 
                   onChange={handleChange} 
                   required 
-                  style={{ width: '80%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', fontSize: '17px' }} 
+                  style={fieldStyle} 
                 />
               </div>
               <div>
@@ -356,7 +367,7 @@ export default function MobileNewOrderModal({
                   value={form.deliveryTime} 
                   onChange={handleChange} 
                   required 
-                  style={{ width: '85%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff' }} 
+                  style={fieldStyle} 
                 />
               </div>
             </div>
@@ -369,7 +380,7 @@ export default function MobileNewOrderModal({
                 value={form.deliveryDate} 
                 onChange={handleChange} 
                 required 
-                style={{ width: '93%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff' }} 
+                style={fieldStyle} 
               />
             </div>
 
@@ -382,7 +393,7 @@ export default function MobileNewOrderModal({
                 onChange={handleChange} 
                 required 
                 rows={3}
-                style={{ width: '93%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', resize: 'vertical' }} 
+                style={{ ...fieldStyle, resize: 'vertical' }} 
               />
             </div>
 
@@ -394,7 +405,7 @@ export default function MobileNewOrderModal({
                 value={form.comment} 
                 onChange={handleChange} 
                 rows={4}
-                style={{ width: '93%', padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff', resize: 'vertical' }} 
+                style={{ ...fieldStyle, resize: 'vertical' }} 
               />
             </div>
 
