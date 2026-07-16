@@ -11,7 +11,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from('users')
       .select('user_id, full_name, organization_name, role')
-      .in('role', ['admin', 'manager', 'dispatcher', 'operator'])  // Только сотрудники
+      .in('role', ['admin', 'manager', 'dispatcher', 'operator', 'laborant'])  // Только сотрудники
       .order('organization_name', { ascending: true });
 
     if (error) throw error;

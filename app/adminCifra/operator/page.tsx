@@ -735,7 +735,7 @@ export default function OperatorBSUPage() {
       { key: 'zayavki',   label: 'Заявки',    action: () => setActiveTab('zayavki') },
       { key: 'warehouse', label: 'Склад',     action: () => setActiveTab('warehouse') },
       { key: 'reports',   label: 'Отчеты',    action: () => setActiveTab('reports') },
-      { key: 'recipes',   label: 'Рецепты',   action: () => setActiveTab('recipes') }
+      { key: 'recipes',   label: 'Лаборатория',   action: () => setActiveTab('recipes') }
     ].map((tab) => (
       <button
         key={tab.key}

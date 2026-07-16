@@ -160,7 +160,7 @@ useEffect(() => {
           if (staffRes.ok) {
             const allUsers = await staffRes.json();
             result = allUsers
-              .filter((u: any) => ['admin', 'manager', 'dispatcher', 'operator'].includes((u.role || '').toLowerCase()))
+              .filter((u: any) => ['admin', 'manager', 'dispatcher', 'operator', 'laborant'].includes((u.role || '').toLowerCase()))
               .map((s: any) => ({ ...s, isStaff: true }));
           }
         }
@@ -200,7 +200,7 @@ useEffect(() => {
         // Фильтр + сортировка с Гостем
         staffList = staffList
           .filter((u: any) => 
-            ['admin', 'manager', 'dispatcher', 'operator', 'guest'].includes((u.role || '').toLowerCase())
+            ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'guest'].includes((u.role || '').toLowerCase())
           )
           .sort((a: any, b: any) => {
             const roleOrder: { [key: string]: number } = {
@@ -208,7 +208,8 @@ useEffect(() => {
               manager: 2,
               dispatcher: 3,
               operator: 4,
-              guest: 5
+              laborant: 5,
+              guest: 6
             };
             return (roleOrder[a.role] || 999) - (roleOrder[b.role] || 999) || 
                    (a.full_name || '').localeCompare(b.full_name || '');
@@ -293,7 +294,7 @@ const handleSelectProfile = async (profile: any) => {
 
   let selected = { ...profile };
 
-  if (['admin', 'manager', 'dispatcher', 'operator'].includes((profile.role || '').toLowerCase())) {
+  if (['admin', 'manager', 'dispatcher', 'operator', 'laborant'].includes((profile.role || '').toLowerCase())) {
     selected.isStaff = true;
     selected.role = profile.role;
 
@@ -1061,7 +1062,7 @@ const clients = profiles.filter((item: any) => item.groupId);
 // Стафф — пользователи с ролью (без groupId)
 const staff = profiles.filter((item: any) => 
   !item.groupId && 
-  ['admin', 'manager', 'dispatcher', 'operator'].includes((item.role || '').toLowerCase())
+  ['admin', 'manager', 'dispatcher', 'operator', 'laborant'].includes((item.role || '').toLowerCase())
 );
 
 const currentList = activeTab === 'clients' ? clients : staff;
@@ -1934,6 +1935,7 @@ const changeStaffPassword = async (staffMember: any) => {
           {item.role === 'admin' ? 'Администратор' : 
            item.role === 'dispatcher' ? 'Диспетчер' : 
            item.role === 'operator' ? 'Оператор' : 
+           item.role === 'laborant' ? 'Лаборант' : 
            item.role === 'guest' ? 'Гость' : 'Менеджер'}
         </span>
       </div>
@@ -2880,6 +2882,7 @@ const changeStaffPassword = async (staffMember: any) => {
             <option value="manager">Менеджер</option>
             <option value="dispatcher">Диспетчер</option>
             <option value="operator">Оператор</option>
+            <option value="laborant">Лаборант</option>
             <option value="guest">Гость (демо-доступ)</option>
           </select>
         </div>

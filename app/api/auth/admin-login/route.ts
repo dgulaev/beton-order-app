@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Проверка роли
-    const allowedRoles = ['admin', 'manager', 'dispatcher', 'operator', 'guest'];
+    const allowedRoles = ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'guest'];
     if (!user.role || !allowedRoles.includes(user.role)) {
       return NextResponse.json({ 
         success: false, 

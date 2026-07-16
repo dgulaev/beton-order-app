@@ -9,7 +9,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const ALLOWED_STAFF_ROLES = ['admin', 'manager', 'dispatcher', 'operator', 'guest'];
+const ALLOWED_STAFF_ROLES = ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'guest'];
 
 export async function GET() {
   try {

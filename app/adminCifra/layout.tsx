@@ -1,13 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell, CheckCircle, LogOut, Globe } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
 import Image from 'next/image';
 import { useUserRole } from '../providers/UserRoleProvider';
 import { useOrderChangeNotifications } from '@/hooks/useRealtimeOrders';
 import { reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
+import { useWakeReload } from '@/hooks/useWakeReload';
 import { formatPhoneInput } from '@/lib/phone';
 
 // ==================== PERSISTENTНЫЕ УВЕДОМЛЕНИЯ (localStorage) ====================
@@ -50,7 +51,12 @@ function deletePersistedNotif(id: string) {
 
 export default function AdminCifraLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const isActive = (path: string) => pathname === path;
+
+  // Однократная перезагрузка при пробуждении вкладки после долгого простоя
+  // (напр. оставленный на ночь экран) — оживляет «замороженную» страницу.
+  useWakeReload();
 
   // ==================== 1. РОЛЬ ИЗ PROVIDER ====================
   const { user, loading: roleLoading, refreshRole, logout } = useUserRole();
@@ -146,6 +152,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   // ==================== 1.2 АВТОМАТИЧЕСКИЙ РЕДИРЕКТ НА МОБИЛЬНУЮ ВЕРСИЮ ====================
   useEffect(() => {
     const redirectToMobile = () => {
+      // Лаборант работает только на десктопной странице «Лаборатория»
+      // (в мобильной версии этого раздела нет) — не уводим его на /mobile.
+      if (userRole === 'laborant') return;
+
       const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Samsung/i.test(navigator.userAgent) ||
                        window.innerWidth <= 768;
 
@@ -169,7 +179,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     const timer = setTimeout(redirectToMobile, 700);
 
     return () => clearTimeout(timer);
-  }, []);
+  }, [userRole]);
 
   // ==================== 2. СОСТОЯНИЯ УВЕДОМЛЕНИЙ ====================
   const [newOrdersCount, setNewOrdersCount] = useState(0);
@@ -514,6 +524,16 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     }
   }, [pathname]);
 
+  // ==================== 6.0 ОГРАНИЧЕНИЕ ДОСТУПА ЛАБОРАНТА ====================
+  // Лаборант работает только со страницей «Лаборатория» — если он попал на
+  // любой другой путь /adminCifra (по прямой ссылке, из истории и т.п.),
+  // возвращаем его на свою страницу, чтобы он не путался в разделах.
+  useEffect(() => {
+    if (userRole === 'laborant' && pathname !== '/adminCifra/recipes') {
+      router.replace('/adminCifra/recipes');
+    }
+  }, [userRole, pathname, router]);
+
   // ==================== 6.1 ЗАГРУЗКА ====================
   if (roleLoading) {
     return (
@@ -826,6 +846,14 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
           <nav style={{ flex: 1, paddingLeft: '8px', paddingRight: '8px' }}>
 
+            {/* ==================== БЛОК 9.5: ЛАБОРАНТ — ТОЛЬКО «ЛАБОРАТОРИЯ» ==================== */}
+            {userRole === 'laborant' ? (
+              <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
+                <FlaskConical size={22} />
+                <span style={navTextStyle(isCollapsed)}>Лаборатория</span>
+              </Link>
+            ) : (
+            <>
             <Link href="/adminCifra/dashboard" style={navLinkStyle(isActive('/adminCifra/dashboard'), isCollapsed)}>
               <Home size={22} />
               <span style={navTextStyle(isCollapsed)}>Дашборд</span>
@@ -856,7 +884,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
                 <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
                   <FlaskConical size={22} />
-                  <span style={navTextStyle(isCollapsed)}>Рецепты</span>
+                  <span style={navTextStyle(isCollapsed)}>Лаборатория</span>
                 </Link>
 
                 <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers'), isCollapsed)}>
@@ -901,6 +929,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   </Link>
                 )}
               </>
+            )}
+            </>
             )}
 
             {/* ==================== БЛОК 13.1 ЛИЧНЫЙ ВЫХОД ==================== */}

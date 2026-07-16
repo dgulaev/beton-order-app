@@ -39,6 +39,7 @@ export const CONCRETE_CONFIG = {
     MANAGER: 'manager',
     DISPATCHER: 'dispatcher',
     ADMIN: 'admin',
+    LABORANT: 'laborant',
   } as const,
 
   // ==================== ДРУГИЕ НАСТРОЙКИ ====================

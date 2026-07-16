@@ -22,6 +22,7 @@ import {
   DriverMixerInfo,
 } from './driver/driverClient';
 import DriverDashboard from './driver/components/DriverDashboard';
+import { useWakeReload } from '@/hooks/useWakeReload';
 
 // Сколько ждём ответ /api/driver/auth, прежде чем сдаться (см. пояснение у
 // ROLE_FETCH_TIMEOUT_MS в UserRoleProvider — та же причина).
@@ -57,6 +58,10 @@ const INPUT_STYLE: React.CSSProperties = {
 
 export default function MobileLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
+
+  // Однократная перезагрузка при пробуждении после долгого простоя — покрывает
+  // и мобильную админку, и дашборд водителя (оба рендерятся внутри этого layout).
+  useWakeReload();
 
   // ==================== 1. РОЛЬ СОТРУДНИКА ИЗ PROVIDER ====================
   const { user, loading: roleLoading, refreshRole, logout } = useUserRole();

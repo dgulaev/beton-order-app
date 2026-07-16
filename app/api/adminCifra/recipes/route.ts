@@ -6,13 +6,20 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// GET — получить все рецепты
-export async function GET() {
-  const { data, error } = await supabase
-    .from('recipes')
-    .select('*')
-    .eq('is_active', true)
-    .order('code');
+// GET — получить рецепты.
+// По умолчанию (без параметров) отдаёт только активные — это поведение,
+// на которое рассчитывает форма создания заказа менеджера (NewOrderModal).
+// Каталог «Лаборатории» передаёт ?all=true, чтобы видеть и неактивные.
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const includeAll = searchParams.get('all') === 'true';
+
+  let query = supabase.from('recipes').select('*').order('code');
+  if (!includeAll) {
+    query = query.eq('is_active', true);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

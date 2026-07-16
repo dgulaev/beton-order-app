@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 import { phonesMatch } from '@/lib/phone';
 
-const ALLOWED_STAFF_ROLES = ['admin', 'manager', 'dispatcher', 'operator', 'guest'];
+const ALLOWED_STAFF_ROLES = ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'guest'];
 
 export async function POST(request: NextRequest) {
   try {

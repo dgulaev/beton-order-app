@@ -136,14 +136,11 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
     return `Брянск, ${address}`;
   };
 
-  const openGoogleMaps = () => {
-    const destination = getFullAddressForRoute(order.address || '');
-    const origin = "Брянск, туп. Орловский, 6А";
-    window.open(
-      `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`, 
-      '_blank'
-    );
-  };
+  // Ссылка на маршрут в Google Maps. Раньше открывалась через window.open() в
+  // onClick — на мобильных Chromium-браузерах (в т.ч. Яндекс.Браузере) это
+  // "обеляло"/подвешивало страницу. Обычная <a href target="_blank"> (как у
+  // Яндекс.Карт ниже) обрабатывается браузером штатно, без побочных эффектов.
+  const googleMapsHref = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Брянск, туп. Орловский, 6А')}&destination=${encodeURIComponent(getFullAddressForRoute(order.address || ''))}&travelmode=driving`;
 
   
 
@@ -398,8 +395,11 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
               >
                 🗺️ {yandexRouteReady ? 'Яндекс.Карты' : 'Строим маршрут...'}
               </a>
-              <button 
-                onClick={openGoogleMaps}
+              <a 
+                href={googleMapsHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
                 style={{ 
                   flex: 1, 
                   padding: '16px', 
@@ -408,11 +408,14 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
                   border: 'none', 
                   borderRadius: '12px', 
                   fontSize: '16px',
-                  fontWeight: '600'
+                  fontWeight: '600',
+                  textAlign: 'center',
+                  textDecoration: 'none',
+                  display: 'inline-block'
                 }}
               >
                 🗺️ Google Maps
-              </button>
+              </a>
             </div>
           </div>
 

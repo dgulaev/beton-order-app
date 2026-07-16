@@ -30,10 +30,23 @@ interface BroadcastEntry {
   status: RealtimeStatus;
   keepalive?: ReturnType<typeof setInterval>;
   cleanupTimer?: ReturnType<typeof setTimeout>;
+  // Отложенное проставление статуса ERROR — чтобы индикатор не мигал красным
+  // на короткие промежуточные сбои, из которых соединение само выходит.
+  errorTimer?: ReturnType<typeof setTimeout>;
 }
 
 const registry = new Map<string, BroadcastEntry>();
 let globalListenersAttached = false;
+
+// Задержка перед тем, как показать ERROR в UI (дебаунс индикатора).
+const ERROR_DEBOUNCE_MS = 6_000;
+// Если сбой держится дольше этого времени — жёстко пересоздаём сам WebSocket-сокет
+// (а не только каналы): признак «мёртвого» сокета, который сам не воскресает.
+const HARD_RESET_AFTER_MS = 45_000;
+
+// Момент первого не восстановившегося сбоя (по любому каналу). null = всё здорово.
+let firstErrorAt: number | null = null;
+let hardResetInProgress = false;
 
 function notify(topic: string, status: RealtimeStatus) {
   const entry = registry.get(topic);
@@ -72,18 +85,74 @@ function connect(topic: string): BroadcastEntry {
       dispatch(topic, 'delete', msg.payload?.record ?? msg.payload, msg.payload?.old);
     })
     .subscribe((s) => {
+      const e = registry.get(topic);
       if (s === 'SUBSCRIBED') {
         console.log(`✅ [Broadcast] ПОДПИСКА АКТИВНА → ${topic}`);
+        // Соединение живо — снимаем отложенный ERROR и общий счётчик сбоев.
+        if (e?.errorTimer) {
+          clearTimeout(e.errorTimer);
+          e.errorTimer = undefined;
+        }
+        firstErrorAt = null;
         notify(topic, 'SUBSCRIBED');
       } else if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') {
         console.warn(`⚠️ [Broadcast] ОШИБКА ${s} → ${topic}`);
-        notify(topic, 'ERROR');
+        if (firstErrorAt === null) firstErrorAt = Date.now();
+        // Не мигаем индикатором сразу — вдруг восстановится за пару секунд.
+        if (e && !e.errorTimer) {
+          e.errorTimer = setTimeout(() => {
+            e.errorTimer = undefined;
+            if (registry.get(topic) === e && (e.channel as any)?.state !== 'joined') {
+              notify(topic, 'ERROR');
+            }
+          }, ERROR_DEBOUNCE_MS);
+        }
       } else if (s === 'CLOSED') {
         notify(topic, 'CLOSED');
       }
     });
 
   return entry;
+}
+
+// Жёсткий сброс: пересоздаём сам WebSocket-сокет и все каналы поверх свежего
+// соединения. Нужно, когда сокет «умер» (idle-таймаут за ночь, длинный обрыв
+// сети) — пересоздание одних каналов на мёртвом сокете даёт вечный CHANNEL_ERROR.
+async function hardResetSocket() {
+  if (hardResetInProgress) return;
+  hardResetInProgress = true;
+  console.warn('🔌 [Broadcast] Жёсткий сброс WebSocket-сокета (устойчивый сбой)');
+
+  const preserved: { topic: string; listeners: Set<BroadcastListener> }[] = [];
+  for (const [topic, entry] of registry) {
+    preserved.push({ topic, listeners: entry.listeners });
+    if (entry.keepalive) clearInterval(entry.keepalive);
+    if (entry.errorTimer) clearTimeout(entry.errorTimer);
+    try {
+      await supabase.removeChannel(entry.channel);
+    } catch {
+      // канал мог уже быть мёртв — игнорируем
+    }
+  }
+  registry.clear();
+
+  try {
+    supabase.realtime.disconnect();
+  } catch {
+    // ignore
+  }
+
+  // Небольшая пауза, чтобы сокет успел закрыться, затем поднимаем каналы заново
+  // (channel.subscribe сам инициирует новое соединение сокета).
+  setTimeout(() => {
+    for (const { topic, listeners } of preserved) {
+      const fresh = connect(topic);
+      listeners.forEach((l) => fresh.listeners.add(l));
+      fresh.keepalive = setInterval(() => reconnect(topic), 20_000);
+    }
+    firstErrorAt = null;
+    hardResetInProgress = false;
+  }, 800);
 }
 
 function reconnect(topic: string) {
@@ -95,6 +164,7 @@ function reconnect(topic: string) {
   console.warn(`🔁 [Broadcast] Переподключение → ${topic} (состояние: ${state})`);
   const listeners = entry.listeners;
   if (entry.keepalive) clearInterval(entry.keepalive);
+  if (entry.errorTimer) clearTimeout(entry.errorTimer);
   void supabase.removeChannel(entry.channel);
   registry.delete(topic);
 
@@ -123,6 +193,17 @@ function attachGlobalListeners() {
     if (document.visibilityState === 'visible') reconnectAll();
   });
   window.addEventListener('online', reconnectAll);
+
+  // Watchdog: если сбой держится дольше HARD_RESET_AFTER_MS — сокет считается
+  // «мёртвым», делаем жёсткий сброс всего соединения. Проверяем только на
+  // видимой вкладке (в фоне браузер всё равно троттлит; пробуждение поднимет
+  // страницу через useWakeReload/reconnectAll).
+  setInterval(() => {
+    if (document.visibilityState !== 'visible') return;
+    if (firstErrorAt !== null && Date.now() - firstErrorAt > HARD_RESET_AFTER_MS) {
+      void hardResetSocket();
+    }
+  }, 15_000);
 }
 
 interface BroadcastOptions extends BroadcastListener {
