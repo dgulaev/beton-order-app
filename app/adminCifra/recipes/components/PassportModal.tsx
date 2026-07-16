@@ -9,6 +9,8 @@ interface Props {
   specId?: number | null;
   initialDocKind?: 'concrete' | 'mortar';
   onClose: () => void;
+  /** вызывается после сохранения паспорта (для обновления списка заявок) */
+  onSaved?: (orderId: number | null) => void;
 }
 
 type PassportData = Record<string, any>;
@@ -25,11 +27,14 @@ function composeDesignation(d: PassportData): string {
     .join(' ');
 }
 
-export default function PassportModal({ orderId, specId, initialDocKind = 'concrete', onClose }: Props) {
+export default function PassportModal({ orderId, specId, initialDocKind = 'concrete', onClose, onSaved }: Props) {
   const [docKind, setDocKind] = useState<'concrete' | 'mortar'>(initialDocKind);
   const [data, setData] = useState<PassportData>({ doc_kind: initialDocKind });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // id уже сохранённого паспорта этого заказа — чтобы правки перезаписывали
+  // существующую запись, а не создавали дубликат.
+  const [recordId, setRecordId] = useState<number | null>(null);
 
   const loadAutofill = async (kind: 'concrete' | 'mortar') => {
     setLoading(true);
@@ -70,10 +75,47 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
     }
   };
 
+  // При открытии — если по заказу уже есть паспорт, загружаем именно его
+  // (сохранённые данные + id для перезаписи). Иначе собираем черновик.
+  const initPassport = async () => {
+    setLoading(true);
+    try {
+      // Ищем уже сохранённый паспорт по заказу (или по спецификации).
+      const q = orderId ? `order_id=${orderId}` : specId ? `spec_id=${specId}` : '';
+      if (q) {
+        const res = await fetch(`/api/adminCifra/concrete-passports?${q}`);
+        if (res.ok) {
+          const list = await res.json();
+          if (Array.isArray(list) && list.length > 0) {
+            const rec = list[0]; // роут отдаёт по created_at desc — берём последний
+            const kind = rec.doc_kind === 'mortar' ? 'mortar' : 'concrete';
+            setRecordId(rec.id);
+            setDocKind(kind);
+            setData({ ...(rec.payload || {}), doc_kind: kind });
+            setLoading(false);
+            return;
+          }
+        }
+      }
+      await loadAutofill(initialDocKind);
+    } catch (e) {
+      console.error(e);
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    loadAutofill(docKind);
+    initPassport();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docKind]);
+  }, []);
+
+  // Переключение Бетон/Раствор пересобирает черновик под нужный вид.
+  // recordId сохраняется — сохранение всё равно обновит ту же запись.
+  const changeKind = (kind: 'concrete' | 'mortar') => {
+    if (kind === docKind) return;
+    setDocKind(kind);
+    loadAutofill(kind);
+  };
 
   const set = (key: string, value: any) => setData((prev) => ({ ...prev, [key]: value }));
 
@@ -81,22 +123,28 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
     setSaving(true);
     try {
       const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
-      await fetch('/api/adminCifra/concrete-passports', {
-        method: 'POST',
+      const isUpdate = recordId != null;
+      const res = await fetch('/api/adminCifra/concrete-passports', {
+        method: isUpdate ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          ...(isUpdate ? { id: recordId } : { created_by: userId ? Number(userId) : null }),
           passport_no: data.batch_no || null,
           doc_kind: docKind,
           order_id: orderId ?? null,
           spec_id: specId ?? null,
           payload: data,
-          created_by: userId ? Number(userId) : null,
         }),
       });
-      alert('Паспорт сохранён');
+      if (!res.ok) throw new Error('save failed');
+      const saved = await res.json();
+      if (!isUpdate && saved?.id) setRecordId(saved.id);
+      // Сообщаем родителю (список заявок сразу пометит заказ «с паспортом»)
+      // и закрываем модалку — кнопка тут же становится «Паспорт».
+      onSaved?.(orderId ?? null);
+      onClose();
     } catch (e) {
       alert('Ошибка сохранения');
-    } finally {
       setSaving(false);
     }
   };
@@ -157,13 +205,22 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
       data.decl_reg_date ? `<br/>дата регистрации ${esc(data.decl_reg_date)}` : ''
     }`;
 
+    // Верхняя техническая строка (как браузерный колонтитул, но своя — печатается
+    // всегда): дата/время слева, «Паспорт №» справа. Нижний браузерный
+    // колонтитул при этом убран через @page { margin: 0 }.
+    const stamp = new Date().toLocaleString('ru-RU', {
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
+    const topbar = `<div class="topbar"><span>${stamp}</span><span>Паспорт ${esc(data.batch_no)}</span></div>`;
+
     const html = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Паспорт ${esc(data.batch_no)}</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: 'Times New Roman', serif; color: #000; margin: 20px 24px; font-size: 12.5px; }
+  .topbar { display: flex; justify-content: space-between; font-size: 10.5px; color: #333; margin-bottom: 8px; }
   .head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
   .org { font-size: 12px; line-height: 1.45; }
-  .org b { font-size: 13.5px; }
+  .org b { font-size: 27px; }
   .decl { margin-top: 8px; font-size: 11.5px; }
   .qr { text-align: center; font-size: 10px; }
   .qr img { width: 118px; height: 118px; display: block; }
@@ -175,10 +232,15 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
   td.v { font-weight: bold; }
   td.v .dim { font-weight: normal; font-size: 10.5px; font-style: italic; }
   .note { margin-top: 14px; font-size: 11px; font-style: italic; text-align: justify; }
-  .sign { margin-top: 26px; font-size: 12.5px; }
-  .sign .cap { display: block; font-size: 10px; color: #000; text-align: right; }
+  .sign { margin-top: 26px; font-size: 12.5px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .sign-right { text-align: right; }
+  .sign-line { white-space: nowrap; }
+  .sign .cap { display: block; font-size: 10px; color: #000; margin-top: 2px; }
+  /* margin:0 у @page убирает браузерные колонтитулы (дата, заголовок, URL сайта) */
+  @page { size: A4; margin: 0; }
   @media print { body { margin: 10mm 12mm; } }
 </style></head><body>
+  ${topbar}
   <div class="head">
     <div class="org">
       <b>${esc(data.org_name)}</b><br/>
@@ -216,8 +278,11 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
   <div class="note">Примечание: Предприятие гарантирует соответствие продукции требованиям настоящего стандарта при условии соблюдения транспортными организациями правил транспортирования, а потребителем – условий применения.</div>
 
   <div class="sign">
-    Нач. лаборатории ${esc(data.org_name)} _______________ / ${esc(data.lab_head_name)}
-    <span class="cap">подпись, фамилия, инициалы</span>
+    <div class="sign-role">Нач. лаборатории ${esc(data.org_name)}</div>
+    <div class="sign-right">
+      <div class="sign-line">_______________ / ${esc(data.lab_head_name)}</div>
+      <span class="cap">подпись, фамилия, инициалы</span>
+    </div>
   </div>
 </body></html>`;
 
@@ -289,13 +354,13 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
           <h2 style={{ fontSize: '20px', color: '#fff', margin: 0 }}>Паспорт качества</h2>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
-              onClick={() => setDocKind('concrete')}
+              onClick={() => changeKind('concrete')}
               style={{ ...ghostButton, background: docKind === 'concrete' ? COLORS.accentDark : '#334155', color: '#fff' }}
             >
               Бетон
             </button>
             <button
-              onClick={() => setDocKind('mortar')}
+              onClick={() => changeKind('mortar')}
               style={{ ...ghostButton, background: docKind === 'mortar' ? COLORS.accentDark : '#334155', color: '#fff' }}
             >
               Раствор

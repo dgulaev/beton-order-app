@@ -180,6 +180,13 @@ export function reconnectAllBroadcastChannels() {
   registry.forEach((_e, topic) => reconnect(topic));
 }
 
+// Публичная функция — принудительный жёсткий сброс сокета (для мягкого
+// восстановления на мобильном при пробуждении: пересоздаём соединение целиком,
+// т.к. после фоновой заморозки сокет часто «зомби»).
+export function hardResetBroadcastSocket() {
+  void hardResetSocket();
+}
+
 function attachGlobalListeners() {
   if (globalListenersAttached || typeof document === 'undefined') return;
   globalListenersAttached = true;
@@ -193,6 +200,11 @@ function attachGlobalListeners() {
     if (document.visibilityState === 'visible') reconnectAll();
   });
   window.addEventListener('online', reconnectAll);
+  // Мобильные: возврат из bfcache и выход из «заморозки» (Page Lifecycle)
+  window.addEventListener('pageshow', (e) => {
+    if ((e as PageTransitionEvent).persisted) reconnectAll();
+  });
+  document.addEventListener('resume', reconnectAll);
 
   // Watchdog: если сбой держится дольше HARD_RESET_AFTER_MS — сокет считается
   // «мёртвым», делаем жёсткий сброс всего соединения. Проверяем только на

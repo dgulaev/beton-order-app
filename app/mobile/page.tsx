@@ -8,6 +8,7 @@ import MobileExitButton from './components/MobileExitButton';
 // 🔥 Подключаем хуки авторизации и real-time
 import { useUserRole } from '../providers/UserRoleProvider';
 import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
+import { useWakeRefresh } from '@/hooks/useWakeReload';
 
 export default function MobileDashboard() {
   // ==================== 1. СТАТУСЫ И СОСТОЯНИЯ ====================
@@ -129,6 +130,22 @@ useEffect(() => {
       // 🔥 Можно показать баннер "Нет связи с сервером"
     });
 }, [selectedDate]);
+
+// Мягкое восстановление данных при пробуждении вкладки (без перезагрузки) —
+// подтягиваем свежие заявки и активные миксеры. Сокет realtime поднимает layout.
+useWakeRefresh(() => {
+  if (!userId) return;
+  fetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`)
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => { if (data) setAllOrders(data); })
+    .catch(() => {});
+
+  const dateStr = selectedDate.toISOString().split('T')[0];
+  fetch(`/api/adminCifra/active-mixers?date=${dateStr}`)
+    .then((res) => (res.ok ? res.json() : null))
+    .then((mixers) => { if (mixers) setActiveMixers(mixers); })
+    .catch(() => {});
+});
 
 // 🔥 Назначенные миксеры — раньше грузили ВСЮ таблицу order_mixers (за всё
 // время работы завода — сотни КБ и постоянно растёт), хотя на дашборде

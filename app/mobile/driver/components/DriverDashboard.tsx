@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LogOut, Clock, MapPin, Package, ChevronRight, Bell, Phone } from 'lucide-react';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
+import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { driverFetch, DriverMixerInfo, DriverTrip } from '../driverClient';
 import DriverTripDetailModal from './DriverTripDetailModal';
 import RouteButton from './RouteButton';
@@ -22,6 +23,30 @@ type Tab = 'today' | 'history';
 function formatTime(t?: string | null) {
   if (!t) return '—';
   return t.slice(0, 5);
+}
+
+// Извлекает телефон из текста комментария (клиенты часто пишут доп. контакт
+// прямо в комментарии: "...вывоз 12ой +79532799112 Евгений"). Берём первую
+// последовательность телефонного вида: 11 цифр с 7/8 в начале или 10 цифр с 9.
+// Разделители (пробел/дефис/скобки) допускаются, буквы — нет (не склеивают
+// соседние числа вроде "12ой и 10-ми").
+function extractPhoneFromText(text?: string | null): string | null {
+  if (!text) return null;
+  const matches = text.match(/(?:\+?[78][\s\-()]*)?\d(?:[\s\-()]*\d){9,10}/g);
+  if (!matches) return null;
+  for (const m of matches) {
+    const digits = m.replace(/\D/g, '');
+    if (digits.length === 11 && (digits[0] === '7' || digits[0] === '8')) return m.trim();
+    if (digits.length === 10 && digits[0] === '9') return m.trim();
+  }
+  return null;
+}
+
+// Телефон для кнопки «позвонить»: приоритет — номер из комментария заявки,
+// иначе телефон из самой заявки.
+function resolveContactPhone(order?: { phone?: string | null; comment?: string | null } | null): string | null {
+  if (!order) return null;
+  return extractPhoneFromText(order.comment) || order.phone || null;
 }
 
 function formatDateLabel(dateStr: string): string {
@@ -166,6 +191,14 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
       setInitialTripsLoaded(true);
     });
   }, []);
+
+  // Мягкое восстановление данных при пробуждении вкладки (без перезагрузки) —
+  // подтягиваем свежие рейсы. Сокет realtime поднимает layout (useWakeRefresh →
+  // hardResetBroadcastSocket).
+  useWakeRefresh(() => {
+    fetchToday();
+    fetchHistory();
+  });
 
   // ==================== OFFLINE QUEUE: ЗАГРУЗКА + СИНХРОНИЗАЦИЯ ====================
   useEffect(() => {
@@ -347,7 +380,7 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
     const canGoOnSite = trip.status === 'В пути';
     const canUnload = trip.status === 'На объекте';
     const isBusy = actionLoadingId === trip.id;
-    const phone = trip.order?.phone;
+    const phone = resolveContactPhone(trip.order);
     const tripElapsed = elapsed[trip.id];
     const showTimer = (trip.status === 'Загрузка' || trip.status === 'В пути' || trip.status === 'На объекте') && tripElapsed !== undefined;
 

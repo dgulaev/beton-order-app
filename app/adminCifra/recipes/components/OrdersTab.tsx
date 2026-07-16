@@ -19,6 +19,8 @@ interface Props {
   onEnsureMonth: (year: number, month: number) => void;
   onAcknowledge: (id: string) => void;
   onAcknowledgeAll: () => void;
+  /** паспорт по заказу сохранён — отметить заказ как «с паспортом» */
+  onPassportSaved: (orderId: number | null) => void;
 }
 
 const STATUS_META: Record<string, { label: string; bg: string; color: string }> = {
@@ -61,6 +63,7 @@ export default function OrdersTab({
   onEnsureMonth,
   onAcknowledge,
   onAcknowledgeAll,
+  onPassportSaved,
 }: Props) {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [statusFilter, setStatusFilter] = useState<StatusKey>('all');
@@ -505,7 +508,11 @@ export default function OrdersTab({
       </div>
 
       {passportOrder && (
-        <PassportModal orderId={Number(passportOrder.id)} onClose={() => setPassportOrder(null)} />
+        <PassportModal
+          orderId={Number(passportOrder.id)}
+          onClose={() => setPassportOrder(null)}
+          onSaved={onPassportSaved}
+        />
       )}
     </div>
   );

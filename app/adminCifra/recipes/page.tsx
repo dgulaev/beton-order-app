@@ -111,6 +111,17 @@ export default function LaboratoryPage() {
 
   const acknowledgeAllOrders = useCallback(() => setNewOrderIds(new Set()), []);
 
+  // Паспорт по заказу сохранён/обновлён — помечаем заказ как «с паспортом»,
+  // чтобы кнопка сразу стала «Паспорт» без перезагрузки страницы.
+  const markPassportSaved = useCallback((orderId: number | null) => {
+    if (orderId == null) return;
+    setPassportOrderIds((prev) => {
+      const next = new Set(prev);
+      next.add(String(orderId));
+      return next;
+    });
+  }, []);
+
   // ==================== СОСТОЯНИЕ КАТАЛОГА РЕЦЕПТУР ====================
   const [recipes, setRecipes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -302,6 +313,7 @@ export default function LaboratoryPage() {
           onEnsureMonth={ensureMonth}
           onAcknowledge={acknowledgeOrder}
           onAcknowledgeAll={acknowledgeAllOrders}
+          onPassportSaved={markPassportSaved}
         />
       )}
       {tab === 'specifications' && <SpecificationsTab />}

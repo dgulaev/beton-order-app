@@ -15,7 +15,7 @@
 // heartbeat — это простое сравнение Date.now() в памяти, БЕЗ каких-либо запросов
 // к серверу (в отличие от старого полинга): ноль трафика, ноль нагрузки.
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 const HEARTBEAT_MS = 30_000;
 // Разрыв больше порога = вкладку заморозили / оставили надолго. Активная
@@ -88,6 +88,57 @@ export function useWakeReload(enabled = true) {
     return () => {
       clearInterval(beat);
       document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [enabled]);
+}
+
+// useWakeRefresh — мягкое восстановление при пробуждении вкладки БЕЗ перезагрузки.
+// Для мобильных (водитель, мобильная админка): принудительный reload на Android
+// (особенно Samsung Internet) сам подвисает на белом экране, поэтому вместо него
+// при возврате на передний план просто переподключаем соединение и обновляем
+// данные на месте. Страница остаётся отрисованной.
+//
+// Триггеры пробуждения на мобильном надёжнее ловятся комбинацией:
+//   visibilitychange → visible  (обычный возврат на вкладку)
+//   pageshow (persisted)        (восстановление из bfcache)
+//   resume                      (Page Lifecycle API — выход из «заморозки»)
+export function useWakeRefresh(onWake: () => void, enabled = true) {
+  const cbRef = useRef(onWake);
+  cbRef.current = onWake;
+
+  useEffect(() => {
+    if (!enabled || typeof document === 'undefined') return;
+
+    let lastFire = 0;
+    // Дебаунс: visibilitychange и pageshow нередко приходят почти одновременно —
+    // не дёргаем onWake дважды подряд.
+    const fire = () => {
+      const now = Date.now();
+      if (now - lastFire < 3000) return;
+      lastFire = now;
+      try {
+        cbRef.current();
+      } catch (e) {
+        console.warn('[WakeRefresh] onWake error:', e);
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') fire();
+    };
+    const onPageShow = (e: Event) => {
+      if ((e as PageTransitionEvent).persisted) fire();
+    };
+    const onResume = () => fire();
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onPageShow);
+    document.addEventListener('resume', onResume);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onPageShow);
+      document.removeEventListener('resume', onResume);
     };
   }, [enabled]);
 }

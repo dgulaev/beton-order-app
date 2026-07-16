@@ -187,6 +187,7 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
   .concl b { font-weight: bold; }
   .gost { margin-top: 10px; text-align: justify; line-height: 1.4; font-size: 11px; }
   .sign { margin-top: 26px; display: flex; justify-content: space-between; align-items: flex-end; }
+  @page { size: A4; margin: 0; }
   @media print { body { margin: 10mm 12mm; } }
 </style></head><body>
   <div class="head center">
