@@ -3224,7 +3224,7 @@ const changeStaffPassword = async (staffMember: any) => {
               Операторы смены
             </label>
             <div style={{ fontSize: '13px', color: '#64748B', marginBottom: '10px' }}>
-              Общая учётка «Оперратор» используется несколькими людьми по очереди —
+              Общая учётка «Операторы» используется несколькими людьми по очереди —
               здесь список имён, из которых оператор выбирает себя на странице БСУ.
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>

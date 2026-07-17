@@ -55,36 +55,62 @@ export default function ReportsPage() {
   // корректно пересчитается на реальный размер сразу после измерения.
   const CHART_INITIAL_DIMENSION = { width: 400, height: 300 };
 
-  // Подбираем itemsPerPage САМОСХОДЯЩИМСЯ алгоритмом по ФАКТИЧЕСКОМУ (а не
-  // предполагаемому по формуле) свободному месту в контейнере — это надёжнее
-  // любой формулы-оценки по высоте строки, т.к. учитывает зум браузера,
-  // масштабирование экрана (DPI), округление суб-пикселей шрифта (высота
-  // строки зависит от font-size: clamp(12px, 0.9vw, 15px)) и другие факторы,
-  // из-за которых формула на конкретном экране может немного промахнуться.
-  // На каждый проход только ОДНО решение: либо убрать строку (если реально не
-  // влезает), либо добавить (если есть место под ещё одну целую строку) —
-  // никогда оба сразу и никогда в противоречивые стороны одновременно,
-  // поэтому гарантированно сходится к точному значению без "дребезга" туда-сюда,
-  // независимо от того, с какого стартового значения начали.
-  // Срабатывает на resize контейнера И на появление/удаление строк в DOM
-  // (важно: данные истории отчётов подгружаются асинхронно ПОСЛЕ монтирования,
-  // и до появления реальных строк измерять и корректировать нечего).
+  // Подбираем itemsPerPage напрямую по ФАКТИЧЕСКИ отрендеренной высоте одной
+  // строки — так учитывается зум браузера, масштабирование экрана (DPI),
+  // суб-пиксельное округление шрифта (высота строки зависит от font-size:
+  // clamp(12px, 0.9vw, 15px)) и другие факторы, из-за которых "теоретическая"
+  // высота строки могла бы немного промахнуться.
+  //
+  // ВАЖНО: раньше здесь был пошаговый алгоритм (+1/-1 строка за раз, ждём
+  // следующий resize/mutation, повторяем) — он ломался при большом скачке
+  // доступной высоты (напр. смена монитора 4K → 1920 за один проход): чтобы
+  // дойти от 24 строк до 6, нужно было 18 срабатываний ResizeObserver подряд,
+  // и если что-то мешало кому-то из промежуточных шагов, итог "застревал" на
+  // промежуточном значении — лишняя строка обрезалась по высоте. Формула ниже
+  // вычисляет целевое количество строк ЗА ОДИН проход по реальному размеру,
+  // поэтому не зависит от количества и порядка сработавших событий.
+  //
+  // КРИТИЧНО: высоту строки берём через getComputedStyle(...).height, а НЕ
+  // getBoundingClientRect(). Весь /adminCifra обёрнут в transform: scale(...)
+  // (layout.tsx, "ГЛОБАЛЬНЫЙ МАСШТАБ" — 1.00/0.88/0.84/0.80 в зависимости от
+  // эффективной ширины окна, которая на реальном "1920" ноутбуке может
+  // отличаться от 1920 из-за масштабирования Windows, что незаметно на глаз,
+  // но сдвигает scale на ступеньку). getBoundingClientRect() возвращает
+  // ВИЗУАЛЬНЫЙ размер ПОСЛЕ transform (т.е. уже умноженный на scale), а
+  // el.clientHeight контейнера — размер ДО transform (сырые layout-координаты,
+  // transform их не меняет). Делить одно на другое при scale ≠ 1.00 — это
+  // делить в разных единицах, из-за чего расчёт "сколько строк влезает"
+  // промахивался именно на экранах не с "чистым" 1920 (где scale случайно
+  // равен 1.00), а с любым другим эффективным разрешением.
+  // getComputedStyle(...).height, в отличие от getBoundingClientRect, transform
+  // игнорирует (та же "сырая" система координат, что и clientHeight) — но, в
+  // отличие от offsetHeight, сохраняет дробные суб-пиксели (offsetHeight
+  // округляет до целого, а на грани буквально 1px этого достаточно, чтобы
+  // недосчитать строку, которая на самом деле помещается).
   useEffect(() => {
     const el = historyListRef.current;
     if (!el) return;
+    const GAP = 8;
     const adjust = () => {
       if (el.clientHeight <= 0) return;
-      if (el.scrollHeight > el.clientHeight + 1) {
-        setItemsPerPage(prev => (prev > 1 ? prev - 1 : prev));
-        return;
-      }
-      const firstRow = el.firstElementChild as HTMLElement | null;
-      if (!firstRow) return;
-      const rowHeight = firstRow.getBoundingClientRect().height + 8 /* gap */;
-      const freeSpace = el.clientHeight - el.scrollHeight;
-      if (freeSpace >= rowHeight) {
-        setItemsPerPage(prev => prev + 1);
-      }
+      const rows = Array.from(el.children) as HTMLElement[];
+      if (rows.length === 0) return;
+      // Плейсхолдер "отчёты не найдены" совсем другой формы (крупный паддинг),
+      // мерить по нему высоту обычной строки нельзя — иначе на пустой выборке
+      // itemsPerPage резко проседает.
+      if (rows.length === 1 && rows[0].dataset.reportPlaceholder === 'true') return;
+
+      // box-sizing здесь content-box (нет Tailwind preflight) — cs.height не
+      // включает padding/border, поэтому досчитываем их явно, чтобы получить
+      // полную (border-box) высоту строки с сохранением суб-пиксельной точности.
+      const cs = getComputedStyle(rows[0]);
+      const rowHeight = parseFloat(cs.height)
+        + parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+        + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+      if (!rowHeight || rowHeight <= 0) return;
+
+      const target = Math.max(1, Math.floor((el.clientHeight + GAP) / (rowHeight + GAP)));
+      setItemsPerPage(prev => (prev === target ? prev : target));
     };
     adjust();
     const ro = new ResizeObserver(adjust);
@@ -1032,29 +1058,29 @@ export default function ReportsPage() {
                     });
 
                     if (res.ok) {
-                      alert(`✅ Отчёт "${file.name}" успешно загружен!\nПартий: ${processed.length} • Объём: ${totalVolume} м³`);
+                      let successMessage = `✅ Отчёт "${file.name}" успешно загружен!\nПартий: ${processed.length} • Объём: ${totalVolume} м³`;
 
-                      // === АВТОМАТИЧЕСКОЕ СПИСАНИЕ ДОБАВОК ===
-                      if (totalAdditive1 > 0 || totalAdditive2 > 0) {
+                      // === СВЕРКА ДОБАВОК: план по отчёту MEKA vs факт, уже списанный в реальном времени ===
+                      // Склад теперь списывается сразу при разгрузке каждого рейса
+                      // (см. lib/orderMixers.ts), а не пакетно из отчёта — отчёт
+                      // используется только для проверки, не разошлись ли цифры.
+                      if ((totalAdditive1 > 0 || totalAdditive2 > 0) && reportDate) {
                         try {
-                          const resSubtract = await fetch('/api/adminCifra/warehouse/subtract', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              pfmLiters: totalAdditive1,
-                              linomixLiters: totalAdditive2
-                            })
-                          });
-
-                          if (resSubtract.ok) {
-                            console.log(`✅ Автоматически списано: ПФМ-НЛК ${totalAdditive1.toFixed(1)} л, Линомикс ${totalAdditive2.toFixed(1)} л`);
-                          } else {
-                            console.warn('Не удалось списать добавки автоматически');
+                          const resReconcile = await fetch(`/api/adminCifra/warehouse/reconcile?date=${reportDate}`, { cache: 'no-store' });
+                          if (resReconcile.ok) {
+                            const reconcile = await resReconcile.json();
+                            const actual = reconcile.actual || {};
+                            successMessage +=
+                              `\n\nСверка добавок за ${reportDate}:\n` +
+                              `ПФМ-НЛК — план по отчёту: ${totalAdditive1.toFixed(1)} кг, списано в реальном времени: ${(actual.pfmKg ?? 0).toFixed(1)} кг\n` +
+                              `Линомикс ТипР — план по отчёту: ${totalAdditive2.toFixed(1)} кг, списано в реальном времени: ${(actual.linomixKg ?? 0).toFixed(1)} кг`;
                           }
                         } catch (err) {
-                          console.error('Ошибка при автоматическом списании добавок:', err);
+                          console.error('Не удалось получить сверку добавок:', err);
                         }
                       }
+
+                      alert(successMessage);
 
                       loadHistory();
                       setReportData(processed);
@@ -1209,7 +1235,7 @@ export default function ReportsPage() {
                 </div>
               </div>
             )) : (
-              <div style={{ padding: '60px', textAlign: 'center', color: '#64748B', backgroundColor: '#25334A', borderRadius: '16px' }}>
+              <div data-report-placeholder="true" style={{ padding: '60px', textAlign: 'center', color: '#64748B', backgroundColor: '#25334A', borderRadius: '16px' }}>
                 Отчёты по выбранным фильтрам не найдены
               </div>
             )}

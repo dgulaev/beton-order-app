@@ -183,7 +183,7 @@ export async function DELETE(request: NextRequest) {
     // ==================== ПРОВЕРКА ФИНАЛЬНОГО СТАТУСА ЗАЯВКИ ====================
     const { data: mixer, error: mixerFetchError } = await supabase
       .from('order_mixers')
-      .select('id, order_id, orders!inner(status)')
+      .select('id, order_id, additive_write_off_id, additive_write_off_liters, orders!inner(status)')
       .eq('id', id)
       .single();
 
@@ -193,6 +193,20 @@ export async function DELETE(request: NextRequest) {
         return NextResponse.json({
           error: `Заявка уже в финальном статусе "${STATUS_LABELS_RU[orderStatus] || orderStatus}" — удаление миксеров запрещено`
         }, { status: 400 });
+      }
+    }
+
+    // ==================== ВОЗВРАТ ДОБАВКИ НА СКЛАД ====================
+    // Если по этому рейсу уже было реальное списание добавки (см.
+    // lib/orderMixers.ts) — при удалении самой записи о рейсе нужно вернуть
+    // остаток на склад, иначе он "потеряется" безвозвратно.
+    if (mixer && (mixer as any).additive_write_off_liters != null) {
+      const { error: rpcError } = await supabase.rpc('warehouse_additive_adjust', {
+        p_additive_id: (mixer as any).additive_write_off_id,
+        p_delta_liters: Number((mixer as any).additive_write_off_liters),
+      });
+      if (rpcError) {
+        console.error('Не удалось вернуть добавку на склад при удалении миксера:', rpcError);
       }
     }
 

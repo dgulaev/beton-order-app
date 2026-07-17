@@ -5,6 +5,7 @@
 // того, кто меняет статус.
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 import { OWN_UNLOAD_ALLOWANCE_MIN, ORDER_MIXER_STATUSES, type OrderMixerStatus } from '@/lib/mixerConfig';
+import { findRecipeByGrade, calculateAdditiveUsage } from '@/lib/recipeAdditives';
 
 const FINAL_ORDER_STATUSES = ['completed', 'cancelled'];
 const STATUS_LABELS_RU: Record<string, string> = {
@@ -92,7 +93,7 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
 
   const { data: mixer, error: fetchError } = await supabase
     .from('order_mixers')
-    .select(`*, orders!inner(id, status, volume)`)
+    .select(`*, orders!inner(id, status, volume, grade)`)
     .eq('id', id)
     .single();
 
@@ -150,6 +151,73 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
       if (downtimeMinutes !== null) {
         updateData.downtime_minutes = downtimeMinutes;
       }
+    }
+  }
+
+  // ==================== РЕАЛЬНОЕ СПИСАНИЕ ДОБАВКИ СО СКЛАДА ====================
+  // Раньше добавки (ПФМ-НЛК / Линомикс ТипР) списывались пакетно раз в день
+  // при загрузке отчёта MEKA — по значениям из отчёта (кг), но 1:1 из
+  // литрового остатка склада, без перевода по плотности. Теперь списываем
+  // сразу в момент разгрузки конкретного рейса, по реальной дозировке из
+  // рецепта (recipes.additive/additive2), с переводом кг → литры по
+  // плотности (1.16 для ПФМ-НЛК, 1.18 для Линомикса). Работает для ЛЮБОГО
+  // способа перевести миксер в "Разгружен" — оператор, диспетчер, водитель,
+  // админ — все идут через эту функцию.
+  //
+  // Сумма списания сохраняется на самой строке order_mixers
+  // (additive_write_off_*), чтобы при отмене/удалении рейса можно было
+  // вернуть на склад ровно столько, сколько было списано, а не пересчитывать
+  // по (возможно, уже изменившемуся) рецепту заново.
+  if (status === 'Разгружен' && oldStatus !== 'Разгружен' && mixer.additive_write_off_liters == null) {
+    try {
+      const { data: recipes } = await supabase
+        .from('recipes')
+        .select('code, name, type, cement, additive, additive2');
+
+      const recipe = findRecipeByGrade(recipes || [], mixer.orders?.grade);
+      const usage = calculateAdditiveUsage(recipe, Number(mixer.volume || 0));
+
+      if (usage) {
+        const { error: rpcError } = await supabase.rpc('warehouse_additive_adjust', {
+          p_additive_id: usage.additiveId,
+          p_delta_liters: -usage.liters,
+        });
+
+        if (rpcError) {
+          console.error('Не удалось списать добавку со склада (реальное время):', rpcError);
+        } else {
+          updateData.additive_write_off_id = usage.additiveId;
+          updateData.additive_write_off_liters = usage.liters;
+          updateData.additive_write_off_kg = usage.kg;
+        }
+      }
+    } catch (err) {
+      // Проблема со списанием добавки не должна блокировать сам факт разгрузки миксера.
+      console.error('Ошибка расчёта реального списания добавки:', err);
+    }
+  } else if (
+    status &&
+    status !== 'Разгружен' &&
+    oldStatus === 'Разгружен' &&
+    mixer.additive_write_off_liters != null
+  ) {
+    // Статус рейса откатили обратно (отмена/исправление) — возвращаем на
+    // склад ровно то, что было списано за этот рейс.
+    try {
+      const { error: rpcError } = await supabase.rpc('warehouse_additive_adjust', {
+        p_additive_id: mixer.additive_write_off_id,
+        p_delta_liters: Number(mixer.additive_write_off_liters),
+      });
+
+      if (rpcError) {
+        console.error('Не удалось вернуть добавку на склад при откате статуса:', rpcError);
+      } else {
+        updateData.additive_write_off_id = null;
+        updateData.additive_write_off_liters = null;
+        updateData.additive_write_off_kg = null;
+      }
+    } catch (err) {
+      console.error('Ошибка возврата добавки на склад при откате статуса:', err);
     }
   }
 

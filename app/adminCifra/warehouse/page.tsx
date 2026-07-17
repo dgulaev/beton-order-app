@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 
 import { supabase } from '@/lib/supabaseClient';
+import { findRecipeByGrade, calculateAdditiveUsage, calculateCementUsageKg } from '@/lib/recipeAdditives';
 
 interface WarehousePageProps {
   recipes?: any[];
@@ -118,7 +119,14 @@ const loadWarehouse = async () => {
   }
 };
 
-    // ==================== 2.1 ЗАГРУЗКА РАСХОДА ЗА СЕГОДНЯ (УЧИТЫВАЕМ ТИП БЕТОНА) ====================
+    // ==================== 2.1 ЗАГРУЗКА РАСХОДА ЗА СЕГОДНЯ (ПО РЕАЛЬНЫМ РЕЦЕПТАМ) ====================
+  // Раньше цемент считался как volume × 350 кг/м³, а добавка — как
+  // volume × 1.16/1.18 по угадыванию "раствор или бетон" по подстроке в
+  // марке (grade.includes('ТР'/'РАСТВОР'/...)). Это давало грубую оценку,
+  // не совпадающую с реальной дозировкой конкретного рецепта (у нас марки
+  // от 130 до 570 кг цемента на м³, добавка — от 0 до 9+ кг/м³). Теперь для
+  // каждого рейса ищем реальный рецепт по марке (та же логика, что и в
+  // /adminCifra/zayavki для планового расхода) и считаем по его составу.
 const loadTodayConsumption = async () => {
   try {
     const res = await fetch('/api/adminCifra/production-log?today=true', {
@@ -137,34 +145,28 @@ const loadTodayConsumption = async () => {
     const data = await res.json();
     const logs = data.logs || data || [];
 
-    let totalCement = 0;
-    let totalPFM = 0;
-    let totalLinomix = 0;
+    let totalCementKg = 0;
+    let totalPfmKg = 0;
+    let totalLinomixKg = 0;
 
     logs.forEach((log: any) => {
       const volume = parseFloat(log.volume || log.qty || 0);
       if (isNaN(volume) || volume <= 0) return;
 
-      const grade = (log.concrete_grade || '').toUpperCase().trim();
+      const recipe = findRecipeByGrade(recipes, log.concrete_grade);
+      if (!recipe) return; // рецепт не нашли — расход по нему не учитываем (лучше 0, чем случайная оценка)
 
-      const isSolution = grade.includes('ТР') || 
-                        grade.includes('РАСТВОР') || 
-                        grade.includes('М100') || 
-                        grade.includes('М150');
+      totalCementKg += calculateCementUsageKg(recipe, volume);
 
-      if (isSolution) {
-        totalLinomix += volume * 1.18;
-      } else {
-        totalPFM += volume * 1.16;
-      }
-
-      totalCement += volume * 350;
+      const usage = calculateAdditiveUsage(recipe, volume);
+      if (usage?.additiveId === 1) totalPfmKg += usage.kg;
+      else if (usage?.additiveId === 2) totalLinomixKg += usage.kg;
     });
 
     const newConsumption = {
-      cement: Math.round(totalCement / 1000),
-      pfm: Math.round(totalPFM),
-      linomix: Math.round(totalLinomix)
+      cement: Math.round(totalCementKg / 1000),
+      pfm: Math.round(totalPfmKg),
+      linomix: Math.round(totalLinomixKg)
     };
 
     setTodayConsumption(newConsumption);
@@ -197,91 +199,22 @@ const loadTodayConsumption = async () => {
     }
   };
 
-  // ==================== 2.2.1  СПИСАНИЕ ДОБАВОК ПО ОТЧЁТУ ====================
-  const subtractAdditivesFromReport = async (pfmLiters: number, linomixLiters: number) => {
-    if (pfmLiters <= 0 && linomixLiters <= 0) {
-      alert('Нет расхода добавок в отчёте');
-      return;
-    }
-
-    if (!confirm(`Списать по отчёту:\n` +
-                `ПФМ-НЛК: ${pfmLiters.toFixed(1)} л\n` +
-                `Линомикс ТипР: ${linomixLiters.toFixed(1)} л ?`)) {
-      return;
-    }
-
-    setAdditives(prev => {
-      const updated = [...prev];
-
-      // ПФМ-НЛК (index 0)
-      if (updated[0] && pfmLiters > 0) {
-        const old = Number(updated[0].current || 0);
-        updated[0].current = Math.max(0, old - pfmLiters);
-        console.log(`📉 Списано ${pfmLiters.toFixed(1)} л ПФМ-НЛК. Было: ${old.toFixed(1)} → Стало: ${updated[0].current.toFixed(1)}`);
-        addToHistory('− Списано по отчёту', 'ПФМ-НЛК', pfmLiters, old, updated[0].current, 'л');
-      }
-
-      // Линомикс (index 1)
-      if (updated[1] && linomixLiters > 0) {
-        const old = Number(updated[1].current || 0);
-        updated[1].current = Math.max(0, old - linomixLiters);
-        console.log(`📉 Списано ${linomixLiters.toFixed(1)} л Линомикс. Было: ${old.toFixed(1)} → Стало: ${updated[1].current.toFixed(1)}`);
-        addToHistory('− Списано по отчёту', 'Линомикс ТипР', linomixLiters, old, updated[1].current, 'л');
-      }
-
-      saveToDatabase(undefined, updated);
-      return updated;
-    });
-  };
-
-       // ==================== 2.2.2 ОТКАТ СПИСАНИЯ ДОБАВОК ПРИ УДАЛЕНИИ ОТЧЁТА ====================
-  const rollbackAdditivesFromReport = async (pfmLiters: number, linomixLiters: number) => {
-    if (pfmLiters <= 0 && linomixLiters <= 0) {
-      console.log('⚠️ Откат: нет данных для возврата');
-      return;
-    }
-
-    console.log(`🔄 Запуск отката: ПФМ +${pfmLiters.toFixed(1)}л | Линомикс +${linomixLiters.toFixed(1)}л`);
-
-    setAdditives(prev => {
-      const updated = [...prev];
-
-      // ПФМ-НЛК (index 0)
-      if (updated[0] && pfmLiters > 0) {
-        const old = Number(updated[0].current || 0);
-        updated[0].current = old + pfmLiters;
-        console.log(`📈 [ОТКАТ] ПФМ-НЛК: ${old.toFixed(1)} → ${updated[0].current.toFixed(1)}`);
-        addToHistory('+ Возврат по удалённому отчёту', 'ПФМ-НЛК', pfmLiters, old, updated[0].current, 'л');
-      }
-
-      // Линомикс ТипР (index 1)
-      if (updated[1] && linomixLiters > 0) {
-        const old = Number(updated[1].current || 0);
-        updated[1].current = old + linomixLiters;
-        console.log(`📈 [ОТКАТ] Линомикс: ${old.toFixed(1)} → ${updated[1].current.toFixed(1)}`);
-        addToHistory('+ Возврат по удалённому отчёту', 'Линомикс ТипР', linomixLiters, old, updated[1].current, 'л');
-      }
-
-      // Принудительно сохраняем в базу
-      setTimeout(() => {
-        saveToDatabase(undefined, updated);
-      }, 100);
-
-      return updated;
-    });
-  };
-
   // ==================== 2.3 ЗАГРУЗКА ДАННЫХ И ИНИЦИАЛИЗАЦИЯ ====================
   useEffect(() => {
     loadWarehouse();
     loadTodayConsumption();
     loadOperationHistory();
 
-    (window as any).subtractAdditivesFromReport = subtractAdditivesFromReport;
-    (window as any).rollbackAdditivesFromReport = rollbackAdditivesFromReport;
-
     console.log('✅ WarehousePage загружен');
   }, []);
+
+  // Рецепты в родителе (adminCifra/operator) грузятся отдельным запросом и
+  // могут прилететь позже первого монтирования этой вкладки — пересчитываем
+  // КПИ расхода, как только список рецептов действительно наполнился.
+  useEffect(() => {
+    if (recipes.length > 0) loadTodayConsumption();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipes]);
 
   // Раньше здесь был setInterval(loadTodayConsumption, 8000) — опрос тяжёлого
   // JOIN-запроса каждые 8с на КАЖДОЙ открытой странице склада, постоянная
@@ -290,6 +223,22 @@ const loadTodayConsumption = async () => {
   useRealtimeBroadcast({
     topic: 'production_logs:all',
     onInsert: () => loadTodayConsumption(),
+  });
+
+  // ==================== REALTIME-СИНХРОНИЗАЦИЯ ОСТАТКОВ ДОБАВОК ====================
+  // Реальное списание добавки при разгрузке рейса (см. lib/orderMixers.ts)
+  // теперь может произойти в любой момент — в том числе с ЧУЖОГО устройства
+  // (диспетчер/водитель), пока эта вкладка открыта. saveToDatabase() ниже
+  // отправляет ПОЛНЫЙ текущий снимок additives при любом ручном действии на
+  // складе (внесение цемента, кубик и т.п.) — если снимок в памяти устареет
+  // (кто-то списал добавку за рейс, а мы этого не увидели), такое ручное
+  // действие может затереть уже списанный остаток обратно. Подписка держит
+  // additives/silos свежими почти в реальном времени и убирает этот риск.
+  useRealtimeBroadcast({
+    topic: 'order_mixers:all',
+    onUpdate: (record: any) => {
+      if (record?.status === 'Разгружен') loadWarehouse();
+    },
   });
 
     // ==================== АВТОМАТИЧЕСКАЯ ЗАГРУЗКА ФБС ====================

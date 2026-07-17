@@ -609,13 +609,25 @@ useEffect(() => {
   };
 
   // ==================== 18. ТАЙМЛАЙН ==============================================
+  // Позиция линии/точки текущего времени на шкале 00:00–24:00. Раньше здесь
+  // стоял искусственный порог (min 3%, max 97%) — видимо, чтобы плашка с
+  // временем не обрезалась у самого края контейнера. Но этот порог сдвигал
+  // саму ЛИНИЮ: 3% от суток = 43 минуты, поэтому в 00:12 линия рисовалась
+  // так, будто время 00:43 (визуально почти у засечки 01:00 — ровно то, что
+  // и было на скриншоте). Теперь здесь только точный процент от суток без
+  // искажений; защиту от обрезания плашки с текстом времени переносим в её
+  // собственный стиль через CSS clamp() (см. рендер ниже) — линия и точка
+  // на шкале при этом остаются математически точными.
   useEffect(() => {
     const updateTime = () => {
       const now = new Date();
       const minutes = now.getHours() * 60 + now.getMinutes();
-      setCurrentHourPercent(Math.min(Math.max((minutes / 1440) * 100, 3), 97));
+      setCurrentHourPercent(Math.min(Math.max((minutes / 1440) * 100, 0), 100));
     };
     updateTime();
+    // Обновление раз в минуту — это НЕ сетевой полинг, а чисто локальный
+    // таймер: пересчитываем позицию из часов браузера, без единого запроса
+    // к серверу. Раз в минуту достаточно, т.к. точность шкалы — минута.
     const interval = setInterval(updateTime, 60000);
     return () => clearInterval(interval);
   }, []);
@@ -1339,7 +1351,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
       overflowX: 'auto',
       overflowY: 'auto',
       paddingRight: '20px',
-      paddingBottom: '36px', // запас для плашки текущего времени внизу
+      paddingBottom: '26px', // запас для подписи текущего времени внизу
     }}
   >
     {todayOrders.length > 0 ? todayOrders.map((order: Order) => {
@@ -1608,36 +1620,34 @@ const generateDailyReport = () => {
       pointerEvents: 'none',
       zIndex: 50,
     }}>
-      {/* Линия не доходит до плашки — bottom: 32px оставляет место для badge */}
+      {/* Линия не доходит до подписи времени — bottom: 22px оставляет место под текст */}
       <div style={{
         position: 'absolute',
         left: `${currentHourPercent}%`,
         top: 0,
-        bottom: '32px',
+        bottom: '22px',
         width: '2px',
         background: 'linear-gradient(180deg, #4ADE80, #86EFAC)',
         boxShadow: '0 0 10px rgba(74,222,128,0.7)',
         transform: 'translateX(-50%)',
       }} />
-      {/* Badge выведен ниже линии, не клипируется */}
+      {/* Просто время, без плашки-пилюли — светящийся текст в цвет линии.
+          left через CSS clamp(): сама линия остаётся на математически точном
+          currentHourPercent, а у текста свой минимальный отступ от краёв
+          (в px), чтобы он не срезался на самой границе суток (00:00 / 24:00). */}
       <div style={{
         position: 'absolute',
-        left: `${currentHourPercent}%`,
-        bottom: '4px',
+        left: `clamp(20px, ${currentHourPercent}%, calc(100% - 20px))`,
+        bottom: 0,
         transform: 'translateX(-50%)',
-        background: 'rgba(74,222,128,0.18)',
-        color: '#4ADE80',
-        padding: '4px 12px',
-        borderRadius: '9999px',
+        color: '#86EFAC',
         fontSize: '13px',
         fontWeight: '700',
-        zIndex: 60,
-        boxShadow: '0 0 14px rgba(74,222,128,0.45)',
+        letterSpacing: '0.3px',
+        fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
         whiteSpace: 'nowrap',
-        border: 'none',
-        textAlign: 'center',
-        minWidth: '56px',
-        backdropFilter: 'blur(4px)',
+        textShadow: '0 0 10px rgba(74,222,128,0.75)',
+        zIndex: 60,
       }}>
         {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
       </div>
