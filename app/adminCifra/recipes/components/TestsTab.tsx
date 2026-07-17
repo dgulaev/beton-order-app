@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { COLORS, inputStyle, labelStyle, cardStyle, ghostButton, primaryButton, overlayStyle, modalStyle, pillStyle } from '../labStyles';
 import ProtocolModal from './ProtocolModal';
 import { SCALE, num, ru, ruInt, computeSeries, type Specimen } from '../protocolCalc';
+import { useAutoRows, LabPagination } from '../pagination';
 
 type JournalKey = '7' | '28';
 
@@ -42,11 +43,26 @@ export default function TestsTab() {
   const [journal, setJournal] = useState<JournalKey>('7');
   const [orders, setOrders] = useState<any[]>([]);
   const [orderSearch, setOrderSearch] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
+  const [page, setPage] = useState(1);
+  const listRef = useRef<HTMLDivElement>(null);
+  const { perPage, rowH } = useAutoRows(listRef, { deps: [journal, tests.length, dateFilter] });
   const loadedOrderMonths = useRef<Set<string>>(new Set());
 
-  const journalTests = tests.filter((t) => String(t.test_type) === journal);
+  const journalTests = tests
+    .filter((t) => String(t.test_type) === journal)
+    .filter((t) => !dateFilter || String(t.sample_date) === dateFilter);
   const count7 = tests.filter((t) => String(t.test_type) === '7').length;
   const count28 = tests.filter((t) => String(t.test_type) === '28').length;
+
+  const totalPages = Math.max(1, Math.ceil(journalTests.length / perPage));
+  const pageSafe = Math.min(page, totalPages);
+  const pagedTests = journalTests.slice((pageSafe - 1) * perPage, pageSafe * perPage);
+
+  // Сброс на первую страницу при смене журнала / фильтра даты.
+  useEffect(() => {
+    setPage(1);
+  }, [journal, dateFilter]);
 
   const load = async () => {
     setLoading(true);
@@ -96,6 +112,34 @@ export default function TestsTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing?.sample_date, editing != null]);
 
+  // Поиск по номеру заявки: если ввели чистое число и такой заявки нет среди
+  // загруженных (например, из другого месяца) — подгружаем её по id напрямую,
+  // чтобы она появилась в выпадающем списке.
+  useEffect(() => {
+    const q = orderSearch.trim();
+    if (!editing || !/^\d+$/.test(q)) return;
+    if (orders.some((o) => String(o.id) === q)) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/adminCifra/orders/${q}`);
+        if (res.ok && !cancelled) {
+          const o = await res.json();
+          if (o && o.id) {
+            setOrders((prev) => (prev.some((x) => String(x.id) === String(o.id)) ? prev : [...prev, o]));
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderSearch, editing != null]);
+
   const orderOptions = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
     return orders
@@ -114,11 +158,18 @@ export default function TestsTab() {
   const selectOrder = (val: string) => {
     const id = val ? Number(val) : null;
     const o = id != null ? orders.find((x) => String(x.id) === String(id)) : null;
-    setEditing((prev: any) => ({
-      ...prev,
-      order_id: id,
-      recipe_code: prev.recipe_code || o?.grade || '',
-    }));
+    const consumer = o ? o.organization_name || o.full_name || '' : '';
+    setEditing((prev: any) => {
+      const p = prev.protocol && typeof prev.protocol === 'object' ? prev.protocol : { cube_size: 100, specimens: defaultSpecimens() };
+      return {
+        ...prev,
+        order_id: id,
+        recipe_code: prev.recipe_code || o?.grade || '',
+        // Организацию-потребителя храним в protocol.consumer: она показывается
+        // в строке журнала и подставляется в печатный протокол.
+        protocol: { ...p, consumer },
+      };
+    });
   };
 
   // Данные серии кубиков (масса/нагрузка) храним в editing.protocol.
@@ -196,7 +247,7 @@ export default function TestsTab() {
       </div>
 
       {/* Переключатель журналов: 7 суток / 28 суток — это два разных журнала */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '18px' }}>
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '18px', alignItems: 'center', flexWrap: 'wrap' }}>
         {([
           { key: '7' as JournalKey, label: 'Журнал 7 суток', count: count7 },
           { key: '28' as JournalKey, label: 'Журнал 28 суток', count: count28 },
@@ -218,35 +269,50 @@ export default function TestsTab() {
             <span style={pillStyle('rgba(148,163,184,0.15)', journal === j.key ? COLORS.accent : COLORS.muted)}>{j.count}</span>
           </button>
         ))}
+        {/* Фильтр по дате образцов */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
+          <span style={{ color: COLORS.muted, fontSize: '13px' }}>Дата образцов:</span>
+          <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} style={{ ...inputStyle, width: 'auto', padding: '8px 10px' }} />
+          {dateFilter && (
+            <button onClick={() => setDateFilter('')} style={{ ...ghostButton, padding: '8px 12px' }}>Сброс</button>
+          )}
+        </div>
       </div>
 
       {loading ? (
         <p style={{ color: COLORS.muted }}>Загрузка...</p>
       ) : journalTests.length === 0 ? (
         <div style={{ ...cardStyle, textAlign: 'center', color: COLORS.muted }}>
-          В журнале {journal} суток записей нет. Добавьте первое испытание партии.
+          {dateFilter
+            ? `За ${dateFilter} записей в журнале ${journal} суток нет.`
+            : `В журнале ${journal} суток записей нет. Добавьте первое испытание партии.`}
         </div>
       ) : (
-        <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
-          <div style={{ display: 'flex', padding: '12px 16px', color: COLORS.muted, fontSize: '13px', borderBottom: `1px solid ${COLORS.border}` }}>
+        <div ref={listRef} style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
+          <div data-lab-head style={{ display: 'flex', padding: '12px 16px', color: COLORS.muted, fontSize: '13px', borderBottom: `1px solid ${COLORS.border}` }}>
             <div style={{ width: '120px' }}>Партия</div>
-            <div style={{ width: '90px' }}>Марка</div>
-            <div style={{ width: '110px' }}>Дата</div>
-            <div style={{ width: '110px' }}>Требуемая</div>
-            <div style={{ width: '110px' }}>Факт</div>
-            <div style={{ flex: 1 }}>Результат</div>
+            <div style={{ width: '80px' }}>Заявка</div>
+            <div style={{ width: '80px' }}>Марка</div>
+            <div style={{ width: '100px' }}>Дата</div>
+            <div style={{ flex: 1 }}>Организация</div>
+            <div style={{ width: '100px' }}>Требуемая</div>
+            <div style={{ width: '100px' }}>Факт</div>
+            <div style={{ width: '150px' }}>Результат</div>
             <div style={{ width: '250px' }}></div>
           </div>
-          {journalTests.map((t) => (
-            <div key={t.id} style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: `1px solid ${COLORS.border}`, color: '#E2E8F0', fontSize: '14px' }}>
+          {pagedTests.map((t) => (
+            <div key={t.id} data-lab-row style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: `1px solid ${COLORS.border}`, color: '#E2E8F0', fontSize: '14px' }}>
               <div style={{ width: '120px' }}>{t.batch_no || '—'}</div>
-              <div style={{ width: '90px' }}>{t.recipe_code || '—'}</div>
-              <div style={{ width: '110px' }}>{t.sample_date || '—'}</div>
-              <div style={{ width: '110px' }}>{t.required_strength ?? '—'} МПа</div>
-              <div style={{ width: '110px' }}>{t.actual_strength_mpa ?? '—'} МПа</div>
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ width: '80px', color: t.order_id ? COLORS.blue : COLORS.muted }}>{t.order_id ? `№${t.order_id}` : '—'}</div>
+              <div style={{ width: '80px' }}>{t.recipe_code || '—'}</div>
+              <div style={{ width: '100px' }}>{t.sample_date || '—'}</div>
+              <div style={{ flex: 1, color: t.protocol?.consumer ? '#E2E8F0' : COLORS.muted, paddingRight: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {t.protocol?.consumer || '—'}
+              </div>
+              <div style={{ width: '100px' }}>{t.required_strength ?? '—'} МПа</div>
+              <div style={{ width: '100px' }}>{t.actual_strength_mpa ?? '—'} МПа</div>
+              <div style={{ width: '150px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={resultPill(t.result)}>{resultLabel(t.result)}</span>
-                {t.protocol && <span style={pillStyle('rgba(96,165,250,0.15)', COLORS.blue)}>протокол</span>}
               </div>
               <div style={{ width: '250px', display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
                 <button onClick={() => setProtocolTest(t)} style={{ ...ghostButton, padding: '6px 12px', background: 'rgba(96,165,250,0.15)', color: COLORS.blue }}>Протокол</button>
@@ -255,8 +321,14 @@ export default function TestsTab() {
               </div>
             </div>
           ))}
+          {/* Распорка держит высоту списка постоянной, чтобы пагинация не прыгала. */}
+          {totalPages > 1 && pagedTests.length < perPage && (
+            <div style={{ height: `${(perPage - pagedTests.length) * rowH}px` }} />
+          )}
         </div>
       )}
+
+      <LabPagination page={pageSafe} totalPages={totalPages} onPage={setPage} />
 
       {editing && (
         <div style={overlayStyle} onClick={() => setEditing(null)}>

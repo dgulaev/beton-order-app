@@ -319,6 +319,60 @@ export default function OperatorBSUPage() {
     });
   }, [completedTrips]);
 
+  // ==================== 1.2.2 "ОСИРОТЕВШИЕ" РЕЙСЫ — LIVE-ПОДХВАТ ====================
+  // Дублирует ту же логику, что и на сервере (см. /api/adminCifra/production-log),
+  // но работает мгновенно, без перезагрузки страницы: если диспетчер (в модалке
+  // заявки) или водитель (в своём приложении) переводит миксер в "Разгружен"/
+  // "Возврат" напрямую — эта смена статуса НЕ создаёт запись в production_logs
+  // (создаёт её только кнопка оператора "Загружен"), но rawMixers (общий
+  // realtime-поток по order_mixers, уже используемый очередью) её всё равно
+  // получает. Раньше такой рейс был навечно не виден в "Отгружено сегодня", а
+  // % отгрузки по заявке никогда не доходил до 100 — при следующей загрузке
+  // страницы его подтянет API, а здесь — сразу, пока вкладка открыта.
+  useEffect(() => {
+    const orphanStatuses = new Set(['Разгружен', 'Возврат']);
+    const knownMixerIds = new Set(
+      completedTrips
+        .map((t: any) => t.order_mixer_id)
+        .filter((id: any) => id != null)
+        .map((id: any) => String(id))
+    );
+
+    const newOrphans = rawMixers.filter(
+      (m: any) => orphanStatuses.has(m.status) && !knownMixerIds.has(String(m.id))
+    );
+
+    if (newOrphans.length === 0) return;
+
+    setCompletedTrips(prev => {
+      const existingIds = new Set(
+        prev.map((t: any) => String(t.order_mixer_id ?? '')).filter(Boolean)
+      );
+      const toAdd = newOrphans
+        .filter((m: any) => !existingIds.has(String(m.id)))
+        .map((m: any) => {
+          const timestamp = m.unloadedAt || m.updated_at || m.created_at;
+          return {
+            id: `orphan-${m.id}`,
+            order_id: m.orderId ?? m.order_id,
+            order_mixer_id: m.id,
+            mixer_name: m.number ?? m.mixer_name,
+            concrete_grade: m.concrete_grade,
+            volume: m.volume,
+            podvizhnost: m.podvizhnost || 'П3',
+            start_time: null,
+            end_time: timestamp,
+            duration_minutes: null,
+            created_at: timestamp,
+            order_volume: m.order_volume ?? null,
+            no_operator_record: true,
+          };
+        });
+
+      return toAdd.length > 0 ? [...toAdd, ...prev] : prev;
+    });
+  }, [rawMixers, completedTrips]);
+
        // ==================== 1.2 ЗАВЕРШИТЬ ЗАГРУЗКУ ====================
   // ⚠️ ГАРАНТИРОВАННЫЙ ПЕРЕНОС: строка сразу и безусловно переезжает в
   // "Отгружено сегодня" и мгновенно скрывается из очереди — не дожидаясь
@@ -568,9 +622,18 @@ export default function OperatorBSUPage() {
     })
     .map((trip: any) => ({
       ...trip,
+      // У "осиротевших" рейсов (no_operator_record — статус выставлен
+      // диспетчером/водителем напрямую) start_time никогда не известен, но
+      // время самого действия есть — end_time/created_at (это unloaded_at
+      // миксера). Раньше в таком случае колонка "Время" показывала "—",
+      // хотя фактическое время у нас есть, просто в другом поле.
       time: trip.start_time 
         ? new Date(trip.start_time).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) 
-        : (trip.time || '—'),
+        : trip.time
+        ? trip.time
+        : (trip.end_time || trip.created_at)
+        ? new Date(trip.end_time || trip.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+        : '—',
       loadedTime: trip.duration_minutes 
         ? `${trip.duration_minutes} мин` 
         : '—',
@@ -1200,6 +1263,9 @@ export default function OperatorBSUPage() {
                 {filteredCompletedTrips.length > 0 ? filteredCompletedTrips.map((trip) => (
                   <div 
                     key={trip.id}
+                    title={trip.no_operator_record
+                      ? 'Статус выставлен диспетчером/водителем напрямую, минуя кнопку "Загружен" у оператора БСУ — точного времени загрузки нет'
+                      : undefined}
                     style={{
                       backgroundColor: '#25334A',
                       borderRadius: '12px',
@@ -1216,7 +1282,13 @@ export default function OperatorBSUPage() {
                       gap: '8px',
                       alignItems: 'center',
                       minHeight: '28px',
-                      fontSize: '13.5px'
+                      fontSize: '13.5px',
+                      // Рейс, никогда не прошедший через кнопку оператора "Загружен"
+                      // (статус выставлен диспетчером/водителем напрямую) — выделяем
+                      // янтарной полосой слева, чтобы это было заметно с первого взгляда.
+                      ...(trip.no_operator_record ? {
+                        boxShadow: 'inset 3px 0 0 #F59E0B',
+                      } : {}),
                     }}
                   >
                       <div style={{ fontWeight: '600', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1280,6 +1352,10 @@ export default function OperatorBSUPage() {
                         {trip._pending ? (
                           <div style={{ color: '#F59E0B', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title="Сохраняется, статус миксера подтверждается">
                             ⏳ Сохранение…
+                          </div>
+                        ) : trip.no_operator_record ? (
+                          <div style={{ color: '#F59E0B', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            🖊️ Диспетчер
                           </div>
                         ) : (
                           <div style={{ color: '#10B981', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

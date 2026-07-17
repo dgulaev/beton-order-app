@@ -80,7 +80,8 @@ async function buildAutofill(orderId: number, docKind: string) {
     frost_resistance: recipe?.frost_resistance || accredited?.frost_resistance || '',
     water_resistance: recipe?.water_resistance || accredited?.water_resistance || '',
     slump: recipe?.slump || accredited?.slump || '',
-    additive: '',
+    // Добавка по умолчанию: бетон — ПФМ-НЛК, раствор — ЛинамиксР (редактируется).
+    additive: docKind === 'mortar' ? 'ЛинамиксР' : 'ПФМ-НЛК',
     // Крупность заполнителя в растворах не нормируется — не заполняем.
     max_aggregate: docKind === 'mortar' ? '' : '20мм',
     keeping_min: 'не менее 120мин',
@@ -88,7 +89,8 @@ async function buildAutofill(orderId: number, docKind: string) {
     required_strength_28: test28?.required_strength ?? '',
     actual_strength_28: test28?.actual_strength_mpa ?? '',
     actual_strength_7: test7?.actual_strength_mpa ?? '',
-    mix_no: '',
+    // Номер номинального состава берём из рецептуры (редактируется в паспорте).
+    mix_no: recipe?.mix_no ?? '',
     batch_no: '',
   };
 }

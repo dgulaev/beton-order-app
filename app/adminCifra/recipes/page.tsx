@@ -7,6 +7,7 @@ import TestsTab from './components/TestsTab';
 import OrdersTab from './components/OrdersTab';
 import RecipeVersionsModal from './components/RecipeVersionsModal';
 import TemplatesModal from './components/TemplatesModal';
+import { useAutoRows, useAutoGrid, LabPagination } from './pagination';
 import { useRealtimeOrders, useOrderChangeNotifications } from '../../../hooks/useRealtimeOrders';
 import { FlaskConical } from 'lucide-react';
 
@@ -126,13 +127,19 @@ export default function LaboratoryPage() {
   // ==================== СОСТОЯНИЕ КАТАЛОГА РЕЦЕПТУР ====================
   const [recipes, setRecipes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [editingRecipe, setEditingRecipe] = useState<any>(null);
   const [changeNote, setChangeNote] = useState('');
   const [search, setSearch] = useState('');
   const [groupFilter, setGroupFilter] = useState('all');
+  const [recipeDate, setRecipeDate] = useState('');
+  const [recipePage, setRecipePage] = useState(1);
   const [versionsFor, setVersionsFor] = useState<any>(null);
   const [showTemplates, setShowTemplates] = useState(false);
+  const recipeListRef = useRef<HTMLDivElement>(null);
+  const recipeGridRef = useRef<HTMLDivElement>(null);
+  const { perPage: listPerPage, rowH: listRowH } = useAutoRows(recipeListRef, { deps: [tab, viewMode, recipes.length] });
+  const gridPerPage = useAutoGrid(recipeGridRef, { deps: [tab, viewMode, recipes.length] });
 
   const inputStyle = sharedInput;
 
@@ -172,10 +179,22 @@ export default function LaboratoryPage() {
     const q = search.trim().toLowerCase();
     return recipes.filter((r) => {
       if (groupFilter !== 'all' && (r.group_name || '') !== groupFilter) return false;
+      if (recipeDate && String(r.created_at || '').slice(0, 10) !== recipeDate) return false;
       if (!q) return true;
       return [r.code, r.name, r.strength_class].filter(Boolean).some((v: string) => String(v).toLowerCase().includes(q));
     });
-  }, [recipes, search, groupFilter]);
+  }, [recipes, search, groupFilter, recipeDate]);
+
+  // Пагинация каталога: число элементов на страницу зависит от вида
+  // (плитки/список) и разрешения экрана.
+  const recipesPerPage = viewMode === 'grid' ? gridPerPage : listPerPage;
+  const recipesTotalPages = Math.max(1, Math.ceil(filteredRecipes.length / recipesPerPage));
+  const recipesPageSafe = Math.min(recipePage, recipesTotalPages);
+  const pagedRecipes = filteredRecipes.slice((recipesPageSafe - 1) * recipesPerPage, recipesPageSafe * recipesPerPage);
+
+  useEffect(() => {
+    setRecipePage(1);
+  }, [search, groupFilter, recipeDate, viewMode, recipesPerPage]);
 
   // ==================== СОХРАНЕНИЕ РЕЦЕПТА ====================
   const saveRecipe = async (recipe: any) => {
@@ -335,6 +354,8 @@ export default function LaboratoryPage() {
                   <option key={g} value={g}>{g}</option>
                 ))}
               </select>
+              <input type="date" value={recipeDate} onChange={(e) => setRecipeDate(e.target.value)} title="Дата создания" style={{ ...inputStyle, width: 'auto' }} />
+              {recipeDate && <button onClick={() => setRecipeDate('')} style={ghostButton}>Сброс даты</button>}
               <button onClick={() => setShowTemplates(true)} style={ghostButton}>Шаблоны</button>
             </div>
             <div style={{ display: 'flex', gap: '12px' }}>
@@ -368,9 +389,9 @@ export default function LaboratoryPage() {
           {loading ? (
             <p style={{ color: COLORS.muted }}>Загрузка...</p>
           ) : viewMode === 'grid' ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '20px' }}>
-              {filteredRecipes.map((recipe) => (
-                <div key={recipe.id} style={{ background: COLORS.card, borderRadius: '16px', padding: '16px', border: `1px solid ${COLORS.border}`, height: 'fit-content', opacity: recipe.is_active === false ? 0.6 : 1 }}>
+            <div ref={recipeGridRef} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '20px' }}>
+              {pagedRecipes.map((recipe) => (
+                <div key={recipe.id} data-lab-card style={{ background: COLORS.card, borderRadius: '16px', padding: '16px', border: `1px solid ${COLORS.border}`, height: 'fit-content', opacity: recipe.is_active === false ? 0.6 : 1 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
                     <div style={{ fontSize: '22px', fontWeight: 700 }}>{recipe.code}</div>
                     <span style={pillStyle(
@@ -419,9 +440,9 @@ export default function LaboratoryPage() {
               ))}
             </div>
           ) : (
-            <div style={{ background: COLORS.card, borderRadius: '16px', overflow: 'hidden' }}>
-              {filteredRecipes.map((recipe) => (
-                <div key={recipe.id} style={{ display: 'flex', alignItems: 'center', padding: '12px 20px', borderBottom: `1px solid ${COLORS.border}` }}>
+            <div ref={recipeListRef} style={{ background: COLORS.card, borderRadius: '16px', overflow: 'hidden' }}>
+              {pagedRecipes.map((recipe) => (
+                <div key={recipe.id} data-lab-row style={{ display: 'flex', alignItems: 'center', padding: '12px 20px', borderBottom: `1px solid ${COLORS.border}` }}>
                   <div style={{ width: '200px', fontWeight: 700, fontSize: '17px' }}>{recipe.code}</div>
                   <div style={{ flex: 1, color: '#CBD5E1', fontSize: '15px' }}>
                     {recipe.name}
@@ -435,8 +456,14 @@ export default function LaboratoryPage() {
                   </div>
                 </div>
               ))}
+              {/* Распорка держит высоту списка, чтобы пагинация не прыгала. */}
+              {recipesTotalPages > 1 && pagedRecipes.length < listPerPage && (
+                <div style={{ height: `${(listPerPage - pagedRecipes.length) * listRowH}px` }} />
+              )}
             </div>
           )}
+
+          {!loading && <LabPagination page={recipesPageSafe} totalPages={recipesTotalPages} onPage={setRecipePage} />}
         </div>
       )}
 
@@ -507,6 +534,10 @@ export default function LaboratoryPage() {
                   <div>
                     <label style={{ display: 'block', marginBottom: '6px', color: COLORS.muted, fontSize: '14px' }}>Марка цемента</label>
                     <input value={editingRecipe.cement_grade || ''} onChange={(e) => setEditingRecipe({ ...editingRecipe, cement_grade: e.target.value })} style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '6px', color: COLORS.muted, fontSize: '14px' }}>№ номинального состава (рецепта)</label>
+                    <input value={editingRecipe.mix_no || ''} onChange={(e) => setEditingRecipe({ ...editingRecipe, mix_no: e.target.value })} placeholder="напр. 1" style={inputStyle} />
                   </div>
                 </div>
               </>

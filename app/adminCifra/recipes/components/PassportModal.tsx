@@ -65,6 +65,9 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
           declaration_no: kind === 'mortar' ? s.declaration_mortar : s.declaration_concrete,
           fsa_url: kind === 'mortar' ? s.fsa_url_mortar : s.fsa_url_concrete,
           decl_reg_date: kind === 'mortar' ? '' : '18.12.2023',
+          // Добавка по умолчанию: бетон — ПФМ-НЛК, раствор — ЛинамиксР.
+          additive: kind === 'mortar' ? 'ЛинамиксР' : 'ПФМ-НЛК',
+          max_aggregate: kind === 'mortar' ? '' : '20мм',
           issue_date: new Date().toLocaleDateString('ru-RU'),
         });
       }

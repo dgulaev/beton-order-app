@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { COLORS, inputStyle, labelStyle, cardStyle, ghostButton, primaryButton, overlayStyle, modalStyle, pillStyle } from '../labStyles';
 import PassportModal from './PassportModal';
+import { useAutoRows, LabPagination } from '../pagination';
 
 type FilterKey = 'all' | 'active' | 'no_recipes' | 'no_products';
 
@@ -36,8 +37,16 @@ export default function SpecificationsTab() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterKey>('all');
   const [search, setSearch] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
+  const [page, setPage] = useState(1);
+  const listRef = useRef<HTMLDivElement>(null);
+  const { perPage, rowH } = useAutoRows(listRef, { deps: [specs.length, dateFilter, filter] });
   const [editing, setEditing] = useState<any>(null);
   const [passportFor, setPassportFor] = useState<any>(null);
+  // Результат поиска заказа по номеру в модалке: null — не искали,
+  // объект — найден, false — не найден.
+  const [orderLookup, setOrderLookup] = useState<any>(null);
+  const [orderChecking, setOrderChecking] = useState(false);
 
   const recipeById = useMemo(() => {
     const m: Record<string, any> = {};
@@ -84,10 +93,10 @@ export default function SpecificationsTab() {
 
   const save = async () => {
     const method = editing.id ? 'PUT' : 'POST';
-    // accredited_marking — UI-поле (не колонка); specification_recipes — вложенная
-    // связь, пересобирается через recipe_links. Оба исключаем из payload.
-    const { accredited_marking, specification_recipes, ...clean } = editing;
-    void accredited_marking;
+    // specification_recipes — вложенная связь, пересобирается через recipe_links.
+    // accredited_marking сохраняем в БД, чтобы марка не терялась при повторном
+    // редактировании.
+    const { specification_recipes, ...clean } = editing;
     void specification_recipes;
     const payload = { ...clean, order_id: editing.order_id ? Number(editing.order_id) : null };
     const res = await fetch('/api/adminCifra/specifications', {
@@ -114,7 +123,33 @@ export default function SpecificationsTab() {
       plant_id: l.plant_id,
       recipe_id: l.recipe_id,
     }));
+    setOrderLookup(null);
     setEditing({ ...spec, order_id: spec.order_id ?? '', recipe_links });
+  };
+
+  // Поиск заказа по номеру заявки — проверяем, что заказ существует, и
+  // показываем клиента, чтобы лаборант убедился в привязке для паспорта.
+  const findOrder = async () => {
+    const id = String(editing?.order_id ?? '').trim();
+    if (!id) {
+      setOrderLookup(false);
+      return;
+    }
+    setOrderChecking(true);
+    try {
+      const res = await fetch(`/api/adminCifra/orders/${id}`);
+      if (res.ok) {
+        const o = await res.json();
+        setOrderLookup(o && o.id ? o : false);
+      } else {
+        setOrderLookup(false);
+      }
+    } catch (e) {
+      console.error(e);
+      setOrderLookup(false);
+    } finally {
+      setOrderChecking(false);
+    }
   };
 
   // Автозаполнение полей спецификации по выбранной аккредитованной марке
@@ -144,6 +179,19 @@ export default function SpecificationsTab() {
   const concreteGrades = useMemo(() => accredited.filter((a) => a.doc_kind !== 'mortar'), [accredited]);
   const mortarGrades = useMemo(() => accredited.filter((a) => a.doc_kind === 'mortar'), [accredited]);
 
+  // Фильтр по дате (по дате создания спецификации) + пагинация под экран.
+  const filteredSpecs = useMemo(
+    () => (dateFilter ? specs.filter((s) => String(s.created_at || '').slice(0, 10) === dateFilter) : specs),
+    [specs, dateFilter]
+  );
+  const totalPages = Math.max(1, Math.ceil(filteredSpecs.length / perPage));
+  const pageSafe = Math.min(page, totalPages);
+  const pagedSpecs = filteredSpecs.slice((pageSafe - 1) * perPage, pageSafe * perPage);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filter, search, dateFilter, specs.length]);
+
   const assignedRecipeText = (spec: any) => {
     const links = spec.specification_recipes || [];
     if (links.length === 0) return null;
@@ -161,7 +209,7 @@ export default function SpecificationsTab() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
         <h2 style={{ fontSize: '18px', color: '#fff', margin: 0 }}>Спецификации</h2>
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button onClick={() => setEditing(emptySpec())} style={primaryButton()}>+ Спецификация</button>
+          <button onClick={() => { setOrderLookup(null); setEditing(emptySpec()); }} style={primaryButton()}>+ Спецификация</button>
         </div>
       </div>
 
@@ -188,27 +236,34 @@ export default function SpecificationsTab() {
             {f.label}
           </button>
         ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
+          <span style={{ color: COLORS.muted, fontSize: '13px' }}>Дата:</span>
+          <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} style={{ ...inputStyle, width: 'auto', padding: '8px 10px' }} />
+          {dateFilter && (
+            <button onClick={() => setDateFilter('')} style={{ ...ghostButton, padding: '8px 12px' }}>Сброс</button>
+          )}
+        </div>
       </div>
 
       {loading ? (
         <p style={{ color: COLORS.muted }}>Загрузка...</p>
-      ) : specs.length === 0 ? (
+      ) : filteredSpecs.length === 0 ? (
         <div style={{ ...cardStyle, textAlign: 'center', color: COLORS.muted }}>
-          Спецификаций нет. Создайте первую по кнопке «+ Спецификация».
+          {dateFilter ? `За ${dateFilter} спецификаций нет.` : 'Спецификаций нет. Создайте первую по кнопке «+ Спецификация».'}
         </div>
       ) : (
-        <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
-          <div style={{ display: 'flex', padding: '12px 16px', color: COLORS.muted, fontSize: '13px', borderBottom: `1px solid ${COLORS.border}` }}>
+        <div ref={listRef} style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
+          <div data-lab-head style={{ display: 'flex', padding: '12px 16px', color: COLORS.muted, fontSize: '13px', borderBottom: `1px solid ${COLORS.border}` }}>
             <div style={{ flex: 1.4 }}>Спецификация</div>
             <div style={{ flex: 1.2 }}>Продукция</div>
             <div style={{ flex: 1 }}>Рецептура</div>
             <div style={{ width: '110px' }}>Статус</div>
             <div style={{ width: '210px' }}></div>
           </div>
-          {specs.map((s) => {
+          {pagedSpecs.map((s) => {
             const recipeText = assignedRecipeText(s);
             return (
-              <div key={s.id} style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: `1px solid ${COLORS.border}`, color: '#E2E8F0', fontSize: '14px' }}>
+              <div key={s.id} data-lab-row style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: `1px solid ${COLORS.border}`, color: '#E2E8F0', fontSize: '14px' }}>
                 <div style={{ flex: 1.4 }}>
                   <div style={{ fontWeight: 600 }}>{s.code || s.name || `Спец. #${s.id}`}</div>
                   <div style={{ color: COLORS.muted, fontSize: '13px' }}>
@@ -238,8 +293,13 @@ export default function SpecificationsTab() {
               </div>
             );
           })}
+          {totalPages > 1 && pagedSpecs.length < perPage && (
+            <div style={{ height: `${(perPage - pagedSpecs.length) * rowH}px` }} />
+          )}
         </div>
       )}
+
+      <LabPagination page={pageSafe} totalPages={totalPages} onPage={setPage} />
 
       {/* Модалка создания/редактирования */}
       {editing && (
@@ -282,7 +342,28 @@ export default function SpecificationsTab() {
               </div>
               <div>
                 <label style={labelStyle}>Номер заказа</label>
-                <input type="number" value={editing.order_id ?? ''} onChange={(e) => setEditing({ ...editing, order_id: e.target.value })} style={inputStyle} />
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="number"
+                    value={editing.order_id ?? ''}
+                    onChange={(e) => { setEditing({ ...editing, order_id: e.target.value }); setOrderLookup(null); }}
+                    onKeyDown={(e) => e.key === 'Enter' && findOrder()}
+                    placeholder="напр. 583"
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                  <button type="button" onClick={findOrder} disabled={orderChecking} style={{ ...ghostButton, padding: '0 14px', whiteSpace: 'nowrap' }}>
+                    {orderChecking ? '...' : 'Найти'}
+                  </button>
+                </div>
+                {orderLookup === false && (
+                  <p style={{ color: COLORS.danger, fontSize: '12px', margin: '6px 0 0' }}>Заявка с таким номером не найдена.</p>
+                )}
+                {orderLookup && orderLookup.id && (
+                  <p style={{ color: COLORS.accent, fontSize: '12px', margin: '6px 0 0' }}>
+                    Найдена: №{orderLookup.id} · {orderLookup.organization_name || orderLookup.full_name || 'клиент не указан'}
+                    {orderLookup.grade ? ` · ${orderLookup.grade}` : ''}
+                  </p>
+                )}
               </div>
               <div style={{ gridColumn: '1 / -1' }}>
                 <label style={labelStyle}>Наименование</label>

@@ -40,14 +40,31 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
       } catch (e) {
         console.error(e);
       }
+
+      // Организация-потребитель: тянем из привязанной заявки, чтобы не вводить
+      // вручную. Если в заявке нет — останется значение из сохранённого протокола.
+      let orderConsumer = '';
+      let orderObject = '';
+      if (test?.order_id) {
+        try {
+          const res = await fetch(`/api/adminCifra/orders/${test.order_id}`);
+          if (res.ok) {
+            const o = await res.json();
+            orderConsumer = o?.organization_name || o?.full_name || '';
+            orderObject = o?.address || '';
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
       if (cancelled) return;
 
       // Если протокол уже сохранён — берём его, иначе строим черновик.
       const saved = test?.protocol && typeof test.protocol === 'object' ? test.protocol : null;
       const base = {
         result_no: '',
-        consumer: '',
-        object: 'Строительство',
+        consumer: orderConsumer,
+        object: orderObject || 'Строительство',
         design_class: test?.recipe_code || '',
         design_strength: test?.required_strength || '',
         fabrication_date: toRuDate(test?.sample_date),
@@ -64,7 +81,12 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
         lab_org: settings.org_name || '',
         lab_head: settings.lab_head_name || '',
       };
-      setProt(saved ? { ...base, ...saved } : base);
+      const merged = saved ? { ...base, ...saved } : base;
+      // Если в сохранённом протоколе потребитель/объект пустые — подставляем
+      // данные из заявки (могли появиться после привязки).
+      if (!merged.consumer && orderConsumer) merged.consumer = orderConsumer;
+      if ((!merged.object || merged.object === 'Строительство') && orderObject) merged.object = orderObject;
+      setProt(merged);
     })();
     return () => {
       cancelled = true;
@@ -173,22 +195,24 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
     const html = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Протокол ${esc(prot.result_no)}</title>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: 'Times New Roman', serif; color: #000; margin: 16px 20px; font-size: 12px; }
+  /* Альбомная A4: протокол с широкой таблицей серии кубиков размещаем
+     горизонтально, чтобы колонки не сжимались. */
+  body { font-family: 'Times New Roman', serif; color: #000; margin: 10mm 14mm; font-size: 13px; }
   .center { text-align: center; }
-  .h1 { font-weight: bold; font-size: 13px; }
-  .head { margin-bottom: 10px; line-height: 1.4; }
-  .meta { margin: 8px 0; line-height: 1.5; }
-  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
-  th, td { border: 1px solid #000; padding: 3px 4px; font-size: 11px; vertical-align: middle; }
-  th { font-weight: normal; text-align: center; line-height: 1.15; }
+  .h1 { font-weight: bold; font-size: 15px; }
+  .head { margin-bottom: 12px; line-height: 1.4; }
+  .meta { margin: 10px 0; line-height: 1.6; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { border: 1px solid #000; padding: 5px 6px; font-size: 12px; vertical-align: middle; }
+  th { font-weight: normal; text-align: center; line-height: 1.2; }
   td.c { text-align: center; }
   td.b { font-weight: bold; }
-  .concl { margin-top: 12px; text-align: justify; line-height: 1.4; }
+  .concl { margin-top: 16px; text-align: justify; line-height: 1.45; font-size: 13px; }
   .concl b { font-weight: bold; }
-  .gost { margin-top: 10px; text-align: justify; line-height: 1.4; font-size: 11px; }
-  .sign { margin-top: 26px; display: flex; justify-content: space-between; align-items: flex-end; }
-  @page { size: A4; margin: 0; }
-  @media print { body { margin: 10mm 12mm; } }
+  .gost { margin-top: 12px; text-align: justify; line-height: 1.45; font-size: 12px; }
+  .sign { margin-top: 40px; display: flex; justify-content: space-between; align-items: flex-end; font-size: 13px; }
+  @page { size: A4 landscape; margin: 0; }
+  @media print { body { margin: 10mm 14mm; } }
 </style></head><body>
   <div class="head center">
     <div class="h1">${esc(prot.lab_title)}</div>

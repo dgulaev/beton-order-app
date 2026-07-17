@@ -52,6 +52,7 @@ alter table public.recipes
   add column if not exists water_resistance text,   -- водонепроницаемость W, напр. "W6"
   add column if not exists slump            text,   -- подвижность П / марка по удобоукладываемости, напр. "П4"
   add column if not exists cement_grade     text,   -- марка цемента
+  add column if not exists mix_no           text,   -- № номинального состава (номер рецепта) для паспорта
   add column if not exists group_name       text,   -- группа/папка для каталога (Летние/Зимние/...)
   add column if not exists notes            text,
   add column if not exists created_at       timestamptz default now(),
@@ -78,6 +79,7 @@ create table if not exists public.specifications (
   frost_resistance text,
   water_resistance text,
   slump            text,
+  accredited_marking text,                  -- выбранная аккредитованная марка (из выписки Росаккредитации)
   status           text not null default 'active',  -- active / archived
   source           text not null default 'manual',  -- manual / asu
   created_by       bigint,
@@ -88,6 +90,10 @@ create table if not exists public.specifications (
 
 comment on table public.specifications is 'Спецификации: привязка заказа к продукции/характеристикам/рецептуре.';
 comment on column public.specifications.order_id is 'Логическая ссылка на orders.id (без FK — типы PK в live-базе).';
+
+-- Для уже существующей таблицы (live-база): добавляем колонку выбранной
+-- аккредитованной марки, чтобы она сохранялась и подставлялась при редактировании.
+alter table public.specifications add column if not exists accredited_marking text;
 
 create index if not exists idx_specifications_order_id on public.specifications (order_id);
 create index if not exists idx_specifications_status on public.specifications (status);
