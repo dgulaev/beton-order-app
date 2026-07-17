@@ -9,10 +9,21 @@ import ReportsPage, { preloadReportsData } from '../reports/page';
 import RecipesPage from '../recipes/page';
 import { UserCog } from 'lucide-react';
 
-
+// ==================== ПОДПИСИ РОЛЕЙ ДЛЯ "ОСИРОТЕВШИХ" РЕЙСОВ ====================
+// Статус миксера "Разгружен"/"Возврат" может выставить не только диспетчер,
+// но и менеджер/админ/водитель через свои интерфейсы, минуя оператора БСУ.
+// Реальный автор действия берётся из order_history (см. production-log/route.ts,
+// actor_name/actor_role) — здесь только маппинг кода роли в подпись на русском.
+const ORPHAN_ACTOR_ROLE_LABELS: Record<string, string> = {
+  admin: 'Администратор',
+  manager: 'Менеджер',
+  dispatcher: 'Диспетчер',
+  operator: 'Оператор',
+  driver: 'Водитель',
+  logist: 'Логист',
+};
 
 export default function OperatorBSUPage() {
-  const [currentShift] = useState('Дневная');
   const [selectedTrip, setSelectedTrip] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'zayavki' | 'warehouse' | 'reports' | 'recipes'>('zayavki');
 
@@ -27,9 +38,97 @@ export default function OperatorBSUPage() {
   const clockSeconds = String(clockNow.getSeconds()).padStart(2, '0');
   const clockDateLabel = clockNow.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
 
+  // ==================== КТО СЕЙЧАС НА СМЕНЕ (общая учётка на двоих) ====================
+  // За пультом БСУ работают Семён и Максим под одной общей учёткой "Оперратор"
+  // (сделано намеренно — чтобы не заставлять их логиниться заново на каждой
+  // смене). Это переключатель, кто из них сейчас за пультом — хранится ОДНОЙ
+  // строкой в operator_shift_settings (см. scripts/operator-shift-settings.sql),
+  // переключение — это UPDATE существующей строки, а не новая запись/логин.
+  // Список доступных имён редактируется в карточке "Оператор" на странице
+  // Клиенты → Стафф (без правки кода) — подтягиваем его отсюда же, вместе с
+  // текущей активной сменой.
+  const [operatorShiftNames, setOperatorShiftNames] = useState<string[]>(['Семён', 'Максим']);
+  const [activeOperatorName, setActiveOperatorName] = useState<string | null>(null);
+  const [shiftLoading, setShiftLoading] = useState(false);
+  // До первого ответа сервера не знаем, выбрана ли смена — не показываем
+  // напоминание, чтобы оно не "мигало" на долю секунды при каждой загрузке.
+  const [shiftDataLoaded, setShiftDataLoaded] = useState(false);
+  // Разрешаем закрыть напоминание "на потом" (например, если зашли просто
+  // проверить данные) — но только на текущую вкладку/до следующей перезагрузки,
+  // при новой загрузке страницы оно появится снова, пока смена не выбрана.
+  const [shiftReminderDismissed, setShiftReminderDismissed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/adminCifra/operator-shift');
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setActiveOperatorName(data?.active_operator_name || null);
+        if (Array.isArray(data?.available_names) && data.available_names.length > 0) {
+          setOperatorShiftNames(data.available_names);
+        }
+      } catch (err) {
+        console.error('Не удалось загрузить, кто на смене:', err);
+      } finally {
+        if (!cancelled) setShiftDataLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleShiftOperatorChange = async (name: string) => {
+    // Состояние общее для всех, кто открывает страницу (см. showShiftReminder
+    // ниже) — значит, админ/менеджер/диспетчер могут кликнуть по имени просто
+    // из любопытства и молча поменять реальную смену оператору. Для роли
+    // "operator" (общая учётка БСУ) — никаких подтверждений, переключение
+    // должно быть мгновенным, в том числе при передаче смены среди дня.
+    // Всем остальным — явное подтверждение с предупреждением.
+    if (user?.role !== 'operator') {
+      const confirmed = window.confirm(
+        `Вы вошли не как оператор БСУ (роль: ${user?.role || 'неизвестна'}).\n\n` +
+        `Назначить смену «${name}»? Обычно это делает сам оператор на своём пульте — ` +
+        `подтверждайте только если действительно нужно поменять/исправить смену вручную.`
+      );
+      if (!confirmed) return;
+    }
+
+    setActiveOperatorName(name); // оптимистично — переключение должно быть мгновенным
+    setShiftLoading(true);
+    try {
+      const res = await fetch('/api/adminCifra/operator-shift', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active_operator_name: name }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      console.error('Не удалось сохранить, кто на смене:', err);
+    } finally {
+      setShiftLoading(false);
+    }
+  };
+
+  // ==================== ЗАМЕТНОЕ НАПОМИНАНИЕ "ВЫБЕРИ СЕБЯ" ====================
+  // Показывается КАЖДОМУ, кто открывает страницу, пока смена не выбрана —
+  // намеренно без привязки к роли залогиненного пользователя: и оператору
+  // утром, и админу/менеджеру, если он просто откроет эту страницу проверить —
+  // состояние общее для всех, кто на него смотрит.
+  const showShiftReminder = shiftDataLoaded && !activeOperatorName && !shiftReminderDismissed && operatorShiftNames.length > 0;
+
+  const pickShiftOperatorFromReminder = (name: string) => {
+    handleShiftOperatorChange(name);
+    setShiftReminderDismissed(true);
+  };
+
   // ==================== ИДЕНТИЧНОСТЬ ОПЕРАТОРА (для записи в историю) ====================
+  // Реальное имя того, кто сейчас на смене (Семён/Максим), приоритетнее
+  // обезличенного имени общей учётки — так в истории заявки и логе
+  // производства видно, кто конкретно выполнил действие.
   const { user } = useUserRole();
-  const operatorName = user?.full_name || user?.username || 'Оператор';
+  const operatorName = activeOperatorName || user?.full_name || user?.username || 'Оператор';
   const operatorRole = user?.role || 'operator';
 
     // ==================== 0. УПРАВЛЕНИЕ ДАТОЙ ====================
@@ -366,12 +465,54 @@ export default function OperatorBSUPage() {
             created_at: timestamp,
             order_volume: m.order_volume ?? null,
             no_operator_record: true,
+            // Статус миксера в момент попадания в этот список — нужен только
+            // чтобы ниже (см. 1.2.3) сопоставить запись с order_history и
+            // найти реального автора действия. В UI не отображается.
+            mixer_status: m.status,
           };
         });
 
       return toAdd.length > 0 ? [...toAdd, ...prev] : prev;
     });
   }, [rawMixers, completedTrips]);
+
+  // ==================== 1.2.3 АТРИБУЦИЯ АВТОРА "ОСИРОТЕВШЕГО" РЕЙСА ====================
+  // Live-подхват выше (1.2.2) создаёт запись мгновенно из rawMixers, но там
+  // нет информации о том, кто именно поменял статус (order_mixers это не
+  // хранит) — только "Диспетчер" как обезличенный запасной вариант. Реальное
+  // имя/роль лежат в order_history (см. production-log/route.ts — там та же
+  // атрибуция уже подтягивается при полной перезагрузке страницы). Дотягиваем
+  // её и сюда, чтобы не дожидаться перезагрузки вкладки.
+  const enrichedOrphanIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const pending = completedTrips.filter(
+      (t: any) => t.no_operator_record && t.actor_name == null && t.mixer_status && (t.order_id ?? t.orderId) != null
+    ).filter((t: any) => !enrichedOrphanIdsRef.current.has(String(t.id)));
+
+    if (pending.length === 0) return;
+    pending.forEach((t: any) => enrichedOrphanIdsRef.current.add(String(t.id)));
+
+    pending.forEach(async (trip: any) => {
+      const orderId = String(trip.order_id ?? trip.orderId);
+      try {
+        const res = await fetch(`/api/adminCifra/order-history?orderId=${orderId}`);
+        if (!res.ok) return;
+        const history = await res.json();
+        const targetMarker = `на "${trip.mixer_status}"`;
+        const match = (Array.isArray(history) ? history : []).find(
+          (h: any) => h.action?.includes('Изменил статус миксера') && h.action?.includes(trip.mixer_name) && h.action?.includes(targetMarker)
+        );
+        if (!match) return;
+
+        setCompletedTrips(prev => prev.map((t: any) =>
+          String(t.id) === String(trip.id) ? { ...t, actor_name: match.user_name || null, actor_role: match.user_role || null } : t
+        ));
+      } catch (err) {
+        console.error(`Не удалось определить автора осиротевшего рейса заявки #${orderId}:`, err);
+        enrichedOrphanIdsRef.current.delete(String(trip.id));
+      }
+    });
+  }, [completedTrips]);
 
        // ==================== 1.2 ЗАВЕРШИТЬ ЗАГРУЗКУ ====================
   // ⚠️ ГАРАНТИРОВАННЫЙ ПЕРЕНОС: строка сразу и безусловно переезжает в
@@ -419,6 +560,7 @@ export default function OperatorBSUPage() {
       // (строка из очереди) уже содержит order_volume из active-mixers, дальше
       // тянуть его неоткуда не нужно.
       order_volume: trip.order_volume ?? null,
+      operator_name: operatorName,
       _pending: true, // статус миксера ещё не подтверждён сервером — красная точка на строке
     };
 
@@ -488,7 +630,12 @@ export default function OperatorBSUPage() {
           concrete_grade: trip.concrete_grade,
           volume: parseFloat(trip.volume || 0),
           podvizhnost: trip.podvizhnost || 'П3',
-          start_time: startTime
+          start_time: startTime,
+          // Кто из операторов смены реально оформил рейс — для статистики
+          // в карточке "Оператор" (Клиенты → Стафф). Не путать с userName в
+          // соседнем вызове order-mixers/status — то уходит в order_history,
+          // это отдельно в саму запись рейса (нужно для агрегации объёма/м³).
+          operator_name: operatorName,
         })
       });
       const json = await res.json().catch(() => null);
@@ -874,8 +1021,45 @@ export default function OperatorBSUPage() {
           </div>
         </div>
 
-        <div style={{ backgroundColor: '#25334A', padding: '10px 20px', borderRadius: '9999px', fontSize: '15px' }}>
-          Смена: <span style={{ color: '#10B981', fontWeight: '600' }}>{currentShift}</span>
+        {/* ==================== ПЕРЕКЛЮЧАТЕЛЬ "КТО НА СМЕНЕ" ==================== */}
+        {/* Общая учётка на двоих (Семён/Максим) — выбор здесь не меняет логин,
+            только подписывает будущие действия реальным именем и переключает
+            одну строку в БД (см. handleShiftOperatorChange выше). */}
+        <div
+          title="Кто сейчас за пультом — влияет на подпись в истории заявок"
+          style={{
+            backgroundColor: '#25334A',
+            padding: '10px 16px 10px 20px',
+            borderRadius: '9999px',
+            fontSize: '15px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            opacity: shiftLoading ? 0.7 : 1,
+          }}
+        >
+          Смена:
+          <select
+            value={activeOperatorName || ''}
+            onChange={(e) => handleShiftOperatorChange(e.target.value)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: activeOperatorName ? '#10B981' : '#94A3B8',
+              fontWeight: 600,
+              fontSize: '15px',
+              cursor: 'pointer',
+              outline: 'none',
+              appearance: 'none',
+              WebkitAppearance: 'none',
+              paddingRight: '4px',
+            }}
+          >
+            <option value="" disabled>Выбрать…</option>
+            {operatorShiftNames.map((name) => (
+              <option key={name} value={name} style={{ color: '#0F172A' }}>{name}</option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -1264,7 +1448,11 @@ export default function OperatorBSUPage() {
                   <div 
                     key={trip.id}
                     title={trip.no_operator_record
-                      ? 'Статус выставлен диспетчером/водителем напрямую, минуя кнопку "Загружен" у оператора БСУ — точного времени загрузки нет'
+                      ? `Статус выставлен ${
+                          trip.actor_name
+                            ? `«${trip.actor_name}»${trip.actor_role ? ` (${ORPHAN_ACTOR_ROLE_LABELS[trip.actor_role] || trip.actor_role})` : ''}`
+                            : 'диспетчером/менеджером/водителем'
+                        } напрямую, минуя кнопку "Загружен" у оператора БСУ — точного времени загрузки нет`
                       : undefined}
                     style={{
                       backgroundColor: '#25334A',
@@ -1354,8 +1542,11 @@ export default function OperatorBSUPage() {
                             ⏳ Сохранение…
                           </div>
                         ) : trip.no_operator_record ? (
-                          <div style={{ color: '#F59E0B', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            🖊️ Диспетчер
+                          <div
+                            style={{ color: '#F59E0B', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                            title={trip.actor_name || (trip.actor_role && ORPHAN_ACTOR_ROLE_LABELS[trip.actor_role]) || undefined}
+                          >
+                            🖊️ {trip.actor_name || (trip.actor_role && ORPHAN_ACTOR_ROLE_LABELS[trip.actor_role]) || 'Диспетчер'}
                           </div>
                         ) : (
                           <div style={{ color: '#10B981', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1623,6 +1814,86 @@ export default function OperatorBSUPage() {
               </button>
               
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== 6. НАПОМИНАНИЕ "КТО НА СМЕНЕ" ==================== */}
+      {/* Показывается ЛЮБОМУ, кто открывает страницу, пока смена не выбрана —
+          и оператору утром, и админу/менеджеру, если тот просто заглянул
+          проверить страницу (см. showShiftReminder выше). zIndex выше, чем у
+          модалки рейса (1000), чтобы напоминание было видно первым делом. */}
+      {showShiftReminder && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            zIndex: 1100,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            style={{
+              background: '#1E2937',
+              border: '1px solid #F59E0B',
+              boxShadow: '0 0 0 4px rgba(245, 158, 11, 0.12), 0 20px 60px rgba(0,0,0,0.5)',
+              padding: '36px 40px',
+              borderRadius: '24px',
+              width: '100%',
+              maxWidth: '480px',
+              margin: '0 16px',
+              color: '#fff',
+              textAlign: 'center',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ fontSize: '40px', marginBottom: '10px' }}>👋</div>
+            <div style={{ fontSize: '21px', fontWeight: '700', marginBottom: '8px' }}>
+              Доброе утро! Кто сегодня на смене?
+            </div>
+            <div style={{ color: '#94A3B8', fontSize: '14.5px', marginBottom: '26px', lineHeight: 1.5 }}>
+              Выберите себя — все ваши действия будут подписаны вашим именем
+              в истории заявок.
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '18px' }}>
+              {operatorShiftNames.map((name) => (
+                <button
+                  key={name}
+                  onClick={() => pickShiftOperatorFromReminder(name)}
+                  disabled={shiftLoading}
+                  style={{
+                    padding: '16px',
+                    background: '#10B981',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '14px',
+                    fontSize: '17px',
+                    fontWeight: '700',
+                    cursor: shiftLoading ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setShiftReminderDismissed(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#64748B',
+                fontSize: '14px',
+                cursor: 'pointer',
+                textDecoration: 'underline',
+              }}
+            >
+              Напомнить позже
+            </button>
           </div>
         </div>
       )}

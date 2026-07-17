@@ -88,28 +88,98 @@ export async function GET(request: NextRequest) {
       console.error('Production log orphan mixers error:', orphanError);
     }
 
-    const orphanFormatted = (orphanMixers || [])
-      .filter((m: any) => !loggedMixerIds.has(String(m.id)))
-      .map((m: any) => {
-        const timestamp = m.unloaded_at || m.updated_at || m.created_at;
-        return {
-          id: `orphan-${m.id}`,
-          order_id: m.order_id,
-          order_mixer_id: m.id,
-          mixer_name: m.mixer_name,
-          concrete_grade: m.orders?.grade || null,
-          volume: m.volume,
-          podvizhnost: m.podvizhnost || 'П3',
-          start_time: null,
-          end_time: timestamp,
-          duration_minutes: null,
-          created_at: timestamp,
-          order_volume: m.orders?.volume ?? null,
-          // Помечаем — эта запись собрана из статуса миксера, а не создана
-          // оператором через кнопку "Загружен". UI показывает её с пометкой.
-          no_operator_record: true,
-        };
-      });
+    const orphanList = (orphanMixers || []).filter((m: any) => !loggedMixerIds.has(String(m.id)));
+
+    // ==================== АТРИБУЦИЯ АВТОРА ОСИРОТЕВШЕЙ ЗАПИСИ ====================
+    // order_mixers не хранит, кто именно поменял статус — эта информация есть
+    // только в order_history (текстовый action + user_name/user_role). Чтобы в
+    // UI оператора показывать реального автора ("Наталья Жукова" / "Менеджер"),
+    // а не всегда одну и ту же надпись "Диспетчер", подтягиваем историю по всем
+    // заявкам с осиротевшими рейсами и сопоставляем запись по имени миксера и
+    // целевому статусу — формат строки см. lib/orderMixers.ts.
+    let historyByOrder = new Map<number, any[]>();
+    const orphanOrderIds = Array.from(new Set(orphanList.map((m: any) => m.order_id).filter((id: any) => id != null)));
+    if (orphanOrderIds.length > 0) {
+      // Берём и "Изменил статус миксера..." (основной источник — точный момент
+      // перехода в "Разгружен"/"Возврат"), и "Добавил миксер..." (запасной
+      // источник) — некоторые миксеры добавляются диспетчером уже готовой
+      // записью о доставке, без отдельного шага смены статуса, и тогда в
+      // истории есть только действие добавления.
+      const { data: historyRows, error: historyError } = await supabase
+        .from('order_history')
+        .select('order_id, action, user_name, user_role, created_at')
+        .in('order_id', orphanOrderIds)
+        .or('action.ilike.Изменил статус миксера%,action.ilike.Добавил миксер%');
+
+      if (historyError) {
+        console.error('Production log orphan history error:', historyError);
+      } else {
+        for (const row of historyRows || []) {
+          const list = historyByOrder.get(row.order_id) || [];
+          list.push(row);
+          historyByOrder.set(row.order_id, list);
+        }
+      }
+    }
+
+    const findOrphanActor = (m: any) => {
+      const rows = historyByOrder.get(m.order_id);
+      if (!rows || rows.length === 0) return null;
+
+      const targetTime = new Date(m.unloaded_at || m.updated_at || m.created_at).getTime();
+      const closestOf = (candidates: any[]) => {
+        if (candidates.length === 0) return null;
+        const sorted = [...candidates].sort(
+          (a: any, b: any) =>
+            Math.abs(new Date(a.created_at).getTime() - targetTime) -
+            Math.abs(new Date(b.created_at).getTime() - targetTime)
+        );
+        return sorted[0];
+      };
+
+      // 1) Приоритет — явная смена статуса именно на текущий (Разгружен/Возврат).
+      const targetMarker = `на "${m.status}"`;
+      const statusChangeMatches = rows.filter(
+        (r: any) => r.action?.startsWith('Изменил статус миксера') && r.action?.includes(m.mixer_name) && r.action?.includes(targetMarker)
+      );
+      const statusMatch = closestOf(statusChangeMatches);
+      if (statusMatch) return statusMatch;
+
+      // 2) Запасной вариант — запись о добавлении этого миксера в заявку
+      // (актуально, если миксер сразу создавался в статусе "Разгружен").
+      const addMatches = rows.filter(
+        (r: any) => r.action?.startsWith('Добавил миксер') && r.action?.includes(m.mixer_name)
+      );
+      return closestOf(addMatches);
+    };
+
+    const orphanFormatted = orphanList.map((m: any) => {
+      const timestamp = m.unloaded_at || m.updated_at || m.created_at;
+      const actor = findOrphanActor(m);
+      return {
+        id: `orphan-${m.id}`,
+        order_id: m.order_id,
+        order_mixer_id: m.id,
+        mixer_name: m.mixer_name,
+        concrete_grade: m.orders?.grade || null,
+        volume: m.volume,
+        podvizhnost: m.podvizhnost || 'П3',
+        start_time: null,
+        end_time: timestamp,
+        duration_minutes: null,
+        created_at: timestamp,
+        order_volume: m.orders?.volume ?? null,
+        // Помечаем — эта запись собрана из статуса миксера, а не создана
+        // оператором через кнопку "Загружен". UI показывает её с пометкой.
+        no_operator_record: true,
+        // Реальный автор изменения статуса (диспетчер/менеджер/админ), если
+        // найден в истории заказа. Для старых записей до внедрения атрибуции
+        // ролей (до 16.06.2026) user_role в истории может быть null — тогда
+        // остаётся только имя ("Диспетчер" как обезличенная надпись).
+        actor_name: actor?.user_name || null,
+        actor_role: actor?.user_role || null,
+      };
+    });
 
     if (todayOnly && orphanFormatted.length > 0) {
       const todayStart = new Date();
@@ -149,7 +219,11 @@ export async function POST(request: NextRequest) {
       concrete_grade, 
       volume, 
       podvizhnost,
-      start_time 
+      start_time,
+      // Кто из операторов смены (Семён/Максим — общая учётка на всех) реально
+      // зафиксировал этот рейс. Используется для статистики в карточке
+      // "Оператор" (Клиенты → Стафф) — см. /api/adminCifra/staff/operator-stats.
+      operator_name,
     } = body;
 
     const end_time = new Date().toISOString();
@@ -187,6 +261,7 @@ export async function POST(request: NextRequest) {
         mixer_name,
         concrete_grade,
         volume,
+        operator_name: operator_name || null,
         podvizhnost,
         start_time,
         end_time,

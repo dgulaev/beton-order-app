@@ -50,6 +50,46 @@ export default function ClientsPage() {
   const [staffPasswordInput, setStaffPasswordInput] = useState('');
   const [savingStaff, setSavingStaff] = useState(false);
 
+  // ==================== ИМЕНА ОПЕРАТОРОВ СМЕНЫ (карточка "Оператор") ====================
+  // У оператора БСУ одна общая учётка на всех (см. app/adminCifra/operator/page.tsx —
+  // переключатель "Смена"), поэтому редактировать здесь нужно не сам логин,
+  // а список имён, из которых оператор выбирает себя на странице БСУ.
+  // Список хранится в operator_shift_settings.available_names (одна строка).
+  const [operatorShiftNames, setOperatorShiftNames] = useState<string[]>([]);
+  const [newOperatorNameInput, setNewOperatorNameInput] = useState('');
+  const [savingOperatorNames, setSavingOperatorNames] = useState(false);
+
+  // ==================== СТАТИСТИКА ОПЕРАТОРОВ (боковая панель карточки) ====================
+  // У "Оператора" одна общая учётка — обычная "статистика куратора" (клиенты,
+  // объём продаж) для неё бессмысленна (всегда 0). Показываем вместо неё
+  // реальную активность каждого из операторов (Семён/Максим) по данным
+  // production_logs.operator_name — см. /api/adminCifra/staff/operator-stats.
+  const [operatorStatsData, setOperatorStatsData] = useState<{
+    operators: string[];
+    today: { name: string; trips: number; volume: number; avgDurationMinutes: number | null }[];
+    week: { name: string; trips: number; volume: number; avgDurationMinutes: number | null }[];
+    month: { name: string; trips: number; volume: number; avgDurationMinutes: number | null }[];
+  } | null>(null);
+  const [operatorStatsPeriod, setOperatorStatsPeriod] = useState<'today' | 'week' | 'month'>('today');
+  const [operatorStatsLoading, setOperatorStatsLoading] = useState(false);
+
+  // ==================== СТАТИСТИКА ЛАБОРАНТА (боковая панель карточки) ====================
+  // У лаборанта, в отличие от оператора БСУ, обычный личный логин — считаем
+  // строго по её/его user_id (created_by/changed_by уже заполнены во всех
+  // таблицах модуля "Лаборатория"). См. /api/adminCifra/staff/laborant-stats.
+  type LaborantPeriodStats = {
+    tests: { total: number; pass: number; fail: number; pending: number; passRate: number | null };
+    passports: { total: number; concrete: number; mortar: number };
+    recipeEdits: number;
+  };
+  const [laborantStatsData, setLaborantStatsData] = useState<{
+    today: LaborantPeriodStats;
+    week: LaborantPeriodStats;
+    month: LaborantPeriodStats;
+  } | null>(null);
+  const [laborantStatsPeriod, setLaborantStatsPeriod] = useState<'today' | 'week' | 'month'>('today');
+  const [laborantStatsLoading, setLaborantStatsLoading] = useState(false);
+
   // ==================== СОСТОЯНИЯ МОДАЛЬНОГО ОКНА ЗВОНКА ====================
   const [showCallModal, setShowCallModal] = useState(false);
   const [callModalClient, setCallModalClient] = useState<any>(null);
@@ -225,6 +265,99 @@ useEffect(() => {
         setStaffProfiles([]);
       });
   };
+
+  // ==================== 2.0.2 ИМЕНА ОПЕРАТОРОВ СМЕНЫ ====================
+  // Подгружаем при открытии карточки "Оператор" (и при смене роли на "Оператор"
+  // прямо в форме) — список общий для всех, поэтому хранится в БД, а не в этой
+  // конкретной записи сотрудника.
+  useEffect(() => {
+    if (!isStaffEditModalOpen || editingStaff?.role !== 'operator') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/adminCifra/operator-shift');
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled) setOperatorShiftNames(Array.isArray(data?.available_names) ? data.available_names : []);
+      } catch (err) {
+        console.error('Не удалось загрузить список имён операторов:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isStaffEditModalOpen, editingStaff?.role]);
+
+  const saveOperatorShiftNames = async (names: string[]) => {
+    setSavingOperatorNames(true);
+    try {
+      const res = await fetch('/api/adminCifra/operator-shift', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ available_names: names }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      console.error('Не удалось сохранить список имён операторов:', err);
+      alert('Не удалось сохранить список операторов — попробуйте ещё раз');
+    } finally {
+      setSavingOperatorNames(false);
+    }
+  };
+
+  const addOperatorShiftName = () => {
+    const name = newOperatorNameInput.trim();
+    if (!name || operatorShiftNames.includes(name)) return;
+    const updated = [...operatorShiftNames, name];
+    setOperatorShiftNames(updated);
+    setNewOperatorNameInput('');
+    saveOperatorShiftNames(updated);
+  };
+
+  const removeOperatorShiftName = (name: string) => {
+    const updated = operatorShiftNames.filter((n) => n !== name);
+    setOperatorShiftNames(updated);
+    saveOperatorShiftNames(updated);
+  };
+
+  // Статистика в боковой панели — грузим при открытии карточки "Оператор"
+  // (не путать с эффектом выше, который грузит список имён внутри модалки
+  // редактирования — это разные, независимые UI).
+  useEffect(() => {
+    if (!(selectedProfile?.isStaff && selectedProfile?.role === 'operator')) return;
+    let cancelled = false;
+    setOperatorStatsLoading(true);
+    (async () => {
+      try {
+        const res = await fetch('/api/adminCifra/staff/operator-stats');
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled) setOperatorStatsData(data);
+      } catch (err) {
+        console.error('Не удалось загрузить статистику операторов:', err);
+      } finally {
+        if (!cancelled) setOperatorStatsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedProfile]);
+
+  useEffect(() => {
+    if (!(selectedProfile?.isStaff && selectedProfile?.role === 'laborant' && selectedProfile?.user_id)) return;
+    let cancelled = false;
+    setLaborantStatsLoading(true);
+    (async () => {
+      try {
+        const res = await fetch(`/api/adminCifra/staff/laborant-stats?userId=${selectedProfile.user_id}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled) setLaborantStatsData(data);
+      } catch (err) {
+        console.error('Не удалось загрузить статистику лаборанта:', err);
+      } finally {
+        if (!cancelled) setLaborantStatsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedProfile]);
 
   useEffect(() => {
     if (activeTab === 'staff') loadStaffList();
@@ -2072,6 +2205,194 @@ const changeStaffPassword = async (staffMember: any) => {
         </button>
       </div>
 
+      {selectedProfile.role === 'operator' ? (
+        /* ==================== СТАТИСТИКА ОПЕРАТОРОВ СМЕНЫ ==================== */
+        /* Общая учётка на всех (Семён/Максим) — "статистика куратора" здесь
+           бессмысленна (клиентов/продаж у оператора нет по определению).
+           Вместо неё — реальная активность каждого по данным production_logs. */
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexShrink: 0 }}>
+            {([
+              { id: 'today', label: 'Сегодня' },
+              { id: 'week', label: '7 дней' },
+              { id: 'month', label: '30 дней' },
+            ] as const).map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setOperatorStatsPeriod(tab.id)}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: '9999px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  background: operatorStatsPeriod === tab.id ? '#10B981' : '#25334A',
+                  color: operatorStatsPeriod === tab.id ? '#0F172A' : '#94A3B8',
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {operatorStatsLoading && !operatorStatsData ? (
+            <div style={{ color: '#94A3B8', textAlign: 'center', padding: '40px 0' }}>Загрузка…</div>
+          ) : (() => {
+            const rows = operatorStatsData?.[operatorStatsPeriod] || [];
+            const maxVolume = Math.max(1, ...rows.map((r) => r.volume));
+
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flexShrink: 0 }}>
+                {rows.length === 0 && (
+                  <div style={{ color: '#64748B', textAlign: 'center', padding: '20px 0' }}>Нет данных за период</div>
+                )}
+                {rows.map((row) => (
+                  <div key={row.name} style={{ background: '#25334A', borderRadius: '16px', padding: '18px 20px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
+                      <div style={{ fontSize: '18px', fontWeight: '700' }}>{row.name}</div>
+                      <div style={{ fontSize: '13px', color: '#94A3B8' }}>
+                        {row.trips} {row.trips === 1 ? 'рейс' : 'рейсов'}
+                      </div>
+                    </div>
+
+                    {/* Полоска сравнения объёма относительно лидера периода */}
+                    <div style={{ background: '#334155', borderRadius: '9999px', height: '8px', overflow: 'hidden', marginBottom: '12px' }}>
+                      <div style={{
+                        height: '100%',
+                        borderRadius: '9999px',
+                        width: `${Math.max(4, Math.round((row.volume / maxVolume) * 100))}%`,
+                        background: '#10B981',
+                      }} />
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
+                      <div>
+                        <div style={{ fontSize: '22px', fontWeight: '700', color: '#60A5FA' }}>{row.volume}</div>
+                        <div style={{ fontSize: '12.5px', color: '#94A3B8' }}>м³ отгружено</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '22px', fontWeight: '700', color: '#FBBF24' }}>
+                          {row.avgDurationMinutes != null ? `${row.avgDurationMinutes} мин` : '—'}
+                        </div>
+                        <div style={{ fontSize: '12.5px', color: '#94A3B8' }}>среднее время загрузки</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                <div style={{ color: '#64748B', fontSize: '12.5px', textAlign: 'center', marginTop: '4px' }}>
+                  Учитываются рейсы, оформленные через кнопку «Загружен» — статистика ведётся с момента внедрения атрибуции по оператору смены.
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      ) : selectedProfile.role === 'laborant' ? (
+        /* ==================== СТАТИСТИКА ЛАБОРАНТА ==================== */
+        /* У лаборанта личный логин (не общая учётка) — "статистика куратора"
+           здесь тоже бессмысленна, у неё нет клиентов. Вместо этого — реальная
+           работа по модулю "Лаборатория": испытания, паспорта, рецептуры. */
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexShrink: 0 }}>
+            {([
+              { id: 'today', label: 'Сегодня' },
+              { id: 'week', label: '7 дней' },
+              { id: 'month', label: '30 дней' },
+            ] as const).map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setLaborantStatsPeriod(tab.id)}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: '9999px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  background: laborantStatsPeriod === tab.id ? '#10B981' : '#25334A',
+                  color: laborantStatsPeriod === tab.id ? '#0F172A' : '#94A3B8',
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {laborantStatsLoading && !laborantStatsData ? (
+            <div style={{ color: '#94A3B8', textAlign: 'center', padding: '40px 0' }}>Загрузка…</div>
+          ) : (() => {
+            const stats = laborantStatsData?.[laborantStatsPeriod];
+            if (!stats) {
+              return <div style={{ color: '#64748B', textAlign: 'center', padding: '20px 0' }}>Нет данных за период</div>;
+            }
+
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {/* Испытания */}
+                <div style={{ background: '#25334A', borderRadius: '16px', padding: '18px 20px' }}>
+                  <div style={{ fontSize: '15px', color: '#94A3B8', marginBottom: '12px' }}>Испытания прочности</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                    <div>
+                      <div style={{ fontSize: '28px', fontWeight: '700', color: '#60A5FA' }}>{stats.tests.total}</div>
+                      <div style={{ fontSize: '12.5px', color: '#94A3B8' }}>проведено</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '28px', fontWeight: '700', color: '#34D399' }}>
+                        {stats.tests.passRate != null ? `${stats.tests.passRate}%` : '—'}
+                      </div>
+                      <div style={{ fontSize: '12.5px', color: '#94A3B8' }}>прошли норму</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '28px', fontWeight: '700', color: stats.tests.fail > 0 ? '#F87171' : '#94A3B8' }}>
+                        {stats.tests.fail}
+                      </div>
+                      <div style={{ fontSize: '12.5px', color: '#94A3B8' }}>не прошли</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Паспорта качества */}
+                <div style={{ background: '#25334A', borderRadius: '16px', padding: '18px 20px' }}>
+                  <div style={{ fontSize: '15px', color: '#94A3B8', marginBottom: '12px' }}>Паспорта качества</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                    <div>
+                      <div style={{ fontSize: '28px', fontWeight: '700', color: '#60A5FA' }}>{stats.passports.total}</div>
+                      <div style={{ fontSize: '12.5px', color: '#94A3B8' }}>всего выпущено</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '28px', fontWeight: '700', color: '#FBBF24' }}>{stats.passports.concrete}</div>
+                      <div style={{ fontSize: '12.5px', color: '#94A3B8' }}>бетон</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '28px', fontWeight: '700', color: '#A78BFA' }}>{stats.passports.mortar}</div>
+                      <div style={{ fontSize: '12.5px', color: '#94A3B8' }}>раствор</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Рецептуры */}
+                <div style={{
+                  background: '#25334A',
+                  borderRadius: '12px',
+                  padding: '10px 16px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}>
+                  <div style={{ color: '#94A3B8' }}>Изменений в рецептурах</div>
+                  <div style={{ fontSize: '24px', fontWeight: '700' }}>{stats.recipeEdits}</div>
+                </div>
+
+                <div style={{ color: '#64748B', fontSize: '12.5px', textAlign: 'center', marginTop: '4px' }}>
+                  Испытания, паспорта и правки рецептур из модуля «Лаборатория».
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      ) : (
+      <>
       {/* Основная статистика */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px', flexShrink: 0 }}>
         <div style={{ background: '#25334A', padding: '16px 20px', borderRadius: '16px', textAlign: 'center' }}>
@@ -2193,6 +2514,8 @@ const changeStaffPassword = async (staffMember: any) => {
     Пока нет клиентов под кураторством
   </div>
 )}
+      </>
+      )}
 
     </div>
   </div>
@@ -2890,6 +3213,90 @@ const changeStaffPassword = async (staffMember: any) => {
             <option value="guest">Гость (демо-доступ)</option>
           </select>
         </div>
+
+        {/* ==================== ИМЕНА ОПЕРАТОРОВ СМЕНЫ ==================== */}
+        {/* У "Оператора" одна общая учётка на всех (без личных логинов) — здесь
+            редактируется не сам логин, а список имён, из которых оператор
+            выбирает себя на странице БСУ (плашка "Смена" в шапке). */}
+        {editingStaff.role === 'operator' && (
+          <div>
+            <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>
+              Операторы смены
+            </label>
+            <div style={{ fontSize: '13px', color: '#64748B', marginBottom: '10px' }}>
+              Общая учётка «Оперратор» используется несколькими людьми по очереди —
+              здесь список имён, из которых оператор выбирает себя на странице БСУ.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
+              {operatorShiftNames.length === 0 && (
+                <div style={{ color: '#64748B', fontSize: '14px' }}>Список пуст</div>
+              )}
+              {operatorShiftNames.map((name) => (
+                <div
+                  key={name}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 8px 6px 14px',
+                    background: '#25334A',
+                    borderRadius: '9999px',
+                    fontSize: '14px',
+                  }}
+                >
+                  {name}
+                  <button
+                    type="button"
+                    onClick={() => removeOperatorShiftName(name)}
+                    disabled={savingOperatorNames}
+                    title={`Удалить «${name}» из списка`}
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      borderRadius: '50%',
+                      border: 'none',
+                      background: 'rgba(239, 68, 68, 0.18)',
+                      color: '#F87171',
+                      cursor: savingOperatorNames ? 'not-allowed' : 'pointer',
+                      fontSize: '13px',
+                      lineHeight: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input
+                value={newOperatorNameInput}
+                onChange={(e) => setNewOperatorNameInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addOperatorShiftName(); } }}
+                placeholder="Имя нового оператора"
+                style={{ flex: 1, padding: '10px 12px', background: '#25334A', border: 'none', borderRadius: '10px', color: '#fff' }}
+              />
+              <button
+                type="button"
+                onClick={addOperatorShiftName}
+                disabled={savingOperatorNames || !newOperatorNameInput.trim()}
+                style={{
+                  padding: '10px 18px',
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  borderRadius: '10px',
+                  color: '#10B981',
+                  fontWeight: '500',
+                  cursor: (savingOperatorNames || !newOperatorNameInput.trim()) ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Добавить
+              </button>
+            </div>
+          </div>
+        )}
 
         <div>
           <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>
