@@ -28,10 +28,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    console.log('🔍 [Role API] Received userId:', userId);
-
     if (!userId) {
-      console.log('⚠️ No userId found');
       return NextResponse.json({ 
         success: true, 
         role: 'client',
@@ -49,18 +46,18 @@ export async function POST(request: NextRequest) {
       .eq('user_id', parsedUserId)
       .maybeSingle();
 
-    console.log('📊 Query data:', data);
-    console.log('📊 Query error:', error);
-
+    // Логируем реальные ошибки всегда. "error: null" на каждый успешный вызов
+    // не печатаем — этот роут вызывается очень часто (при каждом входе/
+    // обновлении роли), и такой лог только шумит в терминале без пользы.
     if (error) {
-      console.error('❌ Role fetch error:', error);
+      console.error('❌ [Role API] Query error:', error);
     }
 
     const role = data?.role || 'client';
     const full_name = data?.full_name || data?.username || 'Сотрудник';
     const forceLogoutVersion = data?.force_logout_version || 0;
 
-    console.log(`✅ [Role API] Final role for ${parsedUserId}: ${role} | name: ${full_name}`);
+    console.log(`✅ [Role API] ${parsedUserId}: ${role} | ${full_name}`);
 
     return NextResponse.json({ 
       success: true, 

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
 import MixerHistoryDrawer from './MixerHistoryDrawer';
+import { Truck } from 'lucide-react';
 
 interface Mixer {
   id: number;
@@ -158,23 +159,15 @@ export default function MixersPage() {
       {/* ==================== ЗАГОЛОВОК + КНОПКА ДОБАВИТЬ ==================== */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexShrink: 0 }}>
         <h1 style={{
-          fontSize: '24px',
-          fontWeight: '700',
+          fontSize: '26px',
+          fontWeight: 700,
+          color: '#fff',
           marginTop: 0,
           display: 'flex',
-          alignItems: 'flex-end',
+          alignItems: 'center',
           gap: '10px'
         }}>
-          <img 
-            src="/icons/mixer-truck.png" 
-            alt="Миксер" 
-            style={{ 
-              width: '38px', 
-              height: '38px', 
-              objectFit: 'contain',
-              marginBottom: '-2px'
-            }} 
-          />
+          <Truck size={26} color="#94A3B8" />
           Миксеры
         </h1>
 

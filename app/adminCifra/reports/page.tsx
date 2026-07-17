@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell 
@@ -36,7 +36,108 @@ export default function ReportsPage() {
   const [viewMode, setViewMode] = useState<'month' | 'day'>('day');
   const [currentPage, setCurrentPage] = useState(1);
   const [scaleMode, setScaleMode] = useState<'linear' | 'log'>('linear');
-  const itemsPerPage = 10;
+
+  // Список загруженных отчётов не скроллится — вместо этого подстраиваем
+  // количество строк на странице под реально доступную высоту (адаптивно
+  // под 4K/1920/меньшие экраны), измеряя контейнер списка через ResizeObserver.
+  const historyListRef = useRef<HTMLDivElement>(null);
+  const [itemsPerPage, setItemsPerPage] = useState(8);
+
+  // Recharts <ResponsiveContainer> ДО первого измерения родителя (через
+  // ResizeObserver) держит служебные значения width/height = -1 — и именно в
+  // этот момент, на самом первом рендере, печатает предупреждение "width(-1)
+  // and height(-1) of chart should be greater than 0..." — это баг самого
+  // Recharts (recharts/recharts#6716), возникает всегда при монтировании
+  // компонента независимо от готовности раскладки страницы, поэтому просто
+  // "подождать кадр" перед рендером не помогает. Официальный обходной путь —
+  // передать `initialDimension`, тогда на первом рендере используются эти
+  // значения вместо -1, и предупреждение не возникает. Сам график всё равно
+  // корректно пересчитается на реальный размер сразу после измерения.
+  const CHART_INITIAL_DIMENSION = { width: 400, height: 300 };
+
+  // Подбираем itemsPerPage САМОСХОДЯЩИМСЯ алгоритмом по ФАКТИЧЕСКОМУ (а не
+  // предполагаемому по формуле) свободному месту в контейнере — это надёжнее
+  // любой формулы-оценки по высоте строки, т.к. учитывает зум браузера,
+  // масштабирование экрана (DPI), округление суб-пикселей шрифта (высота
+  // строки зависит от font-size: clamp(12px, 0.9vw, 15px)) и другие факторы,
+  // из-за которых формула на конкретном экране может немного промахнуться.
+  // На каждый проход только ОДНО решение: либо убрать строку (если реально не
+  // влезает), либо добавить (если есть место под ещё одну целую строку) —
+  // никогда оба сразу и никогда в противоречивые стороны одновременно,
+  // поэтому гарантированно сходится к точному значению без "дребезга" туда-сюда,
+  // независимо от того, с какого стартового значения начали.
+  // Срабатывает на resize контейнера И на появление/удаление строк в DOM
+  // (важно: данные истории отчётов подгружаются асинхронно ПОСЛЕ монтирования,
+  // и до появления реальных строк измерять и корректировать нечего).
+  useEffect(() => {
+    const el = historyListRef.current;
+    if (!el) return;
+    const adjust = () => {
+      if (el.clientHeight <= 0) return;
+      if (el.scrollHeight > el.clientHeight + 1) {
+        setItemsPerPage(prev => (prev > 1 ? prev - 1 : prev));
+        return;
+      }
+      const firstRow = el.firstElementChild as HTMLElement | null;
+      if (!firstRow) return;
+      const rowHeight = firstRow.getBoundingClientRect().height + 8 /* gap */;
+      const freeSpace = el.clientHeight - el.scrollHeight;
+      if (freeSpace >= rowHeight) {
+        setItemsPerPage(prev => prev + 1);
+      }
+    };
+    adjust();
+    const ro = new ResizeObserver(adjust);
+    ro.observe(el);
+    const mo = new MutationObserver(adjust);
+    mo.observe(el, { childList: true });
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, [itemsPerPage]);
+
+  // ==================== ФИЛЬТР ПО РЕЦЕПТАМ В ТЕКУЩЕМ ОТЧЁТЕ (как в Excel) ====================
+  // null = фильтр не применён (показываем все строки, все чекбоксы отмечены).
+  // Set (даже пустой) = пользователь явно что-то выбрал/снял.
+  const [selectedRecipes, setSelectedRecipes] = useState<Set<string> | null>(null);
+  const [recipeFilterOpen, setRecipeFilterOpen] = useState(false);
+  const [recipeFilterSearch, setRecipeFilterSearch] = useState('');
+  // Координаты списка фильтра считаем от кнопки и рисуем через position:fixed —
+  // иначе список зависит от высоты <table>, а <table>/её обёртка держат
+  // overflow:hidden (нужно для другого фикса скролла) и "режут" список, когда
+  // строк становится мало (например, после "Снять все" таблица сжимается почти
+  // до высоты одного заголовка).
+  const [recipeFilterPos, setRecipeFilterPos] = useState({ top: 0, left: 0 });
+  // У модалки задан transform (центрирование) — по спецификации CSS это делает
+  // её "системой координат" для всех потомков с position:fixed (top/left
+  // считаются от НЕЁ, а не от экрана). getBoundingClientRect() кнопки всегда
+  // возвращает координаты относительно ЭКРАНА, поэтому координаты обязательно
+  // нужно пересчитывать относительно модалки — иначе на широких экранах (где
+  // модалка сильно смещена от левого края) список фильтра "убегает" вправо на
+  // величину этого смещения.
+  const modalPanelRef = useRef<HTMLDivElement>(null);
+  const modalBodyRef = useRef<HTMLDivElement>(null);
+
+  // Метаданные отчёта, открытого в модалке (для заголовка) — сами строки лежат в reportData
+  const [openReportMeta, setOpenReportMeta] = useState<{ fileName: string; dateLabel: string } | null>(null);
+
+  const closeReportModal = () => {
+    setReportData([]);
+    setOpenReportMeta(null);
+    setSelectedRecipes(null);
+    setRecipeFilterOpen(false);
+  };
+
+  // Закрытие модалки детального отчёта по Escape
+  useEffect(() => {
+    if (reportData.length === 0) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeReportModal();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [reportData.length]);
 
   const loadHistory = async (force = false) => {
     // Если данные уже есть в кеше и не форс — показываем мгновенно
@@ -121,6 +222,11 @@ export default function ReportsPage() {
 
   const totalPages = Math.ceil(filteredHistory.length / itemsPerPage);
 
+  // itemsPerPage меняется динамически (см. ResizeObserver выше) — не даём
+  // currentPage "вылететь" за пределы диапазона после пересчёта. Вычисляем
+  // безопасное значение прямо при рендере (без эффекта), а не мутируем state.
+  const safeCurrentPage = Math.min(currentPage, Math.max(1, totalPages));
+
     // ==================== СОРТИРОВКА: ТЕКУЩИЙ МЕСЯЦ СНАЧАЛА ====================
   const sortedHistory = useMemo(() => {
     const now = new Date();
@@ -161,8 +267,8 @@ export default function ReportsPage() {
   }, [filteredHistory]);
 
   const currentReports = sortedHistory.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
+    (safeCurrentPage - 1) * itemsPerPage,
+    safeCurrentPage * itemsPerPage
   );
 
     // ==================== ГРАФИКИ ====================
@@ -385,158 +491,65 @@ export default function ReportsPage() {
     };
   }, [filteredHistory]);
 
+  // ==================== СПИСОК РЕЦЕПТОВ В ОТКРЫТОМ ОТЧЁТЕ (для фильтра в шапке) ====================
+  const availableRecipes = useMemo(() => {
+    const counts = new Map<string, number>();
+    reportData.forEach(row => {
+      counts.set(row.recipe, (counts.get(row.recipe) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  }, [reportData]);
+
+  // Строки текущего отчёта после применения фильтра по рецептам
+  const filteredReportData = useMemo(() => {
+    if (selectedRecipes === null) return reportData;
+    return reportData.filter(row => selectedRecipes.has(row.recipe));
+  }, [reportData, selectedRecipes]);
+
 
 
 
 
   return (
-    <div style={{ padding: '0 0 24px 0' }}>
-      {/* ====================== КНОПКА ЗАГРУЗКИ НОВОГО ОТЧЕТА ====================== */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
-        <label style={{
-    color: '#10B981',
-    padding: '10px 20px',
-    fontWeight: '600',
-    fontSize: '15.5px',
-    cursor: 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '8px',
-    backgroundColor: 'transparent',
-    border: 'none',
-    transition: 'all 0.2s ease',
-    whiteSpace: 'nowrap'
-   }}>
-    Загрузить новый отчёт MEKA (.xls / .xlsx)
-    
-        <input
-      type="file"
-      accept=".xls,.xlsx"
-      onChange={async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
-        try {
-          const XLSX = await import('xlsx');
-          const data = await file.arrayBuffer();
-          const workbook = XLSX.read(data, { type: 'array' });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
-
-          const jsonData = XLSX.utils.sheet_to_json(sheet, { 
-            range: 5, 
-            defval: '', 
-            blankrows: false 
-          });
-
-          const processed = jsonData.map((row: any) => ({
-            no: row['__EMPTY_3'] || row['NO'] || '-',
-            date: row['__EMPTY_1'] || row['DATE'] || '',
-            time: row['__EMPTY_2'] || '',
-            recipe: row['__EMPTY_4'] || row['RECIPE CODE'] || 'Неизвестно',
-
-            qty: Number(row['__EMPTY_5'] || 0),
-            sand:    Number(row['__EMPTY_6'] || 0),
-            gravel:  Number(row['__EMPTY_7'] || 0),
-            cement:  Number(row['__EMPTY_12'] || 0),
-            water:   Number(row['__EMPTY_18'] || 0),
-            additive: Number(row['__EMPTY_20'] || 0),     // ПФМ-НЛК
-            additive2: Number(row['__EMPTY_21'] || row['__EMPTY_22'] || 0), // Линомикс
-          })).filter(r => r.qty > 0 && r.qty < 1000 && r.recipe !== 'Неизвестно' && !r.recipe.includes('ИТОГО') && r.no !== '-');
-
-          const totalVolume = processed.reduce((sum: number, r: any) => sum + r.qty, 0);
-          const totalCement = processed.reduce((sum: number, r: any) => sum + r.cement, 0);
-
-          // === РАСЧЁТ РАСХОДА ДОБАВОК ===
-          const totalAdditive1 = processed.reduce((sum: number, r: any) => sum + (r.additive || 0), 0);
-          const totalAdditive2 = processed.reduce((sum: number, r: any) => sum + (r.additive2 || 0), 0);
-
-          // === ИСПРАВЛЕНИЕ ДАТЫ ===
-          let reportDate = processed[0]?.date || '';
-          if (reportDate.includes('.')) {
-            const [day, month, year] = reportDate.split('.');
-            reportDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-          }
-
-          const res = await fetch('/api/adminCifra/meka-report', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              file_name: file.name,
-              report_date: reportDate,
-              total_volume: totalVolume,
-              total_cement: totalCement,
-              raw_data: processed
-            })
-          });
-
-          if (res.ok) {
-            alert(`✅ Отчёт "${file.name}" успешно загружен!\nПартий: ${processed.length} • Объём: ${totalVolume} м³`);
-
-                        // === АВТОМАТИЧЕСКОЕ СПИСАНИЕ ДОБАВОК ===
-            if (totalAdditive1 > 0 || totalAdditive2 > 0) {
-              try {
-                const resSubtract = await fetch('/api/adminCifra/warehouse/subtract', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    pfmLiters: totalAdditive1,
-                    linomixLiters: totalAdditive2
-                  })
-                });
-
-                if (resSubtract.ok) {
-                  console.log(`✅ Автоматически списано: ПФМ-НЛК ${totalAdditive1.toFixed(1)} л, Линомикс ${totalAdditive2.toFixed(1)} л`);
-                } else {
-                  console.warn('Не удалось списать добавки автоматически');
-                }
-              } catch (err) {
-                console.error('Ошибка при автоматическом списании добавок:', err);
-              }
-            }
-
-            loadHistory();
-            setReportData(processed);
-          } else {
-            const errorText = await res.text();
-            console.error('Ошибка сервера:', errorText);
-            alert(`Ошибка сохранения:\n${errorText}`);
-          }
-        } catch (err: any) {
-          console.error(err);
-          alert('Ошибка обработки файла');
-        }
-      }}
-      style={{ display: 'none' }}
-    />
-  </label>
-</div>
-
-          {/* ==================== СТАТИСТИКА СВЕРХУ ==================== */}
+    <div style={{
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      gap: 'clamp(6px, 0.9vh, 14px)'
+    }}>
+          {/* ==================== СТАТИСТИКА СВЕРХУ ====================
+              Компактные карточки с адаптивными (clamp) отступами/шрифтом —
+              на 4K они крупнее, на маленьких экранах ужимаются, но не скроллятся.
+              Кнопка загрузки отчёта перенесена вниз, к шапке "История..." —
+              освободившееся место отдано под эти карточки. */}
 <div style={{ 
   display: 'grid', 
-  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', 
-  gap: '14px',
-  marginBottom: '18px'
+  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
+  gap: 'clamp(8px, 1vw, 14px)',
+  flexShrink: 0
 }}>
   
   {/* Всего отчётов */}
   <div style={{ 
     background: '#1E2937', 
-    borderRadius: '18px', 
-    padding: '16px 20px' 
+    borderRadius: '16px', 
+    padding: 'clamp(8px, 1.2vh, 16px) clamp(12px, 1.4vw, 20px)' 
   }}>
-    <div style={{ color: '#94A3B8', fontSize: '13.5px', marginBottom: '6px' }}>Всего отчётов</div>
-    <div style={{ fontSize: '32px', fontWeight: '700' }}>{stats.reports}</div>
+    <div style={{ color: '#94A3B8', fontSize: 'clamp(11px, 0.9vw, 13.5px)', marginBottom: '4px' }}>Всего отчётов</div>
+    <div style={{ fontSize: 'clamp(20px, 2.2vw, 32px)', fontWeight: '700' }}>{stats.reports}</div>
   </div>
 
   {/* Общий объём */}
   <div style={{ 
     background: '#1E2937', 
-    borderRadius: '18px', 
-    padding: '16px 20px' 
+    borderRadius: '16px', 
+    padding: 'clamp(8px, 1.2vh, 16px) clamp(12px, 1.4vw, 20px)' 
   }}>
-    <div style={{ color: '#94A3B8', fontSize: '13.5px', marginBottom: '6px' }}>Общий объём</div>
-    <div style={{ fontSize: '32px', fontWeight: '700', color: '#10B981' }}>
+    <div style={{ color: '#94A3B8', fontSize: 'clamp(11px, 0.9vw, 13.5px)', marginBottom: '4px' }}>Общий объём</div>
+    <div style={{ fontSize: 'clamp(20px, 2.2vw, 32px)', fontWeight: '700', color: '#10B981' }}>
       {stats.volume} м³
     </div>
   </div>
@@ -544,11 +557,11 @@ export default function ReportsPage() {
   {/* Цемент */}
   <div style={{ 
     background: '#1E2937', 
-    borderRadius: '18px', 
-    padding: '16px 20px' 
+    borderRadius: '16px', 
+    padding: 'clamp(8px, 1.2vh, 16px) clamp(12px, 1.4vw, 20px)' 
   }}>
-    <div style={{ color: '#94A3B8', fontSize: '13.5px', marginBottom: '6px' }}>Цемент израсходовано</div>
-    <div style={{ fontSize: '32px', fontWeight: '700', color: '#F59E0B' }}>
+    <div style={{ color: '#94A3B8', fontSize: 'clamp(11px, 0.9vw, 13.5px)', marginBottom: '4px' }}>Цемент израсходовано</div>
+    <div style={{ fontSize: 'clamp(20px, 2.2vw, 32px)', fontWeight: '700', color: '#F59E0B' }}>
       {stats.cement} т
     </div>
   </div>
@@ -556,11 +569,11 @@ export default function ReportsPage() {
   {/* Добавка 1 */}
   <div style={{ 
     background: '#1E2937', 
-    borderRadius: '18px', 
-    padding: '16px 20px' 
+    borderRadius: '16px', 
+    padding: 'clamp(8px, 1.2vh, 16px) clamp(12px, 1.4vw, 20px)' 
   }}>
-    <div style={{ color: '#94A3B8', fontSize: '13.5px', marginBottom: '6px' }}>Добавка 1 (ПФМ-НЛК)</div>
-    <div style={{ fontSize: '32px', fontWeight: '700', color: '#8B5CF6' }}>
+    <div style={{ color: '#94A3B8', fontSize: 'clamp(11px, 0.9vw, 13.5px)', marginBottom: '4px' }}>Добавка 1 (ПФМ-НЛК)</div>
+    <div style={{ fontSize: 'clamp(20px, 2.2vw, 32px)', fontWeight: '700', color: '#8B5CF6' }}>
       {stats.additive1} кг
     </div>
   </div>
@@ -568,11 +581,11 @@ export default function ReportsPage() {
   {/* Добавка 2 */}
   <div style={{ 
     background: '#1E2937', 
-    borderRadius: '18px', 
-    padding: '16px 20px' 
+    borderRadius: '16px', 
+    padding: 'clamp(8px, 1.2vh, 16px) clamp(12px, 1.4vw, 20px)' 
   }}>
-    <div style={{ color: '#94A3B8', fontSize: '13.5px', marginBottom: '6px' }}>Добавка 2 (Линомикс)</div>
-    <div style={{ fontSize: '32px', fontWeight: '700', color: '#EC4899' }}>
+    <div style={{ color: '#94A3B8', fontSize: 'clamp(11px, 0.9vw, 13.5px)', marginBottom: '4px' }}>Добавка 2 (Линомикс)</div>
+    <div style={{ fontSize: 'clamp(20px, 2.2vw, 32px)', fontWeight: '700', color: '#EC4899' }}>
       {stats.additive2} кг
     </div>
   </div>
@@ -580,56 +593,56 @@ export default function ReportsPage() {
 </div>
 
           {/* Фильтры */}
-          <div style={{ display: 'flex', gap: '16px', marginBottom: '18px', flexWrap: 'wrap', alignItems: 'end' }}>
+          <div style={{ display: 'flex', gap: 'clamp(8px, 1vw, 16px)', flexWrap: 'wrap', alignItems: 'end', flexShrink: 0 }}>
             <div>
-              <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>Поиск</div>
+              <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px' }}>Поиск</div>
               <input 
                 type="text" 
                 placeholder="Имя файла или дата..." 
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 style={{
-                  padding: '14px 20px',
+                  padding: 'clamp(8px, 1vh, 14px) 20px',
                   backgroundColor: '#1E2937',
                   border: 'none',
                   borderRadius: '9999px',
                   color: 'white',
-                  width: '340px',
-                  fontSize: '16px'
+                  width: 'clamp(220px, 22vw, 340px)',
+                  fontSize: '14px'
                 }}
               />
             </div>
 
             <div>
-              <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>С даты</div>
+              <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px' }}>С даты</div>
               <input 
                 type="date" 
                 value={dateFrom}
                 onChange={(e) => setDateFrom(e.target.value)}
                 style={{
-                  padding: '14px 20px',
+                  padding: 'clamp(8px, 1vh, 14px) 20px',
                   backgroundColor: '#1E2937',
                   border: 'none',
                   borderRadius: '9999px',
                   color: 'white',
-                  fontSize: '16px'
+                  fontSize: '14px'
                 }}
               />
             </div>
 
             <div>
-              <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>По дату</div>
+              <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px' }}>По дату</div>
               <input 
                 type="date" 
                 value={dateTo}
                 onChange={(e) => setDateTo(e.target.value)}
                 style={{
-                  padding: '14px 20px',
+                  padding: 'clamp(8px, 1vh, 14px) 20px',
                   backgroundColor: '#1E2937',
                   border: 'none',
                   borderRadius: '9999px',
                   color: 'white',
-                  fontSize: '16px'
+                  fontSize: '14px'
                 }}
               />
             </div>
@@ -637,37 +650,49 @@ export default function ReportsPage() {
             <button 
               onClick={() => { setSearchTerm(''); setDateFrom(''); setDateTo(''); }}
               style={{ 
-                padding: '14px 28px', 
+                padding: 'clamp(8px, 1vh, 14px) 28px', 
                 borderRadius: '9999px', 
                 backgroundColor: '#334155', 
                 border: 'none', 
                 color: 'white', 
-                cursor: 'pointer', 
-                height: '52px'
+                cursor: 'pointer'
               }}
             >
               Сбросить
             </button>
           </div>
 
-         {/* Графики */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+         {/* Графики + история — общий flex:1 контейнер. Так сумма высот ВСЕГДА
+             равна реально доступному месту (какое бы оно ни было на конкретном
+             разрешении/с любой шапкой/баннерами над этим блоком) — переполнение
+             и обрезка снизу структурно невозможны. Графики предпочитают свою
+             высоту (flexBasis), но готовы сжаться (flexShrink:1), если места
+             мало; история забирает весь остаток (flex:1) и сама решает, сколько
+             строк показать (см. ResizeObserver у historyListRef). */}
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: 'clamp(6px, 0.9vh, 14px)' }}>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+            gap: 'clamp(8px, 1vw, 16px)',
+            flex: '0 1 clamp(200px, 27vh, 320px)',
+            minHeight: 0
+          }}>
 
                      {/* 1. Объём производства — с переключением */}
-            <div style={{ backgroundColor: '#1E2937', padding: '18px', borderRadius: '18px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                <h3 style={{ color: '#E2E8F0' }}>Объём производства</h3>
+            <div style={{ backgroundColor: '#1E2937', padding: 'clamp(10px, 1.4vh, 18px)', borderRadius: '16px', display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexShrink: 0 }}>
+                <h3 style={{ color: '#E2E8F0', margin: 0, fontSize: 'clamp(13px, 1vw, 16px)' }}>Объём производства</h3>
                 
-                <div style={{ display: 'flex', backgroundColor: '#334155', borderRadius: '9999px', padding: '4px' }}>
+                <div style={{ display: 'flex', backgroundColor: '#334155', borderRadius: '9999px', padding: '3px' }}>
                   <button
                     onClick={() => setViewMode('month')}
                     style={{
-                      padding: '8px 24px',
+                      padding: '5px 14px',
                       borderRadius: '9999px',
                       backgroundColor: viewMode === 'month' ? '#10B981' : 'transparent',
                       color: viewMode === 'month' ? 'white' : '#94A3B8',
                       border: 'none',
-                      fontSize: '15px',
+                      fontSize: 'clamp(11px, 0.8vw, 13px)',
                       fontWeight: '600',
                       cursor: 'pointer'
                     }}
@@ -677,12 +702,12 @@ export default function ReportsPage() {
                   <button
                     onClick={() => setViewMode('day')}
                     style={{
-                      padding: '8px 24px',
+                      padding: '5px 14px',
                       borderRadius: '9999px',
                       backgroundColor: viewMode === 'day' ? '#10B981' : 'transparent',
                       color: viewMode === 'day' ? 'white' : '#94A3B8',
                       border: 'none',
-                      fontSize: '15px',
+                      fontSize: 'clamp(11px, 0.8vw, 13px)',
                       fontWeight: '600',
                       cursor: 'pointer'
                     }}
@@ -692,7 +717,8 @@ export default function ReportsPage() {
                 </div>
               </div>
 
-              <ResponsiveContainer width="100%" height={300}>
+              <div style={{ flex: 1, minHeight: 0 }}>
+              <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
                 <BarChart 
   data={viewMode === 'month' ? monthlyVolume : dailyVolume}
   barCategoryGap={viewMode === 'month' ? 80 : 18}
@@ -713,12 +739,13 @@ export default function ReportsPage() {
   <Bar dataKey="value" fill="#10B981" radius={12} />
 </BarChart>
               </ResponsiveContainer>
+              </div>
             </div>
 
             {/* ТОП РЕЦЕПТОВ */}
-<div style={{ background: '#1E2937', borderRadius: '18px', padding: '18px' }}>
-  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-    <h3 style={{ margin: 0, color: '#94A3B8' }}>Топ рецептов</h3>
+<div style={{ background: '#1E2937', borderRadius: '16px', padding: 'clamp(10px, 1.4vh, 18px)', display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px', flexShrink: 0 }}>
+    <h3 style={{ margin: 0, color: '#94A3B8', fontSize: 'clamp(13px, 1vw, 16px)' }}>Топ рецептов</h3>
     {isLoading && (
       <span style={{ fontSize: '12px', color: '#475569', display: 'flex', alignItems: 'center', gap: '6px' }}>
         <span style={{
@@ -735,42 +762,46 @@ export default function ReportsPage() {
     )}
   </div>
   
-  <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '18px' }}>
+  <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
     {isLoading && topRecipes.length === 0 ? (
       /* Скелетон — кольцо-заглушка пока грузятся данные */
       <div style={{
-        width: '240px',
-        height: '240px',
+        width: 'clamp(100px, 16vh, 180px)',
+        height: 'clamp(100px, 16vh, 180px)',
         borderRadius: '50%',
-        border: '35px solid #263040',
+        border: '24px solid #263040',
         borderTopColor: '#1E3A5F',
         animation: 'spin 1.4s linear infinite',
         opacity: 0.6,
       }} />
     ) : (
       <div style={{
+        width: '100%',
+        height: '100%',
         animation: topRecipes.length > 0
           ? 'chartReveal 0.65s cubic-bezier(0.34, 1.56, 0.64, 1) forwards'
           : 'none',
         transformOrigin: 'center',
       }}>
-        <PieChart width={280} height={280}>
-          <Pie
-            data={topRecipes}
-            cx="50%"
-            cy="50%"
-            innerRadius={85}
-            outerRadius={120}
-            dataKey="value"
-            nameKey="name"
-            isAnimationActive={false}
-          >
-            {topRecipes.map((entry, index) => (
-              <Cell key={`cell-${index}`} fill={entry.fill} />
-            ))}
-          </Pie>
-          <Tooltip content={<CustomPieTooltip />} />
-        </PieChart>
+        <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
+          <PieChart>
+            <Pie
+              data={topRecipes}
+              cx="50%"
+              cy="50%"
+              innerRadius="55%"
+              outerRadius="82%"
+              dataKey="value"
+              nameKey="name"
+              isAnimationActive={false}
+            >
+              {topRecipes.map((entry, index) => (
+                <Cell key={`cell-${index}`} fill={entry.fill} />
+              ))}
+            </Pie>
+            <Tooltip content={<CustomPieTooltip />} />
+          </PieChart>
+        </ResponsiveContainer>
       </div>
     )}
   </div>
@@ -779,17 +810,18 @@ export default function ReportsPage() {
   <div style={{ 
     display: 'flex', 
     flexWrap: 'wrap', 
-    gap: '14px 24px', 
+    gap: '6px 16px', 
     justifyContent: 'center',
-    marginTop: '12px',
-    minHeight: isLoading && topRecipes.length === 0 ? '44px' : 'auto',
+    flexShrink: 0,
+    fontSize: 'clamp(11px, 0.8vw, 13px)',
+    minHeight: isLoading && topRecipes.length === 0 ? '30px' : 'auto',
   }}>
     {isLoading && topRecipes.length === 0 ? (
       /* Скелетон легенды */
       [0,1,2,3,4,5].map(i => (
         <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ width: '18px', height: '18px', borderRadius: '4px', background: '#263040' }} />
-          <div style={{ width: `${60 + (i % 3) * 20}px`, height: '14px', borderRadius: '4px', background: '#263040' }} />
+          <div style={{ width: '14px', height: '14px', borderRadius: '4px', background: '#263040' }} />
+          <div style={{ width: `${60 + (i % 3) * 20}px`, height: '12px', borderRadius: '4px', background: '#263040' }} />
         </div>
       ))
     ) : (
@@ -797,19 +829,19 @@ export default function ReportsPage() {
         <div key={index} style={{ 
           display: 'flex', 
           alignItems: 'center', 
-          gap: '10px',
+          gap: '6px',
           whiteSpace: 'nowrap'
         }}>
           <div style={{ 
-            width: '18px', 
-            height: '18px', 
+            width: '12px', 
+            height: '12px', 
             backgroundColor: recipe.fill, 
-            borderRadius: '4px',
+            borderRadius: '3px',
             flexShrink: 0
           }} />
           <div>
             <span style={{ fontWeight: '600' }}>{recipe.name}</span>
-            <span style={{ color: '#10B981', marginLeft: '8px', fontWeight: '700' }}>
+            <span style={{ color: '#10B981', marginLeft: '6px', fontWeight: '700' }}>
               {Math.round(recipe.value)} м³
             </span>
           </div>
@@ -820,27 +852,27 @@ export default function ReportsPage() {
 </div>
 
          {/* ==================== РАСХОД МАТЕРИАЛОВ С ПЕРЕКЛЮЧАТЕЛЕМ ==================== */}
-<div style={{ background: '#1E2937', borderRadius: '18px', padding: '18px' }}>
-  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-    <h3 style={{ margin: 0, color: '#94A3B8' }}>Расход материалов</h3>
+<div style={{ background: '#1E2937', borderRadius: '16px', padding: 'clamp(10px, 1.4vh, 18px)', display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexShrink: 0 }}>
+    <h3 style={{ margin: 0, color: '#94A3B8', fontSize: 'clamp(13px, 1vw, 16px)' }}>Расход материалов</h3>
     
     {/* Красивый переключатель */}
     <div style={{ 
       background: '#25334A', 
       borderRadius: '9999px', 
-      padding: '4px', 
+      padding: '3px', 
       display: 'flex' 
     }}>
       <button 
         onClick={() => setScaleMode('linear')}
         style={{
-          padding: '8px 20px',
+          padding: '5px 14px',
           borderRadius: '9999px',
           background: scaleMode === 'linear' ? '#10B981' : 'transparent',
           color: scaleMode === 'linear' ? '#fff' : '#94A3B8',
           border: 'none',
           fontWeight: '600',
-          fontSize: '14px',
+          fontSize: 'clamp(11px, 0.8vw, 13px)',
           cursor: 'pointer',
           transition: 'all 0.2s'
         }}
@@ -850,13 +882,13 @@ export default function ReportsPage() {
       <button 
         onClick={() => setScaleMode('log')}
         style={{
-          padding: '8px 20px',
+          padding: '5px 14px',
           borderRadius: '9999px',
           background: scaleMode === 'log' ? '#10B981' : 'transparent',
           color: scaleMode === 'log' ? '#fff' : '#94A3B8',
           border: 'none',
           fontWeight: '600',
-          fontSize: '14px',
+          fontSize: 'clamp(11px, 0.8vw, 13px)',
           cursor: 'pointer',
           transition: 'all 0.2s'
         }}
@@ -866,7 +898,8 @@ export default function ReportsPage() {
     </div>
   </div>
   
-  <ResponsiveContainer width="100%" height={300}>
+  <div style={{ flex: 1, minHeight: 0 }}>
+  <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
     <BarChart data={materialConsumption} barCategoryGap={40}>
       <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
       <XAxis 
@@ -886,14 +919,16 @@ export default function ReportsPage() {
       <Bar dataKey="value" fill="#10B981" radius={8} />
     </BarChart>
   </ResponsiveContainer>
+  </div>
 
   {/* Легенда */}
   <div style={{ 
     display: 'flex', 
     flexWrap: 'wrap', 
-    gap: '12px 24px', 
+    gap: '6px 16px', 
     justifyContent: 'center',
-    marginTop: '12px'
+    flexShrink: 0,
+    fontSize: 'clamp(11px, 0.8vw, 13px)'
   }}>
     {[
       { color: '#F59E0B', label: 'Цемент' },
@@ -902,8 +937,8 @@ export default function ReportsPage() {
       { color: '#8B5CF6', label: 'Вода' },
       { color: '#EF4444', label: 'Добавка' }
     ].map((item, i) => (
-      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <div style={{ width: '18px', height: '18px', backgroundColor: item.color, borderRadius: '4px' }} />
+      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ width: '14px', height: '14px', backgroundColor: item.color, borderRadius: '4px' }} />
         <span style={{ fontWeight: '500' }}>{item.label}</span>
       </div>
     ))}
@@ -912,43 +947,165 @@ export default function ReportsPage() {
             </div>
 
                               {/* ====================== ИСТОРИЯ ====================== */}
-          <h3 style={{ marginBottom: '12px', color: '#94A3B8' }}>
-            История загруженных отчётов ({filteredHistory.length})
-          </h3>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '8px', flexShrink: 0 }}>
+            <h3 style={{ margin: 0, color: '#94A3B8', fontSize: 'clamp(13px, 1vw, 16px)' }}>
+              История загруженных отчётов ({filteredHistory.length})
+            </h3>
+
+            {/* ====================== КНОПКА ЗАГРУЗКИ НОВОГО ОТЧЕТА ====================== */}
+            <label style={{
+              color: '#10B981',
+              padding: '6px 16px',
+              fontWeight: '600',
+              fontSize: 'clamp(12px, 0.9vw, 14px)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              backgroundColor: 'transparent',
+              border: '1px solid #10B981',
+              borderRadius: '9999px',
+              transition: 'all 0.2s ease',
+              whiteSpace: 'nowrap'
+             }}>
+              Загрузить новый отчёт MEKA (.xls / .xlsx)
+
+              <input
+                type="file"
+                accept=".xls,.xlsx"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+
+                  try {
+                    const XLSX = await import('xlsx');
+                    const data = await file.arrayBuffer();
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+                    const jsonData = XLSX.utils.sheet_to_json(sheet, {
+                      range: 5,
+                      defval: '',
+                      blankrows: false
+                    });
+
+                    const processed = jsonData.map((row: any) => ({
+                      no: row['__EMPTY_3'] || row['NO'] || '-',
+                      date: row['__EMPTY_1'] || row['DATE'] || '',
+                      time: row['__EMPTY_2'] || '',
+                      recipe: row['__EMPTY_4'] || row['RECIPE CODE'] || 'Неизвестно',
+
+                      qty: Number(row['__EMPTY_5'] || 0),
+                      sand:    Number(row['__EMPTY_6'] || 0),
+                      gravel:  Number(row['__EMPTY_7'] || 0),
+                      cement:  Number(row['__EMPTY_12'] || 0),
+                      water:   Number(row['__EMPTY_18'] || 0),
+                      additive: Number(row['__EMPTY_20'] || 0),     // ПФМ-НЛК
+                      additive2: Number(row['__EMPTY_21'] || row['__EMPTY_22'] || 0), // Линомикс
+                    })).filter(r => r.qty > 0 && r.qty < 1000 && r.recipe !== 'Неизвестно' && !r.recipe.includes('ИТОГО') && r.no !== '-');
+
+                    const totalVolume = processed.reduce((sum: number, r: any) => sum + r.qty, 0);
+                    const totalCement = processed.reduce((sum: number, r: any) => sum + r.cement, 0);
+
+                    // === РАСЧЁТ РАСХОДА ДОБАВОК ===
+                    const totalAdditive1 = processed.reduce((sum: number, r: any) => sum + (r.additive || 0), 0);
+                    const totalAdditive2 = processed.reduce((sum: number, r: any) => sum + (r.additive2 || 0), 0);
+
+                    // === ИСПРАВЛЕНИЕ ДАТЫ ===
+                    let reportDate = processed[0]?.date || '';
+                    if (reportDate.includes('.')) {
+                      const [day, month, year] = reportDate.split('.');
+                      reportDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+                    }
+
+                    const res = await fetch('/api/adminCifra/meka-report', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        file_name: file.name,
+                        report_date: reportDate,
+                        total_volume: totalVolume,
+                        total_cement: totalCement,
+                        raw_data: processed
+                      })
+                    });
+
+                    if (res.ok) {
+                      alert(`✅ Отчёт "${file.name}" успешно загружен!\nПартий: ${processed.length} • Объём: ${totalVolume} м³`);
+
+                      // === АВТОМАТИЧЕСКОЕ СПИСАНИЕ ДОБАВОК ===
+                      if (totalAdditive1 > 0 || totalAdditive2 > 0) {
+                        try {
+                          const resSubtract = await fetch('/api/adminCifra/warehouse/subtract', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              pfmLiters: totalAdditive1,
+                              linomixLiters: totalAdditive2
+                            })
+                          });
+
+                          if (resSubtract.ok) {
+                            console.log(`✅ Автоматически списано: ПФМ-НЛК ${totalAdditive1.toFixed(1)} л, Линомикс ${totalAdditive2.toFixed(1)} л`);
+                          } else {
+                            console.warn('Не удалось списать добавки автоматически');
+                          }
+                        } catch (err) {
+                          console.error('Ошибка при автоматическом списании добавок:', err);
+                        }
+                      }
+
+                      loadHistory();
+                      setReportData(processed);
+                    } else {
+                      const errorText = await res.text();
+                      console.error('Ошибка сервера:', errorText);
+                      alert(`Ошибка сохранения:\n${errorText}`);
+                    }
+                  } catch (err: any) {
+                    console.error(err);
+                    alert('Ошибка обработки файла');
+                  }
+                }}
+                style={{ display: 'none' }}
+              />
+            </label>
+          </div>
 
           {/* Пагинация */}
           {totalPages > 1 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexShrink: 0 }}>
               <div style={{ color: '#94A3B8' }}>
-                Страница {currentPage} из {totalPages}
+                Страница {safeCurrentPage} из {totalPages}
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button 
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage(Math.max(1, safeCurrentPage - 1))}
+                  disabled={safeCurrentPage === 1}
                   style={{ 
                     padding: '8px 16px', 
                     borderRadius: '9999px', 
                     backgroundColor: '#334155', 
                     border: 'none', 
                     color: 'white', 
-                    cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
-                    opacity: currentPage === 1 ? 0.5 : 1 
+                    cursor: safeCurrentPage === 1 ? 'not-allowed' : 'pointer',
+                    opacity: safeCurrentPage === 1 ? 0.5 : 1 
                   }}
                 >
                   ← Назад
                 </button>
                 <button 
-                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage(Math.min(totalPages, safeCurrentPage + 1))}
+                  disabled={safeCurrentPage === totalPages}
                   style={{ 
                     padding: '8px 16px', 
                     borderRadius: '9999px', 
                     backgroundColor: '#334155', 
                     border: 'none', 
                     color: 'white', 
-                    cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
-                    opacity: currentPage === totalPages ? 0.5 : 1 
+                    cursor: safeCurrentPage === totalPages ? 'not-allowed' : 'pointer',
+                    opacity: safeCurrentPage === totalPages ? 0.5 : 1 
                   }}
                 >
                   Вперёд →
@@ -957,18 +1114,21 @@ export default function ReportsPage() {
             </div>
           )}
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {/* Список не скроллится — количество строк (itemsPerPage) подстраивается
+              под реально доступную высоту через ResizeObserver на этом контейнере. */}
+          <div ref={historyListRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {currentReports.length > 0 ? currentReports.map((report: any) => (
               <div 
                 key={report.id} 
                 style={{
                   backgroundColor: '#25334A',
-                  padding: '12px 20px',
+                  padding: '10px 20px',
                   borderRadius: '12px',
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                  fontSize: '15px'
+                  fontSize: 'clamp(12px, 0.9vw, 15px)',
+                  flexShrink: 0
                 }}
               >
                 <div>
@@ -984,20 +1144,26 @@ export default function ReportsPage() {
                     })()}
                   </strong>
                   <span style={{ color: '#94A3B8', marginLeft: '12px' }}>
-                    {report.raw_data?.length || 0} партий • {report.total_volume} м³ • {report.file_name}
+                    {report.raw_data?.length || 0} партий • {Math.round(report.total_volume || 0)} м³ • {report.file_name}
                   </span>
                 </div>
 
                 <div style={{ display: 'flex', gap: '6px' }}>
                   <button 
                     style={{ backgroundColor: '#10B981', color: 'white', border: 'none', padding: '6px 16px', borderRadius: '9999px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
-                    onClick={() => setReportData(report.raw_data || [])}
+                    onClick={() => {
+                      const excelDate = report.raw_data?.[0]?.date || report.report_date || '';
+                      setReportData(report.raw_data || []);
+                      setOpenReportMeta({ fileName: report.file_name, dateLabel: excelDate });
+                      setSelectedRecipes(null);
+                      setRecipeFilterOpen(false);
+                    }}
                   >
                     Открыть
                   </button>
                   <button 
                     style={{ backgroundColor: '#64748B', color: 'white', border: 'none', padding: '6px 16px', borderRadius: '9999px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
-                    onClick={() => setReportData([])}
+                    onClick={closeReportModal}
                   >
                     Скрыть
                   </button>
@@ -1048,22 +1214,163 @@ export default function ReportsPage() {
               </div>
             )}
           </div>
+          </div>
+          </div>
 
-          {/* Текущий отчёт */}
+          {/* Текущий отчёт — модальное окно, а не блок в потоке страницы.
+              Так исключён сам класс багов с "провалом" колеса мыши во вложенном
+              скролл-контейнере: у модалки ровно одна зона вертикального скролла
+              (тело модалки), она не зависит от скролла страницы под ней. */}
           {reportData.length > 0 && (
-            <div style={{ marginTop: '28px' }}>
-              <h3 style={{ marginBottom: '14px', color: '#10B981' }}>
-                ✅ Текущий отчёт • {reportData.length} партий
-              </h3>
+            <>
+              <div
+                onClick={closeReportModal}
+                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 200 }}
+              />
+              <div
+                ref={modalPanelRef}
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  position: 'fixed',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  zIndex: 201,
+                  width: 'min(1240px, 94vw)',
+                  // Фиксированная height (а не maxHeight!) обязательна: иначе при пустой
+                  // выборке (например, "Снять все" в фильтре рецептов) высота модалки
+                  // "сжималась" по контенту почти до нуля и вырезала (overflow: hidden)
+                  // абсолютно спозиционированный выпадающий список фильтра — визуально это
+                  // выглядело так, будто "марки из фильтра пропадают". Фиксированная высота
+                  // также гарантирует, что body модалки всегда получает строго заданную
+                  // высоту и скролл внутри неё работает предсказуемо при любом числе строк.
+                  height: '86vh',
+                  background: '#1E2937',
+                  borderRadius: '20px',
+                  boxShadow: '0 24px 60px rgba(0,0,0,0.6)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden'
+                }}
+              >
+                {/* Заголовок модалки */}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '16px',
+                  padding: '20px 24px',
+                  borderBottom: '1px solid #334155',
+                  flexShrink: 0
+                }}>
+                  <h3 style={{ margin: 0, color: '#10B981', fontSize: '17px' }}>
+                    ✅ Отчёт{openReportMeta?.dateLabel ? ` от ${openReportMeta.dateLabel}` : ''} • {filteredReportData.length}
+                    {selectedRecipes !== null ? ` из ${reportData.length}` : ''} партий
+                    {openReportMeta?.fileName && (
+                      <span style={{ color: '#64748B', fontWeight: 400, fontSize: '13px', marginLeft: '10px' }}>
+                        {openReportMeta.fileName}
+                      </span>
+                    )}
+                  </h3>
 
-              <div className="scroll-hidden" style={{ overflowX: 'auto', borderRadius: '16px' }}>
-              <table style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', backgroundColor: '#25334A', overflow: 'hidden' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+                    {selectedRecipes !== null && (
+                      <button
+                        onClick={() => setSelectedRecipes(null)}
+                        style={{
+                          fontSize: '12px',
+                          fontWeight: '600',
+                          color: '#94A3B8',
+                          background: '#334155',
+                          border: 'none',
+                          borderRadius: '9999px',
+                          padding: '6px 14px',
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        ✕ Сбросить фильтр рецептов
+                      </button>
+                    )}
+                    <button
+                      onClick={closeReportModal}
+                      title="Закрыть (Esc)"
+                      style={{
+                        background: '#334155',
+                        border: 'none',
+                        color: '#E2E8F0',
+                        width: '32px',
+                        height: '32px',
+                        borderRadius: '50%',
+                        fontSize: '16px',
+                        cursor: 'pointer',
+                        flexShrink: 0
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                {/* Тело модалки — единственная зона вертикального скролла */}
+                <div
+                  ref={modalBodyRef}
+                  className="scroll-subtle"
+                  onScroll={() => setRecipeFilterOpen(false)}
+                  style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 24px' }}
+                >
+
+              {/* overflowY: 'hidden' обязателен — иначе браузер по спецификации CSS
+                  автоматически делает overflow-y: auto у этого блока (т.к. задан overflow-x),
+                  и он превращается в отдельный вертикальный скролл-контейнер без места для
+                  прокрутки, конфликтующий с прокруткой тела модалки выше. Из-за overflow-y:
+                  hidden колесо мыши над таблицей не всегда докручивает родителя (зависит от
+                  браузера), поэтому дублируем прокрутку вручную через onWheel. */}
+              <div
+                className="scroll-hidden"
+                onWheel={(e) => {
+                  e.preventDefault();
+                  modalBodyRef.current?.scrollBy({ top: e.deltaY, left: 0 });
+                }}
+                style={{ overflowX: 'auto', overflowY: 'hidden', borderRadius: '16px' }}
+              >
+              <table style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', backgroundColor: '#25334A' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#334155' }}>
                     <th style={{ padding: '14px', textAlign: 'left' }}>NO</th>
                     <th style={{ padding: '14px', textAlign: 'left' }}>Дата</th>
                     <th style={{ padding: '14px', textAlign: 'left' }}>Время</th>
-                    <th style={{ padding: '14px', textAlign: 'left' }}>Рецепт</th>
+                    <th style={{ padding: '14px', textAlign: 'left', position: 'relative' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span>Рецепт</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                            const panelRect = modalPanelRef.current?.getBoundingClientRect();
+                            setRecipeFilterPos({
+                              top: rect.bottom - (panelRect?.top ?? 0) + 6,
+                              left: rect.left - (panelRect?.left ?? 0)
+                            });
+                            setRecipeFilterSearch('');
+                            setRecipeFilterOpen(o => !o);
+                          }}
+                          title="Фильтр по рецепту"
+                          style={{
+                            background: selectedRecipes !== null ? '#10B981' : 'transparent',
+                            border: 'none',
+                            borderRadius: '4px',
+                            color: selectedRecipes !== null ? '#fff' : '#94A3B8',
+                            cursor: 'pointer',
+                            padding: '2px 5px',
+                            fontSize: '11px',
+                            lineHeight: 1
+                          }}
+                        >
+                          ▼
+                        </button>
+                      </div>
+                    </th>
                     <th style={{ padding: '14px', textAlign: 'right' }}>Объём (м³)</th>
                     <th style={{ padding: '14px', textAlign: 'right' }}>Цемент (кг)</th>
                     <th style={{ padding: '14px', textAlign: 'right' }}>Песок (кг)</th>
@@ -1074,17 +1381,17 @@ export default function ReportsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {reportData.map((row, i) => (
+                  {filteredReportData.map((row, i) => (
                     <tr key={i} style={{ borderTop: '1px solid #334155' }}>
                       <td style={{ padding: '14px' }}>{row.no}</td>
                       <td style={{ padding: '14px' }}>{row.date}</td>
                       <td style={{ padding: '14px' }}>{row.time}</td>
                       <td style={{ padding: '14px', fontWeight: '600' }}>{row.recipe}</td>
-                      <td style={{ padding: '14px', textAlign: 'right', color: '#10B981', fontWeight: '600' }}>{row.qty}</td>
-                      <td style={{ padding: '14px', textAlign: 'right' }}>{row.cement.toLocaleString('ru-RU')}</td>
-                      <td style={{ padding: '14px', textAlign: 'right' }}>{row.sand.toLocaleString('ru-RU')}</td>
-                      <td style={{ padding: '14px', textAlign: 'right' }}>{row.gravel.toLocaleString('ru-RU')}</td>
-                      <td style={{ padding: '14px', textAlign: 'right' }}>{row.water.toLocaleString('ru-RU')}</td>
+                      <td style={{ padding: '14px', textAlign: 'right', color: '#10B981', fontWeight: '600' }}>{Math.round(row.qty)}</td>
+                      <td style={{ padding: '14px', textAlign: 'right' }}>{Math.round(row.cement).toLocaleString('ru-RU')}</td>
+                      <td style={{ padding: '14px', textAlign: 'right' }}>{Math.round(row.sand).toLocaleString('ru-RU')}</td>
+                      <td style={{ padding: '14px', textAlign: 'right' }}>{Math.round(row.gravel).toLocaleString('ru-RU')}</td>
+                      <td style={{ padding: '14px', textAlign: 'right' }}>{Math.round(row.water).toLocaleString('ru-RU')}</td>
                       <td style={{ padding: '14px', textAlign: 'right' }}>{row.additive.toFixed(3)}</td>
                       <td style={{ padding: '14px', textAlign: 'right' }}>
                         {row.additive2 > 0 ? row.additive2.toFixed(3) : '-'}
@@ -1093,7 +1400,7 @@ export default function ReportsPage() {
                   ))}
                 </tbody>
 
-      {/* ИТОГОВАЯ СТРОКА (только одна) */}
+      {/* ИТОГОВАЯ СТРОКА (только одна, считается по отфильтрованным строкам) */}
                 <tfoot>
                   <tr style={{ 
                     backgroundColor: '#334155', 
@@ -1102,34 +1409,138 @@ export default function ReportsPage() {
                     borderTop: '3px solid #10B981'
                   }}>
                     <td style={{ padding: '16px 14px' }} colSpan={4}>
-                      <strong>ИТОГО ЗА ДЕНЬ</strong>
+                      <strong>ИТОГО{selectedRecipes !== null ? ' ПО ФИЛЬТРУ' : ' ЗА ДЕНЬ'}</strong>
                     </td>
                     <td style={{ padding: '16px 14px', textAlign: 'right', color: '#10B981' }}>
-                      {reportData.reduce((sum, r) => sum + (r.qty || 0), 0)} м³
+                      {Math.round(filteredReportData.reduce((sum, r) => sum + (r.qty || 0), 0))} м³
                     </td>
                     <td style={{ padding: '16px 14px', textAlign: 'right' }}>
-                      {reportData.reduce((sum, r) => sum + (r.cement || 0), 0).toLocaleString('ru-RU')} кг
+                      {Math.round(filteredReportData.reduce((sum, r) => sum + (r.cement || 0), 0)).toLocaleString('ru-RU')} кг
                     </td>
                     <td style={{ padding: '16px 14px', textAlign: 'right' }}>
-                      {reportData.reduce((sum, r) => sum + (r.sand || 0), 0).toLocaleString('ru-RU')} кг
+                      {Math.round(filteredReportData.reduce((sum, r) => sum + (r.sand || 0), 0)).toLocaleString('ru-RU')} кг
                     </td>
                     <td style={{ padding: '16px 14px', textAlign: 'right' }}>
-                      {reportData.reduce((sum, r) => sum + (r.gravel || 0), 0).toLocaleString('ru-RU')} кг
+                      {Math.round(filteredReportData.reduce((sum, r) => sum + (r.gravel || 0), 0)).toLocaleString('ru-RU')} кг
                     </td>
                     <td style={{ padding: '16px 14px', textAlign: 'right' }}>
-                      {reportData.reduce((sum, r) => sum + (r.water || 0), 0).toLocaleString('ru-RU')} кг
+                      {Math.round(filteredReportData.reduce((sum, r) => sum + (r.water || 0), 0)).toLocaleString('ru-RU')} кг
                     </td>
                     <td style={{ padding: '16px 14px', textAlign: 'right' }}>
-                      {reportData.reduce((sum, r) => sum + (r.additive || 0), 0).toFixed(3)} кг
+                      {filteredReportData.reduce((sum, r) => sum + (r.additive || 0), 0).toFixed(3)} кг
                     </td>
                     <td style={{ padding: '16px 14px', textAlign: 'right' }}>
-                      {reportData.reduce((sum, r) => sum + (r.additive2 || 0), 0).toFixed(3)} кг
+                      {filteredReportData.reduce((sum, r) => sum + (r.additive2 || 0), 0).toFixed(3)} кг
                     </td>
                   </tr>
                 </tfoot>
               </table>
               </div>
-            </div>
+                </div>
+
+                {/* Выпадающий список фильтра рецептов рисуется ЗДЕСЬ — вне таблицы
+                    и вне скроллящихся контейнеров (.scroll-hidden/.scroll-subtle).
+                    Раньше он был вложен в <th>, и когда фокус попадал на поле
+                    поиска (autoFocus), браузер сам скроллил ВСЕХ scroll-предков
+                    в DOM-дереве, чтобы "показать" элемент — в т.ч. горизontальный
+                    scroll-hidden у таблицы, из-за чего форма визуально "уезжала
+                    вправо". Позиция всё равно вычисляется от кнопки (fixed). */}
+                {recipeFilterOpen && (
+                  <>
+                    <div
+                      onClick={() => setRecipeFilterOpen(false)}
+                      style={{ position: 'fixed', inset: 0, zIndex: 210 }}
+                    />
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        position: 'fixed',
+                        top: recipeFilterPos.top,
+                        left: recipeFilterPos.left,
+                        zIndex: 211,
+                        background: '#1E2937',
+                        border: '1px solid #475569',
+                        borderRadius: '12px',
+                        padding: '10px',
+                        minWidth: '220px',
+                        maxHeight: '320px',
+                        overflowY: 'auto',
+                        boxShadow: '0 12px 30px rgba(0,0,0,0.6)',
+                        fontWeight: '400',
+                        fontSize: '14px',
+                        textTransform: 'none'
+                      }}
+                    >
+                      <input
+                        type="text"
+                        placeholder="Поиск рецепта..."
+                        value={recipeFilterSearch}
+                        onChange={(e) => setRecipeFilterSearch(e.target.value)}
+                        autoFocus
+                        style={{
+                          width: '100%',
+                          boxSizing: 'border-box',
+                          padding: '8px 10px',
+                          marginBottom: '8px',
+                          background: '#0F172A',
+                          border: '1px solid #334155',
+                          borderRadius: '8px',
+                          color: 'white',
+                          fontSize: '13px'
+                        }}
+                      />
+
+                      <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                        <button
+                          onClick={() => setSelectedRecipes(null)}
+                          style={{ flex: 1, padding: '6px', background: '#334155', border: 'none', borderRadius: '6px', color: '#E2E8F0', fontSize: '12px', cursor: 'pointer' }}
+                        >
+                          Выбрать все
+                        </button>
+                        <button
+                          onClick={() => setSelectedRecipes(new Set())}
+                          style={{ flex: 1, padding: '6px', background: '#334155', border: 'none', borderRadius: '6px', color: '#E2E8F0', fontSize: '12px', cursor: 'pointer' }}
+                        >
+                          Снять все
+                        </button>
+                      </div>
+
+                      {availableRecipes
+                        .filter(r => r.name.toLowerCase().includes(recipeFilterSearch.toLowerCase()))
+                        .map(r => {
+                          const isChecked = selectedRecipes === null || selectedRecipes.has(r.name);
+                          return (
+                            <label
+                              key={r.name}
+                              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 4px', cursor: 'pointer', borderRadius: '6px' }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => {
+                                  setSelectedRecipes(prev => {
+                                    // null значит "все выбраны" — материализуем полный
+                                    // список, чтобы можно было снять галку с одного.
+                                    const base = prev === null
+                                      ? new Set(availableRecipes.map(r2 => r2.name))
+                                      : new Set(prev);
+                                    if (base.has(r.name)) base.delete(r.name);
+                                    else base.add(r.name);
+                                    // Если в итоге выбраны все — возвращаемся к "фильтр не применён"
+                                    return base.size === availableRecipes.length ? null : base;
+                                  });
+                                }}
+                              />
+                              <span style={{ flex: 1 }}>{r.name}</span>
+                              <span style={{ color: '#64748B', fontSize: '12px' }}>{r.count}</span>
+                            </label>
+                          );
+                        })}
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
           )}
     </div>
   );

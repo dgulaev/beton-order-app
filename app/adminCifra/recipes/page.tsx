@@ -8,6 +8,7 @@ import OrdersTab from './components/OrdersTab';
 import RecipeVersionsModal from './components/RecipeVersionsModal';
 import TemplatesModal from './components/TemplatesModal';
 import { useRealtimeOrders, useOrderChangeNotifications } from '../../../hooks/useRealtimeOrders';
+import { FlaskConical } from 'lucide-react';
 
 type LabTab = 'orders' | 'specifications' | 'recipes' | 'tests';
 
@@ -294,7 +295,10 @@ export default function LaboratoryPage() {
           }
           .lab-tab-badge { animation: labTabBadgePulse 1.4s infinite; }
         `}</style>
-        <h1 style={{ fontSize: '22px', fontWeight: 700, margin: '0 0 12px' }}>Лаборатория</h1>
+        <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <FlaskConical size={26} color="#94A3B8" />
+          Лаборатория
+        </h1>
         <div style={{ display: 'flex', gap: '28px', borderBottom: `1px solid ${COLORS.border}` }}>
           {tabBtn('orders', 'Заявки', newOrderIds.size)}
           {tabBtn('specifications', 'Спецификации')}

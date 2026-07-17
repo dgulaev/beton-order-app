@@ -251,12 +251,20 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
   }, []);
 
   // ==================== REALTIME (BROADCAST): РЕЙСЫ ЭТОГО МИКСЕРА ====================
-  // Broadcast from Database — триггер order_mixers шлёт realtime.send() в топик
-  // `order_mixers:<номер миксера>`. Лёгкий канал, стабильная подписка.
+  // Подписываемся на ОБЩИЙ топик `order_mixers:all` (чистый ASCII — как оператор и
+  // дашборд, у которых индикатор стабильно зелёный) и фильтруем события по своему
+  // миксеру на клиенте. Персональный топик `order_mixers:<номер>` содержал кириллицу
+  // в имени канала — Supabase Realtime не мог стабильно установить такую подписку,
+  // из-за чего статус вечно висел на CONNECTING (жёлтый). Сервер сопоставляет рейсы
+  // по mixer_name === номер миксера (см. /api/driver/trips), поэтому фильтр надёжен.
+  const belongsToMe = (rec: any) =>
+    rec != null && String(rec.mixer_name) === String(mixer.number);
+
   const { status: realtimeStatus } = useRealtimeBroadcast({
-    topic: `order_mixers:${mixer.number}`,
+    topic: 'order_mixers:all',
     enabled: initialTripsLoaded,
     onInsert: async (record) => {
+      if (!belongsToMe(record)) return;
       playAlertSound();
 
       const [freshTrips] = await Promise.all([fetchToday(), fetchHistory()]);
@@ -271,11 +279,13 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
 
       setTimeout(() => setBanner(null), 8000);
     },
-    onUpdate: () => {
+    onUpdate: (record, old) => {
+      if (!belongsToMe(record) && !belongsToMe(old)) return;
       fetchToday();
       fetchHistory();
     },
-    onDelete: () => {
+    onDelete: (old) => {
+      if (!belongsToMe(old)) return;
       fetchToday();
       fetchHistory();
     },

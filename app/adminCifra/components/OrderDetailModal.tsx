@@ -15,7 +15,6 @@ interface OrderDetailModalProps {
   currentUser?: { id: number; name?: string; role: string };
   handleStatusChange: (mixerId: number, newStatus: string) => void;
   deleteMixer: (mixerId: number, index: number) => void;
-  completeLogistics: (order: Order) => void;
   history: any[];
   addToHistory: (action: string) => Promise<void>;
   getStatusConfig: (status: string) => any;
@@ -49,7 +48,6 @@ export default function OrderDetailModal({
   currentUser,
   handleStatusChange,
   deleteMixer,
-  completeLogistics,
   history,           
   addToHistory,
   getStatusConfig,
@@ -333,112 +331,109 @@ const formatVolume = (value: number | string) => {
   }}
         onClick={e => e.stopPropagation()}
       >
-        {/* ==================== HEADER ==================== */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-          <h2 style={{ margin: 0, fontSize: '28px' }}>
-            Заявка #{order.id}
-          </h2>
-          <button 
-            onClick={onClose} 
-            style={{ fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}
+        {/* ==================== HEADER (заголовок + статус-пилюля) ==================== */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
+            <h2 style={{ margin: 0, fontSize: '28px', whiteSpace: 'nowrap' }}>
+              Заявка #{order.id}
+            </h2>
+
+            {/* ==================== СТАТУС ЗАКАЗА (компактная пилюля) ==================== */}
+            {getStatusConfig(localOrder.status).final ? (
+              // Финальные статусы менять нельзя — просто цветная пилюля
+              <div style={{
+                backgroundColor: getStatusConfig(localOrder.status).bg,
+                color: getStatusConfig(localOrder.status).color,
+                padding: '7px 18px',
+                borderRadius: '9999px',
+                fontWeight: '600',
+                fontSize: '14px',
+                whiteSpace: 'nowrap'
+              }}>
+                {getStatusConfig(localOrder.status).label}
+              </div>
+            ) : (
+              // Можно менять — сама пилюля и есть select (клик открывает меню статусов)
+              <select
+                value={localOrder.status || 'new'}
+                onChange={async (e) => {
+                  const newStatus = e.target.value;
+                  if (newStatus === localOrder.status) return;
+
+                  const oldStatus = localOrder.status;
+
+                  // Локальное обновление
+                  setLocalOrder(prev => ({ ...prev, status: newStatus }));
+                  setAllOrders(prev => prev.map(o =>
+                    o.id === order.id ? { ...o, status: newStatus } : o
+                  ));
+
+                  try {
+                    // Ручная смена статуса всегда идёт через /orders/update — там же
+                    // защита финальных статусов и запись истории с реальной ролью.
+                    const res = await fetch('/api/adminCifra/orders/update', {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        id: order.id,
+                        status: newStatus,
+                        userName: getCurrentUserName(),
+                        userRole: getCurrentRole()
+                      })
+                    });
+
+                    const data = await res.json();
+
+                    if (data.success) {
+                      if (typeof setHistory === 'function') {
+                        const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
+                        if (histRes.ok) setHistory(await histRes.json());
+                      }
+                    } else {
+                      // Откат
+                      setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+                      setAllOrders(prev => prev.map(o =>
+                        o.id === order.id ? { ...o, status: oldStatus } : o
+                      ));
+                      alert('Ошибка сохранения: ' + (data.message || ''));
+                    }
+                  } catch (err) {
+                    console.error(err);
+                    // Откат
+                    setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+                    setAllOrders(prev => prev.map(o =>
+                      o.id === order.id ? { ...o, status: oldStatus } : o
+                    ));
+                    alert('Не удалось связаться с сервером');
+                  }
+                }}
+                title="Сменить статус заявки"
+                style={{
+                  background: getStatusConfig(localOrder.status).bg,
+                  color: getStatusConfig(localOrder.status).color,
+                  border: 'none',
+                  borderRadius: '9999px',
+                  padding: '7px 14px',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer'
+                }}
+              >
+                <option value="new">Новая</option>
+                <option value="processing">В работе</option>
+                <option value="completed">Выполнена</option>
+                <option value="cancelled">Отменена</option>
+              </select>
+            )}
+          </div>
+
+          <button
+            onClick={onClose}
+            style={{ fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer', flexShrink: 0 }}
           >
             ×
           </button>
         </div>
-
-       {/* ==================== СТАТУС ЗАКАЗА ==================== */}
-<div style={{ marginBottom: '28px' }}>
-  <label style={{ display: 'block', color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
-    Статус заказа
-  </label>
-
-  {getStatusConfig(localOrder.status).final ? (
-    // ==================== ФИНАЛЬНЫЕ СТАТУСЫ (нельзя менять) ====================
-    <div style={{ 
-      backgroundColor: getStatusConfig(localOrder.status).bg,
-      color: getStatusConfig(localOrder.status).color,
-      padding: '12px 26px',
-      borderRadius: '9999px',
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '8px',
-      fontWeight: '600',
-      fontSize: '16px'
-    }}>
-      {getStatusConfig(localOrder.status).label} — конечный статус
-    </div>
-  ) : (
-    // Можно менять (только если не финальный статус)
-    <select 
-  value={localOrder.status || 'new'}
-  onChange={async (e) => {
-    const newStatus = e.target.value;
-    if (newStatus === localOrder.status) return;
-
-    const oldStatus = localOrder.status;
-
-    // Локальное обновление
-    setLocalOrder(prev => ({ ...prev, status: newStatus }));
-    setAllOrders(prev => prev.map(o => 
-      o.id === order.id ? { ...o, status: newStatus } : o
-    ));
-
-    try {
-      // Ручная смена статуса всегда идёт через /orders/update — там же
-      // защита финальных статусов и запись истории с реальной ролью.
-      const res = await fetch('/api/adminCifra/orders/update', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: order.id,
-          status: newStatus,
-          userName: getCurrentUserName(),
-          userRole: getCurrentRole()
-        })
-      });
-
-      const data = await res.json();
-
-      if (data.success) {
-        if (typeof setHistory === 'function') {
-          const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
-          if (histRes.ok) setHistory(await histRes.json());
-        }
-      } else {
-        // Откат
-        setLocalOrder(prev => ({ ...prev, status: oldStatus }));
-        setAllOrders(prev => prev.map(o => 
-          o.id === order.id ? { ...o, status: oldStatus } : o
-        ));
-        alert('Ошибка сохранения: ' + (data.message || ''));
-      }
-    } catch (err) {
-      console.error(err);
-      // Откат
-      setLocalOrder(prev => ({ ...prev, status: oldStatus }));
-      setAllOrders(prev => prev.map(o => 
-        o.id === order.id ? { ...o, status: oldStatus } : o
-      ));
-      alert('Не удалось связаться с сервером');
-    }
-  }}
-  style={{
-    background: '#1E2937',
-    color: 'white',
-    border: '2px solid #475569',
-    borderRadius: '12px',
-    padding: '12px 16px',
-    fontSize: '16px',
-    width: '100%'
-  }}
->
-  <option value="new">Новая</option>
-  <option value="processing">В работе</option>
-  <option value="completed">Выполнена</option>
-  <option value="cancelled">Отменена</option>
-</select>
-  )}
-</div>
 
 
         {/* ==================== GRID 1fr 1fr ==================== */}
@@ -666,27 +661,6 @@ const formatVolume = (value: number | string) => {
   </div>
 </div>
 
-                 {/* ==================== КНОПКА ЗАВЕРШЕНИЯ ЛОГИСТИКИ ==================== */}
-<button 
-  onClick={async () => {
-    console.log('🛠 Нажата кнопка сохранения логистики — сохраняем порядок...');
-    await saveSortOrderToDB();     // ← сначала сохраняем порядок
-    await completeLogistics(order); // ← потом логистику
-  }} 
-  style={{ 
-    width: '100%', 
-    padding: '18px', 
-    background: isFullyReady ? '#10B981' : '#475569', 
-    color: 'white', 
-    border: 'none', 
-    borderRadius: '16px', 
-    fontSize: '17px', 
-    fontWeight: '700', 
-    cursor: 'pointer' 
-  }}
->
-  {isFullyReady ? '✓ Завершить логистику и сохранить в базу' : '⚠️ Сохранить частичную логистику'}
-</button>
                 </div>
               );
             })()}
@@ -920,9 +894,10 @@ const formatVolume = (value: number | string) => {
   Добавить
 </button>
 
-              {/* Кнопка Завершить логистику */}
-              <button 
-                onClick={() => completeLogistics(order)}
+              {/* Кнопка закрытия модалки — статус и логистика теперь считаются
+                  автоматически на сервере, отдельного "завершения" не требуется */}
+              <button
+                onClick={onClose}
                 style={{
                   padding: '14px 28px',
                   background: '#3B82F6',
@@ -935,7 +910,7 @@ const formatVolume = (value: number | string) => {
                   height: '52px'
                 }}
               >
-                Завершить логистику
+                ✓ Готово
               </button>
             </div>
           </div>

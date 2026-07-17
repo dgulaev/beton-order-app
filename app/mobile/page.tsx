@@ -229,11 +229,6 @@ useEffect(() => {
     });
   }, [activeMixers, selectedDateStr]);
 
-  // ==================== 7. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-  const completeLogistics = (order: any) => {
-    alert(`Логистика по заявке #${order.id} завершена`); // временно
-    setSelectedOrder(null);
-  };
   // ==============================================
   // return (продолжение файла)
   // ==============================================
@@ -554,10 +549,9 @@ useEffect(() => {
           allOrders={allOrders}
           setAllOrders={setAllOrders}
           allMixers={activeMixers}
-          currentUser={{ id: 0, name: '', role: '' }}
+          currentUser={{ id: userId || 0, name: user?.full_name || '', role: userRole }}
           handleStatusChange={() => {}}
           deleteMixer={() => {}}
-          completeLogistics={completeLogistics || (() => {})}
           history={[]}
           addToHistory={async () => {}}
           getStatusConfig={() => ({ label: '', color: '', bg: '', final: false })}

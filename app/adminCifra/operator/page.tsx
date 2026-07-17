@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useTodayLoadingMixers } from '../hooks/useTodayLoadingMixers';
 import { useRealtimeProductionLogs } from '@/hooks/useRealtimeOrders';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import WarehousePage from '../warehouse/page';
 import ReportsPage, { preloadReportsData } from '../reports/page';
 import RecipesPage from '../recipes/page';
+import { UserCog } from 'lucide-react';
 
 
 
@@ -278,6 +279,46 @@ export default function OperatorBSUPage() {
   // Live-обновление ленты "Отгружено сегодня" — подхватывает записи от любого оператора
   useRealtimeProductionLogs(setCompletedTrips);
 
+  // ==================== 1.2.1 ДОНАСЫЩЕНИЕ order_volume ДЛЯ ЧУЖИХ РЕЙСОВ ====================
+  // Наша собственная оптимистичная запись (см. completeLoading ниже) уже несёт
+  // order_volume из trip. Но если рейс завершил ДРУГОЙ оператор (в другой
+  // вкладке/браузере) — сюда прилетает "сырая" строка через realtime
+  // (postgres_changes), а там только колонки самой таблицы production_logs,
+  // без JOIN на orders. Без этого поля колонка "Прогресс" навсегда (до
+  // следующей перезагрузки страницы) показывала бы запасной текст "В пути"
+  // вместо плашки. Подтягиваем объём заявки отдельным запросом и патчим все
+  // строки этой заявки, у которых он ещё не известен.
+  const enrichedOrderIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const missingOrderIds = Array.from(new Set(
+      completedTrips
+        .filter((t: any) => (t.order_id ?? t.orderId) != null && t.order_volume == null)
+        .map((t: any) => String(t.order_id ?? t.orderId))
+    )).filter(id => !enrichedOrderIdsRef.current.has(id));
+
+    if (missingOrderIds.length === 0) return;
+
+    missingOrderIds.forEach(id => enrichedOrderIdsRef.current.add(id));
+
+    missingOrderIds.forEach(async (orderId) => {
+      try {
+        const res = await fetch(`/api/adminCifra/orders/${orderId}`);
+        if (!res.ok) return;
+        const order = await res.json();
+        const volume = order?.volume;
+        if (volume == null) return;
+
+        setCompletedTrips(prev => prev.map((t: any) => {
+          const tOrderId = String(t.order_id ?? t.orderId ?? '');
+          return (tOrderId === orderId && t.order_volume == null) ? { ...t, order_volume: volume } : t;
+        }));
+      } catch (err) {
+        console.error(`Не удалось донасытить объём заявки #${orderId} для колонки "Прогресс":`, err);
+        enrichedOrderIdsRef.current.delete(orderId); // разрешаем повторную попытку при следующем обновлении
+      }
+    });
+  }, [completedTrips]);
+
        // ==================== 1.2 ЗАВЕРШИТЬ ЗАГРУЗКУ ====================
   // ⚠️ ГАРАНТИРОВАННЫЙ ПЕРЕНОС: строка сразу и безусловно переезжает в
   // "Отгружено сегодня" и мгновенно скрывается из очереди — не дожидаясь
@@ -319,6 +360,11 @@ export default function OperatorBSUPage() {
       end_time: endTime,
       duration_minutes: durationMinutes,
       created_at: endTime,
+      // Без этого поля колонка "Прогресс" сразу после нажатия "Загружен" на
+      // мгновение показывала запасной текст "В пути" вместо плашки — trip
+      // (строка из очереди) уже содержит order_volume из active-mixers, дальше
+      // тянуть его неоткуда не нужно.
+      order_volume: trip.order_volume ?? null,
       _pending: true, // статус миксера ещё не подтверждён сервером — красная точка на строке
     };
 
@@ -536,6 +582,92 @@ export default function OperatorBSUPage() {
       podvizhnost: trip.podvizhnost || 'П3'
     }));
 
+  // ==================== 1.3 ПРОГРЕСС ПО ЗАЯВКЕ (для колонки "Прогресс") ====================
+  // N/M, где N — сколько рейсов по заявке УЖЕ отгружено сегодня (есть запись
+  // в production_logs), а M — оценка ИТОГОВОГО числа рейсов на всю заявку,
+  // с учётом общего объёма заявки (order_volume):
+  //   остаток объёма = объём заявки − (отгружено + уже стоит в очереди);
+  //   средний рейс = средний объём уже известных рейсов этой заявки
+  //     (отгруженные + в очереди), а если рейсов пока нет вообще — берём
+  //     эмпирику ~9 м³ (так ездит подавляющее большинство рейсов);
+  //   ещё рейсов ≈ ceil(остаток объёма / средний рейс).
+  // M = отгружено + в очереди + ещё рейсов(оценка).
+  // По мере того как диспетчер добавляет в очередь реальные миксеры —
+  // "остаток объёма" уменьшается, а "оценка" пересчитывается сама, потому
+  // что map зависит от queueTrips/filteredCompletedTrips и пересчитывается
+  // при каждом их обновлении.
+  const DEFAULT_AVG_TRIP_VOLUME_M3 = 9;
+
+  const orderProgressMap = useMemo(() => {
+    const map = new Map<string, {
+      dispatchedCount: number;
+      dispatchedVolume: number;
+      queuedCount: number;
+      queuedVolume: number;
+      orderVolume: number | null;
+    }>();
+
+    const getEntry = (orderId: string) => {
+      let entry = map.get(orderId);
+      if (!entry) {
+        entry = { dispatchedCount: 0, dispatchedVolume: 0, queuedCount: 0, queuedVolume: 0, orderVolume: null };
+        map.set(orderId, entry);
+      }
+      return entry;
+    };
+
+    filteredCompletedTrips.forEach((trip: any) => {
+      const orderId = String(trip.order_id ?? trip.orderId ?? '');
+      if (!orderId) return;
+      const entry = getEntry(orderId);
+      entry.dispatchedCount += 1;
+      entry.dispatchedVolume += parseFloat(trip.volume) || 0;
+      if (entry.orderVolume === null && trip.order_volume != null) {
+        entry.orderVolume = parseFloat(trip.order_volume) || null;
+      }
+    });
+
+    queueTrips.forEach((trip: any) => {
+      const orderId = String(trip.order_id ?? trip.orderId ?? '');
+      if (!orderId) return;
+      const entry = getEntry(orderId);
+      entry.queuedCount += 1;
+      entry.queuedVolume += parseFloat(trip.volume) || 0;
+      if (entry.orderVolume === null && trip.order_volume != null) {
+        entry.orderVolume = parseFloat(trip.order_volume) || null;
+      }
+    });
+
+    const result = new Map<string, {
+      dispatched: number;
+      total: number;
+      dispatchedVolume: number;
+      orderVolume: number | null;
+    }>();
+    map.forEach((entry, orderId) => {
+      const knownCount = entry.dispatchedCount + entry.queuedCount;
+      const knownVolume = entry.dispatchedVolume + entry.queuedVolume;
+      const avgTripVolume = knownCount > 0 ? knownVolume / knownCount : DEFAULT_AVG_TRIP_VOLUME_M3;
+
+      let estimatedRemainingTrips = 0;
+      if (entry.orderVolume != null && entry.orderVolume > 0) {
+        const remainingVolume = Math.max(0, entry.orderVolume - knownVolume);
+        estimatedRemainingTrips = remainingVolume > 0 ? Math.ceil(remainingVolume / avgTripVolume) : 0;
+      }
+
+      result.set(orderId, {
+        dispatched: entry.dispatchedCount,
+        total: knownCount + estimatedRemainingTrips,
+        // Для колонки "Отгружено сегодня" — фактический объём (без оценки),
+        // сколько кубов уже реально уехало по этой заявке к этому моменту.
+        dispatchedVolume: entry.dispatchedVolume,
+        orderVolume: entry.orderVolume
+      });
+    });
+
+    return result;
+  }, [filteredCompletedTrips, queueTrips]);
+
     // ==================== 2. СТАТИСТИКА ОПЕРАТОРА ====================
   const totalTrips = filteredCompletedTrips.length;
   const totalVolume = filteredCompletedTrips.reduce((sum, trip) => sum + (parseFloat(trip.volume) || 0), 0);
@@ -641,8 +773,11 @@ export default function OperatorBSUPage() {
         flexShrink: 0
       }}>
         <div>
-          <div style={{ fontSize: '24px', fontWeight: '700' }}>Бетонный завод</div>
-          <div style={{ color: '#94A3B8', fontSize: '14px' }}>Оператор БСУ • Реальное время</div>
+          <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <UserCog size={26} color="#94A3B8" />
+            Бетонный завод
+          </h1>
+          <div style={{ color: '#94A3B8', fontSize: '14px', marginTop: '2px' }}>Оператор БСУ • Реальное время</div>
         </div>
 
         {/* ==================== ЧАСЫ РЕАЛЬНОГО ВРЕМЕНИ ==================== */}
@@ -775,10 +910,14 @@ export default function OperatorBSUPage() {
         {/* ==================== 4. ОСНОВНОЙ КОНТЕНТ ==================== */}
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {activeTab === 'zayavki' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '20px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-            
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 660px', gap: '20px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            {/* Правая колонка зафиксирована в 600px (её строкам этого достаточно, см.
+                ниже) — левая забирает всё оставшееся место. minmax(0, 1fr) вместо
+                просто 1fr обязателен: без него grid-колонка не может стать уже
+                контента внутри (умалчиваемый min-width: auto), из-за чего левая
+                панель раньше "выталкивалась" за пределы экрана на 1920 и ниже. */}
                                                 {/* ==================== 4.1 ОЧЕРЕДЬ НА ЗАГРУЗКУ ==================== */}
-            <div style={{ backgroundColor: '#1E2937', borderRadius: '24px', padding: '20px', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box' }}>
+            <div style={{ backgroundColor: '#1E2937', borderRadius: '24px', padding: '20px', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', minWidth: 0 }}>
               
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexShrink: 0 }}>
                 <h2 style={{ fontSize: '19px', fontWeight: '600' }}>
@@ -794,11 +933,21 @@ export default function OperatorBSUPage() {
                 </div>
               </div>
 
-              {/* Шапка колонок */}
+              {/* Шапка колонок. white-space: nowrap + overflow: hidden обязательны
+                  на каждой ячейке — иначе при недостатке ширины текст либо
+                  переносится на 2 строки ("№ заявки"), либо визуально "вылезает"
+                  в соседнюю колонку и сливается с её текстом ("Подвижность"
+                  наезжала на "Клиент / Организация"). */}
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: '72px 85px 120px 95px 78px 105px 220px 1fr',
-                gap: '8px',
+                // Ширины подобраны замером фактического текста заголовков тем же
+                // шрифтом (canvas measureText) — раньше "№ заявки"/"Подвижность"/
+                // "Прогресс" не влезали и обрезались "…" прямо в шапке. Колонку
+                // "Клиент" сократили здесь до одного слова (полное название всё
+                // равно не влезло бы физически — у нас в базе организации по
+                // 30-35 символов, — а по наведению есть title с полным именем).
+                gridTemplateColumns: '56px 70px 105px 122px 62px 98px 70px 1fr 260px',
+                gap: '10px',
                 padding: '8px 18px',
                 color: '#94A3B8',
                 fontSize: '13.5px',
@@ -807,13 +956,14 @@ export default function OperatorBSUPage() {
                 marginBottom: '10px',
                 flexShrink: 0
               }}>
-                <div>Время</div>
-                <div>№ заявки</div>
-                <div>№ миксера</div>
-                <div>Марка</div>
-                <div>Объём</div>
-                <div>Подвижность</div>
-                <div>Клиент / Организация</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'left' }}>Время</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'center' }}>№ заявки</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'center' }}>№ миксера</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'left' }}>Марка</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'center' }}>Объём</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'center' }}>Подвижность</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'center' }}>Прогресс</div>
+                <div title="Клиент / Организация" style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'left' }}>Клиент</div>
                 <div></div>
               </div>
 
@@ -848,23 +998,26 @@ export default function OperatorBSUPage() {
                         borderRadius: '12px',
                         padding: '13px 18px',
                         display: 'grid',
-                        gridTemplateColumns: '72px 85px 120px 95px 78px 105px 220px 1fr',
-                        gap: '8px',
+                        gridTemplateColumns: '56px 70px 105px 122px 62px 98px 70px 1fr 260px',
+                        gap: '10px',
                         alignItems: 'center',
                         minHeight: '28px',
                         fontSize: '15px',
                         cursor: 'pointer'
                       }}
                     >
-                      <div style={{ fontWeight: '600', color: '#94A3B8' }}>{trip.time || '—'}</div>
-                      <div style={{ fontWeight: '700', color: '#60A5FA' }}>
+                      <div style={{ fontWeight: '600', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>{trip.time || '—'}</div>
+                      <div style={{ fontWeight: '700', color: '#60A5FA', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         #{trip.order_id || trip.orderId || '—'}
                       </div>
-                      <div style={{ fontWeight: '700' }}>
+                      <div style={{ fontWeight: '700', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         {trip.mixer_name || trip.number || '—'}
                       </div>
-                      <div>{trip.concrete_grade || '—'}</div>
-                      <div style={{ fontWeight: '600' }}>{trip.volume} м³</div>
+                      {/* Марка может быть длинным текстом (например, "Ц/П смесь М100"),
+                          а не только "M400" — title показывает полный текст при
+                          наведении, даже если он обрезан "…" из-за нехватки места. */}
+                      <div title={trip.concrete_grade || ''} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>{trip.concrete_grade || '—'}</div>
+                      <div style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center' }}>{trip.volume} м³</div>
 
                       <select 
   value={podvizhnostOverrides[trip.id] ?? trip.podvizhnost ?? 'П3'}
@@ -893,12 +1046,19 @@ export default function OperatorBSUPage() {
   }}
   onClick={(e) => e.stopPropagation()}
   style={{ 
-    padding: '7px 10px', 
+    padding: '7px 8px', 
     background: '#1E2937', 
     border: 'none', 
     borderRadius: '6px', 
     color: '#fff', 
-    fontSize: '14px' 
+    fontSize: '14px',
+    // Без явной ширины <select>, будучи прямым потомком grid-строки,
+    // растягивается на всю колонку (justify-items: stretch по умолчанию) —
+    // из-за этого он выглядел непропорционально широким. Фиксируем компактную
+    // ширину и центрируем в колонке — свободное место остаётся по краям
+    // равномерно, визуально отделяя колонку от соседних.
+    width: '64px',
+    justifySelf: 'center'
   }}
 >
   <option value="П1">П1</option>
@@ -908,17 +1068,50 @@ export default function OperatorBSUPage() {
   <option value="П5">П5</option>
 </select>
 
-                      <div style={{ 
+                      {/* Прогресс по заявке: N — сколько рейсов уже отгружено сегодня,
+                          M — оценка итогового числа рейсов на всю заявку с учётом её
+                          общего объёма и среднего объёма уже известных рейсов (см.
+                          orderProgressMap выше — там же вся логика расчёта). */}
+                      {(() => {
+                        const orderId = String(trip.order_id ?? trip.orderId ?? '');
+                        const progress = orderProgressMap.get(orderId);
+                        const dispatched = progress?.dispatched ?? 0;
+                        const total = progress?.total ?? 1;
+                        return (
+                          <div
+                            title={`Отгружено ${dispatched} из ~${total} рейсов по заявке #${orderId} (оценка по объёму, на текущий момент)`}
+                            style={{
+                              fontSize: '13.5px',
+                              fontWeight: '600',
+                              color: dispatched > 0 ? '#34D399' : '#64748B',
+                              textAlign: 'center',
+                              overflow: 'hidden',
+                              whiteSpace: 'nowrap',
+                              textOverflow: 'ellipsis'
+                            }}
+                          >
+                            {dispatched}/{total}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Названия организаций у нас реально доходят до 30-35 символов
+                          ("АО «БРЯНСКАВТОДОР» Брянский ДРСУч" и т.п.) — колонка
+                          физически не может показать такие целиком при любой разумной
+                          ширине, поэтому обрезка "…" здесь неизбежна в любом случае;
+                          title — обязательная подсказка с полным названием. */}
+                      <div title={client} style={{ 
                         fontSize: '14.5px', 
                         color: '#E2E8F0',
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
-                        textOverflow: 'ellipsis'
+                        textOverflow: 'ellipsis',
+                        textAlign: 'left'
                       }}>
                         {client}
                       </div>
 
-                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: '5px', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'nowrap', overflow: 'hidden' }}>
                         <button 
                           onClick={(e) => { 
                             e.stopPropagation(); 
@@ -926,15 +1119,17 @@ export default function OperatorBSUPage() {
                           }} 
                           disabled={loadingTrips[trip.id]}
                           style={{ 
-                            padding: '7px 14px', 
+                            padding: '6px 11px', 
                             background: loadingTrips[trip.id] ? '#475569' : '#10B981', 
                             color: 'white', 
                             border: 'none', 
                             borderRadius: '9999px', 
-                            fontSize: '13px', 
+                            fontSize: '12.5px', 
                             fontWeight: '600',
                             cursor: loadingTrips[trip.id] ? 'not-allowed' : 'pointer',
-                            minWidth: '110px'
+                            minWidth: '90px',
+                            whiteSpace: 'nowrap',
+                            flexShrink: 0
                           }}
                         >
                           {loadingTrips[trip.id] 
@@ -949,14 +1144,16 @@ export default function OperatorBSUPage() {
                           }} 
                           disabled={!loadingTrips[trip.id] || completingTripIds.has(trip.id)}   // ← Активна только когда начата загрузка и не в процессе завершения (защита от дублей по двойному клику)
                           style={{ 
-                            padding: '7px 14px', 
+                            padding: '6px 11px', 
                             background: loadingTrips[trip.id] && !completingTripIds.has(trip.id) ? '#3B82F6' : '#475569', 
                             color: 'white', 
                             border: 'none', 
                             borderRadius: '9999px', 
-                            fontSize: '13px', 
+                            fontSize: '12.5px', 
                             fontWeight: '600',
-                            cursor: loadingTrips[trip.id] && !completingTripIds.has(trip.id) ? 'pointer' : 'not-allowed'
+                            cursor: loadingTrips[trip.id] && !completingTripIds.has(trip.id) ? 'pointer' : 'not-allowed',
+                            whiteSpace: 'nowrap',
+                            flexShrink: 0
                           }}
                         >
                           {completingTripIds.has(trip.id) ? 'Сохранение…' : 'Загружен'}
@@ -974,6 +1171,31 @@ export default function OperatorBSUPage() {
                 🚚 Отгружено сегодня ({filteredCompletedTrips.length})
               </h2>
 
+              {/* Раньше у этой панели не было шапки колонок вовсе — цифры прогресса
+                  в последней колонке ("22/22 м³") показывались без каких-либо
+                  подписей и выглядели как "просто числа" без контекста. Добавили
+                  шапку с той же сеткой колонок, что и у строк ниже. */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '48px 40px 88px 104px 40px 162px 1fr',
+                gap: '8px',
+                padding: '0 16px 8px',
+                color: '#94A3B8',
+                fontSize: '11.5px',
+                fontWeight: '500',
+                borderBottom: '1px solid #334155',
+                marginBottom: '10px',
+                flexShrink: 0
+              }}>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>Время</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>№</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>Миксер</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>Марка</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>Объём</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', borderRight: '1px solid #334155', paddingRight: '10px' }}>Статус</div>
+                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'right' }}>Прогресс</div>
+              </div>
+
               <div className="scroll-hidden" style={{ display: 'flex', flexDirection: 'column', gap: '9px', flex: 1, minHeight: 0, overflowY: 'auto' }}>
                 {filteredCompletedTrips.length > 0 ? filteredCompletedTrips.map((trip) => (
                   <div 
@@ -982,21 +1204,28 @@ export default function OperatorBSUPage() {
                       backgroundColor: '#25334A',
                       borderRadius: '12px',
                       padding: '12px 16px',
-                      display: 'flex',
+                      display: 'grid',
+                      // Фиксированные колонки вместо flex+space-between — иначе на
+                      // широких экранах (4K) панель просто "растягивала" пустое
+                      // место между блоком данных и статусом справа, визуально
+                      // выглядя чрезмерно широкой. Ширины подобраны так, чтобы
+                      // всё гарантированно помещалось в одну строку без переноса
+                      // при фиксированной ширине самой панели (660px, см. grid
+                      // родителя выше).
+                      gridTemplateColumns: '48px 40px 88px 104px 40px 162px 1fr',
+                      gap: '8px',
                       alignItems: 'center',
-                      justifyContent: 'space-between',
                       minHeight: '28px',
-                      fontSize: '14.5px'
+                      fontSize: '13.5px'
                     }}
                   >
-                    <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flex: 1 }}>
-                      <div style={{ fontWeight: '600', color: '#94A3B8', minWidth: '70px' }}>
+                      <div style={{ fontWeight: '600', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {trip.time || '—'}
                       </div>
-                      <div style={{ fontWeight: '700', color: '#60A5FA', minWidth: '70px' }}>
+                      <div style={{ fontWeight: '700', color: '#60A5FA', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         #{trip.order_id || trip.orderId}
                       </div>
-                      <div style={{ fontWeight: '700', minWidth: '120px', display: 'flex', alignItems: 'center', gap: '7px' }}>
+                      <div style={{ fontWeight: '700', display: 'flex', alignItems: 'center', gap: '5px', overflow: 'hidden' }}>
                         {trip._pending && (
                           <span
                             title="Статус миксера пока не подтверждён сервером — рейс не потерян, идёт сохранение"
@@ -1011,36 +1240,116 @@ export default function OperatorBSUPage() {
                             }}
                           />
                         )}
-                        {trip.mixer_name || trip.number || '—'}
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {trip.mixer_name || trip.number || '—'}
+                        </span>
                       </div>
                       
                       {/* ==================== ОТОБРАЖЕНИЕ ПОДВИЖНОСТИ ==================== */}
-                      <div>
+                      {/* Марка может быть длинным текстом ("Ц/П смесь М100" и т.п.) —
+                          title показывает полный текст при наведении, даже если
+                          он обрезан "…" из-за нехватки места в колонке. */}
+                      <div title={trip.concrete_grade || ''} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {trip.concrete_grade || '—'} 
                         <span style={{ 
                           color: '#10B981', 
                           fontWeight: '600', 
-                          marginLeft: '8px' 
+                          marginLeft: '6px' 
                         }}>
                           {podvizhnostOverrides[trip.id] || trip.podvizhnost || 'П3'}
                         </span>
                       </div>
                       {/* ======================================================== */}
 
-                      <div style={{ fontWeight: '600' }}>
+                      <div style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {trip.volume} м³
                       </div>
-                      {trip._pending ? (
-                        <div style={{ color: '#F59E0B', fontWeight: '600' }} title="Сохраняется, статус миксера подтверждается">
-                          ⏳ Сохранение…
+                      {/* alignSelf: 'stretch' — растягиваем ячейку на всю высоту строки
+                          (у самой строки alignItems: 'center', из-за чего ячейки по
+                          умолчанию только по размеру контента), иначе тонкая серая
+                          линия-разделитель перед колонкой "Прогресс" была бы всего в
+                          пару пикселей высотой вместо всей строки. */}
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        alignSelf: 'stretch',
+                        borderRight: '1px solid #334155',
+                        paddingRight: '10px',
+                        overflow: 'hidden'
+                      }}>
+                        {trip._pending ? (
+                          <div style={{ color: '#F59E0B', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title="Сохраняется, статус миксера подтверждается">
+                            ⏳ Сохранение…
+                          </div>
+                        ) : (
+                          <div style={{ color: '#10B981', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            ✓ Загружен • {trip.loadedTime || '—'}
+                          </div>
+                        )}
+                      </div>
+                    {/* Последняя колонка узкая (~58-90px в зависимости от разрешения) —
+                        расширять саму панель ради неё нельзя, это отъедает место у
+                        левой панели (см. общий grid родителя). Раньше тут всегда был
+                        статичный текст "В пути" — он одинаков для КАЖДОЙ строки этого
+                        списка (это данные из production_logs, статус после отгрузки
+                        уже не отслеживается), т.е. не нёс никакой информации. Ставим
+                        на его место более полезный прогресс по объёму заявки, а "В
+                        пути" оставляем как запасной вариант, если объём заявки
+                        неизвестен (чтобы ячейка не была пустой). */}
+                    {(() => {
+                      const orderId = String(trip.order_id ?? trip.orderId ?? '');
+                      const progress = orderProgressMap.get(orderId);
+                      if (!progress || progress.orderVolume == null || progress.orderVolume <= 0) {
+                        return (
+                          <div style={{ color: '#64748B', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>В пути</div>
+                        );
+                      }
+
+                      const delivered = Math.round(progress.dispatchedVolume * 10) / 10;
+                      const total = Math.round(progress.orderVolume * 10) / 10;
+                      const isComplete = delivered >= total;
+                      const percent = Math.min(100, Math.round((delivered / total) * 100));
+
+                      // Показываем % вместо "N из M м³" — дробная запись у крупных
+                      // заявок (например, 635 из 635 м³) физически не влезает ни в
+                      // одну разумную ширину колонки, а процент всегда занимает
+                      // максимум 4 символа ("100%") при любом объёме заявки. Точные
+                      // кубы — в подсказке по наведению.
+                      return (
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', overflow: 'hidden' }}>
+                          <div
+                            title={`По заявке #${orderId} отгружено ${delivered} из ${total} м³ (${percent}%)`}
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '3px',
+                              padding: '3px 7px',
+                              borderRadius: '9999px',
+                              background: isComplete ? 'rgba(16, 185, 129, 0.16)' : 'rgba(148, 163, 184, 0.14)',
+                              maxWidth: '100%'
+                            }}
+                          >
+                            <span style={{
+                              fontSize: '11px',
+                              fontWeight: '600',
+                              color: isComplete ? '#34D399' : '#94A3B8',
+                              whiteSpace: 'nowrap',
+                              textAlign: 'center'
+                            }}>
+                              {percent}%
+                            </span>
+                            <div style={{ width: '30px', height: '3px', borderRadius: '2px', background: 'rgba(148, 163, 184, 0.25)', overflow: 'hidden' }}>
+                              <div style={{
+                                width: `${percent}%`,
+                                height: '100%',
+                                background: isComplete ? '#10B981' : '#3B82F6',
+                                borderRadius: '2px'
+                              }} />
+                            </div>
+                          </div>
                         </div>
-                      ) : (
-                        <div style={{ color: '#10B981', fontWeight: '600' }}>
-                          ✓ Загружен • {trip.loadedTime || '—'}
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ color: '#64748B' }}>В пути</div>
+                      );
+                    })()}
                   </div>
                 )) : (
                   <div style={{ 
@@ -1063,8 +1372,10 @@ export default function OperatorBSUPage() {
           </div>
         )}
         {/* ==================== ОТЧЕТЫ ==================== */}
+        {/* Без скролла — ReportsPage сама умещает всё содержимое в доступную
+            высоту (адаптивно под 4K/1920/меньшие разрешения). */}
         {activeTab === 'reports' && (
-          <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
             <ReportsPage />
           </div>
         )}

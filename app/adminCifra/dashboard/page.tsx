@@ -7,6 +7,7 @@ import { useRealtimeOrders, useRealtimeOrderMixers, formatOrderMixer } from '../
 import OrderDetailModal from '../components/OrderDetailModal';
 import NewOrderModal from '../components/NewOrderModal';
 import Image from 'next/image';
+import { Home } from 'lucide-react';
 
 export default function AdminCifraDashboard() {
 
@@ -796,68 +797,6 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   );
 };
 
-    // ==================== 30. ЗАВЕРШЕНИЕ ЛОГИСТИКИ =================================
-    // Статус заявки этой кнопкой больше не меняется — он управляется только
-    // двумя автоматическими правилами (добавление миксера / полная разгрузка),
-    // реализованными на сервере. Здесь фиксируется лишь готовность логистики.
-const completeLogistics = async (selectedOrderParam?: Order) => {
-  const targetOrder = selectedOrderParam || selectedOrder;
-  if (!targetOrder) return;
-
-  const assignedVolume = mixerAssignments
-    .filter(m => String(m.orderId) === String(targetOrder.id))
-    .reduce((sum, m) => sum + Number(m.volume || 0), 0);
-
-  const orderVolume = Number(targetOrder.volume || 0);
-  const isFullyReady = assignedVolume >= orderVolume && assignedVolume > 0;
-
-  // Optimistic update
-  setAllOrders(prev => prev.map(o =>
-    o.id === targetOrder.id
-      ? { ...o, logistics_ready: true }
-      : o
-  ));
-
-  if (selectedOrder && selectedOrder.id === targetOrder.id) {
-    setSelectedOrder(prev => prev ? { ...prev, logistics_ready: true } : null);
-  }
-
-  try {
-    const res = await fetch('/api/adminCifra/order-logistics', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        orderId: targetOrder.id,
-        logisticsReady: true
-      })
-    });
-
-    const data = await res.json();
-
-    if (data.success) {
-      const actionText = isFullyReady
-        ? `Завершил логистику: ${assignedVolume}/${orderVolume} м³ (полностью)`
-        : `Сохранил частичную логистику: ${assignedVolume}/${orderVolume} м³`;
-
-      if (typeof addToHistory === 'function') {
-        await addToHistory(actionText);
-      }
-
-      alert(isFullyReady
-        ? `✅ Полная логистика (${assignedVolume}/${orderVolume} м³)`
-        : `⚠️ Сохранена частичная логистика (${assignedVolume}/${orderVolume} м³)`
-      );
-      
-      setSelectedOrder(null);
-    } else {
-      alert('Ошибка: ' + (data.message || 'Не удалось сохранить'));
-    }
-  } catch (err) {
-    console.error('Ошибка завершения логистики:', err);
-    alert('Не удалось связаться с сервером');
-  }
-};
-
   // ==================== 31. ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ ДЛЯ МОДАЛКИ =================================
   const modalCurrentUser = currentUser || {
     id: userId || 0,
@@ -913,10 +852,15 @@ const completeLogistics = async (selectedOrderParam?: Order) => {
 }}>
   <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
     <h1 style={{ 
-      fontSize: '32px',           // ← уменьшил с 38px
-      fontWeight: '700', 
-      margin: 0 
+      fontSize: '26px',
+      fontWeight: 700, 
+      color: '#fff',
+      margin: 0,
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px'
     }}>
+      <Home size={26} color="#94A3B8" />
       Дашборд
     </h1>
     
@@ -1467,10 +1411,10 @@ const assignedVolume = mixerAssignments
 const orderVolume = Number(order.volume || 0);
 const isLogisticsReady = assignedVolume >= orderVolume && assignedVolume > 0;
 //  console.log(`Заказ #${order.id}: ${assignedVolume}/${orderVolume} м³ → ${isLogisticsReady ? 'ЗЕЛЁНЫЙ' : assignedVolume > 0 ? 'ОРАНЖЕВЫЙ' : 'СЕРЫЙ'}`);
-// Основная логика
-const isFullyAssigned = assignedVolume >= orderVolume && assignedVolume > 0;
-const isReadyInDB = (order as any).logistics_ready === true;
 
+// Процент отгрузки — только для "В работе" имеет смысл: у "Новой" отгрузок
+// заведомо 0%, у "Выполненной" заведомо 100%, показывать нечего.
+const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVolume / orderVolume) * 100)) : 0;
 // ==================== 43. ГЕНЕРАЦИЯ ОТЧЁТА ДЛЯ МЕССЕНДЖЕРА ====================
 const generateDailyReport = () => {
   if (groupedMixers.length === 0) {
@@ -1527,6 +1471,17 @@ const generateDailyReport = () => {
     <div 
       key={order.id} 
       onClick={() => setSelectedOrder(order)}
+      // ⚠️ Подсказка с точными кубами специально висит на всей строке, а не
+      // на самом бейджике "%" внутри плашки: у "Информации" (z-index: 15)
+      // z-index выше, чем у плашки статуса (z-index: 10) — это сделано
+      // намеренно, чтобы текст заявки не терялся, когда плашка "наезжает"
+      // на него. Из-за этого именно над бейджиком курсор физически попадает
+      // в невидимую область блока "Информация", а не в сам бейджик — title
+      // там просто не всплывал. На уровне всей строки такой конфликт
+      // невозможен (это общий родитель обоих слоёв).
+      title={order.status === 'processing'
+        ? `Отгружено ${Math.round(assignedVolume * 10) / 10} из ${Math.round(orderVolume * 10) / 10} м³ (${dispatchedPercent}%)`
+        : undefined}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -1565,10 +1520,10 @@ const generateDailyReport = () => {
         <div style={{ fontWeight: '600', color: '#F1F5F9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           #{order.id} — {client}
         </div>
-        <div style={{ color: '#94A3B8', fontSize: '13px' }}>
-          {order.grade} • {volume} м³
+        <div style={{ color: '#94A3B8', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span>{order.grade} • {volume} м³</span>
           {isOverflow && (
-            <span style={{ color: '#FACC15', marginLeft: '6px', fontWeight: '600' }}>{overflowLabel}</span>
+            <span style={{ color: '#FACC15', fontWeight: '600' }}>{overflowLabel}</span>
           )}
         </div>
       </div>
@@ -1599,9 +1554,29 @@ const generateDailyReport = () => {
         } : {}),
       }}>
         {statusText}
+        {/* Процент отгрузки — только для "В работе", прижат к правому краю
+            плашки (marginLeft: auto). Если плашка узкая (маленький объём/
+            короткая продолжительность), бейдж просто уедет за overflow:hidden
+            — как и текст статуса в таких случаях, это ожидаемо. */}
+        {order.status === 'processing' && (
+          <span
+            style={{
+              marginLeft: 'auto',
+              marginRight: isOverflow ? '6px' : 0,
+              flexShrink: 0,
+              background: 'rgba(255,255,255,0.24)',
+              padding: '1px 7px',
+              borderRadius: '9999px',
+              fontSize: '11px',
+              fontWeight: '700',
+            }}
+          >
+            {dispatchedPercent}%
+          </span>
+        )}
         {isOverflow && (
           <span style={{
-            marginLeft: 'auto', marginRight: '6px', flexShrink: 0,
+            marginLeft: order.status === 'processing' ? 0 : 'auto', marginRight: '6px', flexShrink: 0,
             color: '#FDE68A',
             fontSize: '11px', fontWeight: '700',
             letterSpacing: '0.02em',
@@ -1772,17 +1747,23 @@ const generateDailyReport = () => {
             borderBottom: '1px solid #334155',
             display: 'flex',
             justifyContent: 'space-between',
-            alignItems: 'center'
+            alignItems: 'center',
+            gap: '12px',
           }}>
-            <div>
+            <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ fontWeight: '700', fontSize: '16px' }}>
                 Заказ #{group.orderId}
               </div>
+              {/* Длинное название клиента (частая ситуация — юрлица вроде «АО
+                  «БРЯНСКАВТОДОР» Брянский ДРСУч») переносится на свою строку —
+                  это нормально, но раньше из-за display:flex без ограничений
+                  ширины оно "тянуло" за собой и счётчик миксеров справа,
+                  из-за чего "N миксеров" сам разрывался на 2 строки. */}
               <div style={{ color: '#94A3B8', fontSize: '14px' }}>
                 {group.client} • {group.deliveryTime}
               </div>
             </div>
-            <div style={{ color: '#60A5FA', fontSize: '15px' }}>
+            <div style={{ color: '#60A5FA', fontSize: '15px', whiteSpace: 'nowrap', flexShrink: 0 }}>
               {group.mixers.length} миксеров
             </div>
           </div>
@@ -2072,7 +2053,6 @@ const generateDailyReport = () => {
     currentUser={modalCurrentUser}
     handleStatusChange={handleStatusChange}
     deleteMixer={deleteMixer}
-    completeLogistics={completeLogistics}
     history={history}
     addToHistory={addToHistory}
     getStatusConfig={getStatusConfig}

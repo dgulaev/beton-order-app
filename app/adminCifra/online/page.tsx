@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { Globe } from 'lucide-react';
 
 export default function OnlinePage({ isGuest }: { isGuest?: boolean }) {
   const [onlineUsers, setOnlineUsers] = useState<any[]>([]);
@@ -42,7 +43,10 @@ export default function OnlinePage({ isGuest }: { isGuest?: boolean }) {
 
   return (
     <div style={{ padding: '20px' }}>
-      <h1 style={{ marginBottom: '20px' }}>👥 Кто в онлайн сейчас</h1>
+      <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', marginTop: 0, marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <Globe size={26} color="#94A3B8" />
+        Кто в онлайн сейчас
+      </h1>
 
       {loading && <div>Загрузка...</div>}
       {error && <div style={{ color: '#ef4444' }}>{error}</div>}

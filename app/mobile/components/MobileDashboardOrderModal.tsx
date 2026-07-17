@@ -15,7 +15,6 @@ interface MobileOrderDetailModalProps {
   currentUser?: { id: number; name?: string; role: string };
   handleStatusChange: (mixerId: number, newStatus: string) => void;
   deleteMixer: (mixerId: number, index: number) => void;
-  completeLogistics: (order: Order) => void;
   history: any[];
   addToHistory: (action: string) => Promise<void>;
   getStatusConfig: (status: string) => any;
@@ -29,8 +28,7 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
     onClose,
     mixerAssignments,
     setAllOrders,
-    completeLogistics,
-    addToHistory,
+    currentUser,
     history: initialHistory,
     setHistory,
   } = props;
@@ -108,16 +106,41 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
     setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: newStatus } : o));
 
     try {
-      await fetch('/api/adminCifra/order-logistics', {
-        method: 'POST',
+      // Ручная смена статуса всегда идёт через /orders/update — там же защита
+      // финальных статусов и запись истории с реальной ролью пользователя.
+      const res = await fetch('/api/adminCifra/orders/update', {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId: order.id, status: newStatus })
+        body: JSON.stringify({
+          id: order.id,
+          status: newStatus,
+          userName: currentUser?.name || 'Пользователь',
+          userRole: currentUser?.role || 'unknown'
+        })
       });
-      if (typeof addToHistory === 'function') {
-        await addToHistory(`Изменил статус заявки с "${getStatusRussian(oldStatus)}" на "${getStatusRussian(newStatus)}"`);
+
+      const data = await res.json();
+
+      if (!data.success) {
+        // Откат
+        setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+        setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: oldStatus } : o));
+        alert('Ошибка сохранения: ' + (data.message || ''));
+        return;
+      }
+
+      const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
+      if (histRes.ok) {
+        const freshHistory = await histRes.json();
+        setLocalHistory(freshHistory);
+        if (typeof setHistory === 'function') setHistory(freshHistory);
       }
     } catch (err) {
       console.error(err);
+      // Откат
+      setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+      setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: oldStatus } : o));
+      alert('Не удалось связаться с сервером');
     }
   };
 
@@ -170,78 +193,48 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
         onClick={e => e.stopPropagation()}
       >
         
-        {/* 1. ШАПКА МОДАЛКИ */}
+        {/* 1. ШАПКА МОДАЛКИ (заголовок + статус-пилюля) */}
         <div style={{ 
           padding: '18px 20px', 
           borderBottom: '1px solid #334155',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
+          gap: '12px',
           position: 'sticky',
           top: 0,
           backgroundColor: '#1E2937',
           zIndex: 10
         }}>
-          <h2 style={{ margin: 0, fontSize: '22px', color: '#ffffff' }}>
-            Заявка #{order?.id}
-          </h2>
-          <button 
-            onClick={onClose} 
-            style={{ 
-              fontSize: '34px', 
-              background: 'none', 
-              border: 'none', 
-              color: '#94A3B8',
-              padding: 0,
-              lineHeight: 1
-            }}
-          >
-            ×
-          </button>
-        </div>
-
-        <div style={{ padding: '20px' }}>
-
-          {/* 2. СТАТУС ЗАКАЗА */}
-          <div style={{ marginBottom: '28px' }}>
-            <label style={{ 
-              display: 'block', 
-              color: '#94A3B8', 
-              fontSize: '14px', 
-              marginBottom: '8px' 
-            }}>
-              Статус заказа
-            </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flexWrap: 'wrap' }}>
+            <h2 style={{ margin: 0, fontSize: '20px', color: '#ffffff', whiteSpace: 'nowrap' }}>
+              Заявка #{order?.id}
+            </h2>
 
             {getStatusConfigLocal(localOrder.status).final ? (
-              <div style={{ 
+              <div style={{
                 backgroundColor: getStatusConfigLocal(localOrder.status).bg,
                 color: getStatusConfigLocal(localOrder.status).color,
-                padding: '14px 20px',
+                padding: '6px 14px',
                 borderRadius: '9999px',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '10px',
                 fontWeight: '600',
-                fontSize: '16px',
-                width: '35%',
-                justifyContent: 'center'
+                fontSize: '13px',
+                whiteSpace: 'nowrap'
               }}>
                 {getStatusConfigLocal(localOrder.status).label}
               </div>
             ) : (
-              <select 
+              <select
                 value={localOrder.status || 'new'}
                 onChange={handleOrderStatusChange}
                 style={{
-                  background: '#1E2937',
-                  color: 'white',
-                  border: '2px solid #475569',
-                  borderRadius: '12px',
-                  padding: '14px 16px',
-                  fontSize: '16px',
-                  width: '100%',
-                  boxSizing: 'border-box'
+                  background: getStatusConfigLocal(localOrder.status).bg,
+                  color: getStatusConfigLocal(localOrder.status).color,
+                  border: 'none',
+                  borderRadius: '9999px',
+                  padding: '6px 12px',
+                  fontSize: '13px',
+                  fontWeight: '600'
                 }}
               >
                 <option value="new">Новая</option>
@@ -252,7 +245,25 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
             )}
           </div>
 
-          {/* 3. ИНФОРМАЦИЯ О ЗАКАЗЕ */}
+          <button 
+            onClick={onClose} 
+            style={{ 
+              fontSize: '34px', 
+              background: 'none', 
+              border: 'none', 
+              color: '#94A3B8',
+              padding: 0,
+              lineHeight: 1,
+              flexShrink: 0
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ padding: '20px' }}>
+
+          {/* 2. ИНФОРМАЦИЯ О ЗАКАЗЕ */}
           <div style={{ 
             background: '#25334A', 
             borderRadius: '16px', 

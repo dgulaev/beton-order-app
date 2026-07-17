@@ -81,7 +81,8 @@ async function buildAutofill(orderId: number, docKind: string) {
     water_resistance: recipe?.water_resistance || accredited?.water_resistance || '',
     slump: recipe?.slump || accredited?.slump || '',
     additive: '',
-    max_aggregate: '20мм',
+    // Крупность заполнителя в растворах не нормируется — не заполняем.
+    max_aggregate: docKind === 'mortar' ? '' : '20мм',
     keeping_min: 'не менее 120мин',
     // Прочность из испытаний
     required_strength_28: test28?.required_strength ?? '',

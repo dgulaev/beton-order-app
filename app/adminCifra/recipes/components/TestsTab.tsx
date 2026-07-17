@@ -161,7 +161,8 @@ export default function TestsTab() {
       setEditing(null);
       load();
     } else {
-      alert('Ошибка сохранения испытания');
+      const txt = await res.text().catch(() => '');
+      alert(`Ошибка сохранения испытания${txt ? `:\n${txt}` : ''}`);
     }
   };
 

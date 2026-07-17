@@ -5,6 +5,7 @@ import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
 import { useYandexRouteHref } from '@/lib/yandexRoute';
+import { Package } from 'lucide-react';
 
 export default function ZayavkiPage() {
   const [allOrders, setAllOrders] = useState<Order[]>([]);
@@ -583,7 +584,10 @@ ${order.customer_type?.includes('Юридическое')
       flexShrink: 0
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '40px' }}>
-        <div style={{ fontSize: '28px', fontWeight: '700' }}>Заявки</div>
+        <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Package size={26} color="#94A3B8" />
+          Заявки
+        </h1>
         
         
       </div>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { DollarSign } from 'lucide-react';
 
 export default function WithdrawalsPage() {
   const [withdrawals, setWithdrawals] = useState<any[]>([]);
@@ -91,7 +92,10 @@ export default function WithdrawalsPage() {
 
   return (
     <div style={{ padding: '32px 40px', background: '#0F172A', minHeight: '100vh', color: '#fff' }}>
-      <h1 style={{ fontSize: '32px', marginBottom: '8px' }}>Выводы наличных</h1>
+      <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', marginTop: 0, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <DollarSign size={26} color="#94A3B8" />
+        Выводы наличных
+      </h1>
       <p style={{ color: '#94A3B8', marginBottom: '32px' }}>Актуальные запросы клиентов на вывод баланса</p>
 
       {loading ? (

@@ -35,7 +35,8 @@ export async function GET(request: NextRequest) {
           organization_name,
           full_name,
           client_name,
-          grade
+          grade,
+          volume
         )
       `)
       .in('status', ['Загрузка', 'В пути', 'На объекте', 'Проблема'])
@@ -64,7 +65,11 @@ export async function GET(request: NextRequest) {
       organization_name: item.orders?.organization_name || null,
       client_name: item.orders?.client_name || item.orders?.full_name || null,
       concrete_grade: item.orders?.grade || null,
-      client: item.orders?.organization_name || item.orders?.full_name || item.orders?.client_name || '—'
+      client: item.orders?.organization_name || item.orders?.full_name || item.orders?.client_name || '—',
+      // Общий плановый объём ВСЕЙ заявки (не путать с volume выше — это объём
+      // конкретного рейса/миксера). Нужен для оценки "сколько рейсов ещё
+      // осталось" в колонке "Прогресс" на странице оператора.
+      order_volume: item.orders?.volume ?? null
     }));
 
    // console.log(`✅ Загружено ${formatted.length} активных миксеров (withOrders=${withOrders})`);

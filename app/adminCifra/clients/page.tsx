@@ -6,6 +6,7 @@ import NewOrderModal from './NewOrderModal';
 
 import { useYandexRouteHref } from '@/lib/yandexRoute';
 import { formatPhoneInput } from '@/lib/phone';
+import { Users } from 'lucide-react';
 
 // ==================== 0.1 ГЛОБАЛЬНЫЕ ТИПЫ ДЛЯ WINDOW ===============
 declare global {
@@ -1359,7 +1360,10 @@ const changeStaffPassword = async (staffMember: any) => {
 
   return (
     <div style={{ background: '#0F172A', minHeight: '100%', color: '#fff', padding: '0 32px 12px', boxSizing: 'border-box' }}>
-      <h1 style={{ fontSize: '26px', fontWeight: '700', marginTop: 0, marginBottom: '10px' }}>Клиенты CRM</h1>
+      <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', marginTop: 0, marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <Users size={26} color="#94A3B8" />
+        Клиенты CRM
+      </h1>
 
       {/* ====================== ВЕРХНЯЯ ПАНЕЛЬ УПРАВЛЕНИЯ ====================== */}
 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>

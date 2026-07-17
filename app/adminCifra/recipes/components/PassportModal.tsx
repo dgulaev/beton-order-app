@@ -267,7 +267,7 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
     ${row(flowLabel, data.slump)}
     ${row(`Другие нормируемые показатели качества на месте укладки у потребителя`, data.other_site_props)}
     ${row('Сохраняемость удобоукладываемости и других нормируемых показателей, ч-мин', data.keeping_min)}
-    ${row('Наибольшая крупность заполнителя, мм', data.max_aggregate)}
+    ${isMortar ? '' : row('Наибольшая крупность заполнителя, мм', data.max_aggregate)}
     ${strengthRow}
     ${row(`Другие нормируемые показатели качества ${material}`, data.other_material_props)}
     ${row('Наименование, масса добавки (в расчёте на сухое вещество), кг/м³', data.additive)}
@@ -384,7 +384,7 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
               {field('Морозостойкость (F)', 'frost_resistance')}
               {field('Водонепроницаемость (W)', 'water_resistance')}
               {field('Подвижность (П/Пк)', 'slump')}
-              {field('Крупность заполнителя', 'max_aggregate')}
+              {docKind !== 'mortar' && field('Крупность заполнителя', 'max_aggregate')}
               {field('Сохраняемость', 'keeping_min')}
               {field('Добавка, кг/м³', 'additive')}
               {field('Требуемая прочность 28 сут', 'actual_strength_28', 'number')}

@@ -339,14 +339,15 @@ const showVisualNotification = (type: string, data: any) => {
         {/* ==================== ЗАГОЛОВОК + КНОПКА ДОБАВИТЬ ==================== */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
           <h1 style={{
-            fontSize: '24px',
-            fontWeight: '700',
+            fontSize: '26px',
+            fontWeight: 700,
+            color: '#fff',
             margin: 0,
             display: 'flex',
             alignItems: 'center',
             gap: '10px'
           }}>
-            <CheckCircle size={26} color="#10B981" />
+            <CheckCircle size={26} color="#94A3B8" />
             Задачи
           </h1>
 

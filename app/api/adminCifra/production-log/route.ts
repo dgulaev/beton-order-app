@@ -21,7 +21,8 @@ export async function GET(request: NextRequest) {
         ),
         orders!inner (
           delivery_date,
-          delivery_time
+          delivery_time,
+          volume
         )
       `)
       .order('created_at', { ascending: false });
@@ -43,7 +44,10 @@ export async function GET(request: NextRequest) {
     // Добавляем podvizhnost в корень объекта
     const formatted = (data || []).map((log: any) => ({
       ...log,
-      podvizhnost: log.order_mixers?.podvizhnost || log.podvizhnost || 'П3'
+      podvizhnost: log.order_mixers?.podvizhnost || log.podvizhnost || 'П3',
+      // Общий плановый объём заявки — для расчёта колонки "Прогресс" на
+      // странице оператора (см. active-mixers/route.ts для того же поля).
+      order_volume: log.orders?.volume ?? null
     }));
 
     return NextResponse.json(formatted);
