@@ -1,8 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
-import { useYandexRouteHref } from '@/lib/yandexRoute';
+import { useMapRouteLinks } from '@/lib/yandexRoute';
+import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
+import { hasYandexMapsKey } from '@/lib/yandexMapsLoader';
+import OrderRouteMap from './OrderRouteMap';
 
 interface OrderDetailModalProps {
   order: Order | null;
@@ -21,21 +24,6 @@ interface OrderDetailModalProps {
   setHistory: React.Dispatch<React.SetStateAction<any[]>>;
   setSelectedOrder: React.Dispatch<React.SetStateAction<Order | null>>;
 }
-
-// ==================== ПЕРЕВОД РОЛЕЙ ДЛЯ ОТОБРАЖЕНИЯ В ИСТОРИИ ====================
-const getRoleDisplayName = (role: string): string => {
-  switch (role) {
-    case 'admin': return 'Админ';
-    case 'manager': return 'Менеджер';
-    case 'dispatcher': return 'Диспетчер';
-    case 'logist': return 'Логист';
-    case 'logistic': return 'Логист';
-    case 'operator': return 'Оператор';
-    case 'accountant': return 'Бухгалтер';
-    case 'driver': return 'Водитель';
-    default: return role;
-  }
-};
 
 export default function OrderDetailModal({
   order,
@@ -103,7 +91,7 @@ const loadData = async () => {
 
   // Ссылка на маршрут в Яндекс.Картах — "дозревает" в фоне до координат,
   // как только геокодирование адреса доставки вернётся с сервера (см. lib/yandexRoute.ts).
-  const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(order.address);
+  const { yandexHref: yandexRouteHref, googleHref: googleRouteHref } = useMapRouteLinks(order.address);
 
   // ==================== 2. HELPER ДЛЯ ОПРЕДЕЛЕНИЯ РОЛИ ====================
   const getCurrentRole = () => {
@@ -261,6 +249,30 @@ const currentMixers = mixerAssignments
 // ==================== 6.2 ПРОСТОЙ: ПО РЕЙСАМ И ИТОГО ПО ЗАЯВКЕ ====================
 const totalDowntimeMinutes = currentMixers.reduce((sum, m) => sum + Number(m.downtimeMinutes || 0), 0);
 
+// ==================== 6.3 "СПИСОК УШЁЛ ВНИЗ" — ПОДСКАЗКА СО СТРЕЛКОЙ ====================
+// Показываем стрелку ↓ поверх списка назначенных миксеров, только пока в
+// списке реально есть скрытый снизу контент (список не докручен до конца).
+// Пересчитываем: (а) при скролле, (б) когда список миксеров меняется
+// (добавили/удалили миксер — новая строка может как раз вызвать переполнение).
+const mixerListRef = useRef<HTMLDivElement>(null);
+const [mixerListHasMore, setMixerListHasMore] = useState(false);
+
+const recomputeMixerListOverflow = () => {
+  const el = mixerListRef.current;
+  if (!el) { setMixerListHasMore(false); return; }
+  const hasMore = el.scrollHeight - el.scrollTop - el.clientHeight > 4;
+  setMixerListHasMore(hasMore);
+};
+
+const handleMixerListScroll = () => recomputeMixerListOverflow();
+
+useEffect(() => {
+  // rAF — даём браузеру применить новую строку миксера перед замером высоты.
+  const raf = requestAnimationFrame(recomputeMixerListOverflow);
+  return () => cancelAnimationFrame(raf);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [currentMixers.length]);
+
 const formatOnSiteDuration = (mixer: any): string | null => {
   if (!mixer.onSiteAt) return null;
   const endTime = mixer.unloadedAt ? new Date(mixer.unloadedAt) : new Date();
@@ -307,6 +319,13 @@ const formatVolume = (value: number | string) => {
 
 
   return (
+  <>
+  <style>{`
+    @keyframes mixerListBounce {
+      0%, 100% { transform: translateY(0); opacity: 0.7; }
+      50%      { transform: translateY(3px); opacity: 1; }
+    }
+  `}</style>
   <div 
     style={{ 
       position: 'fixed', 
@@ -322,129 +341,159 @@ const formatVolume = (value: number | string) => {
     onClick={onClose}
   >
     <div 
-    className="w-full max-w-[1300px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
+    className="w-full max-w-[1650px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
   style={{ 
     background: '#1E2937', 
     borderRadius: '24px', 
-    padding: '32px', 
+    // Небольшой доп. отступ сверху относительно боковых/нижнего —
+    // раньше эту "воздушную подушку" сверху давал отдельный header со
+    // заголовком заявки, теперь заголовок переехал в шапки колонок,
+    // поэтому добавляем чуть больше паддинга сверху, чтобы не смотрелось,
+    // будто контент прилипает к скруглённому верхнему краю модалки.
+    padding: '38px 32px 32px 32px', 
     boxShadow: '0 30px 80px rgba(0,0,0,0.7)',
   }}
         onClick={e => e.stopPropagation()}
       >
-        {/* ==================== HEADER (заголовок + статус-пилюля) ==================== */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', gap: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
-            <h2 style={{ margin: 0, fontSize: '28px', whiteSpace: 'nowrap' }}>
-              Заявка #{order.id}
-            </h2>
+        {/* ==================== ТЕЛО МОДАЛКИ: КАРТА СЛЕВА (НА ВСЮ ВЫСОТУ) + ОСТАЛЬНОЙ КОНТЕНТ ==================== */}
+        <div style={{ display: 'flex', gap: '28px', alignItems: 'stretch' }}>
 
-            {/* ==================== СТАТУС ЗАКАЗА (компактная пилюля) ==================== */}
-            {getStatusConfig(localOrder.status).final ? (
-              // Финальные статусы менять нельзя — просто цветная пилюля
-              <div style={{
-                backgroundColor: getStatusConfig(localOrder.status).bg,
-                color: getStatusConfig(localOrder.status).color,
-                padding: '7px 18px',
-                borderRadius: '9999px',
+        {hasYandexMapsKey() && (
+          <div style={{ width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <OrderRouteMap address={order.address} routeHref={yandexRouteHref} />
+            </div>
+            {/* Google Карты — запасной вариант, если карта/маршрут Яндекса не построились.
+                Тот же нормализованный адрес/координаты, что и у Яндекса (см. useMapRouteLinks). */}
+            <a
+              href={googleRouteHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                padding: '9px 12px',
+                background: '#25334A',
+                color: '#94A3B8',
+                textAlign: 'center',
+                borderRadius: '10px',
+                textDecoration: 'none',
                 fontWeight: '600',
-                fontSize: '14px',
-                whiteSpace: 'nowrap'
-              }}>
-                {getStatusConfig(localOrder.status).label}
-              </div>
-            ) : (
-              // Можно менять — сама пилюля и есть select (клик открывает меню статусов)
-              <select
-                value={localOrder.status || 'new'}
-                onChange={async (e) => {
-                  const newStatus = e.target.value;
-                  if (newStatus === localOrder.status) return;
-
-                  const oldStatus = localOrder.status;
-
-                  // Локальное обновление
-                  setLocalOrder(prev => ({ ...prev, status: newStatus }));
-                  setAllOrders(prev => prev.map(o =>
-                    o.id === order.id ? { ...o, status: newStatus } : o
-                  ));
-
-                  try {
-                    // Ручная смена статуса всегда идёт через /orders/update — там же
-                    // защита финальных статусов и запись истории с реальной ролью.
-                    const res = await fetch('/api/adminCifra/orders/update', {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        id: order.id,
-                        status: newStatus,
-                        userName: getCurrentUserName(),
-                        userRole: getCurrentRole()
-                      })
-                    });
-
-                    const data = await res.json();
-
-                    if (data.success) {
-                      if (typeof setHistory === 'function') {
-                        const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
-                        if (histRes.ok) setHistory(await histRes.json());
-                      }
-                    } else {
-                      // Откат
-                      setLocalOrder(prev => ({ ...prev, status: oldStatus }));
-                      setAllOrders(prev => prev.map(o =>
-                        o.id === order.id ? { ...o, status: oldStatus } : o
-                      ));
-                      alert('Ошибка сохранения: ' + (data.message || ''));
-                    }
-                  } catch (err) {
-                    console.error(err);
-                    // Откат
-                    setLocalOrder(prev => ({ ...prev, status: oldStatus }));
-                    setAllOrders(prev => prev.map(o =>
-                      o.id === order.id ? { ...o, status: oldStatus } : o
-                    ));
-                    alert('Не удалось связаться с сервером');
-                  }
-                }}
-                title="Сменить статус заявки"
-                style={{
-                  background: getStatusConfig(localOrder.status).bg,
-                  color: getStatusConfig(localOrder.status).color,
-                  border: 'none',
-                  borderRadius: '9999px',
-                  padding: '7px 14px',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  cursor: 'pointer'
-                }}
-              >
-                <option value="new">Новая</option>
-                <option value="processing">В работе</option>
-                <option value="completed">Выполнена</option>
-                <option value="cancelled">Отменена</option>
-              </select>
-            )}
+                fontSize: '13px',
+                flexShrink: 0,
+              }}
+            >
+              🗺️ Открыть в Google Картах
+            </a>
           </div>
+        )}
 
-          <button
-            onClick={onClose}
-            style={{ fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer', flexShrink: 0 }}
-          >
-            ×
-          </button>
-        </div>
-
+        <div style={{ flex: 1, minWidth: 0 }}>
 
         {/* ==================== GRID 1fr 1fr ==================== */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
           
           {/* ==================== ЛЕВАЯ КОЛОНКА — ИНФОРМАЦИЯ ==================== */}
           <div>
-            <h3 style={{ marginBottom: '18px', color: '#94A3B8' }}>Информация о заказе</h3>
-            
-            <div style={{ background: '#25334A', borderRadius: '16px', padding: '24px', lineHeight: '2' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '12px' }}>
+            {/* ==================== ЗАГОЛОВОК ЗАЯВКИ + СТАТУС-ПИЛЮЛЯ (на месте бывшей "Информация о заказе") ==================== */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '18px', flexWrap: 'wrap' }}>
+              <h2 style={{ margin: 0, fontSize: '22px', color: '#F1F5F9', whiteSpace: 'nowrap' }}>
+                Заявка #{order.id}
+              </h2>
+
+              {/* ==================== СТАТУС ЗАКАЗА (компактная пилюля) ==================== */}
+              {getStatusConfig(localOrder.status).final ? (
+                // Финальные статусы менять нельзя — просто цветная пилюля
+                <div style={{
+                  backgroundColor: getStatusConfig(localOrder.status).bg,
+                  color: getStatusConfig(localOrder.status).color,
+                  padding: '7px 18px',
+                  borderRadius: '9999px',
+                  fontWeight: '600',
+                  fontSize: '14px',
+                  whiteSpace: 'nowrap'
+                }}>
+                  {getStatusConfig(localOrder.status).label}
+                </div>
+              ) : (
+                // Можно менять — сама пилюля и есть select (клик открывает меню статусов)
+                <select
+                  value={localOrder.status || 'new'}
+                  onChange={async (e) => {
+                    const newStatus = e.target.value;
+                    if (newStatus === localOrder.status) return;
+
+                    const oldStatus = localOrder.status;
+
+                    // Локальное обновление
+                    setLocalOrder(prev => ({ ...prev, status: newStatus }));
+                    setAllOrders(prev => prev.map(o =>
+                      o.id === order.id ? { ...o, status: newStatus } : o
+                    ));
+
+                    try {
+                      // Ручная смена статуса всегда идёт через /orders/update — там же
+                      // защита финальных статусов и запись истории с реальной ролью.
+                      const res = await fetch('/api/adminCifra/orders/update', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          id: order.id,
+                          status: newStatus,
+                          userName: getCurrentUserName(),
+                          userRole: getCurrentRole()
+                        })
+                      });
+
+                      const data = await res.json();
+
+                      if (data.success) {
+                        if (typeof setHistory === 'function') {
+                          const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
+                          if (histRes.ok) setHistory(await histRes.json());
+                        }
+                      } else {
+                        // Откат
+                        setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+                        setAllOrders(prev => prev.map(o =>
+                          o.id === order.id ? { ...o, status: oldStatus } : o
+                        ));
+                        alert('Ошибка сохранения: ' + (data.message || ''));
+                      }
+                    } catch (err) {
+                      console.error(err);
+                      // Откат
+                      setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+                      setAllOrders(prev => prev.map(o =>
+                        o.id === order.id ? { ...o, status: oldStatus } : o
+                      ));
+                      alert('Не удалось связаться с сервером');
+                    }
+                  }}
+                  title="Сменить статус заявки"
+                  style={{
+                    background: getStatusConfig(localOrder.status).bg,
+                    color: getStatusConfig(localOrder.status).color,
+                    border: 'none',
+                    borderRadius: '9999px',
+                    padding: '7px 14px',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value="new">Новая</option>
+                  <option value="processing">В работе</option>
+                  <option value="completed">Выполнена</option>
+                  <option value="cancelled">Отменена</option>
+                </select>
+              )}
+            </div>
+
+            <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px 20px', lineHeight: '1.45' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: '6px 12px', alignItems: 'baseline' }}>
                 <div style={{ color: '#94A3B8' }}>Клиент</div>
                 <div style={{ fontWeight: '600' }}>{(order as any).organization_name || (order as any).full_name || '—'}</div>
 
@@ -455,20 +504,36 @@ const formatVolume = (value: number | string) => {
                 <div style={{ fontWeight: '600', color: '#60A5FA' }}>{order.grade}</div>
 
                 <div style={{ color: '#94A3B8' }}>Объём</div>
-                <div style={{ fontSize: '24px', fontWeight: '700', color: '#10B981' }}>{order.volume} м³</div>
+                <div style={{ fontSize: '20px', fontWeight: '700', color: '#10B981' }}>{order.volume} м³</div>
 
                 <div style={{ color: '#94A3B8' }}>Дата и время</div>
                 <div>{order.delivery_date} • {order.delivery_time}</div>
 
                 <div style={{ color: '#94A3B8' }}>Адрес доставки</div>
-                <div style={{ fontWeight: '600', fontSize: '17px' }}>{order.address}</div>
+                <div style={{ fontWeight: '600', fontSize: '15px' }}>{order.address}</div>
               </div>
             </div>
 
             {order.comment && (
-              <div style={{ marginTop: '24px' }}>
-                <h4 style={{ color: '#94A3B8', marginBottom: '8px' }}>Комментарий клиента</h4>
-                <div style={{ background: '#25334A', padding: '20px', borderRadius: '16px', whiteSpace: 'pre-wrap' }}>
+              <div style={{ marginTop: '16px' }}>
+                <h4 style={{ color: '#94A3B8', marginBottom: '6px' }}>Комментарий клиента</h4>
+                <div style={{
+                  background: '#25334A',
+                  padding: '12px 16px',
+                  borderRadius: '16px',
+                  whiteSpace: 'pre-wrap',
+                  // clamp вместо фикс-px — на 4K (больше реальной высоты
+                  // окна) блок пропорционально вырастает и показывает
+                  // больше текста без обрезки, а на 1920 остаётся как был.
+                  // До 1080px высоты вьюпорта (весь диапазон 1920×1080, в т.ч.
+                  // с браузерной панелью/таскбаром) формула даёт ровно 76px —
+                  // поведение на 1920 не меняется. Выше 1080px (4K и крупнее)
+                  // блок начинает расти дальше, до потолка в 240px.
+                  maxHeight: 'clamp(76px, calc(76px + (100vh - 1080px) * 0.15), 240px)',
+                  overflowY: 'auto',
+                  fontSize: '14px',
+                  lineHeight: '1.5',
+                }}>
                   {order.comment}
                 </div>
               </div>
@@ -477,7 +542,26 @@ const formatVolume = (value: number | string) => {
 
                     {/* ==================== ПРАВАЯ КОЛОНКА — ЛОГИСТИКА ==================== */}
           <div>
-            <h3 style={{ marginBottom: '20px', color: '#94A3B8' }}>Выстраивание логистики</h3>
+            {/* ==================== ЗАГОЛОВОК + КНОПКА ЗАКРЫТИЯ (крестик перенесён с бывшего header) ==================== */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
+              <h3 style={{ margin: 0, color: '#94A3B8' }}>Выстраивание логистики</h3>
+              <button
+                onClick={onClose}
+                title="Закрыть"
+                style={{
+                  fontSize: '28px',
+                  lineHeight: 1,
+                  background: 'none',
+                  border: 'none',
+                  color: '#94A3B8',
+                  cursor: 'pointer',
+                  padding: 0,
+                  flexShrink: 0,
+                }}
+              >
+                ×
+              </button>
+            </div>
             
             {(() => {
               const assignedVolume = mixerAssignments
@@ -488,20 +572,20 @@ const formatVolume = (value: number | string) => {
               const isFullyReady = assignedVolume >= orderVolume && assignedVolume > 0;
 
               return (
-                <div style={{ background: '#25334A', borderRadius: '16px', padding: '24px' }}>
+                <div style={{ background: '#25334A', borderRadius: '16px', padding: '18px' }}>
                   {/* Сумма по миксерам */}
 <div style={{ 
   background: '#1E2937', 
   borderRadius: '12px', 
-  padding: '16px', 
+  padding: '12px', 
   textAlign: 'center',
-  marginBottom: '24px'
+  marginBottom: '14px'
 }}>
-  <div style={{ color: '#94A3B8', fontSize: '14px' }}>Назначено бетона</div>
-  <div style={{ fontSize: '32px', fontWeight: '700', color: '#10B981', margin: '8px 0' }}>
+  <div style={{ color: '#94A3B8', fontSize: '13px' }}>Назначено бетона</div>
+  <div style={{ fontSize: '25px', fontWeight: '700', color: '#10B981', margin: '4px 0' }}>
     {formatVolume(assignedVolume)} / {formatVolume(orderVolume)} м³
   </div>
-  <div style={{ fontSize: '14px', color: isFullyReady ? '#10B981' : '#F59E0B' }}>
+  <div style={{ fontSize: '13px', color: isFullyReady ? '#10B981' : '#F59E0B' }}>
     {isFullyReady 
       ? '✅ Полностью укомплектовано' 
       : `Осталось ${formatVolume(orderVolume - assignedVolume)} м³`
@@ -509,28 +593,34 @@ const formatVolume = (value: number | string) => {
   </div>
 
   <div style={{
-    marginTop: '14px',
-    paddingTop: '14px',
+    marginTop: '10px',
+    paddingTop: '10px',
     borderTop: '1px solid #334155',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     gap: '8px'
   }}>
-    <span style={{ color: '#94A3B8', fontSize: '13.5px' }}>Общий простой по заявке:</span>
-    <span style={{ color: totalDowntimeMinutes > 0 ? '#F97316' : '#10B981', fontWeight: '700', fontSize: '16px' }}>{totalDowntimeMinutes} мин</span>
+    <span style={{ color: '#94A3B8', fontSize: '13px' }}>Общий простой по заявке:</span>
+    <span style={{ color: totalDowntimeMinutes > 0 ? '#F97316' : '#10B981', fontWeight: '700', fontSize: '15px' }}>{totalDowntimeMinutes} мин</span>
   </div>
 </div>
 
                   {/* ==================== СПИСОК НАЗНАЧЕННЫХ МИКСЕРОВ ==================== */}
-<div style={{ marginBottom: '24px' }}>
-  <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '10px', display: 'flex', justifyContent: 'space-between' }}>
+<div>
+  <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
     <span>Назначенные миксеры ({currentMixers.length})</span>
     <span style={{ fontSize: '13px', color: '#64748B' }}>Изменяй время — список пересортируется</span>
   </div>
   
-  <div style={{ 
-    maxHeight: '240px',
+  <div style={{ position: 'relative' }}>
+  <div 
+    ref={mixerListRef}
+    onScroll={handleMixerListScroll}
+    style={{ 
+    // Тот же принцип: до 1080px высоты вьюпорта — ровно 128px (как на 1920),
+    // на 4K и выше — растёт дальше, до потолка в 430px.
+    maxHeight: 'clamp(128px, calc(128px + (100vh - 1080px) * 0.28), 430px)',
     overflowY: 'auto',
     paddingRight: '8px',
     display: 'flex',
@@ -659,6 +749,35 @@ const formatVolume = (value: number | string) => {
       </div>
     )}
   </div>
+
+  {/* Подсказка "список ушёл вниз" — стрелка + мягкая тень снизу,
+      видна только пока список реально скроллится и не докручен до конца. */}
+  {mixerListHasMore && (
+    <div style={{
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: '8px',
+      height: '28px',
+      display: 'flex',
+      alignItems: 'flex-end',
+      justifyContent: 'center',
+      paddingBottom: '2px',
+      background: 'linear-gradient(to bottom, rgba(37,51,74,0), rgba(37,51,74,0.95))',
+      borderRadius: '0 0 12px 12px',
+      pointerEvents: 'none',
+    }}>
+      <span style={{
+        color: '#94A3B8',
+        fontSize: '13px',
+        lineHeight: 1,
+        animation: 'mixerListBounce 1.4s ease-in-out infinite',
+      }}>
+        ▼
+      </span>
+    </div>
+  )}
+  </div>
 </div>
 
                 </div>
@@ -668,8 +787,8 @@ const formatVolume = (value: number | string) => {
           </div>
 
                        {/* ==================== ФОРМА ДОБАВЛЕНИЯ МИКСЕРА ==================== */}
-        <div style={{ borderTop: '1px solid #334155', paddingTop: '15px', marginTop: '20px' }}>
-          <h4 style={{ color: '#94A3B8', marginBottom: '20px' }}>Добавить миксер</h4>
+        <div style={{ borderTop: '1px solid #334155', paddingTop: '10px', marginTop: '10px' }}>
+          <h4 style={{ color: '#94A3B8', marginBottom: '10px' }}>Добавить миксер</h4>
           
           <div style={{ 
             display: 'grid', 
@@ -917,153 +1036,31 @@ const formatVolume = (value: number | string) => {
         </div>
 
         {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ (ПОЛНАЯ + МИКСЕРЫ) ==================== */}
-<div style={{ marginTop: '15px', borderTop: '1px solid #334155', paddingTop: '10px' }}>
-  <h4 style={{ color: '#94A3B8', marginBottom: '16px' }}>История изменений</h4>
+<div style={{ marginTop: '10px', borderTop: '1px solid #334155', paddingTop: '8px' }}>
+  <h4 style={{ color: '#94A3B8', marginBottom: '8px' }}>История изменений</h4>
   
   <div style={{ 
     background: '#25334A', 
     borderRadius: '16px', 
-    padding: '20px', 
+    padding: '16px', 
     fontSize: '15px',
-    maxHeight: '280px',
+    // Тот же принцип: до 1080px высоты вьюпорта — ровно 160px (как на 1920),
+    // на 4K и выше — растёт дальше, до потолка в 520px.
+    maxHeight: 'clamp(160px, calc(160px + (100vh - 1080px) * 0.33), 520px)',
     overflowY: 'auto'
   }}>
-    {history.length > 0 ? (
-      history.map((entry: any, index: number) => {
-        const time = new Date(entry.created_at).toLocaleString('ru-RU', { 
-          hour: '2-digit', 
-          minute: '2-digit',
-          day: '2-digit',
-          month: '2-digit'
-        });
-
-        const cleanAction = entry.action || '';
-        const isAuto = entry.user_role === 'system';
-
-        // Определение цвета изменения
-        let highlightColor = '#CBD5E1';
-        if (entry.field_name === 'organization_name' || cleanAction.toLowerCase().includes('организации')) highlightColor = '#60A5FA';
-        if (entry.field_name === 'status') highlightColor = '#10B981';
-        if (entry.field_name === 'volume') highlightColor = '#F59E0B';
-        if (entry.field_name === 'address') highlightColor = '#A78BFA';
-
-        return (
-          <div key={index} style={{ 
-            display: 'flex', 
-            gap: '12px', 
-            marginBottom: '14px', 
-            paddingBottom: '12px',
-            borderBottom: index !== history.length - 1 ? '1px solid #334155' : 'none',
-            alignItems: 'flex-start'
-          }}>
-            {/* Время */}
-            <div style={{ 
-              width: '68px', 
-              color: '#64748B', 
-              fontSize: '13px', 
-              flexShrink: 0,
-              textAlign: 'right',
-              paddingTop: '2px'
-            }}>
-              {time}
-            </div>
-            
-            {/* Контент */}
-            <div style={{ flex: 1 }}>
-              <strong style={{ color: isAuto ? '#60A5FA' : '#CBD5E1' }}>
-                {isAuto ? '🤖 Система (автоматически)' : (entry.user_name || 'Сотрудник')}
-                {!isAuto && entry.user_role && entry.user_role !== 'unknown' && ` (${getRoleDisplayName(entry.user_role)})`}
-              </strong>
-
-              <div style={{ marginTop: '4px', color: '#E2E8F0', lineHeight: '1.4' }}>
-                {cleanAction}
-              </div>
-
-              {/* Детальная информация об изменении (как в странице Заявки) */}
-              {(entry.field_name || entry.old_value || entry.new_value) && (
-                <div style={{ 
-                  marginTop: '6px', 
-                  padding: '6px 10px', 
-                  background: '#1E2937', 
-                  borderRadius: '8px',
-                  fontSize: '14px'
-                }}>
-                  <span style={{ color: '#94A3B8' }}>{entry.field_name || 'Поле'}:</span>{' '}
-                  <span style={{ color: '#EF4444' }}>{entry.old_value || '—'}</span>
-                  {' → '}
-                  <span style={{ color: highlightColor, fontWeight: '600' }}>
-                    {entry.new_value || '—'}
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })
-    ) : (
-      <div style={{ color: '#64748B', textAlign: 'center', padding: '60px 0', fontStyle: 'italic' }}>
-        История изменений пуста
-      </div>
-    )}
+    <OrderHistoryTimeline entries={history} />
   </div>
 </div>
 
-        {/* ==================== КАРТЫ ==================== */}
-<div style={{ marginTop: '32px' }}>
-  <h4 style={{ color: '#94A3B8', marginBottom: '16px' }}>Маршрут доставки</h4>
-  
-  <div style={{ 
-    display: 'flex', 
-    flexDirection: 'row', 
-    gap: '12px' 
-  }}>
-    <a 
-      href={`https://www.google.com/maps/dir/?api=1&origin=Брянск,+Орловский+тупик,+6&destination=${encodeURIComponent(order.address || '')}&travelmode=driving`} 
-      target="_blank" 
-      rel="noopener noreferrer" 
-      style={{ 
-        flex: 1,
-        padding: '13px 18px', 
-        background: '#10B981', 
-        color: 'white', 
-        textAlign: 'center', 
-        borderRadius: '12px', 
-        textDecoration: 'none', 
-        fontWeight: '600',
-        fontSize: '15px',
-        transition: 'all 0.2s'
-      }}
-    >
-      🗺️ Google Maps
-    </a>
+        </div>
+        {/* /flex: 1, остальной контент */}
 
-    <a
-      href={yandexRouteHref}
-      target="_blank"
-      rel="noopener noreferrer"
-      aria-disabled={!yandexRouteReady}
-      onClick={(e) => { if (!yandexRouteReady) e.preventDefault(); }}
-      style={{ 
-        flex: 1,
-        padding: '13px 18px', 
-        background: '#3B82F6', 
-        color: 'white', 
-        textAlign: 'center', 
-        borderRadius: '12px', 
-        textDecoration: 'none',
-        fontWeight: '600',
-        fontSize: '15px',
-        transition: 'all 0.2s',
-        opacity: yandexRouteReady ? 1 : 0.6,
-        cursor: yandexRouteReady ? 'pointer' : 'wait'
-      }}
-    >
-      🗺️ {yandexRouteReady ? 'Яндекс.Карты' : 'Строим маршрут...'}
-    </a>
-  </div>
-</div>
+        </div>
+        {/* /ТЕЛО МОДАЛКИ: карта + остальной контент */}
 
       </div>
     </div>
+  </>
   );
 }

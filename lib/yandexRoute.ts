@@ -109,7 +109,7 @@ export function buildYandexMapsRouteUrl(rawAddress: string | null | undefined): 
 // Координаты завода (Брянск, Орловский тупик, 6) — получены геокодером один
 // раз и захардкожены, чтобы не дёргать API на каждое построение маршрута:
 // точка отправления не меняется от заявки к заявке.
-const ROUTE_ORIGIN_COORDS = { lat: 53.25347, lon: 34.416444 };
+export const ROUTE_ORIGIN_COORDS = { lat: 53.25347, lon: 34.416444 };
 
 /**
  * Извлекает координаты прямо из текста адреса, если диспетчер вставил их
@@ -141,7 +141,7 @@ function buildYandexMapsRouteUrlByCoords(destLat: number, destLon: number): stri
   return `https://yandex.ru/maps/?${params.toString()}`;
 }
 
-type Coords = { lat: number; lon: number };
+export type Coords = { lat: number; lon: number };
 
 // Кэш результатов геокодирования на время сессии (вкладки). Один и тот же
 // адрес доставки часто встречается сразу в нескольких местах (список заявок
@@ -317,6 +317,125 @@ export function useYandexRouteHref(rawAddress: string | null | undefined): Yande
 
   return {
     href: isResolved ? resolved!.href : fallbackHref,
+    ready: isResolved || isTimedOut,
+  };
+}
+
+// ==================== ССЫЛКИ НА GOOGLE КАРТЫ И 2ГИС — ТА ЖЕ НОРМАЛИЗАЦИЯ АДРЕСА ====================
+// Раньше кнопки "Google" и "2ГИС" подставляли в ссылку СЫРОЙ адрес заявки
+// (order.address) без каких-либо поправок. Если менеджер написал адрес без
+// города ("ул. Советская") — Яндекс.Карты (через normalizeDeliveryAddress)
+// корректно достраивали "г. Брянск, ...", а Google/2ГИС могли уехать в другой
+// регион (или вовсе не найти адрес). Приводим все три сервиса к единой логике:
+// 1) если в адресе есть готовые координаты (extractCoordsFromAddress) — берём
+//    их и не геокодируем вовсе; 2) иначе, как только достаётся геокодирование
+//    через normalizeDeliveryAddress (DaData, регион "Брянская" — см.
+//    /api/geocode), используем координаты результата; 3) до готовности
+//    координат — временный фолбэк на нормализованный ТЕКСТ адреса.
+const TWO_GIS_ORIGIN = `${ROUTE_ORIGIN_COORDS.lon},${ROUTE_ORIGIN_COORDS.lat}`;
+
+function buildGoogleMapsRouteUrl(rawAddress: string | null | undefined, coords: Coords | null): string {
+  const destination = coords ? `${coords.lat},${coords.lon}` : normalizeDeliveryAddress(rawAddress);
+  const params = new URLSearchParams({
+    api: '1',
+    origin: ROUTE_ORIGIN_ADDRESS,
+    destination,
+    travelmode: 'driving',
+  });
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+
+/**
+ * 2ГИС координаты в deeplink-ссылке указываются в порядке "долгота,широта"
+ * (см. help.2gis.ru — "точка А/Б = [lon],[lat]"), в отличие от Яндекса и
+ * Google, где принят обратный порядок "широта,долгота" — легко перепутать.
+ * Без координат 2ГИС не умеет строить маршрут по ссылке (координата — 
+ * обязательный параметр), поэтому пока координаты не готовы отдаём хотя бы
+ * ссылку на поиск нормализованного адреса в Брянске.
+ */
+function buildTwoGisRouteUrl(rawAddress: string | null | undefined, coords: Coords | null): string {
+  if (coords) {
+    return `https://2gis.ru/routeSearch/rsType/car/from/${TWO_GIS_ORIGIN}/to/${coords.lon},${coords.lat}`;
+  }
+  return `https://2gis.ru/bryansk/search/${encodeURIComponent(normalizeDeliveryAddress(rawAddress))}`;
+}
+
+export interface MapRouteLinks {
+  yandexHref: string;
+  googleHref: string;
+  twoGisHref: string;
+  /** true — координаты подтянуты (или геокодирование гарантированно не удастся/истёк таймаут) — ссылки на все три сервиса безопасно открывать. */
+  ready: boolean;
+}
+
+/**
+ * Единая точка входа для кнопок "Яндекс" / "Google" / "2ГИС" в модалках
+ * заявки: все три ссылки строятся из одного и того же нормализованного
+ * адреса/координат (см. `normalizeDeliveryAddress`, `useDeliveryCoords`),
+ * поэтому дозаполнение города/области и разбор вручную вписанных координат
+ * работает одинаково для всех сервисов, а не только для Яндекса.
+ */
+export function useMapRouteLinks(rawAddress: string | null | undefined): MapRouteLinks {
+  const { href: yandexHref, ready: yandexReady } = useYandexRouteHref(rawAddress);
+  const { coords, ready: coordsReady } = useDeliveryCoords(rawAddress);
+
+  const googleHref = useMemo(() => buildGoogleMapsRouteUrl(rawAddress, coords), [rawAddress, coords]);
+  const twoGisHref = useMemo(() => buildTwoGisRouteUrl(rawAddress, coords), [rawAddress, coords]);
+
+  return { yandexHref, googleHref, twoGisHref, ready: yandexReady && coordsReady };
+}
+
+export interface DeliveryCoordsResult {
+  /** Координаты адреса доставки. null, пока не получены (или если геокодирование не удалось). */
+  coords: Coords | null;
+  /** true — попытка получить координаты завершена (успешно или неуспешно), можно перестать показывать загрузку. */
+  ready: boolean;
+}
+
+/**
+ * Хук, отдающий координаты адреса доставки напрямую (а не готовую ссылку,
+ * как `useYandexRouteHref`) — нужен там, где адрес требуется не для ссылки,
+ * а для отрисовки точки/маршрута на самой карте (см. `OrderRouteMap`).
+ * Использует тот же кэш геокодирования (память вкладки → sessionStorage →
+ * DaData), что и `useYandexRouteHref`, поэтому повторный запрос одного и
+ * того же адреса в разных местах интерфейса не дублирует сетевые запросы.
+ */
+export function useDeliveryCoords(rawAddress: string | null | undefined): DeliveryCoordsResult {
+  const embeddedCoords = useMemo(() => extractCoordsFromAddress(rawAddress), [rawAddress]);
+
+  const [resolved, setResolved] = useState<{ address: string | null | undefined; coords: Coords | null } | null>(null);
+  const [timedOutAddress, setTimedOutAddress] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (!rawAddress || embeddedCoords) return;
+
+    let cancelled = false;
+    const destination = normalizeDeliveryAddress(rawAddress);
+
+    geocodeAddressCached(destination).then((coords) => {
+      if (cancelled) return;
+      setResolved({ address: rawAddress, coords });
+    });
+
+    const timer = setTimeout(() => {
+      if (!cancelled) setTimedOutAddress(rawAddress);
+    }, GEOCODE_READY_TIMEOUT_MS);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [rawAddress, embeddedCoords]);
+
+  if (embeddedCoords) {
+    return { coords: embeddedCoords, ready: true };
+  }
+
+  const isResolved = !!resolved && resolved.address === rawAddress;
+  const isTimedOut = timedOutAddress === rawAddress;
+
+  return {
+    coords: isResolved ? resolved!.coords : null,
     ready: isResolved || isTimedOut,
   };
 }

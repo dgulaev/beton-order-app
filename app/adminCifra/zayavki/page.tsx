@@ -1,16 +1,91 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
-import { useYandexRouteHref } from '@/lib/yandexRoute';
-import { Package } from 'lucide-react';
+import { useMapRouteLinks } from '@/lib/yandexRoute';
+import { Package, Save, Trash2, Send, Share2, Copy, X } from 'lucide-react';
+import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
+import { hasYandexMapsKey } from '@/lib/yandexMapsLoader';
+import OrderRouteMap from '@/app/adminCifra/components/OrderRouteMap';
+
+// ==================== Элегантная кнопка действия в модалке заявки ====================
+// Компактная, без "таблеточного" сплошного фона — тонкая рамка + акцентный
+// цвет текста/иконки, лёгкая подсветка фона при наведении.
+function ModalActionButton({
+  onClick,
+  color,
+  icon,
+  label,
+  disabled,
+}: {
+  onClick: () => void;
+  color: string;
+  icon: React.ReactNode;
+  label: string;
+  disabled?: boolean;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '8px 14px',
+        borderRadius: '10px',
+        border: `1px solid ${color}${hover && !disabled ? '80' : '30'}`,
+        background: hover && !disabled ? `${color}18` : 'transparent',
+        color,
+        fontWeight: 600,
+        fontSize: '13px',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        transition: 'background 0.15s ease, border-color 0.15s ease',
+      }}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+// ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
+// Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
+// мягкий градиент + мерцающая стрелка снизу, видна только пока список не докручен до конца.
+function ScrollMoreHint({ visible, background = 'rgba(37,51,74,0.95)' }: { visible: boolean; background?: string }) {
+  if (!visible) return null;
+  return (
+    <div style={{
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      height: '26px',
+      display: 'flex',
+      alignItems: 'flex-end',
+      justifyContent: 'center',
+      paddingBottom: '2px',
+      background: `linear-gradient(to bottom, rgba(37,51,74,0), ${background})`,
+      borderRadius: '0 0 12px 12px',
+      pointerEvents: 'none',
+    }}>
+      <span style={{ color: '#94A3B8', fontSize: '13px', lineHeight: 1, animation: 'zayavkiScrollBounce 1.4s ease-in-out infinite' }}>
+        ▼
+      </span>
+    </div>
+  );
+}
 
 export default function ZayavkiPage() {
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
-  const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(selectedOrder?.address);
+  const { yandexHref: yandexRouteHref, googleHref: googleRouteHref, twoGisHref: twoGisRouteHref } = useMapRouteLinks(selectedOrder?.address);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -27,6 +102,33 @@ export default function ZayavkiPage() {
   const [isSendingNotification, setIsSendingNotification] = useState(false);
 
   const [recipes, setRecipes] = useState<any[]>([]);
+
+  // ==================== "СПИСОК УШЁЛ ВНИЗ" — стрелки-подсказки для скроллящихся блоков модалки ====================
+  const mixerListRef = useRef<HTMLDivElement>(null);
+  const [mixerListHasMore, setMixerListHasMore] = useState(false);
+  const historyRef = useRef<HTMLDivElement>(null);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const commentRef = useRef<HTMLTextAreaElement>(null);
+  const [commentHasMore, setCommentHasMore] = useState(false);
+
+  const recomputeOverflow = (el: HTMLElement | null, setter: (v: boolean) => void) => {
+    if (!el) { setter(false); return; }
+    setter(el.scrollHeight - el.scrollTop - el.clientHeight > 4);
+  };
+
+  const handleMixerListScroll = () => recomputeOverflow(mixerListRef.current, setMixerListHasMore);
+  const handleHistoryScroll = () => recomputeOverflow(historyRef.current, setHistoryHasMore);
+  const handleCommentScroll = () => recomputeOverflow(commentRef.current, setCommentHasMore);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      recomputeOverflow(mixerListRef.current, setMixerListHasMore);
+      recomputeOverflow(historyRef.current, setHistoryHasMore);
+      recomputeOverflow(commentRef.current, setCommentHasMore);
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOrder?.id, orderMixers.length, orderHistory.length]);
 
   // ==================== HELPER ДЛЯ СТАТУСОВ (getStatusConfig) ====================
 const getStatusConfig = (status: string) => {
@@ -54,21 +156,6 @@ const getStatusConfig = (status: string) => {
   const isAdmin = (role: string): boolean => {
     return role?.toLowerCase().trim() === 'admin';
   };
-
-  // ==================== ПЕРЕВОД РОЛЕЙ ДЛЯ ОТОБРАЖЕНИЯ В ИСТОРИИ ====================
-  const getRoleDisplayName = (role: string): string => {
-    switch (role) {
-      case 'admin': return 'Админ';
-      case 'manager': return 'Менеджер';
-      case 'dispatcher': return 'Диспетчер';
-      case 'logist': return 'Логист';
-      case 'logistic': return 'Логист';
-      case 'operator': return 'Оператор';
-      case 'accountant': return 'Бухгалтер';
-      default: return role;
-    }
-  };
- 
 
   // ==================== ЗАГРУЗКА ИСТОРИИ ИЗМЕНЕНИЙ ====================
   const loadOrderHistory = useCallback(async (orderId: number) => {
@@ -1202,117 +1289,175 @@ ${order.customer_type?.includes('Юридическое')
     
   >
     <div 
-      className="w-full max-w-[1080px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
+      className="w-full max-w-[1650px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
       style={{ 
+        position: 'relative',
         background: '#1E2937', 
         borderRadius: '24px', 
-        padding: '32px', 
+        // Небольшой доп. отступ сверху — заголовок теперь встроен в шапки
+        // колонок, а не в отдельную строку (см. комментарий в OrderDetailModal.tsx).
+        padding: '38px 32px 32px 32px', 
         boxShadow: '0 30px 80px rgba(0,0,0,0.7)'
       }} 
       onClick={e => e.stopPropagation()}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <h2 style={{ margin: 0, fontSize: '28px' }}>
-          Редактирование заявки #{selectedOrder.id}
-        </h2>
-        <button 
-          onClick={() => setSelectedOrder(null)} 
-          style={{ fontSize: '42px', background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}
-        >
-          ×
-        </button>
-      </div>
+      <style>{`
+        @keyframes zayavkiScrollBounce {
+          0%, 100% { transform: translateY(0); opacity: 0.7; }
+          50%      { transform: translateY(3px); opacity: 1; }
+        }
+      `}</style>
 
-            {/* ==================== СТАТУС + "ПОД ВОПРОСОМ" (в одну линию) ==================== */}
-      <div style={{ 
-        display: 'flex', 
-        alignItems: 'center', 
-        gap: '16px', 
-        marginBottom: '28px',
-        flexWrap: 'wrap'
-      }}>
-        
-        {/* Статус */}
-        <div style={{ 
-          display: 'inline-block', 
-          padding: '10px 26px', 
-          borderRadius: '9999px', 
-          fontWeight: '600',
-          backgroundColor: getStatusColor(selectedOrder.status) + '20',
-          color: getStatusColor(selectedOrder.status),
-        }}>
-          {selectedOrder.status === 'new' && '🟡 Новая заявка'}
-          {selectedOrder.status === 'processing' && '🔵 В работе'}
-          {selectedOrder.status === 'completed' && '🟢 Выполнена'}
-          {selectedOrder.status === 'cancelled' && '🔴 Отменена'}
-        </div>
+      {/* Плавающая кнопка закрытия — единая для всей модалки, колонки больше не несут свой заголовок/крестик */}
+      <button
+        onClick={() => setSelectedOrder(null)}
+        title="Закрыть"
+        style={{
+          position: 'absolute',
+          top: '26px',
+          right: '26px',
+          width: '32px',
+          height: '32px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'rgba(148, 163, 184, 0.1)',
+          border: 'none',
+          borderRadius: '9999px',
+          color: '#94A3B8',
+          cursor: 'pointer',
+          zIndex: 1,
+        }}
+      >
+        <X size={18} />
+      </button>
 
-        {/* Чекбокс "Под вопросом" */}
-        {hasManagerPermissions(currentRole) && (
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: '8px', 
-            background: '#25334A', 
-            padding: '10px 18px', 
-            borderRadius: '9999px',
-            fontSize: '15px'
-          }}>
-            <input 
-              type="checkbox" 
-              id="isQuestionable"
-              checked={selectedOrder?.is_questionable || false}
-              onChange={async (e) => {
-                const newValue = e.target.checked;
-                
-                const res = await fetch('/api/adminCifra/orders/update', {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    id: selectedOrder.id,
-                    is_questionable: newValue,
-                    userRole: currentRole
-                  })
-                });
+      {/* ==================== ТЕЛО МОДАЛКИ: КАРТА СЛЕВА (НА ВСЮ ВЫСОТУ) + ОСТАЛЬНОЙ КОНТЕНТ ==================== */}
+      <div style={{ display: 'flex', gap: '28px', alignItems: 'stretch' }}>
 
-                if (res.ok) {
-                  setSelectedOrder((prev: any) => ({
-                    ...prev,
-                    is_questionable: newValue
-                  }));
-
-                  setAllOrders((prev: any[]) => prev.map((o: any) => 
-                    o.id === selectedOrder.id 
-                      ? { ...o, is_questionable: newValue } 
-                      : o
-                  ));
-                }
-              }}
-              style={{ width: '20px', height: '20px', accentColor: '#EF4444' }}
-            />
-            <label 
-              htmlFor="isQuestionable" 
-              style={{ 
-                color: '#F87171', 
-                fontWeight: '600', 
-                cursor: 'pointer',
-                userSelect: 'none'
-              }}
-            >
-              Под вопросом
-            </label>
+        {hasYandexMapsKey() && (
+          <div style={{ width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <OrderRouteMap address={selectedOrder.address} routeHref={yandexRouteHref} />
+            </div>
+            {/* Запасные варианты — открывают карты приложений отдельной ссылкой,
+                бесплатно (просто deep-link, без платного API маршрутов).
+                Адрес/координаты те же нормализованные, что и у Яндекса
+                (см. useMapRouteLinks) — город/область достраиваются одинаково
+                для всех трёх сервисов. */}
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <a 
+                href={twoGisRouteHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ flex: 1, padding: '9px 8px', background: '#25334A', color: '#94A3B8', textAlign: 'center', borderRadius: '10px', textDecoration: 'none', fontWeight: '600', fontSize: '13px' }}
+              >
+                2ГИС
+              </a>
+              <a 
+                href={googleRouteHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ flex: 1, padding: '9px 8px', background: '#25334A', color: '#94A3B8', textAlign: 'center', borderRadius: '10px', textDecoration: 'none', fontWeight: '600', fontSize: '13px' }}
+              >
+                🗺️ Google
+              </a>
+            </div>
           </div>
         )}
-      </div>
 
+      <div style={{ flex: 1, minWidth: 0 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
         
-        {/* Левая колонка — Информация (с возможностью редактирования) */}
-        <div>
-          <h3 style={{ marginBottom: '18px', color: '#94A3B8' }}>Информация о заказе</h3>
+        {/* Левая колонка — Информация (с возможностью редактирования, ПОЛНОСТЬЮ без обрезки/скролла).
+            display:flex + height:100% — колонка растягивается по высоте сетки на уровень
+            правой колонки (грид уже это делает по умолчанию), а Комментарий клиента
+            (flex:1) дотягивается вниз до её нижнего края, на уровень с "Историей изменений". */}
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          {/* ==================== ЗАГОЛОВОК ЗАЯВКИ + СТАТУС + "ПОД ВОПРОСОМ" (на месте бывшей "Информация о заказе") ==================== */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
+            <h2 style={{ margin: 0, fontSize: '21px', color: '#F1F5F9', whiteSpace: 'nowrap' }}>
+              Заявка #{selectedOrder.id}
+            </h2>
+
+            {/* Статус — компактный read-only бейдж, в одном стиле с кнопками действий
+                (тонкая рамка + акцентный цвет, без сплошной "таблеточной" заливки) */}
+            <div style={{ 
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px', 
+              borderRadius: '10px', 
+              border: `1px solid ${getStatusColor(selectedOrder.status)}30`,
+              fontWeight: '600',
+              fontSize: '13px',
+              whiteSpace: 'nowrap',
+              color: getStatusColor(selectedOrder.status),
+            }}>
+              {selectedOrder.status === 'new' && '🟡 Новая'}
+              {selectedOrder.status === 'processing' && '🔵 В работе'}
+              {selectedOrder.status === 'completed' && '🟢 Выполнена'}
+              {selectedOrder.status === 'cancelled' && '🔴 Отменена'}
+            </div>
+
+            {/* Чекбокс "Под вопросом" — тот же элегантный стиль, лёгкая подсветка фона когда отмечен */}
+            {hasManagerPermissions(currentRole) && (
+              <label
+                htmlFor="isQuestionable"
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '6px', 
+                  padding: '8px 14px', 
+                  borderRadius: '10px',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  background: selectedOrder?.is_questionable ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                }}
+              >
+                <input 
+                  type="checkbox" 
+                  id="isQuestionable"
+                  checked={selectedOrder?.is_questionable || false}
+                  onChange={async (e) => {
+                    const newValue = e.target.checked;
+                    
+                    const res = await fetch('/api/adminCifra/orders/update', {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        id: selectedOrder.id,
+                        is_questionable: newValue,
+                        userRole: currentRole
+                      })
+                    });
+
+                    if (res.ok) {
+                      setSelectedOrder((prev: any) => ({
+                        ...prev,
+                        is_questionable: newValue
+                      }));
+
+                      setAllOrders((prev: any[]) => prev.map((o: any) => 
+                        o.id === selectedOrder.id 
+                          ? { ...o, is_questionable: newValue } 
+                          : o
+                      ));
+                    }
+                  }}
+                  style={{ width: '14px', height: '14px', accentColor: '#EF4444' }}
+                />
+                <span style={{ color: '#F87171', fontWeight: '600' }}>
+                  Под вопросом
+                </span>
+              </label>
+            )}
+          </div>
           
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '24px', lineHeight: '2' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '12px' }}>
+          <div style={{ background: '#25334A', borderRadius: '16px', padding: '14px 18px', lineHeight: '1.3' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '7px', alignItems: 'center' }}>
 
               <div style={{ color: '#94A3B8' }}>Клиент</div>
 <input 
@@ -1325,7 +1470,7 @@ ${order.customer_type?.includes('Юридическое')
       organization_name: e.target.value 
     });
   }}
-  style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+  style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
 />
 
               {selectedOrder.inn !== undefined && (
@@ -1334,7 +1479,7 @@ ${order.customer_type?.includes('Юридическое')
                   <input 
                     value={selectedOrder.inn || ''} 
                     onChange={(e) => setSelectedOrder({ ...selectedOrder, inn: e.target.value })}
-                    style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+                    style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
                   />
                 </>
               )}
@@ -1343,14 +1488,14 @@ ${order.customer_type?.includes('Юридическое')
               <input 
                 value={selectedOrder.phone || ''} 
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, phone: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
               />
 
               <div style={{ color: '#94A3B8' }}>Марка бетона</div>
               <input 
                 value={selectedOrder.grade || ''} 
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, grade: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
               />
 
               <div style={{ color: '#94A3B8' }}>Объём</div>
@@ -1360,7 +1505,7 @@ ${order.customer_type?.includes('Юридическое')
                 min="0.01"
                 value={selectedOrder.volume || ''} 
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, volume: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
               />
 
               <div style={{ color: '#94A3B8' }}>Дата доставки</div>
@@ -1368,7 +1513,7 @@ ${order.customer_type?.includes('Юридическое')
                 type="date" 
                 value={selectedOrder.delivery_date ? selectedOrder.delivery_date.split('T')[0] : ''} 
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, delivery_date: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
               />
 
               <div style={{ color: '#94A3B8' }}>Время доставки</div>
@@ -1376,7 +1521,7 @@ ${order.customer_type?.includes('Юридическое')
                 type="time" 
                 value={selectedOrder.delivery_time || ''} 
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, delivery_time: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff' }}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
               />
 
                                 <div style={{ color: '#94A3B8' }}>Статус заявки</div>
@@ -1386,13 +1531,13 @@ ${order.customer_type?.includes('Юридическое')
                   <div style={{ 
                     backgroundColor: getStatusConfig(selectedOrder.status).bg,
                     color: getStatusConfig(selectedOrder.status).color,
-                    padding: '12px 20px',
-                    borderRadius: '16px',
+                    padding: '8px 16px',
+                    borderRadius: '10px',
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: '8px',
                     fontWeight: '600',
-                    fontSize: '16px',
+                    fontSize: '14px',
                     width: '88%'
                   }}>
                     {getStatusConfig(selectedOrder.status).label} — конечный статус
@@ -1406,9 +1551,9 @@ ${order.customer_type?.includes('Юридическое')
                       background: '#334155', 
                       border: 'none', 
                       borderRadius: '8px', 
-                      padding: '10px 12px', 
+                      padding: '6px 10px', 
                       color: '#fff',
-                      fontSize: '16px',
+                      fontSize: '14px',
                       width: '100%'
                     }}
                   >
@@ -1423,104 +1568,34 @@ ${order.customer_type?.includes('Юридическое')
               <textarea 
                 value={selectedOrder.address || ''} 
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, address: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '8px 12px', color: '#fff', minHeight: '70px', gridColumn: '2' }}
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff', minHeight: '48px', gridColumn: '2' }}
               />
 
             </div>
           </div>
 
-          {/* Комментарий */}
+          {/* Комментарий — редактируемое поле. flex:1 растягивает его вниз до нижнего
+              края правой колонки (на уровень с "Историей изменений"); скроллбар
+              textarea скрыт, вместо него — мерцающая стрелка, если текст не влезает. */}
           {selectedOrder.comment && (
-            <div style={{ marginTop: '24px' }}>
-              <h4 style={{ color: '#94A3B8', marginBottom: '8px' }}>Комментарий клиента</h4>
-              <textarea 
-                value={selectedOrder.comment} 
-                onChange={(e) => setSelectedOrder({ ...selectedOrder, comment: e.target.value })}
-                style={{ width: '95%', background: '#25334A', border: 'none', borderRadius: '16px', padding: '16px', color: '#fff', minHeight: '80px' }}
-              />
+            <div style={{ marginTop: '10px', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+              <h4 style={{ color: '#94A3B8', marginBottom: '6px', flexShrink: 0 }}>Комментарий клиента</h4>
+              <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+                <textarea 
+                  ref={commentRef}
+                  onScroll={handleCommentScroll}
+                  value={selectedOrder.comment} 
+                  onChange={(e) => setSelectedOrder({ ...selectedOrder, comment: e.target.value })}
+                  style={{ width: '100%', height: '100%', boxSizing: 'border-box', resize: 'none', background: '#25334A', border: 'none', borderRadius: '16px', padding: '12px 16px', color: '#fff', minHeight: '72px' }}
+                />
+                <ScrollMoreHint visible={commentHasMore} />
+              </div>
             </div>
           )}
         </div>          
               
-                            {/* Правая колонка — Маршрут + История */}
+                            {/* Правая колонка — Логистика + История (может скроллиться внутри своих блоков) */}
               <div>
-                <h3 style={{ marginBottom: '20px', color: '#94A3B8' }}>Маршрут доставки</h3>
-                
-                <div style={{ background: '#25334A', borderRadius: '16px', padding: '24px', marginBottom: '24px' }}>
-                  <div style={{ marginBottom: '20px' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '14px' }}>От завода</div>
-                    <div style={{ fontWeight: '600' }}>Брянск, Орловский тупик, 6</div>
-                  </div>
-                  <div>
-                    <div style={{ color: '#94A3B8', fontSize: '14px' }}>До объекта</div>
-                    <div style={{ fontWeight: '600', fontSize: '18px' }}>{selectedOrder.address}</div>
-                  </div>
-                </div>
-
-                {/* Компактные кнопки маршрутов в одну строку */}
-                <div style={{ display: 'flex', gap: '10px', marginBottom: '32px' }}>
-                  <a 
-                    href={`https://2gis.ru/dir/534687/70000001000000000?from=534687%2C70000001000000000&to=${encodeURIComponent(selectedOrder.address || '')}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ 
-                      flex: 1,
-                      padding: '12px 16px', 
-                      background: '#10B981', 
-                      color: 'white', 
-                      textAlign: 'center', 
-                      borderRadius: '12px',
-                      textDecoration: 'none',
-                      fontSize: '15px',
-                      fontWeight: '600'
-                    }}
-                  >
-                    2ГИС
-                  </a>
-
-                  <a 
-                    href={yandexRouteHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-disabled={!yandexRouteReady}
-                    onClick={(e) => { if (!yandexRouteReady) e.preventDefault(); }}
-                    style={{ 
-                      flex: 1,
-                      padding: '12px 16px', 
-                      background: '#3B82F6', 
-                      color: 'white', 
-                      textAlign: 'center', 
-                      borderRadius: '12px',
-                      textDecoration: 'none',
-                      fontSize: '15px',
-                      fontWeight: '600',
-                      opacity: yandexRouteReady ? 1 : 0.6,
-                      cursor: yandexRouteReady ? 'pointer' : 'wait'
-                    }}
-                  >
-                    {yandexRouteReady ? 'Яндекс' : '...'}
-                  </a>
-
-                  <a 
-                    href={`https://www.google.com/maps/dir/?api=1&origin=Брянск,+Орловский+тупик,+6&destination=${encodeURIComponent(selectedOrder.address || '')}&travelmode=driving`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ 
-                      flex: 1,
-                      padding: '12px 16px', 
-                      background: '#EF4444', 
-                      color: 'white', 
-                      textAlign: 'center', 
-                      borderRadius: '12px',
-                      textDecoration: 'none',
-                      fontSize: '15px',
-                      fontWeight: '600'
-                    }}
-                  >
-                    Google
-                  </a>
-                </div>
-
                 {/* ==================== НАЗНАЧЕННЫЕ МИКСЕРЫ + ПРОСТОЙ ==================== */}
                 {orderMixers.length > 0 && (() => {
                   const totalDowntime = orderMixers.reduce((sum, m) => sum + Number(m.downtimeMinutes || 0), 0);
@@ -1532,15 +1607,15 @@ ${order.customer_type?.includes('Юридическое')
                   };
 
                   return (
-                    <div style={{ marginBottom: '32px' }}>
-                      <h3 style={{ marginBottom: '12px', color: '#94A3B8' }}>
+                    <div style={{ marginBottom: '20px' }}>
+                      <h3 style={{ marginBottom: '10px', color: '#94A3B8' }}>
                         Назначенные миксеры ({orderMixers.length})
                       </h3>
 
-                      <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
+                      <div style={{ background: '#25334A', borderRadius: '16px', padding: '14px' }}>
                         <div style={{
-                          marginBottom: '14px',
-                          paddingBottom: '14px',
+                          marginBottom: '12px',
+                          paddingBottom: '12px',
                           borderBottom: '1px solid #334155',
                           display: 'flex',
                           alignItems: 'center',
@@ -1551,7 +1626,14 @@ ${order.customer_type?.includes('Юридическое')
                           <span style={{ color: totalDowntime > 0 ? '#F97316' : '#10B981', fontWeight: '700', fontSize: '16px' }}>{totalDowntime} мин</span>
                         </div>
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {/* Список миксеров — своя внутренняя прокрутка. Скроллбар скрыт,
+                            вместо него — мерцающая стрелка вниз, пока список не докручен. */}
+                        <div style={{ position: 'relative' }}>
+                        <div
+                          ref={mixerListRef}
+                          onScroll={handleMixerListScroll}
+                          style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}
+                        >
                           {orderMixers.map((mixer: any) => {
                             const duration = formatOnSiteDuration(mixer);
                             return (
@@ -1560,34 +1642,35 @@ ${order.customer_type?.includes('Юридическое')
                                 style={{
                                   display: 'flex',
                                   alignItems: 'center',
-                                  justifyContent: 'space-between',
-                                  gap: '12px',
+                                  gap: '8px',
                                   background: '#1E2937',
-                                  borderRadius: '10px',
-                                  padding: '10px 14px',
+                                  borderRadius: '8px',
+                                  padding: '7px 12px',
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
                                 }}
                               >
-                                <div>
-                                  <div style={{ fontWeight: '700', fontSize: '14.5px' }}>
-                                    {mixer.mixerName || mixer.number} <span style={{ color: '#64748B', fontWeight: 400 }}>· {mixer.time}</span>
-                                  </div>
-                                  <div style={{ color: '#94A3B8', fontSize: '13px' }}>{Number(mixer.volume).toFixed(1)} м³</div>
-                                </div>
+                                <span style={{ fontWeight: '700', fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {mixer.mixerName || mixer.number}
+                                </span>
+                                <span style={{ color: '#64748B', fontSize: '13px' }}>· {mixer.time}</span>
+                                <span style={{ color: '#94A3B8', fontSize: '13px' }}>· {Number(mixer.volume).toFixed(1)} м³</span>
 
-                                <div style={{ textAlign: 'right' }}>
-                                  <div style={{ fontSize: '13px', color: '#10B981', fontWeight: 600 }}>{mixer.status || 'Загрузка'}</div>
-                                  <div style={{
-                                    marginTop: '4px',
-                                    fontSize: '12px',
-                                    color: Number(mixer.downtimeMinutes) > 0 ? '#F97316' : '#94A3B8'
-                                  }}>
-                                    ⏱ {duration || '0 мин'}
-                                    {mixer.status === 'Разгружен' && ` (простой ${Number(mixer.downtimeMinutes || 0)} мин)`}
-                                  </div>
-                                </div>
+                                <span style={{ marginLeft: 'auto', fontSize: '13px', color: '#10B981', fontWeight: 600 }}>
+                                  {mixer.status || 'Загрузка'}
+                                </span>
+                                <span style={{
+                                  fontSize: '12px',
+                                  color: Number(mixer.downtimeMinutes) > 0 ? '#F97316' : '#94A3B8'
+                                }}>
+                                  ⏱ {duration || '0 мин'}
+                                  {mixer.status === 'Разгружен' && ` (простой ${Number(mixer.downtimeMinutes || 0)} мин)`}
+                                </span>
                               </div>
                             );
                           })}
+                        </div>
+                        <ScrollMoreHint visible={mixerListHasMore} />
                         </div>
                       </div>
                     </div>
@@ -1597,242 +1680,122 @@ ${order.customer_type?.includes('Юридическое')
                                                {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ ==================== */}
 <div>
   <h3 style={{ marginBottom: '12px', color: '#94A3B8' }}>История изменений</h3>
-  <div style={{ 
+  <div style={{ position: 'relative' }}>
+  <div
+    ref={historyRef}
+    onScroll={handleHistoryScroll}
+    style={{ 
     background: '#25334A', 
     borderRadius: '16px', 
-    padding: '20px', 
-    height: '340px', 
+    padding: '16px', 
+    maxHeight: '260px', 
     overflowY: 'auto',
     fontSize: '14px',
     lineHeight: '1.6'
   }}>
-    {orderHistory.length > 0 ? orderHistory.map((entry, index) => {
-      const actionText = entry.action === 'Создал заявку' 
-        ? 'Создал заявку' 
-        : entry.action;
-
-      let newValueDisplay = entry.new_value;
-      let statusColor = '#CBD5E1';
-
-      if (entry.field_name === 'status' || entry.action === 'Создал заявку') {
-        if (entry.new_value === 'new' || entry.new_value === null) {
-          newValueDisplay = 'Новая';
-          statusColor = '#FACC15';           // Жёлтый
-        } else if (entry.new_value === 'processing') {
-          newValueDisplay = 'В работе';
-          statusColor = '#3B82F6';           // Синий
-        } else if (entry.new_value === 'completed') {
-          newValueDisplay = 'Выполнена';
-          statusColor = '#10B981';           // Зелёный
-        } else if (entry.new_value === 'cancelled') {
-          newValueDisplay = 'Отменена';
-          statusColor = '#EF4444';           // Красный
-        }
-      }
-
-      let oldValueDisplay = entry.old_value;
-      if (entry.field_name === 'status') {
-        if (entry.old_value === 'new') oldValueDisplay = 'Новая';
-        else if (entry.old_value === 'processing') oldValueDisplay = 'В работе';
-        else if (entry.old_value === 'completed') oldValueDisplay = 'Выполнена';
-        else if (entry.old_value === 'cancelled') oldValueDisplay = 'Отменена';
-      }
-
-      return (
-        <div key={index} style={{ 
-          marginBottom: '16px', 
-          paddingBottom: '12px', 
-          borderBottom: index < orderHistory.length - 1 ? '1px solid #334155' : 'none' 
-        }}>
-          <div style={{ color: '#94A3B8', fontSize: '13px' }}>
-            {new Date(entry.created_at).toLocaleString('ru-RU')}
-          </div>
-          
-          <div style={{ marginTop: '4px', fontWeight: '600' }}>
-            {actionText}
-          </div>
-          
-          <div style={{ color: entry.user_role === 'system' ? '#60A5FA' : '#60A5FA', marginTop: '2px' }}>
-            {entry.user_role === 'system' ? '🤖 Система (автоматически)' : entry.user_name}
-            {entry.user_role && entry.user_role !== 'unknown' && entry.user_role !== 'system' && (
-              <span style={{ color: '#94A3B8', fontSize: '13px' }}> ({getRoleDisplayName(entry.user_role)})</span>
-            )}
-          </div>
-
-          {entry.field_name && (
-            <div style={{ marginTop: '6px', color: '#CBD5E1' }}>
-              {entry.field_name}: 
-              <span style={{ color: '#EF4444' }}> {oldValueDisplay || '—'} </span> 
-              → 
-              <span style={{ color: statusColor, fontWeight: '600' }}> 
-                {newValueDisplay || '—'}
-              </span>
-            </div>
-          )}
-        </div>
-      );
-    }) : (
-      <div style={{ color: '#64748B', textAlign: 'center', padding: '60px 0' }}>
-        История изменений пуста
-      </div>
-    )}
+    <OrderHistoryTimeline entries={orderHistory} />
+  </div>
+  <ScrollMoreHint visible={historyHasMore} />
   </div>
 </div>
               </div>
             </div>
-            
-        {/* ==================== КНОПКИ ДЕЙСТВИЙ ==================== */}
-    <div style={{ marginTop: '40px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+            {/* /grid 1fr 1fr */}
+      </div>
+      {/* /flex: 1, остальной контент */}
+
+      </div>
+      {/* /ТЕЛО МОДАЛКИ: карта + остальной контент */}
+
+        {/* ==================== КНОПКИ ДЕЙСТВИЙ — компактные, элегантные, без "таблеточного" фона ==================== */}
+    <div style={{ marginTop: '32px', display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
 
       { hasManagerPermissions(currentRole) && (
         <>
-                              {/* Сохранить изменения */}
-<button 
-  onClick={async () => {
-    console.log('🟡 Сохраняем. userFullName =', userFullName);   // ← Добавили
+          {/* Сохранить изменения */}
+          <ModalActionButton
+            color="#10B981"
+            icon={<Save size={15} />}
+            label="Сохранить"
+            onClick={async () => {
+              console.log('🟡 Сохраняем. userFullName =', userFullName);   // ← Добавили
 
-    const updatedOrder = { ...selectedOrder };
+              const updatedOrder = { ...selectedOrder };
 
-    try {
-      const payload = {
-        id: selectedOrder.id,
-        ...selectedOrder,
-        userRole: currentRole || 'admin',
-        userName: userFullName || 'Сотрудник'
-      };
+              try {
+                const payload = {
+                  id: selectedOrder.id,
+                  ...selectedOrder,
+                  userRole: currentRole || 'admin',
+                  userName: userFullName || 'Сотрудник'
+                };
 
-      console.log('📤 Отправляем в API payload.userName =', payload.userName);   // ← Добавили
+                console.log('📤 Отправляем в API payload.userName =', payload.userName);   // ← Добавили
 
-      const res = await fetch('/api/adminCifra/orders/update', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+                const res = await fetch('/api/adminCifra/orders/update', {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(payload)
+                });
 
-      if (res.ok) {
-        alert('✅ Изменения успешно сохранены!');
-        setAllOrders(prev => prev.map(order => String(order.id) === String(selectedOrder.id) ? updatedOrder : order));
-        if (typeof loadOrderHistory === 'function') loadOrderHistory(selectedOrder.id);
-      } else {
-        const errorData = await res.json().catch(() => ({}));
-        alert(errorData.message || 'Ошибка сохранения');
-      }
-    } catch (err) {
-      console.error('Ошибка сохранения:', err);
-      alert('Ошибка соединения с сервером');
-    }
-  }}
-  style={{ 
-    padding: '10px 24px', 
-    background: '#10B981', 
-    color: 'white', 
-    border: 'none', 
-    borderRadius: '9999px', 
-    fontWeight: '600',
-    fontSize: '15px',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px'
-  }}
->
-  💾 Сохранить
-</button>
+                if (res.ok) {
+                  alert('✅ Изменения успешно сохранены!');
+                  setAllOrders(prev => prev.map(order => String(order.id) === String(selectedOrder.id) ? updatedOrder : order));
+                  if (typeof loadOrderHistory === 'function') loadOrderHistory(selectedOrder.id);
+                } else {
+                  const errorData = await res.json().catch(() => ({}));
+                  alert(errorData.message || 'Ошибка сохранения');
+                }
+              } catch (err) {
+                console.error('Ошибка сохранения:', err);
+                alert('Ошибка соединения с сервером');
+              }
+            }}
+          />
 
           {/* Удалить заявку */}
-          <button 
+          <ModalActionButton
+            color="#EF4444"
+            icon={<Trash2 size={15} />}
+            label="Удалить"
             onClick={() => handleDeleteOrder(selectedOrder.id)}
-            style={{ 
-              padding: '10px 24px', 
-              background: '#EF4444', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '9999px', 
-              fontWeight: '600',
-              fontSize: '15px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            🗑️ Удалить
-          </button>
+          />
 
           {/* Отправить в Max */}
-          <button 
-            onClick={() => sendNotification(selectedOrder.id)}
+          <ModalActionButton
+            color="#3B82F6"
+            icon={<Send size={15} />}
+            label="В Max"
             disabled={isSendingNotification}
-            style={{ 
-              padding: '10px 24px', 
-              background: '#3B82F6', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '9999px', 
-              fontWeight: '600',
-              fontSize: '15px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            📢 В Max
-          </button>
+            onClick={() => sendNotification(selectedOrder.id)}
+          />
 
           {/* Поделиться */}
-          <button 
+          <ModalActionButton
+            color="#8B5CF6"
+            icon={<Share2 size={15} />}
+            label="Поделиться"
             onClick={() => shareOrder(selectedOrder)}
-            style={{ 
-              padding: '10px 24px', 
-              background: '#8B5CF6', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '9999px', 
-              fontWeight: '600',
-              fontSize: '15px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            🔗 Поделиться
-          </button>
+          />
 
           {/* Копировать заявку */}
-          <button 
+          <ModalActionButton
+            color="#6366F1"
+            icon={<Copy size={15} />}
+            label="Копировать заявку"
             onClick={() => copyOrder(selectedOrder)}
-            style={{ 
-              padding: '10px 24px', 
-              background: '#6366F1', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '9999px', 
-              fontWeight: '600',
-              fontSize: '15px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            📋 Копировать заявку
-          </button>
+          />
         </>
       )}
 
       {/* Отмена */}
-      <button 
+      <ModalActionButton
+        color="#94A3B8"
+        icon={<X size={15} />}
+        label="Отмена"
         onClick={() => setSelectedOrder(null)}
-        style={{ 
-          padding: '10px 24px', 
-          background: '#475569', 
-          color: 'white', 
-          border: 'none', 
-          borderRadius: '9999px', 
-          fontWeight: '600',
-          fontSize: '15px'
-        }}
-      >
-        Отмена
-      </button>
-      
+      />
+
     </div>
     </div>
   </div>
