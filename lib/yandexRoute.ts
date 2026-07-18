@@ -88,6 +88,31 @@ export function normalizeDeliveryAddress(rawAddress: string | null | undefined):
 }
 
 /**
+ * Короткая подпись адреса для подсказки на точке карты (см. `OrderRouteMap`):
+ * если это сам Брянск — только улица/дом (город и так ясен по контексту
+ * карты завода), если другой населённый пункт региона — населённый пункт +
+ * улица/дом (без повторного "Брянская область" — это не несёт новой
+ * информации на подсказке одной точки).
+ */
+export function getShortDeliveryLabel(rawAddress: string | null | undefined): string {
+  const normalized = normalizeDeliveryAddress(rawAddress);
+
+  // Вписанные прямо в текст координаты (см. `extractCoordsFromAddress`) в
+  // короткой подписи не нужны — они не читаются человеком.
+  let text = normalized.replace(/\d{2,3}\.\d{3,}[,\s]+\d{2,3}\.\d{3,}/, '').trim();
+  text = text.replace(/,\s*,/g, ',').replace(/^[,\s]+|[,\s]+$/g, '').trim();
+  if (!text) return normalized;
+
+  if (mentionsBryanskCity(text)) {
+    const withoutCity = text.replace(/(?:^|,)\s*г\.?\s*Брянск\.?\s*/i, '').replace(/^[,\s]+/, '').trim();
+    return withoutCity || 'г. Брянск';
+  }
+
+  const withoutRegion = text.replace(/,?\s*Брянская\s*обл(?:асть)?\.?\s*$/i, '').trim();
+  return withoutRegion || text;
+}
+
+/**
  * Ссылка на построение маршрута в Яндекс.Картах по ТЕКСТОВЫМ адресам.
  * Работает в обычном браузере (в т.ч. на телефоне) — веб-версия Яндекс.Карт
  * сама геокодирует текст в координаты. НЕ работает в Яндекс.Браузере: он

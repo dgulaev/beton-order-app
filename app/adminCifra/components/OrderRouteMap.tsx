@@ -1,8 +1,10 @@
 'use client';
 // app/adminCifra/components/OrderRouteMap.tsx
 // Вертикальный баннер с интерактивной картой: точка завода и точка адреса
-// доставки, карта автоматически масштабируется так, чтобы обе точки были
-// видны в кадре (ближе — крупнее, дальше — мельче).
+// доставки, линия маршрута по дорогам (см. lib/routeGeometry.ts), карта
+// автоматически масштабируется так, чтобы всё было видно в кадре. Карта
+// полноценно интерактивна (зум колесом/пинчем, перетаскивание) и умеет
+// переключать вид (схема/спутник/светлая/тёмная/топографическая).
 //
 // ⚠️ 18.07.2026: раньше здесь были Яндекс.Карты (JS API), но выяснилось, что
 // наша админка — закрытая система для коммерческого использования, а значит
@@ -11,17 +13,20 @@
 // 100 запросов/сутки, которого реальному бизнесу хватает на полчаса работы,
 // а при регулярном превышении ключ блокируется навсегда без восстановления.
 // Заменили на OpenStreetMap через Leaflet — открытые данные, без API-ключа
-// и договорных ограничений, что отлично подходит именно для такого
-// декоративного превью (реальный маршрут по клику всё равно открывается по
-// обычной ссылке в приложении Яндекс/Google/2ГИС — см. `routeHref`, это НЕ
-// вызовы API, а обычные переходы по URL, они ничего не тратят).
+// и договорных ограничений.
 //
-// Вся карточка — кликабельная ссылка, открывающая маршрут на отдельной странице.
+// ⚠️ Раньше вся карточка была одной большой ссылкой (клик в любом месте
+// открывал маршрут во внешнем приложении) — карта была чисто декоративной,
+// жесты (драг/зум) специально отключались, чтобы не мешать этому клику.
+// Теперь карта интерактивна сама по себе, поэтому переход во внешнее
+// приложение вынесен в отдельную кнопку в углу (см. `RouteButton` ниже) —
+// иначе перетаскивание карты конфликтовало бы с переходом по ссылке.
 
 import React, { useEffect, useRef, useState } from 'react';
-import type { Map as LeafletMap, Polyline } from 'leaflet';
+import type { Map as LeafletMap, Polyline, Control } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { ROUTE_ORIGIN_COORDS, useDeliveryCoords } from '@/lib/yandexRoute';
+import { ExternalLink } from 'lucide-react';
+import { ROUTE_ORIGIN_COORDS, useDeliveryCoords, getShortDeliveryLabel } from '@/lib/yandexRoute';
 import { useRouteGeometry } from '@/lib/routeGeometry';
 
 interface OrderRouteMapProps {
@@ -38,11 +43,45 @@ function makeDivIcon(L: typeof import('leaflet'), color: string) {
   });
 }
 
+// Несколько бесплатных подложек без API-ключа — переключаются штатным
+// контролом Leaflet (иконка слоёв в углу карты). У каждой — своя атрибуция,
+// Leaflet сам показывает её только для активного слоя.
+function makeBaseLayers(L: typeof import('leaflet')) {
+  const osmAttr = '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>';
+  return {
+    'Схема': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      subdomains: ['a', 'b', 'c'],
+      attribution: osmAttr,
+    }),
+    'Светлая': L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      subdomains: 'abcd',
+      attribution: `${osmAttr} © <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">CARTO</a>`,
+    }),
+    'Тёмная': L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      subdomains: 'abcd',
+      attribution: `${osmAttr} © <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">CARTO</a>`,
+    }),
+    'Спутник': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19,
+      attribution: 'Tiles © <a href="https://www.esri.com" target="_blank" rel="noopener noreferrer">Esri</a>',
+    }),
+    'Рельеф': L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+      maxZoom: 17,
+      subdomains: ['a', 'b', 'c'],
+      attribution: `${osmAttr}, SRTM | © <a href="https://opentopomap.org" target="_blank" rel="noopener noreferrer">OpenTopoMap</a>`,
+    }),
+  };
+}
+
 export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const routeLineRef = useRef<Polyline | null>(null);
+  const layersControlRef = useRef<Control.Layers | null>(null);
   // Точки, под которые сейчас подогнан автомасштаб — либо просто [завод,
   // адрес], либо (когда подгрузится) вся геометрия маршрута по дорогам —
   // читается и при ресайзе контейнера, и при появлении линии маршрута.
@@ -76,28 +115,19 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
       const map = L.map(containerRef.current, {
         center: origin,
         zoom: 9,
-        zoomControl: false,
-        attributionControl: false,
-        dragging: false,
-        scrollWheelZoom: false,
-        doubleClickZoom: false,
-        touchZoom: false,
-        boxZoom: false,
-        keyboard: false,
+        zoomControl: true,
+        attributionControl: true,
       });
       mapRef.current = map;
 
-      L.control.attribution({ position: 'bottomleft', prefix: false })
-        .addTo(map)
-        .setPrefix('© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>');
+      const baseLayers = makeBaseLayers(L);
+      baseLayers['Схема'].addTo(map);
+      layersControlRef.current = L.control.layers(baseLayers, undefined, { position: 'topright' }).addTo(map);
 
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        subdomains: ['a', 'b', 'c'],
-      }).addTo(map);
-
-      L.marker(origin, { icon: makeDivIcon(L, '#2563EB'), keyboard: false }).addTo(map).bindTooltip('Завод');
-      L.marker(destination, { icon: makeDivIcon(L, '#DC2626'), keyboard: false }).addTo(map).bindTooltip('Адрес доставки');
+      L.marker(origin, { icon: makeDivIcon(L, '#2563EB') }).addTo(map).bindTooltip('Завод');
+      // Короткая подпись: в Брянске — только улица/дом, в другом населённом
+      // пункте области — населённый пункт + улица/дом (см. getShortDeliveryLabel).
+      L.marker(destination, { icon: makeDivIcon(L, '#DC2626') }).addTo(map).bindTooltip(getShortDeliveryLabel(address));
 
       // Автомасштаб под обе точки (или под всю линию маршрута, если она уже
       // подгрузилась — см. эффект с полилинией ниже): если адрес рядом с
@@ -105,11 +135,13 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
       // пространство; если далеко — отдаляется, чтобы всё поместилось в
       // кадр. Вынесено в функцию (и сохранено в ref), чтобы пересчитывать и
       // при изменении размера контейнера, и при появлении линии маршрута.
+      // Срабатывает только один раз при построении — дальше карта в руках
+      // пользователя (можно свободно зумировать/двигать).
       const fitBothPoints = () => {
         map.fitBounds(boundsPointsRef.current, { padding: [32, 32], animate: false });
         // Если точки совпадают/очень близко — fitBounds может зазумить почти
-        // до предела (дом/подъезд). Для декоративного превью этого слишком
-        // близко — не даём приближаться больше "квартала".
+        // до предела (дом/подъезд). Для превью этого слишком близко — не
+        // даём приближаться больше "квартала" при автоподгонке.
         if (map.getZoom() > 15) {
           map.setZoom(15, { animate: false });
         }
@@ -132,7 +164,6 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
       const resizeObserver = new ResizeObserver(() => {
         if (!mapRef.current) return;
         mapRef.current.invalidateSize();
-        fitBothPoints();
       });
       resizeObserver.observe(containerRef.current);
       resizeObserverRef.current = resizeObserver;
@@ -143,6 +174,7 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
       resizeObserverRef.current?.disconnect();
       resizeObserverRef.current = null;
       routeLineRef.current = null;
+      layersControlRef.current = null;
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -180,14 +212,9 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
   if (status === 'unavailable') return null;
 
   return (
-    <a
-      href={routeHref}
-      target="_blank"
-      rel="noopener noreferrer"
-      title="Открыть маршрут"
+    <div
       style={{
         position: 'relative',
-        display: 'block',
         width: '100%',
         height: '100%',
         borderRadius: '16px',
@@ -196,7 +223,7 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
         flexShrink: 0,
       }}
     >
-      <div ref={containerRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} />
+      <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
 
       {status === 'loading' && (
         <div style={{
@@ -207,27 +234,40 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
           justifyContent: 'center',
           color: '#64748B',
           fontSize: '13px',
+          pointerEvents: 'none',
         }}>
           Строим карту…
         </div>
       )}
 
       {status === 'ready' && (
-        <div style={{
-          position: 'absolute',
-          bottom: '12px',
-          right: '12px',
-          padding: '5px 10px',
-          borderRadius: '8px',
-          background: 'rgba(15,23,42,0.75)',
-          color: '#CBD5E1',
-          fontSize: '12px',
-          fontWeight: 600,
-          pointerEvents: 'none',
-        }}>
-          Открыть карту ↗
-        </div>
+        <a
+          href={routeHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Открыть маршрут в приложении карт"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'absolute',
+            bottom: '12px',
+            right: '12px',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '7px 12px',
+            borderRadius: '8px',
+            background: 'rgba(15,23,42,0.85)',
+            color: '#CBD5E1',
+            fontSize: '12px',
+            fontWeight: 600,
+            textDecoration: 'none',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.35)',
+          }}
+        >
+          Открыть маршрут <ExternalLink size={13} />
+        </a>
       )}
-    </a>
+    </div>
   );
 }
