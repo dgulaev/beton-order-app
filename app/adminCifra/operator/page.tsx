@@ -329,11 +329,22 @@ export default function OperatorBSUPage() {
   }, [rawMixers]);
 
     // ==================== 1.1 НАЧАТЬ ЗАГРУЗКУ ====================
+  // Заявки в финальном статусе (диспетчер/менеджер уже закрыли или отменили)
+  // не должны участвовать в загрузке — иначе сервер всё равно откажет на
+  // шаге смены статуса миксера, а до этого момента интерфейс успеет создать
+  // мусорную запись в "Отгружено сегодня" (см. историю заявки #604, 18.07.2026).
+  const FINAL_ORDER_STATUSES_RU: Record<string, string> = { completed: 'Выполнена', cancelled: 'Отменена' };
+
   const startLoading = async (trip: any) => {
+    if (trip.order_status && FINAL_ORDER_STATUSES_RU[trip.order_status]) {
+      alert(`❌ Заявка #${trip.order_id || trip.orderId} уже в статусе "${FINAL_ORDER_STATUSES_RU[trip.order_status]}" — начать загрузку нельзя. Обратитесь к диспетчеру/менеджеру.`);
+      return;
+    }
+
     const now = new Date().toISOString();
 
     try {
-      await fetch('/api/adminCifra/order-mixers/status', {
+      const res = await fetch('/api/adminCifra/order-mixers/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -345,10 +356,16 @@ export default function OperatorBSUPage() {
         })
       });
 
+      const data = await res.json().catch(() => null);
+      if (!res.ok || data?.success === false) {
+        alert(`❌ Не удалось начать загрузку: ${data?.message || `HTTP ${res.status}`}`);
+        return;
+      }
+
       setLoadingTrips(prev => ({ ...prev, [trip.id]: true }));
       setTripStartTimes(prev => ({ ...prev, [trip.id]: now }));
 
-      // alert удалён — тихое выполнение
+      // alert удалён — тихое выполнение при успехе
     } catch (err) {
       console.error(err);
       alert('Ошибка начала загрузки'); // оставляем только при ошибке
@@ -528,6 +545,11 @@ export default function OperatorBSUPage() {
 
   const completeLoading = (trip: any) => {
     if (completingTripIds.has(trip.id)) return; // защита от двойного клика в первый момент
+
+    if (trip.order_status && FINAL_ORDER_STATUSES_RU[trip.order_status]) {
+      alert(`❌ Заявка #${trip.order_id || trip.orderId} уже в статусе "${FINAL_ORDER_STATUSES_RU[trip.order_status]}" — завершить загрузку нельзя. Обратитесь к диспетчеру/менеджеру.`);
+      return;
+    }
 
     const startTime = tripStartTimes[trip.id] || trip.loading_started_at;
     if (!startTime) {

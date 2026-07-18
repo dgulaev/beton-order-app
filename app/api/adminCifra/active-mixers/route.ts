@@ -30,6 +30,7 @@ export async function GET(request: NextRequest) {
         downtime_minutes,
         orders!inner (
           id,
+          status,
           delivery_date,
           delivery_time,
           organization_name,
@@ -69,7 +70,12 @@ export async function GET(request: NextRequest) {
       // Общий плановый объём ВСЕЙ заявки (не путать с volume выше — это объём
       // конкретного рейса/миксера). Нужен для оценки "сколько рейсов ещё
       // осталось" в колонке "Прогресс" на странице оператора.
-      order_volume: item.orders?.volume ?? null
+      order_volume: item.orders?.volume ?? null,
+      // Статус самой заявки — нужен, чтобы кнопки "Начать"/"Загружен" могли
+      // сразу и понятно отказать, если заявку уже закрыли (диспетчер/менеджер
+      // руками поставили "Выполнена"/"Отменена"), не отправляя запрос на
+      // сервер и не создавая мусорных записей в production_logs.
+      order_status: item.orders?.status ?? null
     }));
 
    // console.log(`✅ Загружено ${formatted.length} активных миксеров (withOrders=${withOrders})`);

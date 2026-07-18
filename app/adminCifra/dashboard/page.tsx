@@ -713,6 +713,13 @@ useEffect(() => {
     if (fresh && (fresh.status !== selectedOrder.status || (fresh as any).logistics_ready !== (selectedOrder as any).logistics_ready)) {
       setSelectedOrder(prev => prev ? { ...prev, ...fresh } : prev);
     }
+    // Заявку удалили (например, тестовую #604) пока её модалка была открыта —
+    // realtime DELETE уже убрал её из allOrders, но сама модалка хранит
+    // отдельный стейт selectedOrder и без этой проверки продолжала бы
+    // показывать замороженные старые данные до перезагрузки страницы.
+    if (!fresh && allOrders.length > 0) {
+      setSelectedOrder(null);
+    }
   }, [allOrders, selectedOrder?.id]);
 
   if (loadingRole || loadingOrders) {

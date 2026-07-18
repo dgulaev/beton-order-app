@@ -187,6 +187,46 @@ const getStatusConfig = (status: string) => {
     }
   }, []);
 
+  // Правка объёма уже назначенного миксера — инструмент для исправления
+  // ситуаций постфактум (напр. заявка #589: заявку закрыли по факту 7=7 м³,
+  // а по факту реально привезли 8 м³). Разрешена и на уже "Выполненной"
+  // заявке.
+  const handleMixerVolumeChange = useCallback(async (mixerId: number, newVolume: number) => {
+    const oldMixer = orderMixers.find((m: any) => m.id === mixerId);
+    const oldVolume = oldMixer?.volume;
+
+    setOrderMixers(prev => prev.map((m: any) => m.id === mixerId ? { ...m, volume: newVolume } : m));
+
+    try {
+      const res = await fetch('/api/adminCifra/order-mixers/volume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: mixerId,
+          volume: newVolume,
+          userName: userFullName || 'Сотрудник',
+          userRole: currentRole || 'admin',
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Не удалось изменить объём миксера');
+      }
+
+      if (selectedOrder?.id) {
+        loadOrderHistory(selectedOrder.id);
+        if (data.data?.orderCompleted) {
+          setSelectedOrder((prev: any) => prev ? { ...prev, status: 'completed' } : prev);
+        }
+      }
+    } catch (err) {
+      console.error('Ошибка сохранения объёма миксера:', err);
+      setOrderMixers(prev => prev.map((m: any) => m.id === mixerId ? { ...m, volume: oldVolume } : m));
+      alert('Не удалось сохранить объём миксера: ' + (err instanceof Error ? err.message : ''));
+    }
+  }, [orderMixers, userFullName, currentRole, selectedOrder?.id, loadOrderHistory]);
+
   // ==================== ОТКРЫТИЕ ЗАЯВКИ С ИСТОРИЕЙ ====================
   const handleOpenOrder = useCallback((order: Order) => {
     setSelectedOrder(order);
@@ -402,6 +442,19 @@ ${order.customer_type?.includes('Юридическое')
 
   // ==================== REALTIME (начальная загрузка + live-обновления) ====================
   const { status: ordersRealtimeStatus } = useRealtimeOrders(setAllOrders);
+
+  // Заявку удалили (например, тестовую #604), пока её модалка была открыта —
+  // realtime DELETE уже убрал заявку из allOrders, но selectedOrder — отдельный
+  // стейт модалки, и без этой проверки она продолжала бы показывать
+  // замороженные старые данные до перезагрузки страницы.
+  useEffect(() => {
+    if (!selectedOrder?.id) return;
+    if (allOrders.length === 0) return;
+    const stillExists = allOrders.some((o: any) => String(o.id) === String(selectedOrder.id));
+    if (!stillExists) {
+      setSelectedOrder(null);
+    }
+  }, [allOrders, selectedOrder?.id]);
 
   // Загрузка всех заказов при открытии страницы (realtime не отдаёт существующие строки)
   useEffect(() => {
@@ -1651,7 +1704,35 @@ ${order.customer_type?.includes('Юридическое')
                                   {mixer.mixerName || mixer.number}
                                 </span>
                                 <span style={{ color: '#64748B', fontSize: '13px' }}>· {mixer.time}</span>
-                                <span style={{ color: '#94A3B8', fontSize: '13px' }}>· {Number(mixer.volume).toFixed(1)} м³</span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
+                                  <span style={{ color: '#64748B', fontSize: '13px' }}>·</span>
+                                  <input
+                                    type="number"
+                                    step="0.1"
+                                    min="0.1"
+                                    defaultValue={Number(mixer.volume)}
+                                    onBlur={(e) => {
+                                      const next = Number(e.target.value);
+                                      if (Number.isFinite(next) && next > 0 && Math.abs(next - Number(mixer.volume)) > 0.001) {
+                                        handleMixerVolumeChange(mixer.id, next);
+                                      } else {
+                                        e.target.value = String(Number(mixer.volume));
+                                      }
+                                    }}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                                    title="Фактический объём этого миксера — можно исправить постфактум"
+                                    style={{
+                                      background: '#0F172A',
+                                      color: '#94A3B8',
+                                      border: '1px solid #475569',
+                                      borderRadius: '6px',
+                                      padding: '2px 3px',
+                                      fontSize: '12.5px',
+                                      width: '40px'
+                                    }}
+                                  />
+                                  <span style={{ color: '#94A3B8', fontSize: '13px' }}>м³</span>
+                                </span>
 
                                 <span style={{ marginLeft: 'auto', fontSize: '13px', color: '#10B981', fontWeight: 600 }}>
                                   {mixer.status || 'Загрузка'}

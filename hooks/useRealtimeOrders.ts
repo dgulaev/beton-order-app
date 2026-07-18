@@ -588,7 +588,14 @@ export function useRealtimeOrderMixers(
   return { status };
 }
 
-/** Live-обновление ленты отгрузок (production_logs) — только INSERT, записи не редактируются */
+/**
+ * Live-обновление ленты отгрузок (production_logs). В основном пишется
+ * только INSERT (кнопка оператора "Загружен"), но UPDATE тоже возможен —
+ * когда диспетчер правит объём уже отгруженного рейса (см.
+ * lib/orderMixers.ts::updateOrderMixerVolume), объём синхронизируется и в
+ * этой таблице, чтобы лента "Отгружено сегодня" сразу показывала верное
+ * число без перезагрузки страницы.
+ */
 export function useRealtimeProductionLogs(
   setLogs: React.Dispatch<React.SetStateAction<any[]>>,
   options?: { enabled?: boolean; onStatusChange?: (status: RealtimeStatus) => void }
@@ -615,6 +622,17 @@ export function useRealtimeProductionLogs(
 
         return [newRecord, ...prev];
       });
+    },
+    onUpdate: (newRecord) => {
+      if (!newRecord) return;
+      setLogs((prev) => prev.map((l) => (String(l.id) === String(newRecord.id) ? { ...l, ...newRecord } : l)));
+    },
+    // Удаление рейса (например, чистка тестовой/ошибочной заявки админом) —
+    // без этого строка оставалась бы висеть в уже открытой вкладке оператора
+    // до перезагрузки страницы, хотя в базе её давно нет.
+    onDelete: (oldRecord) => {
+      if (!oldRecord) return;
+      setLogs((prev) => prev.filter((l) => String(l.id) !== String(oldRecord.id)));
     },
   });
 }

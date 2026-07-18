@@ -31,10 +31,45 @@ export async function PUT(request: NextRequest) {
 
     // ==================== 2. ЗАПРЕТ ИЗМЕНЕНИЯ СТАТУСА ДЛЯ ФИНАЛЬНЫХ ЗАЯВОК ====================
     const finalStatuses = ['completed', 'cancelled'];
+    const isFinalOrder = finalStatuses.includes(currentOrder.status);
 
-    if (finalStatuses.includes(currentOrder.status) && updateData.status !== undefined) {
+    if (isFinalOrder && updateData.status !== undefined) {
       delete updateData.status;
     //  console.log('⚠️ Попытка изменить статус финальной заявки — отклонено');
+    }
+
+    // ==================== 2b. ЗАПРЕТ РУЧНОГО ПЕРЕВОДА В "ВЫПОЛНЕНА" БЕЗ РЕАЛЬНОЙ РАЗГРУЗКИ ====================
+    // Заявка #604 (18.07.2026) показала обходной путь бага #589: диспетчер
+    // руками выбрала в селекторе статус "Выполнена", пока миксер так и
+    // остался в статусе "Загрузка" (даже не выехал). В отличие от
+    // автозавершения при разгрузке (см. lib/orderMixers.ts), эта ручная
+    // смена статуса вообще не проверяла миксеры — отсюда и заявки
+    // "Выполнена" с рейсом, зависшим в очереди на загрузку у оператора.
+    // Правило то же самое, что и для автозавершения: все рейсы разгружены
+    // и их суммарный объём покрывает объём заявки. Если рейсов нет вообще —
+    // не блокируем (могут быть заявки без миксеров, напр. отменённые).
+    if (!isFinalOrder && updateData.status === 'completed') {
+      const { data: mixersForCheck } = await supabase
+        .from('order_mixers')
+        .select('volume, status')
+        .eq('order_id', id);
+
+      const mixers = mixersForCheck || [];
+      if (mixers.length > 0) {
+        const allUnloaded = mixers.every((m: any) => m?.status === 'Разгружен');
+        const totalDelivered = mixers.reduce((sum: number, m: any) => sum + Number(m?.volume || 0), 0);
+        const effectiveVolume = updateData.volume !== undefined ? Number(updateData.volume) : Number(currentOrder.volume || 0);
+        const VOLUME_EPSILON = 0.01;
+
+        if (!allUnloaded || totalDelivered < effectiveVolume - VOLUME_EPSILON) {
+          return NextResponse.json({
+            success: false,
+            message: allUnloaded
+              ? `Нельзя завершить заявку — разгружено ${totalDelivered} м³ из ${effectiveVolume} м³. Добавьте недостающий объём или поправьте объём миксера.`
+              : 'Нельзя завершить заявку — не все рейсы разгружены. Переведите миксеры в статус "Разгружен".',
+          }, { status: 400 });
+        }
+      }
     }
 
     // ==================== 3. ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================

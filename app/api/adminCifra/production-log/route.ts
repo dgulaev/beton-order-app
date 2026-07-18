@@ -232,6 +232,33 @@ export async function POST(request: NextRequest) {
       ? Math.round((new Date(end_time).getTime() - new Date(start_time).getTime()) / 60000) 
       : null;
 
+    // ==================== ЗАПРЕТ ЗАПИСИ РЕЙСА ПО УЖЕ ЗАКРЫТОЙ ЗАЯВКЕ ====================
+    // Страховка на случай, если клиентская проверка на странице оператора
+    // (устаревший кэш вкладки, другой клиент и т.п.) не сработала — см.
+    // историю заявки #604 (18.07.2026), где именно так в production_logs
+    // попала "мусорная" запись по уже "Выполненной" заявке, хотя сам миксер
+    // так и не смог перейти в статус "В пути" (это уже блокирует
+    // lib/orderMixers.ts). Без этой проверки лента "Отгружено сегодня" может
+    // содержать рейсы, которых по факту не было.
+    if (order_id) {
+      const { data: orderForCheck } = await supabase
+        .from('orders')
+        .select('status')
+        .eq('id', order_id)
+        .maybeSingle();
+
+      const finalStatusesRu: Record<string, string> = { completed: 'Выполнена', cancelled: 'Отменена' };
+      if (orderForCheck?.status && finalStatusesRu[orderForCheck.status]) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: `Заявка #${order_id} уже в статусе "${finalStatusesRu[orderForCheck.status]}" — запись рейса запрещена`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     // ⚠️ Защита от задвоения на сервере (доп. страховка к клиентской защите
     // от повторного клика): если для этого же миксера рейс уже был записан
     // за последнюю минуту — это повтор одного и того же запроса (двойной

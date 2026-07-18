@@ -307,6 +307,47 @@ const handleMixerTimeChange = async (mixerId: number, newTime: string) => {
   }
 };
 
+// Правка объёма уже назначенного миксера — инструмент для исправления
+// ситуаций постфактум (напр. заявка #589: заявку закрыли по факту 7=7 м³,
+// а позже выяснилось, что реально привезли 8 м³). Разрешена даже на уже
+// "Выполненной" заявке — сервер сам решит, нужно ли что-то пересчитать.
+const handleMixerVolumeChange = async (mixerId: number, newVolume: number) => {
+  const oldMixer = mixerAssignments.find(m => m.id === mixerId);
+  const oldVolume = oldMixer?.volume;
+
+  setMixerAssignments(prev =>
+    prev.map(item => item.id === mixerId ? { ...item, volume: newVolume } : item)
+  );
+
+  try {
+    const res = await fetch('/api/adminCifra/order-mixers/volume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: mixerId,
+        volume: newVolume,
+        userName: getCurrentUserName(),
+        userRole: getCurrentRole(),
+      })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || !data.success) {
+      throw new Error(data.message || 'Не удалось изменить объём миксера');
+    }
+
+    setTimeout(() => loadData(), 400);
+  } catch (err) {
+    console.error('Ошибка сохранения объёма миксера:', err);
+    // Откат
+    setMixerAssignments(prev =>
+      prev.map(item => item.id === mixerId ? { ...item, volume: oldVolume } : item)
+    );
+    alert('Не удалось сохранить объём миксера: ' + (err instanceof Error ? err.message : ''));
+  }
+};
+
 // Форматирование объёма без лишних нулей
 const formatVolume = (value: number | string) => {
   const num = Number(value);
@@ -679,13 +720,34 @@ const formatVolume = (value: number | string) => {
             }}
           />
 
-          {/* Объём */}
-          <div style={{ 
-            color: '#94A3B8', 
-            fontSize: '13px',
-            minWidth: '70px'
-          }}>
-            {Number(mixer.volume).toFixed(1)} м³
+          {/* Объём — РЕДАКТИРУЕМОЕ (напр. чтобы поправить факт постфактум) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '3px', minWidth: '78px' }}>
+            <input
+              type="number"
+              step="0.1"
+              min="0.1"
+              defaultValue={Number(mixer.volume)}
+              onBlur={(e) => {
+                const next = Number(e.target.value);
+                if (Number.isFinite(next) && next > 0 && Math.abs(next - Number(mixer.volume)) > 0.001) {
+                  handleMixerVolumeChange(mixer.id, next);
+                } else {
+                  e.target.value = String(Number(mixer.volume));
+                }
+              }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+              title="Фактический объём этого миксера — можно исправить постфактум"
+              style={{
+                background: '#0F172A',
+                color: '#94A3B8',
+                border: '1px solid #475569',
+                borderRadius: '8px',
+                padding: '4px 4px',
+                fontSize: '13px',
+                width: '46px'
+              }}
+            />
+            <span style={{ color: '#64748B', fontSize: '12px' }}>м³</span>
           </div>
 
           {/* Статус */}
