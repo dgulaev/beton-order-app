@@ -19,9 +19,10 @@
 // Вся карточка — кликабельная ссылка, открывающая маршрут на отдельной странице.
 
 import React, { useEffect, useRef, useState } from 'react';
-import type { Map as LeafletMap } from 'leaflet';
+import type { Map as LeafletMap, Polyline } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { ROUTE_ORIGIN_COORDS, useDeliveryCoords } from '@/lib/yandexRoute';
+import { useRouteGeometry } from '@/lib/routeGeometry';
 
 interface OrderRouteMapProps {
   address: string | null | undefined;
@@ -41,10 +42,20 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const routeLineRef = useRef<Polyline | null>(null);
+  // Точки, под которые сейчас подогнан автомасштаб — либо просто [завод,
+  // адрес], либо (когда подгрузится) вся геометрия маршрута по дорогам —
+  // читается и при ресайзе контейнера, и при появлении линии маршрута.
+  const boundsPointsRef = useRef<[number, number][]>([]);
+  const fitBothPointsRef = useRef<() => void>(() => {});
   // Статус карты (Leaflet создан, точки добавлены).
   const [mapStatus, setMapStatus] = useState<'pending' | 'ready' | 'unavailable'>('pending');
 
   const { coords: destCoords, ready: coordsReady } = useDeliveryCoords(address);
+  // Реальный маршрут по дорогам через бесплатный OSRM — необязательное
+  // украшение: пока грузится или если не удалось построить, карта работает
+  // как раньше (просто две точки), см. `lib/routeGeometry.ts`.
+  const routeGeometry = useRouteGeometry(destCoords);
 
   const status: 'loading' | 'ready' | 'unavailable' =
     !coordsReady ? 'loading' :
@@ -88,12 +99,14 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
       L.marker(origin, { icon: makeDivIcon(L, '#2563EB'), keyboard: false }).addTo(map).bindTooltip('Завод');
       L.marker(destination, { icon: makeDivIcon(L, '#DC2626'), keyboard: false }).addTo(map).bindTooltip('Адрес доставки');
 
-      // Автомасштаб под обе точки: если адрес рядом с заводом — карта
-      // приближается, чтобы не показывать пустое пространство; если далеко —
-      // отдаляется, чтобы обе точки поместились в кадр. Вынесено в функцию,
-      // чтобы пересчитывать и при изменении размера контейнера (см. ниже).
+      // Автомасштаб под обе точки (или под всю линию маршрута, если она уже
+      // подгрузилась — см. эффект с полилинией ниже): если адрес рядом с
+      // заводом — карта приближается, чтобы не показывать пустое
+      // пространство; если далеко — отдаляется, чтобы всё поместилось в
+      // кадр. Вынесено в функцию (и сохранено в ref), чтобы пересчитывать и
+      // при изменении размера контейнера, и при появлении линии маршрута.
       const fitBothPoints = () => {
-        map.fitBounds([origin, destination], { padding: [32, 32], animate: false });
+        map.fitBounds(boundsPointsRef.current, { padding: [32, 32], animate: false });
         // Если точки совпадают/очень близко — fitBounds может зазумить почти
         // до предела (дом/подъезд). Для декоративного превью этого слишком
         // близко — не даём приближаться больше "квартала".
@@ -101,7 +114,9 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
           map.setZoom(15, { animate: false });
         }
       };
+      fitBothPointsRef.current = fitBothPoints;
 
+      boundsPointsRef.current = [origin, destination];
       fitBothPoints();
 
       if (!cancelled) setMapStatus('ready');
@@ -127,12 +142,40 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
       cancelled = true;
       resizeObserverRef.current?.disconnect();
       resizeObserverRef.current = null;
+      routeLineRef.current = null;
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
       }
     };
   }, [coordsReady, destCoords, address]);
+
+  // Линия маршрута по дорогам — отдельным эффектом, потому что геометрия от
+  // OSRM почти всегда подгружается ПОСЛЕ того, как карта с маркерами уже
+  // отрисована (второй сетевой запрос, параллельно геокодированию). Как
+  // только (и если) она готова — добавляем полилинию и расширяем автомасштаб
+  // под всю трассу маршрута, а не только под две конечные точки.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || mapStatus !== 'ready') return;
+
+    import('leaflet').then((L) => {
+      if (mapRef.current !== map) return; // карта уже сменилась/размонтирована
+
+      routeLineRef.current?.remove();
+      routeLineRef.current = null;
+
+      if (routeGeometry && routeGeometry.length > 1) {
+        routeLineRef.current = L.polyline(routeGeometry, {
+          color: '#3B82F6',
+          weight: 4,
+          opacity: 0.85,
+        }).addTo(map);
+        boundsPointsRef.current = routeGeometry;
+        fitBothPointsRef.current();
+      }
+    });
+  }, [routeGeometry, mapStatus]);
 
   if (status === 'unavailable') return null;
 
