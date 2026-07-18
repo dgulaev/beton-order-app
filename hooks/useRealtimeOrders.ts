@@ -525,6 +525,27 @@ export function useRealtimeOrderMixers(
      * полным рефетчем) сразу после того, как строка появилась локально.
      */
     onInsertRow?: (newRecord: any) => void;
+    /**
+     * Вызывается при DELETE строки order_mixers (id и остальные поля — какими
+     * они были до удаления). Нужен вызывающему коду для точечной чистки
+     * производных клиентских состояний, которые ссылаются на этот миксер, но
+     * сами не являются простым отражением `mixers` (например, синтетические
+     * "осиротевшие" записи на странице оператора — см. operator/page.tsx).
+     * Заметьте: полагаться на "миксера больше нет в текущем списке `mixers`"
+     * недостаточно — этот список (см. activeOnly/active-mixers) изначально не
+     * содержит миксеры в статусах "Разгружен"/"Возврат", поэтому их отсутствие
+     * в `mixers` ничего не говорит о том, удалены они из БД или просто никогда
+     * не входили в этот отфильтрованный снапшот.
+     */
+    onDeleteRow?: (oldRecord: any) => void;
+    /**
+     * Вызывается при UPDATE строки order_mixers с уже отформатированной
+     * записью (formatOrderMixer). В отличие от `mixers`, это сырое событие "как
+     * есть", без фильтрации `activeOnly` — полезно, когда вызывающему коду
+     * нужен именно факт "статус этого миксера сейчас — X", а не выводить его из
+     * (потенциально урезанного) списка `mixers`.
+     */
+    onUpdateRow?: (formattedRecord: any) => void;
   }
 ) {
   const orders = options?.orders;
@@ -579,9 +600,12 @@ export function useRealtimeOrderMixers(
           };
         });
       });
+
+      options?.onUpdateRow?.(formatted);
     },
     onDelete: (oldRecord) => {
       setMixers((prev) => prev.filter((m) => String(m.id) !== String(oldRecord.id)));
+      options?.onDeleteRow?.(oldRecord);
     },
   });
 

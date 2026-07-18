@@ -139,7 +139,32 @@ export default function OperatorBSUPage() {
   });
 
    // ==================== 0.1 РЕАЛЬНЫЕ ДАННЫЕ ====================
-  const { allMixers: rawMixers } = useTodayLoadingMixers();
+
+  // ==================== 0.1.1 ЧИСТКА "ОСИРОТЕВШИХ" ЗАПИСЕЙ ПРИ УДАЛЕНИИ/ОТКАТЕ СТАТУСА ====================
+  // См. подробный комментарий у 1.2.2 ниже про то, что такое "осиротевший"
+  // рейс. Раньше для чистки таких синтетических строк использовался диф
+  // снапшота `rawMixers` — это оказалось неверным: `rawMixers` (см.
+  // /api/adminCifra/active-mixers) изначально НЕ включает миксеры в статусах
+  // "Разгружен"/"Возврат", поэтому у миксера, который был в этом статусе ещё
+  // до открытия вкладки (и в rawMixers никогда не попадал), диф ошибочно
+  // считал его "удалённым" и убирал совершенно рабочую строку другого рейса.
+  // Поэтому чистим только по явным realtime-событиям конкретного миксера —
+  // DELETE (миксер/заявку удалили) или UPDATE со статусом вне
+  // "Разгружен"/"Возврат" (статус откатили назад) — а не по диффу массива.
+  const removeOrphanTrip = (mixerId: any) => {
+    setCompletedTrips((prev: any[]) =>
+      prev.filter((t: any) => !(t.no_operator_record && String(t.order_mixer_id) === String(mixerId)))
+    );
+  };
+
+  const { allMixers: rawMixers } = useTodayLoadingMixers({
+    onMixerDeleted: (oldRecord: any) => removeOrphanTrip(oldRecord?.id),
+    onMixerUpdated: (formatted: any) => {
+      const orphanStatuses = new Set(['Разгружен', 'Возврат']);
+      if (orphanStatuses.has(formatted?.status)) return; // статус всё ещё валиден для осиротевшей записи
+      removeOrphanTrip(formatted?.id);
+    },
+  });
 
   // ==================== 0.2 ФИЛЬТРАЦИЯ + ОПТИМИСТИЧНОЕ СКРЫТИЕ ====================
   // ⚠️ ID миксеров, которые мы только что сами перевели в "В пути" (кнопка
@@ -352,13 +377,22 @@ export default function OperatorBSUPage() {
           status: 'Загрузка',
           loading_started_at: now,
           userName: operatorName,
-          userRole: operatorRole
+          userRole: operatorRole,
+          // Строка попадает в очередь только когда её статус "Загрузка" (см.
+          // queueTrips выше) — если к моменту обработки запроса статус в БД
+          // уже другой (диспетчер успел вручную его сменить), сервер отобьёт
+          // явным конфликтом вместо того чтобы молча продолжить.
+          expectedStatus: 'Загрузка',
         })
       });
 
       const data = await res.json().catch(() => null);
       if (!res.ok || data?.success === false) {
-        alert(`❌ Не удалось начать загрузку: ${data?.message || `HTTP ${res.status}`}`);
+        if (data?.conflict) {
+          alert(`❌ Статус миксера уже изменён (диспетчер/менеджер успел вмешаться) — ${data?.message || ''}`);
+        } else {
+          alert(`❌ Не удалось начать загрузку: ${data?.message || `HTTP ${res.status}`}`);
+        }
         return;
       }
 
@@ -610,6 +644,15 @@ export default function OperatorBSUPage() {
   // минуту, а order-mixers/status просто перезапишет тот же статус повторно
   // без лишней записи в историю (см. lib/orderMixers.ts — история пишется
   // только если статус реально меняется).
+  //
+  // ⚠️ Постоянные бизнес-ошибки (400/404/409 — заявка уже финальная, конфликт
+  // optimistic lock и т.п.) — это НЕ временный сбой сети, повторять их 5-6 раз
+  // с нарастающей паузой (до ~80 сек) бессмысленно и только маскирует
+  // реальную причину. Для таких статусов возвращаем ответ сразу, не бросая
+  // исключение — вызывающий код читает message/conflict из тела и решает,
+  // что показать оператору.
+  const NON_RETRYABLE_STATUSES = new Set([400, 401, 403, 404, 409, 422]);
+
   const fetchWithRetry = async (
     url: string,
     init: RequestInit,
@@ -625,6 +668,7 @@ export default function OperatorBSUPage() {
       try {
         const res = await fetch(url, { ...init, signal: controller.signal });
         clearTimeout(timeoutId);
+        if (!res.ok && NON_RETRYABLE_STATUSES.has(res.status)) return res;
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res;
       } catch (err) {
@@ -661,9 +705,18 @@ export default function OperatorBSUPage() {
         })
       });
       const json = await res.json().catch(() => null);
-      const realId = json?.data?.id;
-      if (realId) {
-        setCompletedTrips(prev => prev.map(l => (l.id === tempId ? { ...l, id: realId } : l)));
+      if (!res.ok || json?.success === false) {
+        // Постоянная бизнес-ошибка (заявка уже финальная и т.п.) — рейс НЕ
+        // записан на сервере, хотя оптимистично уже показан в "Отгружено
+        // сегодня". Раньше это тонуло в console.error и выглядело как успех —
+        // теперь явно сообщаем оператору, чтобы запись не считалась "мусорной".
+        console.error(`❌ [Оператор] Рейс миксера ${trip.mixer_name || trip.number || trip.id} НЕ записан на сервере: ${json?.message || `HTTP ${res.status}`}`);
+        alert(`⚠️ Рейс миксера ${trip.mixer_name || trip.number || trip.id} не удалось записать: ${json?.message || 'ошибка сервера'}. Обратитесь к диспетчеру.`);
+      } else {
+        const realId = json?.data?.id;
+        if (realId) {
+          setCompletedTrips(prev => prev.map(l => (l.id === tempId ? { ...l, id: realId } : l)));
+        }
       }
     } catch (err) {
       console.error(`❌ [Оператор] Не удалось записать отгрузку миксера ${trip.mixer_name || trip.number || trip.id} после всех попыток:`, err);
@@ -671,7 +724,7 @@ export default function OperatorBSUPage() {
 
     // Шаг 2: смена статуса миксера на "В пути" — это главное, повторяем настойчивее
     try {
-      await fetchWithRetry(
+      const res = await fetchWithRetry(
         '/api/adminCifra/order-mixers/status',
         {
           method: 'POST',
@@ -680,16 +733,34 @@ export default function OperatorBSUPage() {
             id: trip.id,
             status: 'В пути',
             userName: operatorName,
-            userRole: operatorRole
+            userRole: operatorRole,
+            // Мы стартовали загрузку от статуса "Загрузка" — если к моменту
+            // завершения он в БД уже другой (диспетчер вручную вмешался в
+            // процессе), это конфликт, а не обычная перезапись (см. lib/orderMixers.ts).
+            expectedStatus: 'Загрузка',
           })
         },
         { attempts: 6, timeoutMs: 8000, baseDelayMs: 2000 }
       );
 
-      // ✅ подтверждено — снимаем красную точку у соответствующей строки
-      setCompletedTrips(prev =>
-        prev.map(l => (String(l.order_mixer_id) === String(trip.id) ? { ...l, _pending: false } : l))
-      );
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok || json?.success === false) {
+        if (json?.conflict) {
+          // Не гонка сети — статус реально сменил кто-то другой (диспетчер/
+          // менеджер) пока оператор грузил миксер. Дальше настойчиво повторять
+          // нечего: это не должно тихо перезаписывать чужое решение.
+          console.error(`⚠️ [Оператор] Конфликт статуса миксера ${trip.mixer_name || trip.number || trip.id}: ${json?.message}`);
+          alert(`⚠️ Статус миксера ${trip.mixer_name || trip.number || trip.id} уже изменил диспетчер/менеджер. Ваше "Завершить загрузку" не применено — уточните у диспетчера актуальный статус рейса.`);
+        } else {
+          throw new Error(json?.message || `HTTP ${res.status}`);
+        }
+      } else {
+        // ✅ подтверждено — снимаем красную точку у соответствующей строки
+        setCompletedTrips(prev =>
+          prev.map(l => (String(l.order_mixer_id) === String(trip.id) ? { ...l, _pending: false } : l))
+        );
+      }
     } catch (err) {
       console.error(`🔴 [Оператор] Статус миксера ${trip.mixer_name || trip.number || trip.id} НЕ подтверждён после всех попыток — нужна ручная проверка:`, err);
 

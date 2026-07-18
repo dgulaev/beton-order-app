@@ -3,7 +3,7 @@ import { updateOrderMixerStatus } from '@/lib/orderMixers';
 
 export async function POST(request: NextRequest) {
   try {
-    const { id, status, loading_started_at, podvizhnost, userName, userRole } = await request.json();
+    const { id, status, loading_started_at, podvizhnost, userName, userRole, expectedStatus } = await request.json();
 
     const result = await updateOrderMixerStatus({
       id,
@@ -12,6 +12,7 @@ export async function POST(request: NextRequest) {
       podvizhnost,
       userName,
       userRole,
+      expectedStatus,
     });
 
     return NextResponse.json(result.body, { status: result.httpStatus });

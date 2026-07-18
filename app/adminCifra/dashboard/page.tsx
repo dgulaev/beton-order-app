@@ -570,6 +570,11 @@ useEffect(() => {
   const handleStatusChange = async (mixerId: number | string, newStatus: string) => {
     console.log(`🔄 Меняем статус миксера ${mixerId} → ${newStatus}`);
 
+    // Статус, который мы видели в списке до отправки запроса — если в БД он
+    // уже другой (например, оператор в этот момент нажал "Начать"/"Загружен"),
+    // сервер отобьёт явным конфликтом вместо тихой перезаписи чужого действия.
+    const oldStatus = activeMixers.find(m => String(m.id) === String(mixerId))?.status;
+
     try {
       const res = await fetch('/api/adminCifra/order-mixers/status', {
         method: 'POST',
@@ -578,7 +583,8 @@ useEffect(() => {
           id: mixerId,
           status: newStatus,
           userName: userFullName || 'Диспетчер',
-          userRole: userRole || 'admin'
+          userRole: userRole || 'admin',
+          expectedStatus: oldStatus,
         })
       });
 

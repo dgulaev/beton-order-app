@@ -49,6 +49,20 @@ export interface UpdateOrderMixerStatusParams {
    * timestamp зафиксирован на устройстве и передаётся при повторной отправке.
    */
   timestampOverride?: string;
+  /**
+   * ==================== ОПТИМИСТИЧНАЯ БЛОКИРОВКА ====================
+   * Статус миксера, который вызывающая сторона считает текущим (тот, что она
+   * видела на экране перед отправкой запроса). Если к моменту обработки в
+   * БД статус уже другой — значит кто-то (оператор/диспетчер/водитель) успел
+   * его сменить первым, и наше действие устарело. Раньше в этом случае
+   * запрос просто тихо перезатирал чужое изменение (см. разбор гонки
+   * "оператор жмёт Завершить, пока диспетчер вручную меняет статус" —
+   * 18.07.2026); теперь вместо этого возвращается явный конфликт 409, и
+   * вызывающая сторона должна обновить данные и решить, что делать дальше.
+   * Необязателен — если не передан, всё равно действует атомарная проверка
+   * на уровне самого UPDATE (см. ниже), просто без подробного сообщения.
+   */
+  expectedStatus?: string;
 }
 
 export interface UpdateOrderMixerStatusResult {
@@ -56,6 +70,8 @@ export interface UpdateOrderMixerStatusResult {
   body: {
     success: boolean;
     message: string;
+    /** true — запрос отбит именно из-за гонки статусов (optimistic lock), а не из-за другой ошибки */
+    conflict?: boolean;
     data?: {
       mixerId: number;
       status?: string;
@@ -85,7 +101,7 @@ export async function resolveUnloadAllowanceMinutes(mixerName: string | null | u
 }
 
 export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParams): Promise<UpdateOrderMixerStatusResult> {
-  const { id, status, loading_started_at, podvizhnost, userName, userRole, timestampOverride } = params;
+  const { id, status, loading_started_at, podvizhnost, userName, userRole, timestampOverride, expectedStatus } = params;
 
   if (!id) {
     return { httpStatus: 400, body: { success: false, message: 'id обязателен' } };
@@ -109,7 +125,8 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   const orderId = mixer.order_id;
   const orderStatus = mixer.orders?.status;
   const orderVolume = Number(mixer.orders?.volume || 0);
-  const oldStatus = mixer.status || 'Загрузка';
+  const rawStatus: string | null = mixer.status ?? null;
+  const oldStatus = rawStatus || 'Загрузка';
 
   if (status && FINAL_ORDER_STATUSES.includes(orderStatus)) {
     return {
@@ -117,6 +134,47 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
       body: {
         success: false,
         message: `Заявка уже в финальном статусе "${STATUS_LABELS_RU[orderStatus] || orderStatus}" — изменение миксеров запрещено`,
+      },
+    };
+  }
+
+  // ==================== БЛОКИРОВКА НА ВРЕМЯ АКТИВНОЙ ЗАГРУЗКИ ====================
+  // Пока оператор БСУ реально грузит миксер (статус "Загрузка" И запущен
+  // таймер loading_started_at — то есть кнопка "Начать" уже нажата, а не
+  // просто дефолтный статус свежеприкреплённого рейса), диспетчер/менеджер/
+  // водитель не могут перепрыгнуть статус мимо него — например поставить
+  // "Разгружен" рукой, пока оператор физически ещё сыплет цемент в барабан.
+  // Разрешены только: "В пути" (естественный следующий шаг — то же самое,
+  // что делает кнопка "Завершить загрузку" у оператора) и "Проблема"
+  // (аварийная ситуация — авария/поломка миксера прямо во время загрузки
+  // должна фиксироваться без каких-либо ограничений). Без этого правила
+  // ручная смена статуса диспетчером тихо "перепрыгивала" через оператора и
+  // приводила к гонке (см. разбор race condition — 18.07.2026).
+  const LOADING_LOCK_EXEMPT_STATUSES = new Set(['В пути', 'Проблема']);
+  const isActivelyLoading = oldStatus === 'Загрузка' && !!mixer.loading_started_at;
+
+  if (isActivelyLoading && status && status !== 'Загрузка' && !LOADING_LOCK_EXEMPT_STATUSES.has(status)) {
+    return {
+      httpStatus: 400,
+      body: {
+        success: false,
+        message: `Миксер сейчас грузится оператором БСУ (таймер запущен) — статус "${status}" поставить нельзя, пока рейс не перейдёт в "В пути". Доступно только "В пути" или "Проблема" (авария).`,
+      },
+    };
+  }
+
+  // ==================== ОПТИМИСТИЧНАЯ БЛОКИРОВКА: РАННЯЯ ПРОВЕРКА ====================
+  // Явная проверка того, что ожидал вызывающий — даёт понятное сообщение
+  // ДО каких-либо побочных эффектов (списание добавки, история). Атомарная
+  // проверка при самом UPDATE (см. ниже) страхует и тех, кто expectedStatus
+  // не передал, но там сообщение более общее.
+  if (expectedStatus !== undefined && expectedStatus !== oldStatus) {
+    return {
+      httpStatus: 409,
+      body: {
+        success: false,
+        conflict: true,
+        message: `Статус миксера уже изменён кем-то другим — сейчас "${oldStatus}", а ожидался "${expectedStatus}". Обновите страницу и попробуйте снова.`,
       },
     };
   }
@@ -159,6 +217,36 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
     }
   }
 
+  // ==================== АТОМАРНОЕ ПРИМЕНЕНИЕ ПЕРЕХОДА (OPTIMISTIC LOCK) ====================
+  // UPDATE условен на статус, который мы только что прочитали (`rawStatus`).
+  // Если между нашим SELECT и этим UPDATE статус успел смениться (гонка
+  // оператор/диспетчер/водитель — см. разбор 18.07.2026), ни одна строка не
+  // подойдёт под условие, supabase вернёт data: null, и мы отбиваем запрос
+  // явным конфликтом — вместо того чтобы молча затереть чужое изменение.
+  // Побочные эффекты (списание добавки, история, автозавершение заявки)
+  // выполняются НИЖЕ, только после того, как переход уже гарантированно
+  // применён — иначе при конфликте они бы всё равно успели сработать.
+  let statusQuery = supabase.from('order_mixers').update(updateData).eq('id', id);
+  statusQuery = rawStatus === null ? statusQuery.is('status', null) : statusQuery.eq('status', rawStatus);
+
+  const { data: updatedMixer, error: updateError } = await statusQuery.select().maybeSingle();
+
+  if (updateError) throw updateError;
+
+  if (!updatedMixer) {
+    const { data: freshMixer } = await supabase.from('order_mixers').select('status').eq('id', id).maybeSingle();
+    return {
+      httpStatus: 409,
+      body: {
+        success: false,
+        conflict: true,
+        message: `Не удалось обновить статус — миксер уже изменён кем-то другим (сейчас: "${
+          freshMixer?.status || '—'
+        }"). Обновите страницу и попробуйте снова.`,
+      },
+    };
+  }
+
   // ==================== РЕАЛЬНОЕ СПИСАНИЕ ДОБАВКИ СО СКЛАДА ====================
   // Раньше добавки (ПФМ-НЛК / Линомикс ТипР) списывались пакетно раз в день
   // при загрузке отчёта MEKA — по значениям из отчёта (кг), но 1:1 из
@@ -169,10 +257,16 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   // способа перевести миксер в "Разгружен" — оператор, диспетчер, водитель,
   // админ — все идут через эту функцию.
   //
+  // Выполняется ПОСЛЕ атомарного UPDATE выше (переход уже подтверждён и
+  // зафиксирован в БД), поэтому склад не трогаем, если статус на самом деле
+  // не применился из-за гонки.
+  //
   // Сумма списания сохраняется на самой строке order_mixers
   // (additive_write_off_*), чтобы при отмене/удалении рейса можно было
   // вернуть на склад ровно столько, сколько было списано, а не пересчитывать
   // по (возможно, уже изменившемуся) рецепту заново.
+  const additivePatch: any = {};
+
   if (status === 'Разгружен' && oldStatus !== 'Разгружен' && mixer.additive_write_off_liters == null) {
     try {
       const { data: recipes } = await supabase
@@ -191,9 +285,9 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
         if (rpcError) {
           console.error('Не удалось списать добавку со склада (реальное время):', rpcError);
         } else {
-          updateData.additive_write_off_id = usage.additiveId;
-          updateData.additive_write_off_liters = usage.liters;
-          updateData.additive_write_off_kg = usage.kg;
+          additivePatch.additive_write_off_id = usage.additiveId;
+          additivePatch.additive_write_off_liters = usage.liters;
+          additivePatch.additive_write_off_kg = usage.kg;
         }
       }
     } catch (err) {
@@ -217,23 +311,19 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
       if (rpcError) {
         console.error('Не удалось вернуть добавку на склад при откате статуса:', rpcError);
       } else {
-        updateData.additive_write_off_id = null;
-        updateData.additive_write_off_liters = null;
-        updateData.additive_write_off_kg = null;
+        additivePatch.additive_write_off_id = null;
+        additivePatch.additive_write_off_liters = null;
+        additivePatch.additive_write_off_kg = null;
       }
     } catch (err) {
       console.error('Ошибка возврата добавки на склад при откате статуса:', err);
     }
   }
 
-  const { error: updateError } = await supabase
-    .from('order_mixers')
-    .update(updateData)
-    .eq('id', id)
-    .select()
-    .maybeSingle();
-
-  if (updateError) throw updateError;
+  if (Object.keys(additivePatch).length > 0) {
+    const { error: additiveUpdateError } = await supabase.from('order_mixers').update(additivePatch).eq('id', id);
+    if (additiveUpdateError) console.error('Не удалось сохранить поля списания добавки:', additiveUpdateError);
+  }
 
   // ==================== ИСТОРИЯ: СМЕНА СТАТУСА МИКСЕРА ====================
   const historyEntries: any[] = [];

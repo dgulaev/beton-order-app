@@ -3,7 +3,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRealtimeOrderMixers } from '@/hooks/useRealtimeOrders';
 
-export const useTodayLoadingMixers = () => {
+export const useTodayLoadingMixers = (options?: {
+  onMixerDeleted?: (oldRecord: any) => void;
+  onMixerUpdated?: (formattedRecord: any) => void;
+}) => {
   const [allMixers, setAllMixers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +69,8 @@ export const useTodayLoadingMixers = () => {
   useRealtimeOrderMixers(setAllMixers, {
     activeOnly: false,
     onInsertRow: () => fetchMixers(),
+    onDeleteRow: options?.onMixerDeleted,
+    onUpdateRow: options?.onMixerUpdated,
   });
 
   return { allMixers, loading, error, refetch: fetchMixers };

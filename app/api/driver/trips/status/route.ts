@@ -58,6 +58,7 @@ export async function POST(request: NextRequest) {
       userRole: 'driver',
       allowedStatusesOverride: DRIVER_ALLOWED_STATUSES,
       timestampOverride: typeof timestamp === 'string' ? timestamp : undefined,
+      expectedStatus: trip.status,
     });
 
     return NextResponse.json(result.body, { status: result.httpStatus });

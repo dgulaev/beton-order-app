@@ -197,7 +197,12 @@ const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
         id: mixerId,
         status: newStatus,
         userName: getCurrentUserName(),
-        userRole: getCurrentRole()
+        userRole: getCurrentRole(),
+        // Статус, который мы видели на экране перед отправкой — если в БД к
+        // моменту обработки он уже другой (кто-то успел изменить его первым,
+        // например оператор нажал "Начать"/"Загружен"), сервер отобьёт явным
+        // конфликтом вместо тихой перезаписи (см. lib/orderMixers.ts).
+        expectedStatus: oldStatus,
       })
     });
 
