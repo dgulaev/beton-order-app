@@ -214,7 +214,13 @@ async function geocodeAddressCached(address: string): Promise<Coords | null> {
 
   const result = await inFlight;
   geocodeMemoryCache.set(address, result);
-  writeSessionCache(address, result);
+  // ⚠️ Неудачный результат (null) в sessionStorage не сохраняем: он живёт до
+  // закрытия вкладки, и если геокодирование не удалось по временной причине
+  // (сеть, не настроен DADATA_API_KEY на сервере и т.п.), адрес "залипал" бы
+  // сломанным на весь сеанс браузера даже после того, как причина устранена
+  // на сервере — следующий рендер снова постучится в API и получит уже
+  // исправленный ответ. Успешный результат кэшируем как обычно.
+  if (result) writeSessionCache(address, result);
   return result;
 }
 
