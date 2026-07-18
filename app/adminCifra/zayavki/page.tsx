@@ -7,7 +7,6 @@ import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
 import { Package, Save, Trash2, Send, Share2, Copy, X } from 'lucide-react';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
-import { hasYandexMapsKey } from '@/lib/yandexMapsLoader';
 import OrderRouteMap from '@/app/adminCifra/components/OrderRouteMap';
 
 // ==================== Элегантная кнопка действия в модалке заявки ====================
@@ -1335,36 +1334,34 @@ ${order.customer_type?.includes('Юридическое')
       {/* ==================== ТЕЛО МОДАЛКИ: КАРТА СЛЕВА (НА ВСЮ ВЫСОТУ) + ОСТАЛЬНОЙ КОНТЕНТ ==================== */}
       <div style={{ display: 'flex', gap: '28px', alignItems: 'stretch' }}>
 
-        {hasYandexMapsKey() && (
-          <div style={{ width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <OrderRouteMap address={selectedOrder.address} routeHref={yandexRouteHref} />
-            </div>
-            {/* Запасные варианты — открывают карты приложений отдельной ссылкой,
-                бесплатно (просто deep-link, без платного API маршрутов).
-                Адрес/координаты те же нормализованные, что и у Яндекса
-                (см. useMapRouteLinks) — город/область достраиваются одинаково
-                для всех трёх сервисов. */}
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <a 
-                href={twoGisRouteHref}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ flex: 1, padding: '9px 8px', background: '#25334A', color: '#94A3B8', textAlign: 'center', borderRadius: '10px', textDecoration: 'none', fontWeight: '600', fontSize: '13px' }}
-              >
-                2ГИС
-              </a>
-              <a 
-                href={googleRouteHref}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ flex: 1, padding: '9px 8px', background: '#25334A', color: '#94A3B8', textAlign: 'center', borderRadius: '10px', textDecoration: 'none', fontWeight: '600', fontSize: '13px' }}
-              >
-                🗺️ Google
-              </a>
-            </div>
+        <div style={{ width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <OrderRouteMap address={selectedOrder.address} routeHref={yandexRouteHref} />
           </div>
-        )}
+          {/* Запасные варианты — открывают карты приложений отдельной ссылкой,
+              бесплатно (просто deep-link, без платного API маршрутов).
+              Адрес/координаты те же нормализованные, что и у Яндекса
+              (см. useMapRouteLinks) — город/область достраиваются одинаково
+              для всех трёх сервисов. */}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <a 
+              href={twoGisRouteHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ flex: 1, padding: '9px 8px', background: '#25334A', color: '#94A3B8', textAlign: 'center', borderRadius: '10px', textDecoration: 'none', fontWeight: '600', fontSize: '13px' }}
+            >
+              2ГИС
+            </a>
+            <a 
+              href={googleRouteHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ flex: 1, padding: '9px 8px', background: '#25334A', color: '#94A3B8', textAlign: 'center', borderRadius: '10px', textDecoration: 'none', fontWeight: '600', fontSize: '13px' }}
+            >
+              🗺️ Google
+            </a>
+          </div>
+        </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>

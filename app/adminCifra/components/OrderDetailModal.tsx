@@ -4,7 +4,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
-import { hasYandexMapsKey } from '@/lib/yandexMapsLoader';
 import OrderRouteMap from './OrderRouteMap';
 
 interface OrderDetailModalProps {
@@ -358,37 +357,35 @@ const formatVolume = (value: number | string) => {
         {/* ==================== ТЕЛО МОДАЛКИ: КАРТА СЛЕВА (НА ВСЮ ВЫСОТУ) + ОСТАЛЬНОЙ КОНТЕНТ ==================== */}
         <div style={{ display: 'flex', gap: '28px', alignItems: 'stretch' }}>
 
-        {hasYandexMapsKey() && (
-          <div style={{ width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <OrderRouteMap address={order.address} routeHref={yandexRouteHref} />
-            </div>
-            {/* Google Карты — запасной вариант, если карта/маршрут Яндекса не построились.
-                Тот же нормализованный адрес/координаты, что и у Яндекса (см. useMapRouteLinks). */}
-            <a
-              href={googleRouteHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px',
-                padding: '9px 12px',
-                background: '#25334A',
-                color: '#94A3B8',
-                textAlign: 'center',
-                borderRadius: '10px',
-                textDecoration: 'none',
-                fontWeight: '600',
-                fontSize: '13px',
-                flexShrink: 0,
-              }}
-            >
-              🗺️ Открыть в Google Картах
-            </a>
+        <div style={{ width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <OrderRouteMap address={order.address} routeHref={yandexRouteHref} />
           </div>
-        )}
+          {/* Google Карты — запасной вариант, если геокодирование адреса не сработало.
+              Тот же нормализованный адрес/координаты (см. useMapRouteLinks). */}
+          <a
+            href={googleRouteHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              padding: '9px 12px',
+              background: '#25334A',
+              color: '#94A3B8',
+              textAlign: 'center',
+              borderRadius: '10px',
+              textDecoration: 'none',
+              fontWeight: '600',
+              fontSize: '13px',
+              flexShrink: 0,
+            }}
+          >
+            🗺️ Открыть в Google Картах
+          </a>
+        </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
 
