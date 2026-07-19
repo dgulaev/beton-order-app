@@ -1,24 +1,31 @@
 'use client';
 
-import { useState, useEffect, useMemo, type CSSProperties } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { formatPhoneInput } from '@/lib/phone';
 import { useDeliveryCoords } from '@/lib/yandexRoute';
 import { calculateDeliveryCost, fetchDeliverySettings, DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
+import { X, Send, User, Phone, Building2, Layers, Clock, Calendar, MapPin, MessageSquare, Wallet } from 'lucide-react';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
-import { X, Send } from 'lucide-react';
 
-
-const fieldStyle: CSSProperties = {
+const INPUT: React.CSSProperties = {
   width: '100%',
-  padding: '14px',
+  padding: '11px 14px',
   background: '#25334A',
-  border: 'none',
-  borderRadius: '12px',
-  color: '#fff',
-  fontSize: '17px',
+  border: '1px solid #334155',
+  borderRadius: '10px',
+  color: '#E2E8F0',
+  fontSize: '15px',
   boxSizing: 'border-box',
 };
+
+function Label({ icon, text }: { icon: React.ReactNode; text: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '6px' }}>
+      {icon}{text}
+    </div>
+  );
+}
 
 interface MobileNewOrderModalProps {
   isOpen: boolean;
@@ -225,253 +232,145 @@ export default function MobileNewOrderModal({
 
   // ==================== 9. РЕНДЕР ====================
   useBodyScrollLock(isOpen);
-
   if (!isOpen) return null;
 
+  const isCopy = !!(initialData && Object.keys(initialData).length > 0);
+
   return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(0,0,0,0.95)',
-      zIndex: 10000,
-      overflowY: 'auto',
-      WebkitOverflowScrolling: 'touch'
-    }} onClick={onClose}>
-      
-      <div 
-        style={{
-          backgroundColor: '#1E2937',
-          minHeight: '100vh',
-          maxWidth: '560px',
-          margin: '0 auto',
-          paddingBottom: '100px'
-        }}
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 20000, overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: '#0D1520', minHeight: '100vh', maxWidth: '560px', margin: '0 auto', paddingBottom: '40px' }}
         onClick={e => e.stopPropagation()}
       >
-        
-        {/* ШАПКА */}
-        <div style={{ 
-          padding: '18px 20px', 
-          borderBottom: '1px solid #334155',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          position: 'sticky',
-          top: 0,
-          backgroundColor: '#1E2937',
-          zIndex: 10
+
+        {/* ── ШАПКА ──────────────────────────────── */}
+        <div style={{
+          position: 'sticky', top: 0, zIndex: 10,
+          background: '#131C2B', borderBottom: '1px solid #1E2937',
+          padding: '14px 16px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
-          <h2 style={{ margin: 0, fontSize: '23px', fontWeight: '700', color: '#ffffff' }}>
-            Новая заявка
-          </h2>
-          <button 
-            onClick={onClose} 
-            style={{ 
-              fontSize: '34px', 
-              background: 'none', 
-              border: 'none', 
-              color: '#94A3B8',
-              padding: 0,
-              lineHeight: 1
-            }}
-          >
-            ×
+          <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>
+            {isCopy ? 'Копия заявки' : 'Новая заявка'}
+          </span>
+          <button onClick={onClose} style={{ background: '#1E2937', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+            <X size={16} color="#64748B" />
           </button>
         </div>
 
-        <div style={{ padding: '20px' }}>
+        <form onSubmit={handleSubmit}>
+          <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {/* ── КЛИЕНТ ─────────────────────────── */}
+            <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
-            {/* Тип заказчика */}
-            <div>
-              <label style={{ color: '#94A3B8', marginBottom: '8px', display: 'block', fontSize: '14px' }}>
-                Тип заказчика
-              </label>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                <button 
-                  type="button" 
-                  onClick={() => setForm(p => ({...p, customerType: 'physical'}))}
-                  style={{ 
-                    flex: 1, 
-                    padding: '16px', 
-                    borderRadius: '16px', 
-                    background: form.customerType === 'physical' ? '#3B82F6' : '#334155', 
-                    color: 'white', 
-                    border: 'none', 
-                    fontSize: '16px' 
-                  }}
-                >
-                  Физ. лицо
-                </button>
-                <button 
-                  type="button" 
-                  onClick={() => setForm(p => ({...p, customerType: 'legal'}))}
-                  style={{ 
-                    flex: 1, 
-                    padding: '16px', 
-                    borderRadius: '16px', 
-                    background: form.customerType === 'legal' ? '#3B82F6' : '#334155', 
-                    color: 'white', 
-                    border: 'none', 
-                    fontSize: '16px' 
-                  }}
-                >
-                  Юр. лицо
-                </button>
+              {/* Тип */}
+              <div>
+                <Label icon={<User size={11} />} text="Тип заказчика" />
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {(['physical', 'legal'] as const).map(t => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setForm(p => ({ ...p, customerType: t }))}
+                      style={{
+                        flex: 1, padding: '10px 8px',
+                        borderRadius: '10px',
+                        border: `1px solid ${form.customerType === t ? '#3B82F6' : '#334155'}`,
+                        background: form.customerType === t ? '#3B82F620' : 'transparent',
+                        color: form.customerType === t ? '#3B82F6' : '#475569',
+                        fontSize: '14px', fontWeight: 600, cursor: 'pointer',
+                      }}
+                    >
+                      {t === 'physical' ? 'Физ. лицо' : 'Юр. лицо'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Название / ФИО */}
+              {form.customerType === 'legal' ? (
+                <div>
+                  <Label icon={<Building2 size={11} />} text="Название организации" />
+                  <input name="organizationName" placeholder="ООО «Название»" value={form.organizationName} onChange={handleChange} required style={INPUT} />
+                </div>
+              ) : (
+                <div>
+                  <Label icon={<User size={11} />} text="ФИО" />
+                  <input name="fullName" placeholder="Иванов Иван Иванович" value={form.fullName} onChange={handleChange} required style={INPUT} />
+                </div>
+              )}
+
+              {/* Телефон */}
+              <div>
+                <Label icon={<Phone size={11} />} text="Телефон" />
+                <input name="phone" type="tel" value={form.phone} onChange={handlePhoneChange} placeholder="+7 (___) ___-__-__" required style={INPUT} />
               </div>
             </div>
 
-            {/* Название / ФИО */}
-            {form.customerType === 'legal' && (
-              <div>
-                <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Название организации</div>
-                <input 
-                  name="organizationName" 
-                  placeholder="Название организации" 
-                  value={form.organizationName} 
-                  onChange={handleChange} 
-                  required 
-                  style={fieldStyle} 
-                />
-              </div>
-            )}
+            {/* ── ПАРАМЕТРЫ ЗАКАЗА ────────────────── */}
+            <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
-            {form.customerType === 'physical' && (
               <div>
-                <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>ФИО полностью</div>
-                <input 
-                  name="fullName" 
-                  placeholder="ФИО полностью" 
-                  value={form.fullName} 
-                  onChange={handleChange} 
-                  required 
-                  style={fieldStyle} 
-                />
+                <Label icon={<Layers size={11} />} text="Марка бетона" />
+                <select name="grade" value={form.grade} onChange={handleChange} style={INPUT}>
+                  {recipes.map(r => <option key={r.code} value={r.code}>{r.name}</option>)}
+                </select>
               </div>
-            )}
 
-            {/* Остальные поля */}
-            <div>
-              <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Телефон</div>
-              <input
-                name="phone"
-                type="tel"
-                value={form.phone}
-                onChange={handlePhoneChange}
-                placeholder="+7 (___) ___-__-__"
-                required
-                style={fieldStyle}
-              />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <Label icon={<span style={{ fontSize: '11px' }}>м³</span>} text="Объём" />
+                  <input name="volume" type="number" step="0.01" placeholder="0" value={form.volume} onChange={handleChange} required style={INPUT} />
+                </div>
+                <div>
+                  <Label icon={<Clock size={11} />} text="Время" />
+                  <input name="deliveryTime" type="time" value={form.deliveryTime} onChange={handleChange} required style={INPUT} />
+                </div>
+              </div>
+
+              <div>
+                <Label icon={<Calendar size={11} />} text="Дата доставки" />
+                <input name="deliveryDate" type="date" value={form.deliveryDate} onChange={handleChange} required style={INPUT} />
+              </div>
             </div>
 
-            <div>
-              <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Марка бетона</div>
-              <select 
-                name="grade" 
-                value={form.grade} 
-                onChange={handleChange} 
-                style={fieldStyle}
-              >
-                {recipes.map(r => (
-                  <option key={r.code} value={r.code}>{r.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+            {/* ── АДРЕС И КОММЕНТАРИЙ ─────────────── */}
+            <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <div>
-                <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Объём, м³</div>
-                <input 
-                  name="volume" 
-                  type="number" 
-                  step="0.01" 
-                  value={form.volume} 
-                  onChange={handleChange} 
-                  required 
-                  style={fieldStyle} 
-                />
+                <Label icon={<MapPin size={11} />} text="Адрес доставки" />
+                <textarea name="address" placeholder="г. Брянск, ул. ..." value={form.address} onChange={handleChange} required rows={2} style={{ ...INPUT, resize: 'vertical', lineHeight: 1.5 }} />
               </div>
               <div>
-                <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Время</div>
-                <input 
-                  name="deliveryTime" 
-                  type="time" 
-                  value={form.deliveryTime} 
-                  onChange={handleChange} 
-                  required 
-                  style={fieldStyle} 
-                />
+                <Label icon={<MessageSquare size={11} />} text="Комментарий" />
+                <textarea name="comment" placeholder="Необязательно" value={form.comment} onChange={handleChange} rows={3} style={{ ...INPUT, resize: 'vertical', lineHeight: 1.5 }} />
               </div>
             </div>
 
-            <div>
-              <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Дата доставки</div>
-              <input 
-                name="deliveryDate" 
-                type="date" 
-                value={form.deliveryDate} 
-                onChange={handleChange} 
-                required 
-                style={fieldStyle} 
-              />
-            </div>
-
-            <div>
-              <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Адрес доставки</div>
-              <textarea 
-                name="address" 
-                placeholder="Полный адрес доставки" 
-                value={form.address} 
-                onChange={handleChange} 
-                required 
-                rows={3}
-                style={{ ...fieldStyle, resize: 'vertical' }} 
-              />
-            </div>
-
-            <div>
-              <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Комментарий</div>
-              <textarea 
-                name="comment" 
-                placeholder="Комментарий (необязательно)" 
-                value={form.comment} 
-                onChange={handleChange} 
-                rows={4}
-                style={{ ...fieldStyle, resize: 'vertical' }} 
-              />
-            </div>
-
-            {/* Стоимость — разбивка на бетон/доставку, как в десктопной админке (NewOrderModal.tsx) */}
+            {/* ── СТОИМОСТЬ ───────────────────────── */}
             {volume > 0 && (
-              <div style={{ background: '#25334A', padding: '20px', borderRadius: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', color: '#E2E8F0' }}>
-                  <span>Бетон:</span><span>{concreteCost.toLocaleString()} ₽</span>
+              <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px' }}>
+                <Label icon={<Wallet size={11} />} text="Расчёт стоимости" />
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94A3B8', fontSize: '14px', padding: '6px 0' }}>
+                  <span>Бетон</span><span>{concreteCost.toLocaleString()} ₽</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', color: '#E2E8F0', marginTop: '6px' }}>
-                  <span>Доставка:</span><span>{deliveryCost.toLocaleString()} ₽</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94A3B8', fontSize: '14px', padding: '6px 0', borderBottom: '1px solid #1E2937' }}>
+                  <span>Доставка</span><span>{deliveryCost.toLocaleString()} ₽</span>
                 </div>
-                {deliveryNote && <div style={{ color: '#34D399', marginTop: '8px', fontSize: '14px' }}>🚚 {deliveryNote}</div>}
-                <div style={{
-                  marginTop: '12px',
-                  paddingTop: '12px',
-                  borderTop: '1px solid #475569',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontWeight: '700',
-                  fontSize: '19px',
-                  color: '#60A5FA',
-                }}>
-                  <span>Итого:</span><span>{totalPrice.toLocaleString()} ₽</span>
+                {deliveryNote && (
+                  <div style={{ color: '#34D399', fontSize: '12px', padding: '6px 0' }}>🚚 {deliveryNote}</div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#60A5FA', fontSize: '17px', fontWeight: 700, paddingTop: '10px' }}>
+                  <span>Итого</span><span>{totalPrice.toLocaleString()} ₽</span>
                 </div>
               </div>
             )}
 
-            {/* КНОПКИ */}
-            <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
+            {/* ── КНОПКИ ──────────────────────────── */}
+            <div style={{ display: 'flex', gap: '10px' }}>
               <ModalActionButton
                 type="button"
                 onClick={onClose}
@@ -491,8 +390,9 @@ export default function MobileNewOrderModal({
                 size="lg"
               />
             </div>
-          </form>
-        </div>
+
+          </div>
+        </form>
       </div>
     </div>
   );

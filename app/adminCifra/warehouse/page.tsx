@@ -1101,7 +1101,9 @@ const removeLastCube = (index: number) => {
         </div>
         
         <div style={{ fontSize: '13px', color: '#9CA3AF', marginBottom: '16px' }}>
-          {block.dimensions || '240 × 40 × 60 см'}
+          {(block.length_cm && block.width_cm && block.height_cm)
+            ? `${block.length_cm} × ${block.width_cm} × ${block.height_cm} см`
+            : (block.dimensions || '—')}
         </div>
 
         {/* Количество */}

@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import MobileDashboardOrderModal from './components/MobileDashboardOrderModal';
 import MobileCalendar from './components/MobileCalendar';
 import MobileExitButton from './components/MobileExitButton';
+import { ChevronLeft, ChevronRight, CalendarDays, X } from 'lucide-react';
 
 // 🔥 Подключаем хуки авторизации и real-time
 import { useUserRole } from '../providers/UserRoleProvider';
@@ -275,16 +276,13 @@ useEffect(() => {
         marginBottom: '24px',
         padding: '0 4px'
       }}>
-        <h1 style={{ 
-          fontSize: '28px', 
-          fontWeight: '700', 
-          margin: 0,
-          color: '#ffffff',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px'
-        }}>
-          Дашборд
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logo-tradecom-white.png"
+            alt="TradeCom"
+            style={{ height: '50px', width: 'auto', objectFit: 'contain', display: 'block' }}
+          />
           <span
             title={
               ordersRealtimeStatus === 'SUBSCRIBED'
@@ -294,41 +292,28 @@ useEffect(() => {
                 : 'Подключение...'
             }
             style={{
-              width: '9px',
-              height: '9px',
+              width: '8px',
+              height: '8px',
               borderRadius: '50%',
+              flexShrink: 0,
               display: 'inline-block',
               background:
                 ordersRealtimeStatus === 'SUBSCRIBED'
                   ? '#10B981'
                   : ordersRealtimeStatus === 'ERROR'
                   ? '#EF4444'
-                  : '#FACC15'
+                  : '#FACC15',
             }}
           />
-        </h1>
+        </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
             onClick={() => setShowCalendar(true)}
-            style={{
-              background: '#1E2937',
-              color: '#60A5FA',
-              border: '1px solid #334155',
-              borderRadius: '12px',
-              padding: '8px 16px',
-              fontSize: '15px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
-            }}
+            style={{ background: '#1E2937', border: '1px solid #334155', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+            title="Открыть календарь"
           >
-            📅 {selectedDate.toLocaleDateString('ru-RU', { 
-              weekday: 'short', 
-              day: '2-digit', 
-              month: 'short' 
-            })}
+            <CalendarDays size={17} color="#60A5FA" />
           </button>
           <MobileExitButton />
         </div>
@@ -358,73 +343,79 @@ useEffect(() => {
 
                {/* Таймлайн с переключением дней */}
         <div style={{ marginBottom: '30px' }}>
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center', 
-            gap: '16px',
-            marginBottom: '18px'
-          }}>
-            <button 
-              onClick={() => {
-                const prevDay = new Date(selectedDate);
-                prevDay.setDate(prevDay.getDate() - 1);
-                setSelectedDate(prevDay);
-              }}
-              style={{
-                background: 'none',
-                border: 'none',
-                fontSize: '32px',
-                color: '#94A3B8',
-                padding: '4px 14px',
-                cursor: 'pointer',
-                lineHeight: 1
-              }}
-            >
-              ←
-            </button>
+          {/* ── НАВИГАЦИЯ ПО ДАТАМ ── */}
+          {(() => {
+            const today = new Date();
+            const isToday =
+              selectedDate.getFullYear() === today.getFullYear() &&
+              selectedDate.getMonth() === today.getMonth() &&
+              selectedDate.getDate() === today.getDate();
 
-            <div style={{ textAlign: 'center' }}>
-              <div style={{ 
-                fontSize: '19px', 
-                fontWeight: '700', 
-                color: '#ffffff',
-                marginBottom: '4px'
-              }}>
-                График отгрузок
-              </div>
-              <div style={{ 
-                fontSize: '15.5px', 
-                color: '#60A5FA',
-                fontWeight: '500'
-              }}>
-                {selectedDate.toLocaleDateString('ru-RU', { 
-                  weekday: 'long', 
-                  day: '2-digit', 
-                  month: 'long' 
-                })}
-              </div>
-            </div>
+            const dayName = selectedDate.toLocaleDateString('ru-RU', { weekday: 'short' });
+            const dayNum = selectedDate.getDate();
+            const monthName = selectedDate.toLocaleDateString('ru-RU', { month: 'long' });
+            const year = selectedDate.getFullYear();
+            const activeCount = todayOrders.filter((o: any) => o.status !== 'cancelled').length;
+            const totalVol = todayOrders.filter((o: any) => o.status !== 'cancelled').reduce((s: number, o: any) => s + Number(o.volume || 0), 0);
 
-            <button 
-              onClick={() => {
-                const nextDay = new Date(selectedDate);
-                nextDay.setDate(nextDay.getDate() + 1);
-                setSelectedDate(nextDay);
-              }}
-              style={{
-                background: 'none',
-                border: 'none',
-                fontSize: '32px',
-                color: '#94A3B8',
-                padding: '4px 14px',
-                cursor: 'pointer',
-                lineHeight: 1
-              }}
-            >
-              →
-            </button>
-          </div>
+            const navBtn = (dir: 'prev' | 'next') => {
+              const d = new Date(selectedDate);
+              d.setDate(d.getDate() + (dir === 'next' ? 1 : -1));
+              setSelectedDate(d);
+            };
+
+            return (
+              <div style={{
+                background: '#131C2B',
+                borderRadius: '18px',
+                padding: '14px 16px',
+                marginBottom: '18px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+              }}>
+                <button
+                  onClick={() => navBtn('prev')}
+                  style={{ background: '#1E2937', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+                >
+                  <ChevronLeft size={18} color="#64748B" />
+                </button>
+
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                  <CalendarDays size={18} color={isToday ? '#10B981' : '#475569'} style={{ flexShrink: 0 }} />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {dayName}, {dayNum} {monthName} {year !== today.getFullYear() ? year : ''}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#475569', marginTop: '1px' }}>
+                      {activeCount > 0 ? `${activeCount} заявок · ${totalVol.toFixed(1)} м³` : 'Нет заявок'}
+                    </div>
+                  </div>
+                </div>
+
+                {!isToday && (
+                  <button
+                    onClick={() => setSelectedDate(new Date(today.getFullYear(), today.getMonth(), today.getDate()))}
+                    style={{ background: 'transparent', border: '1px solid #334155', borderRadius: '8px', padding: '5px 10px', color: '#64748B', fontSize: '12px', fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}
+                  >
+                    Сегодня
+                  </button>
+                )}
+                {isToday && (
+                  <span style={{ background: '#10B98118', border: '1px solid #10B98140', borderRadius: '8px', padding: '5px 10px', color: '#10B981', fontSize: '12px', fontWeight: 600, flexShrink: 0 }}>
+                    Сегодня
+                  </span>
+                )}
+
+                <button
+                  onClick={() => navBtn('next')}
+                  style={{ background: '#1E2937', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+                >
+                  <ChevronRight size={18} color="#64748B" />
+                </button>
+              </div>
+            );
+          })()}
 
                     {/* Фильтрация заказов на выбранный день */}
           {todayOrders.length > 0 ? todayOrders.map((order: any) => {
@@ -562,43 +553,33 @@ useEffect(() => {
         />
       )}
 
-      {/* ==================== УЛУЧШЕННАЯ МОДАЛКА КАЛЕНДАРЯ ==================== */}
+      {/* ==================== МОДАЛКА КАЛЕНДАРЯ ==================== */}
       {showCalendar && (
-        <div 
-          style={{ 
-            position: 'fixed', 
-            inset: 0, 
-            background: 'rgba(0,0,0,0.94)', 
-            zIndex: 99999,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }} 
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 99999, display: 'flex', alignItems: 'flex-end' }}
           onClick={() => setShowCalendar(false)}
         >
-          <div 
-            onClick={e => e.stopPropagation()} 
-            style={{ 
-              width: '94%', 
-              maxWidth: '420px',
-              boxSizing: 'border-box',
-              background: '#1E2937',
-              borderRadius: '20px',
-              padding: '20px 16px',
-              boxShadow: '0 20px 50px rgba(0,0,0,0.7)'
-            }}
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ width: '100%', background: '#0D1520', borderRadius: '24px 24px 0 0', paddingBottom: '32px', boxShadow: '0 -8px 40px rgba(0,0,0,0.6)' }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ margin: 0, color: '#ffffff', fontSize: '21px', fontWeight: '700' }}>Планирование</h3>
-              <button 
+            {/* Ручка */}
+            <div style={{ display: 'flex', justifyContent: 'center', paddingTop: '12px', paddingBottom: '4px' }}>
+              <div style={{ width: '36px', height: '4px', borderRadius: '2px', background: '#334155' }} />
+            </div>
+
+            {/* Шапка */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 20px 16px' }}>
+              <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>Планирование</span>
+              <button
                 onClick={() => setShowCalendar(false)}
-                style={{ background: 'none', border: 'none', fontSize: '30px', color: '#94A3B8', lineHeight: 1 }}
+                style={{ background: '#1E2937', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
               >
-                ✕
+                <X size={16} color="#64748B" />
               </button>
             </div>
 
-            <MobileCalendar 
+            <MobileCalendar
               selectedDate={selectedDate}
               setSelectedDate={setSelectedDate}
               allOrders={allOrders}

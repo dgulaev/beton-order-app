@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { X, MapPin, Navigation, ChevronDown, Clock } from 'lucide-react';
 import { Order } from '../../adminCifra/hooks/useCalendarOrders';
 import { useYandexRouteHref } from '@/lib/yandexRoute';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
@@ -23,7 +24,26 @@ interface MobileOrderDetailModalProps {
   setSelectedOrder: React.Dispatch<React.SetStateAction<Order | null>>;
 }
 
-export default function MobileOrderDetailModal(props: MobileOrderDetailModalProps) {
+const STATUS_OPTIONS = [
+  { value: 'new',        label: 'Новая',     color: '#F59E0B' },
+  { value: 'processing', label: 'В работе',  color: '#3B82F6' },
+  { value: 'completed',  label: 'Выполнена', color: '#10B981' },
+  { value: 'cancelled',  label: 'Отменена',  color: '#EF4444' },
+];
+function statusCfg(s: string) {
+  return STATUS_OPTIONS.find(x => x.value === s) ?? { value: s, label: s, color: '#64748B', final: false };
+}
+
+function InfoRow({ label, value, accent }: { label: string; value: React.ReactNode; accent?: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', padding: '10px 0', borderBottom: '1px solid #1E2937' }}>
+      <span style={{ color: '#475569', fontSize: '13px', flexShrink: 0 }}>{label}</span>
+      <span style={{ color: accent || '#CBD5E1', fontSize: '14px', fontWeight: 600, textAlign: 'right', lineHeight: 1.35 }}>{value || '—'}</span>
+    </div>
+  );
+}
+
+export default function MobileDashboardOrderModal(props: MobileOrderDetailModalProps) {
   const {
     order,
     onClose,
@@ -34,470 +54,271 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
     setHistory,
   } = props;
 
-  // Хуки должны вызываться в одном и том же порядке на каждый рендер — раньше
-  // `if (!order) return null` стоял перед ними (нарушение Rules of Hooks).
-  // Сейчас родитель всегда монтирует модалку только при order != null, но на
-  // случай будущих изменений держим guard'ы (order?.…) внутри самих хуков,
-  // а ранний return — уже после всех вызовов хуков.
   const [localOrder, setLocalOrder] = useState(order);
   const [history, setLocalHistory] = useState(initialHistory || []);
   const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(order?.address);
 
   useBodyScrollLock(!!order);
 
-  // ==================== ЗАГРУЗКА ИСТОРИИ ====================
   useEffect(() => {
-    const loadHistory = async () => {
-      if (!order?.id) return;
-
-      try {
-        const res = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
-        if (res.ok) {
-          const data = await res.json();
-          setLocalHistory(data);
-          if (setHistory) setHistory(data); // синхронизируем с родителем
-        }
-      } catch (err) {
-        console.error('Ошибка загрузки истории в мобильной модалке:', err);
-      }
-    };
-
-    loadHistory();
+    if (!order?.id) return;
+    fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => { setLocalHistory(data); if (setHistory) setHistory(data); })
+      .catch(console.error);
   }, [order?.id, setHistory]);
 
-  useEffect(() => {
-    setLocalOrder(order);
-  }, [order]);
+  useEffect(() => { setLocalOrder(order); }, [order]);
 
-  // Проверяем оба — localOrder синхронизируется с order через useEffect выше,
-  // но независимо им сужаем localOrder до не-null для TypeScript ниже по коду.
   if (!order || !localOrder) return null;
 
   const currentMixers = mixerAssignments
     .filter(m => String(m.orderId) === String(order.id))
     .sort((a, b) => (a.time || '00:00').localeCompare(b.time || '00:00'));
 
-  const assignedVolume = currentMixers.reduce((sum, m) => sum + Number(m.volume || 0), 0);
+  const assignedVolume = currentMixers.reduce((s, m) => s + Number(m.volume || 0), 0);
   const orderVolume = Number(order.volume || 0);
-  const isFullyReady = assignedVolume >= orderVolume && assignedVolume > 0;
+  const totalDowntimeMin = currentMixers.reduce((s, m) => s + Number(m.downtimeMinutes || 0), 0);
 
-  // ==================== ПРОСТОЙ: ПО РЕЙСАМ И ИТОГО ПО ЗАЯВКЕ ====================
-  const totalDowntimeMinutes = currentMixers.reduce((sum, m) => sum + Number(m.downtimeMinutes || 0), 0);
+  const sc = statusCfg(localOrder.status);
+  const isFinal = localOrder.status === 'completed' || localOrder.status === 'cancelled';
 
-  const formatOnSiteDuration = (mixer: any): string | null => {
+  const formatOnSite = (mixer: any): string | null => {
     if (!mixer.onSiteAt) return null;
-    const endTime = mixer.unloadedAt ? new Date(mixer.unloadedAt) : new Date();
-    const minutes = Math.round((endTime.getTime() - new Date(mixer.onSiteAt).getTime()) / 60000);
-    if (minutes < 0) return null;
-    return `${minutes} мин`;
-  };
-
-  const getStatusRussian = (status: string): string => {
-    const map: Record<string, string> = {
-      'new': 'Новая', 'processing': 'В работе', 'completed': 'Выполнена', 'cancelled': 'Отменена'
-    };
-    return map[status?.toLowerCase()] || status || '—';
-  };
-
-  const getStatusConfigLocal = (status: string) => {
-    const s = (status || 'new').toLowerCase();
-    if (s === 'completed') return { label: 'Выполнена', bg: '#22C55E', color: '#ffffff', final: true };
-    if (s === 'cancelled') return { label: 'Отменена', bg: '#EF4444', color: '#ffffff', final: true };
-    if (s === 'processing') return { label: 'В работе', bg: '#3B82F6', color: '#ffffff', final: false };
-    return { label: 'Новая', bg: '#F59E0B', color: '#ffffff', final: false };
+    const end = mixer.unloadedAt ? new Date(mixer.unloadedAt) : new Date();
+    const m = Math.round((end.getTime() - new Date(mixer.onSiteAt).getTime()) / 60000);
+    return m < 0 ? null : `${m} мин`;
   };
 
   const handleOrderStatusChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newStatus = e.target.value;
     if (newStatus === localOrder.status) return;
-
     const oldStatus = localOrder.status;
-    setLocalOrder(prev => (prev ? { ...prev, status: newStatus } : prev));
+    setLocalOrder(prev => prev ? { ...prev, status: newStatus } : prev);
     setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: newStatus } : o));
-
     try {
-      // Ручная смена статуса всегда идёт через /orders/update — там же защита
-      // финальных статусов и запись истории с реальной ролью пользователя.
       const res = await fetch('/api/adminCifra/orders/update', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: order.id,
-          status: newStatus,
-          userName: currentUser?.name || 'Пользователь',
-          userRole: currentUser?.role || 'unknown'
-        })
+        body: JSON.stringify({ id: order.id, status: newStatus, userName: currentUser?.name || 'Пользователь', userRole: currentUser?.role || 'unknown' }),
       });
-
       const data = await res.json();
-
       if (!data.success) {
-        // Откат
-        setLocalOrder(prev => (prev ? { ...prev, status: oldStatus } : prev));
+        setLocalOrder(prev => prev ? { ...prev, status: oldStatus } : prev);
         setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: oldStatus } : o));
-        alert('Ошибка сохранения: ' + (data.message || ''));
+        alert('Ошибка: ' + (data.message || ''));
         return;
       }
-
       const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
-      if (histRes.ok) {
-        const freshHistory = await histRes.json();
-        setLocalHistory(freshHistory);
-        if (typeof setHistory === 'function') setHistory(freshHistory);
-      }
-    } catch (err) {
-      console.error(err);
-      // Откат
-      setLocalOrder(prev => (prev ? { ...prev, status: oldStatus } : prev));
+      if (histRes.ok) { const d = await histRes.json(); setLocalHistory(d); if (setHistory) setHistory(d); }
+    } catch {
+      setLocalOrder(prev => prev ? { ...prev, status: oldStatus } : prev);
       setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: oldStatus } : o));
-      alert('Не удалось связаться с сервером');
+      alert('Ошибка соединения');
     }
   };
 
-             // ==================== АВТОПОДСТАНОВКА ГОРОДА ====================
-    const getFullAddressForRoute = (rawAddress: string): string => {
-    if (!rawAddress) return "Брянск";
-
-    const address = rawAddress.trim();
-
-    // Если уже содержит "Брянск" (в любом регистре)
-    if (/брянск/i.test(address)) {
-      return address;
-    }
-
-    // Добавляем префикс
-    return `Брянск, ${address}`;
-  };
-
-  // Ссылка на маршрут в Google Maps. Раньше открывалась через window.open() в
-  // onClick — на мобильных Chromium-браузерах (в т.ч. Яндекс.Браузере) это
-  // "обеляло"/подвешивало страницу. Обычная <a href target="_blank"> (как у
-  // Яндекс.Карт ниже) обрабатывается браузером штатно, без побочных эффектов.
-  const googleMapsHref = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Брянск, туп. Орловский, 6А')}&destination=${encodeURIComponent(getFullAddressForRoute(order.address || ''))}&travelmode=driving`;
-
-  
-
-  
+  const getFullAddress = (a: string) => (!a ? 'Брянск' : /брянск/i.test(a) ? a : `Брянск, ${a}`);
+  const googleMapsHref = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Брянск, туп. Орловский, 6А')}&destination=${encodeURIComponent(getFullAddress(order.address || ''))}&travelmode=driving`;
 
   return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(0,0,0,0.95)',
-      zIndex: 100000,
-      overflowY: 'auto',
-      WebkitOverflowScrolling: 'touch'
-    }} onClick={onClose}>
-      
-      <div 
-        style={{
-          backgroundColor: '#1E2937',
-          minHeight: '100vh',
-          maxWidth: '560px',
-          margin: '0 auto',
-          paddingBottom: '100px'
-        }}
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 100000, overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: '#0D1520', minHeight: '100vh', maxWidth: '560px', margin: '0 auto', paddingBottom: '40px' }}
         onClick={e => e.stopPropagation()}
       >
-        
-        {/* 1. ШАПКА МОДАЛКИ (заголовок + статус-пилюля) */}
-        <div style={{ 
-          padding: '18px 20px', 
-          borderBottom: '1px solid #334155',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: '12px',
-          position: 'sticky',
-          top: 0,
-          backgroundColor: '#1E2937',
-          zIndex: 10
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flexWrap: 'wrap' }}>
-            <h2 style={{ margin: 0, fontSize: '20px', color: '#ffffff', whiteSpace: 'nowrap' }}>
-              Заявка #{order?.id}
-            </h2>
 
-            {getStatusConfigLocal(localOrder.status).final ? (
-              <div style={{
-                backgroundColor: getStatusConfigLocal(localOrder.status).bg,
-                color: getStatusConfigLocal(localOrder.status).color,
-                padding: '6px 14px',
-                borderRadius: '9999px',
-                fontWeight: '600',
-                fontSize: '13px',
-                whiteSpace: 'nowrap'
-              }}>
-                {getStatusConfigLocal(localOrder.status).label}
-              </div>
+        {/* ── ШАПКА ─────────────────────────────────── */}
+        <div style={{
+          position: 'sticky', top: 0, zIndex: 10,
+          background: '#131C2B',
+          borderBottom: '1px solid #1E2937',
+          padding: '14px 16px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+            <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
+              Заявка #{order.id}
+            </span>
+
+            {isFinal ? (
+              <span style={{ padding: '5px 12px', borderRadius: '9999px', fontSize: '12px', fontWeight: 700, background: `${sc.color}20`, color: sc.color, whiteSpace: 'nowrap' }}>
+                {sc.label}
+              </span>
             ) : (
-              <select
-                value={localOrder.status || 'new'}
-                onChange={handleOrderStatusChange}
-                style={{
-                  background: getStatusConfigLocal(localOrder.status).bg,
-                  color: getStatusConfigLocal(localOrder.status).color,
-                  border: 'none',
-                  borderRadius: '9999px',
-                  padding: '6px 12px',
-                  fontSize: '13px',
-                  fontWeight: '600'
-                }}
-              >
-                <option value="new">Новая</option>
-                <option value="processing">В работе</option>
-                <option value="completed">Выполнена</option>
-                <option value="cancelled">Отменена</option>
-              </select>
+              <div style={{ position: 'relative' }}>
+                <select
+                  value={localOrder.status || 'new'}
+                  onChange={handleOrderStatusChange}
+                  style={{ appearance: 'none', padding: '5px 28px 5px 12px', borderRadius: '9999px', border: `1px solid ${sc.color}50`, background: `${sc.color}20`, color: sc.color, fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                </select>
+                <ChevronDown size={11} color={sc.color} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+              </div>
             )}
           </div>
 
-          <button 
-            onClick={onClose} 
-            style={{ 
-              fontSize: '34px', 
-              background: 'none', 
-              border: 'none', 
-              color: '#94A3B8',
-              padding: 0,
-              lineHeight: 1,
-              flexShrink: 0
-            }}
-          >
-            ×
+          <button onClick={onClose} style={{ background: '#1E2937', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+            <X size={16} color="#64748B" />
           </button>
         </div>
 
-        <div style={{ padding: '20px' }}>
+        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
-          {/* 2. ИНФОРМАЦИЯ О ЗАКАЗЕ */}
-          <div style={{ 
-            background: '#25334A', 
-            borderRadius: '16px', 
-            padding: '20px', 
-            marginBottom: '24px',
-            color: '#ffffff'
-          }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 12px', fontSize: '15.5px' }}>
-              <div style={{ color: '#94A3B8' }}>Клиент</div>
-              <div style={{ fontWeight: '600' }}>{order.organization_name || order.full_name || '—'}</div>
-
-              <div style={{ color: '#94A3B8' }}>Телефон</div>
-              <div style={{ fontWeight: '600' }}>{order.phone || '—'}</div>
-
-              <div style={{ color: '#94A3B8' }}>Марка бетона</div>
-              <div style={{ fontWeight: '600', color: '#60A5FA' }}>{order.grade || '—'}</div>
-
-              <div style={{ color: '#94A3B8' }}>Объём</div>
-              <div style={{ fontSize: '23px', fontWeight: '700', color: '#10B981' }}>{order.volume} м³</div>
-
-              <div style={{ color: '#94A3B8' }}>Дата и время</div>
-              <div style={{ fontWeight: '600' }}>{order.delivery_date} • {order.delivery_time}</div>
-
-              <div style={{ color: '#94A3B8' }}>Адрес</div>
-              <div style={{ fontWeight: '600', lineHeight: 1.35 }}>{order.address || '—'}</div>
-            </div>
-
+          {/* ── ИНФО О ЗАКАЗЕ ─────────────────────── */}
+          <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px' }}>
+            <InfoRow label="Клиент" value={order.organization_name || order.full_name} />
+            <InfoRow label="Телефон" value={order.phone} />
+            <InfoRow label="Марка бетона" value={order.grade} accent="#60A5FA" />
+            <InfoRow label="Объём" value={`${order.volume} м³`} accent="#10B981" />
+            <InfoRow label="Дата и время" value={`${order.delivery_date} · ${order.delivery_time}`} />
+            <InfoRow label="Адрес" value={order.address} />
             {order.comment && (
-              <div style={{ marginTop: '24px' }}>
-                <div style={{ color: '#94A3B8', marginBottom: '8px' }}>Комментарий клиента</div>
-                <div style={{ 
-                  background: '#1E2937', 
-                  padding: '16px', 
-                  borderRadius: '12px', 
-                  whiteSpace: 'pre-wrap',
-                  lineHeight: 1.5 
-                }}>
+              <div style={{ marginTop: '12px', background: '#1E2937', borderRadius: '10px', padding: '12px', color: '#94A3B8', fontSize: '13px', lineHeight: 1.5 }}>
+                <span style={{ color: '#475569', display: 'block', marginBottom: '4px', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Комментарий</span>
+                <div style={{ maxHeight: '120px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
                   {order.comment}
                 </div>
               </div>
             )}
           </div>
 
-          {/* 4. НАЗНАЧЕННЫЕ МИКСЕРЫ */}
-          <div style={{ marginBottom: '28px' }}>
-            <h3 style={{ color: '#94A3B8', marginBottom: '14px', fontSize: '17px' }}>
-              Назначенные миксеры ({currentMixers.length})
-            </h3>
-
-            {currentMixers.length > 0 && (
-              <div style={{
-                marginBottom: '14px',
-                padding: '12px 16px',
-                borderRadius: '12px',
-                background: totalDowntimeMinutes > 0 ? 'rgba(249, 115, 22, 0.12)' : 'rgba(16, 185, 129, 0.12)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px'
-              }}>
-                <span style={{ color: '#94A3B8', fontSize: '13.5px' }}>Общий простой по заявке:</span>
-                <span style={{ color: totalDowntimeMinutes > 0 ? '#F97316' : '#10B981', fontWeight: '700', fontSize: '16px' }}>{totalDowntimeMinutes} мин</span>
+          {/* ── ПРОГРЕСС ОБЪЁМА ───────────────────── */}
+          {currentMixers.length > 0 && (
+            <div style={{ background: '#131C2B', borderRadius: '16px', padding: '14px 16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ color: '#475569', fontSize: '13px' }}>Назначено</span>
+                <span style={{ color: assignedVolume >= orderVolume ? '#10B981' : '#FACC15', fontWeight: 700, fontSize: '14px' }}>
+                  {assignedVolume.toFixed(1)} / {orderVolume} м³
+                </span>
               </div>
-            )}
-            
-            {currentMixers.length > 0 ? (
-              currentMixers.map(mixer => {
-                const onSiteDuration = formatOnSiteDuration(mixer);
-                return (
-                  <div key={mixer.id} style={{ 
-                    background: '#25334A', 
-                    padding: '16px', 
-                    borderRadius: '12px', 
-                    marginBottom: '12px',
-                    color: '#ffffff'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <strong>{mixer.mixerName || mixer.number || 'Миксер'}</strong>
-                        <div style={{ fontSize: '14px', color: '#94A3B8' }}>{mixer.time}</div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontWeight: '600' }}>{Number(mixer.volume).toFixed(1)} м³</div>
-                        <div style={{ fontSize: '13.5px', color: '#10B981' }}>{mixer.status || 'Загрузка'}</div>
-                      </div>
-                    </div>
-
-                    <div style={{
-                      marginTop: '10px',
-                      fontSize: '13px',
-                      padding: '6px 10px',
-                      borderRadius: '8px',
-                      display: 'inline-block',
-                      background: Number(mixer.downtimeMinutes) > 0 ? 'rgba(249, 115, 22, 0.15)' : 'rgba(148, 163, 184, 0.15)',
-                      color: Number(mixer.downtimeMinutes) > 0 ? '#F97316' : '#94A3B8'
-                    }}>
-                      ⏱ {onSiteDuration || '0 мин'}
-                      {mixer.status === 'Разгружен' && ` (простой ${Number(mixer.downtimeMinutes || 0)} мин)`}
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <div style={{ 
-                background: '#25334A', 
-                padding: '50px 20px', 
-                borderRadius: '12px', 
-                textAlign: 'center',
-                color: '#94A3B8'
-              }}>
-                Пока нет назначенных миксеров
+              <div style={{ background: '#1E2937', borderRadius: '9999px', height: '6px', overflow: 'hidden' }}>
+                <div style={{ height: '100%', borderRadius: '9999px', width: `${Math.min(100, (assignedVolume / orderVolume) * 100)}%`, background: assignedVolume >= orderVolume ? '#10B981' : '#FACC15', transition: 'width 0.3s' }} />
               </div>
-            )}
-          </div>
-
-         {/* 5. КАРТЫ (с автоподстановкой города) */}
-          <div style={{ marginBottom: '28px' }}>
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <a 
-                href={yandexRouteHref}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-disabled={!yandexRouteReady}
-                onClick={(e) => { if (!yandexRouteReady) e.preventDefault(); }}
-                style={{ 
-                  flex: 1, 
-                  padding: '16px', 
-                  background: '#3B82F6', 
-                  color: '#ffffff', 
-                  border: 'none', 
-                  borderRadius: '12px', 
-                  fontSize: '16px',
-                  fontWeight: '600',
-                  textAlign: 'center',
-                  textDecoration: 'none',
-                  display: 'inline-block',
-                  opacity: yandexRouteReady ? 1 : 0.6,
-                  cursor: yandexRouteReady ? 'pointer' : 'wait'
-                }}
-              >
-                🗺️ {yandexRouteReady ? 'Яндекс.Карты' : 'Строим маршрут...'}
-              </a>
-              <a 
-                href={googleMapsHref}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                style={{ 
-                  flex: 1, 
-                  padding: '16px', 
-                  background: '#10B981', 
-                  color: '#ffffff', 
-                  border: 'none', 
-                  borderRadius: '12px', 
-                  fontSize: '16px',
-                  fontWeight: '600',
-                  textAlign: 'center',
-                  textDecoration: 'none',
-                  display: 'inline-block'
-                }}
-              >
-                🗺️ Google Maps
-              </a>
-            </div>
-          </div>
-
-        {/* 6. ИСТОРИЯ ИЗМЕНЕНИЙ */}
-          <div>
-            <h3 style={{ color: '#94A3B8', marginBottom: '14px', fontSize: '17px' }}>История изменений</h3>
-            
-            <div style={{ 
-              background: '#25334A', 
-              borderRadius: '16px', 
-              padding: '20px', 
-              maxHeight: '320px',
-              overflowY: 'auto'
-            }}>
-              {history.length > 0 ? (
-                history.map((entry: any, index: number) => {
-                  const time = new Date(entry.created_at).toLocaleString('ru-RU', { 
-                    hour: '2-digit', 
-                    minute: '2-digit',
-                    day: '2-digit',
-                    month: '2-digit'
-                  });
-
-                  const userName = entry.user_name || 'Сотрудник';
-                  const userRole = entry.user_role ? ` (${entry.user_role})` : '';
-
-                  // Исправляем английские статусы на русские
-                  let actionText = entry.action || '';
-                  actionText = actionText
-                    .replace('processing', 'В работе')
-                    .replace('completed', 'Выполнена')
-                    .replace('new', 'Новая')
-                    .replace('cancelled', 'Отменена');
-
-                  return (
-                    <div key={index} style={{ 
-                      paddingBottom: '14px', 
-                      marginBottom: '14px',
-                      borderBottom: index !== history.length - 1 ? '1px solid #334155' : 'none'
-                    }}>
-                      <div style={{ color: '#64748B', fontSize: '13px', marginBottom: '6px' }}>
-                        {time}
-                      </div>
-                      
-                      <div style={{ fontWeight: '600', color: '#CBD5E1' }}>
-                        {userName}{userRole}
-                      </div>
-                      
-                      <div style={{ marginTop: '4px', color: '#E2E8F0', lineHeight: '1.45' }}>
-                        {actionText}
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div style={{ color: '#94A3B8', textAlign: 'center', padding: '40px 0' }}>
-                  История пока пуста
+              {totalDowntimeMin > 0 && (
+                <div style={{ marginTop: '8px', color: '#F97316', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Clock size={12} /> Общий простой: {totalDowntimeMin} мин
                 </div>
               )}
             </div>
+          )}
+
+          {/* ── МИКСЕРЫ ───────────────────────────── */}
+          <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px' }}>
+            <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
+              Миксеры ({currentMixers.length})
+            </div>
+            {currentMixers.length === 0 ? (
+              <div style={{ color: '#334155', fontSize: '14px', textAlign: 'center', padding: '24px 0' }}>Миксеры не назначены</div>
+            ) : <div style={{ maxHeight: '260px', overflowY: 'auto' }}>{currentMixers.map(mixer => {
+              const onSite = formatOnSite(mixer);
+              const hasDowntime = Number(mixer.downtimeMinutes) > 0;
+              return (
+                <div key={mixer.id} style={{ background: '#1E2937', borderRadius: '12px', padding: '12px 14px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '14px', color: '#E2E8F0' }}>{mixer.mixerName || mixer.number || 'Миксер'}</div>
+                    <div style={{ color: '#475569', fontSize: '12px', marginTop: '2px' }}>{mixer.time}</div>
+                    {onSite && (
+                      <div style={{ marginTop: '6px', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '9999px', background: hasDowntime ? '#F9731615' : '#33415515', color: hasDowntime ? '#F97316' : '#64748B', fontSize: '12px' }}>
+                        <Clock size={10} /> {onSite}{mixer.status === 'Разгружен' && hasDowntime ? ` (простой ${mixer.downtimeMinutes} мин)` : ''}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: '16px', color: '#E2E8F0' }}>{Number(mixer.volume).toFixed(1)} м³</div>
+                    <div style={{ fontSize: '12px', color: '#10B981', marginTop: '2px' }}>{mixer.status || 'Загрузка'}</div>
+                  </div>
+                </div>
+              );
+            })}</div>}
           </div>
+
+          {/* ── КАРТЫ ─────────────────────────────── */}
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <a
+              href={yandexRouteHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-disabled={!yandexRouteReady}
+              onClick={e => { if (!yandexRouteReady) e.preventDefault(); }}
+              style={{
+                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                padding: '13px',
+                background: 'transparent',
+                color: yandexRouteReady ? '#3B82F6' : '#334155',
+                border: `1px solid ${yandexRouteReady ? '#3B82F650' : '#1E2937'}`,
+                borderRadius: '12px',
+                fontSize: '14px', fontWeight: 600,
+                textDecoration: 'none',
+                cursor: yandexRouteReady ? 'pointer' : 'wait',
+              }}
+            >
+              <MapPin size={15} />
+              {yandexRouteReady ? 'Яндекс' : '...'}
+            </a>
+            <a
+              href={googleMapsHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                padding: '13px',
+                background: 'transparent',
+                color: '#10B981',
+                border: '1px solid #10B98150',
+                borderRadius: '12px',
+                fontSize: '14px', fontWeight: 600,
+                textDecoration: 'none',
+              }}
+            >
+              <Navigation size={15} />
+              Google
+            </a>
+          </div>
+
+          {/* ── ИСТОРИЯ ───────────────────────────── */}
+          {history.length > 0 && (
+            <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px' }}>
+              <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
+                История изменений
+              </div>
+              <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
+              {history.map((entry: any, i: number) => {
+                const time = new Date(entry.created_at).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
+                let action = (entry.action || '')
+                  .replace('processing', 'В работе').replace('completed', 'Выполнена')
+                  .replace('new', 'Новая').replace('cancelled', 'Отменена');
+                return (
+                  <div key={i} style={{ padding: '10px 0', borderBottom: i < history.length - 1 ? '1px solid #1E2937' : 'none' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
+                      <span style={{ color: '#CBD5E1', fontSize: '13px', fontWeight: 600 }}>{entry.user_name || 'Сотрудник'}</span>
+                      <span style={{ color: '#334155', fontSize: '12px' }}>{time}</span>
+                    </div>
+                    <div style={{ color: '#64748B', fontSize: '13px', lineHeight: 1.4 }}>{action}</div>
+                  </div>
+                );
+              })}
+              </div>
+            </div>
+          )}
+
+          {/* ── ЗАКРЫТЬ ───────────────────────────── */}
+          <button
+            onClick={onClose}
+            style={{
+              width: '100%', padding: '14px',
+              background: 'transparent', color: '#475569',
+              border: '1px solid #1E2937', borderRadius: '12px',
+              fontWeight: 600, fontSize: '15px', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+            }}
+          >
+            <X size={16} /> Закрыть
+          </button>
 
         </div>
       </div>

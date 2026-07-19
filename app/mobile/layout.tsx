@@ -6,7 +6,7 @@
 // 2) сотрудник вводит пароль, водитель подтверждает номер своего миксера.
 // После входа показываем нужный дашборд — без переключения URL.
 
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Home, Package, Truck, Factory, Users, ArrowLeft, Loader2 } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
@@ -299,6 +299,26 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
     if (isOldDriverLink) router.replace('/mobile');
   }, [isOldDriverLink, router]);
 
+  // ==================== НАВБАР: скрывается при скролле вниз, выезжает при скролле вверх ====================
+  const [navVisible, setNavVisible] = useState(true);
+  const lastScrollY = useRef(0);
+
+  useEffect(() => {
+    const onScroll = () => {
+      const y = window.scrollY;
+      if (y < 10) {
+        setNavVisible(true);
+      } else if (y > lastScrollY.current + 6) {
+        setNavVisible(false);
+      } else if (y < lastScrollY.current - 6) {
+        setNavVisible(true);
+      }
+      lastScrollY.current = y;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
   // ==================== 10. ЗАГРУЗКА ====================
   // Блокируем интерфейс спиннером только пока НЕТ вообще никаких данных
   // (ни закэшированного водителя, ни закэшированной роли сотрудника) — если
@@ -493,8 +513,23 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
     <div id="mobile-root" style={{ width: '100vw', maxWidth: '100vw', overflowX: 'hidden', backgroundColor: '#0F172A', minHeight: '100vh', position: 'relative' }}>
       {children}
 
-      {/* Нижний навбар */}
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, height: '74px', background: '#1E2937', borderTop: '1px solid #334155', display: 'flex', alignItems: 'center', justifyContent: 'space-around', zIndex: 1000, paddingBottom: '8px' }}>
+      {/* Нижний навбар с анимацией появления/скрытия */}
+      <div style={{
+        position: 'fixed',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: '74px',
+        background: '#1E2937',
+        borderTop: '1px solid #334155',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-around',
+        zIndex: 1000,
+        paddingBottom: '8px',
+        transform: navVisible ? 'translateY(0)' : 'translateY(100%)',
+        transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+      }}>
         <NavLink href="/mobile/" icon={<Home size={26} />} label="Дашборд" pathname={pathname} />
         <NavLink href="/mobile/zayavki" icon={<Package size={26} />} label="Заявки" pathname={pathname} />
         <NavLink href="/mobile/mixers" icon={<Truck size={26} />} label="Миксеры" pathname={pathname} />

@@ -1,23 +1,10 @@
 'use client';
 
-import { useState, useEffect, type CSSProperties } from 'react';
-import { Save, Trash2, Share2, Copy, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Save, Trash2, Share2, Copy, X, User, Phone, Layers, Clock, Calendar, MapPin, MessageSquare, ChevronDown } from 'lucide-react';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
-
-// Тот же фон полей, что в MobileNewOrderModal (#25334A на карточке #1E2937) —
-// раньше здесь стоял #1E2937 (совпадал с фоном модалки, поля "терялись").
-const fieldStyle: CSSProperties = {
-  width: '100%',
-  padding: '14px',
-  background: '#25334A',
-  border: 'none',
-  borderRadius: '12px',
-  color: '#fff',
-  fontSize: '16px',
-  boxSizing: 'border-box',
-};
 
 interface MobileOrderDetailModalProps {
   isOpen: boolean;
@@ -30,6 +17,40 @@ interface MobileOrderDetailModalProps {
   currentUserName?: string;
 }
 
+const STATUS_OPTIONS = [
+  { value: 'new',        label: 'Новая',     color: '#F59E0B' },
+  { value: 'processing', label: 'В работе',  color: '#3B82F6' },
+  { value: 'completed',  label: 'Выполнена', color: '#10B981' },
+  { value: 'cancelled',  label: 'Отменена',  color: '#EF4444' },
+];
+
+function statusCfg(status: string) {
+  return STATUS_OPTIONS.find(s => s.value === status) ?? { value: status, label: status, color: '#64748B' };
+}
+
+function FieldBlock({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+      <div style={{ color: '#475569', marginTop: '1px', flexShrink: 0 }}>{icon}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '4px' }}>{label}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const INPUT: React.CSSProperties = {
+  width: '100%',
+  padding: '11px 14px',
+  background: '#25334A',
+  border: '1px solid #334155',
+  borderRadius: '10px',
+  color: '#E2E8F0',
+  fontSize: '15px',
+  boxSizing: 'border-box',
+};
+
 export default function MobileOrderDetailModal({
   isOpen,
   order,
@@ -40,81 +61,53 @@ export default function MobileOrderDetailModal({
   currentRole = 'admin',
   currentUserName = 'Сотрудник',
 }: MobileOrderDetailModalProps) {
-
-  // ==================== 1. СОСТОЯНИЯ ====================
   const [editedOrder, setEditedOrder] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  // ==================== REALTIME ОБНОВЛЕНИЕ В МОДАЛКЕ (broadcast) ====================
-  // Слушаем общий broadcast-топик orders:all и фильтруем по id открытой заявки.
   useRealtimeBroadcast({
     topic: 'orders:all',
     enabled: isOpen && !!order?.id,
     onUpdate: (record) => {
       if (record && String(record.id) === String(order?.id)) {
-        setEditedOrder({ ...record });
+        setEditedOrder((prev: any) => ({ ...prev, ...record }));
       }
     },
   });
 
-  // ==================== 2. СИНХРОНИЗАЦИЯ ДАННЫХ ====================
   useEffect(() => {
-    if (order) {
-      setEditedOrder({ ...order });
-    } else {
-      setEditedOrder(null);
-    }
+    setEditedOrder(order ? { ...order } : null);
   }, [order]);
 
-  // ==================== 3. ЗАЩИТА ОТ NULL ====================
   useBodyScrollLock(isOpen && !!editedOrder);
   if (!isOpen || !editedOrder) return null;
 
-  const getStatusConfig = (status: string) => {
-    switch (status) {
-      case 'new': return { label: 'Новая', color: '#FACC15' };
-      case 'processing': return { label: 'В работе', color: '#3B82F6' };
-      case 'completed': return { label: 'Выполнена', color: '#10B981' };
-      case 'cancelled': return { label: 'Отменена', color: '#EF4444' };
-      default: return { label: status || 'Неизвестно', color: '#94A3B8' };
-    }
-  };
-
-  const statusConfig = getStatusConfig(editedOrder.status);
-
-  // ==================== 4. ПРОВЕРКА ПРАВ ====================
+  const sc = statusCfg(editedOrder.status);
+  const isFinal = editedOrder.status === 'completed' || editedOrder.status === 'cancelled';
   const canDelete = currentRole === 'admin';
 
-  // ==================== 4. СОХРАНЕНИЕ ====================
+  const set = (field: string, value: any) => setEditedOrder((p: any) => ({ ...p, [field]: value }));
+
   const handleSave = async () => {
     setIsSaving(true);
     try {
       const res = await fetch('/api/adminCifra/orders/update', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...editedOrder,
-          userRole: currentRole,
-          userName: currentUserName,
-        }),
+        body: JSON.stringify({ ...editedOrder, userRole: currentRole, userName: currentUserName }),
       });
-
       if (res.ok) {
-        alert('✅ Изменения сохранены');
         if (onUpdate) onUpdate(editedOrder);
         onClose();
       } else {
         alert('Ошибка сохранения');
       }
-    } catch (err) {
-      console.error(err);
+    } catch {
       alert('Ошибка соединения');
     } finally {
       setIsSaving(false);
     }
   };
 
-    // ==================== 5. КОПИРОВАТЬ ЗАЯВКУ ====================
   const handleCopyOrder = () => {
     const copiedData = {
       grade: editedOrder.grade,
@@ -129,266 +122,136 @@ export default function MobileOrderDetailModal({
       inn: editedOrder.inn || '',
       comment: editedOrder.comment || '',
     };
-
-    // Закрываем текущую модалку
     onClose();
-
-    // Передаём данные
-    if (onCopyOrder) {
-      onCopyOrder(copiedData);
-    } else {
-      console.warn('onCopyOrder callback не передан');
-    }
+    if (onCopyOrder) onCopyOrder(copiedData);
   };
 
-   // ==================== 6. ПОДЕЛИТЬСЯ ====================
   const handleShare = () => {
-    const orderId = editedOrder.id || editedOrder.order_number || '—';
-    
-    const text = `Заявка #${orderId}
-Клиент: ${editedOrder.organization_name || editedOrder.full_name || '—'}
-Телефон: ${editedOrder.phone || '—'}
-Объём: ${editedOrder.volume} м³ ${editedOrder.grade || ''}
-Дата: ${editedOrder.delivery_date || editedOrder.deliveryDate || '—'}
-Время: ${editedOrder.delivery_time || editedOrder.deliveryTime || '—'}
-Адрес: ${editedOrder.address || '—'}
-${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}`;
-
+    const id = editedOrder.id || '—';
+    const text = `Заявка #${id}\nКлиент: ${editedOrder.organization_name || editedOrder.full_name || '—'}\nТелефон: ${editedOrder.phone || '—'}\nОбъём: ${editedOrder.volume} м³ ${editedOrder.grade || ''}\nДата: ${editedOrder.delivery_date || '—'} ${editedOrder.delivery_time || ''}\nАдрес: ${editedOrder.address || '—'}${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}`;
     if (navigator.share) {
-      navigator.share({
-        title: `Заявка #${orderId}`,
-        text: text.replace(`Заявка #${orderId}\n`, ''), // убираем дублирование в share
-      }).catch(() => {
-        navigator.clipboard.writeText(text);
-      });
+      navigator.share({ title: `Заявка #${id}`, text }).catch(() => navigator.clipboard.writeText(text));
     } else {
       navigator.clipboard.writeText(text);
     }
   };
 
-   // ==================== 7. РЕНДЕР ====================
   return (
-    <div style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: 'rgba(0,0,0,0.95)',
-      zIndex: 10000,
-      overflowY: 'auto',
-      WebkitOverflowScrolling: 'touch'
-    }} onClick={onClose}>
-      
-      <div 
-        style={{
-          backgroundColor: '#1E2937',
-          minHeight: '100vh',
-          maxWidth: '560px',
-          margin: '0 auto',
-          paddingBottom: '100px'
-        }}
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 10000, overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: '#0D1520', minHeight: '100vh', maxWidth: '560px', margin: '0 auto', paddingBottom: '40px' }}
         onClick={e => e.stopPropagation()}
       >
-        
-        {/* ШАПКА */}
-        <div style={{ 
-          padding: '18px 20px', 
-          borderBottom: '1px solid #334155',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          position: 'sticky',
-          top: 0,
-          backgroundColor: '#1E2937',
-          zIndex: 10
+
+        {/* ── ШАПКА ──────────────────────────────────────── */}
+        <div style={{
+          position: 'sticky', top: 0, zIndex: 10,
+          background: '#131C2B',
+          borderBottom: '1px solid #1E2937',
+          padding: '14px 16px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
         }}>
-          <h2 style={{ margin: 0, fontSize: '23px', fontWeight: '700', color: '#ffffff' }}>
-            Заявка #{editedOrder.id}
-          </h2>
-          <button 
-            onClick={onClose} 
-            style={{ 
-              fontSize: '34px', 
-              background: 'none', 
-              border: 'none', 
-              color: '#94A3B8',
-              padding: 0,
-              lineHeight: 1
-            }}
-          >
-            ×
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
+            <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
+              Заявка #{editedOrder.id}
+            </span>
+
+            {/* Статус — select для активных, пилюля для финальных */}
+            {isFinal ? (
+              <span style={{
+                padding: '5px 12px', borderRadius: '9999px', fontSize: '12px', fontWeight: 700,
+                background: `${sc.color}20`, color: sc.color, whiteSpace: 'nowrap',
+              }}>
+                {sc.label}
+              </span>
+            ) : (
+              <div style={{ position: 'relative' }}>
+                <select
+                  value={editedOrder.status || 'new'}
+                  onChange={e => set('status', e.target.value)}
+                  style={{
+                    appearance: 'none',
+                    padding: '5px 28px 5px 12px',
+                    borderRadius: '9999px',
+                    border: `1px solid ${sc.color}50`,
+                    background: `${sc.color}20`,
+                    color: sc.color,
+                    fontSize: '12px', fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {STATUS_OPTIONS.map(s => (
+                    <option key={s.value} value={s.value}>{s.label}</option>
+                  ))}
+                </select>
+                <ChevronDown size={11} color={sc.color} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+              </div>
+            )}
+          </div>
+
+          <button onClick={onClose} style={{ background: '#1E2937', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+            <X size={16} color="#64748B" />
           </button>
         </div>
 
-        <div style={{ padding: '10px' }}>
+        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
-          {/* СТАТУС */}
-          <div style={{ marginBottom: '28px' }}>
-            <label style={{ display: 'block', color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
-              Статус заказа
-            </label>
-            <div style={{
-              padding: '14px 20px',
-              background: '#25334A',
-              borderRadius: '9999px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              fontWeight: '600',
-              fontSize: '17px',
-              color: statusConfig.color
-            }}>
-              {statusConfig.label}
-            </div>
+          {/* ── КЛИЕНТ ──────────────────────────────────── */}
+          <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <FieldBlock icon={<User size={15} />} label="Клиент">
+              <input value={editedOrder.organization_name || editedOrder.full_name || ''} onChange={e => set('organization_name', e.target.value)} style={INPUT} />
+            </FieldBlock>
+            <FieldBlock icon={<Phone size={15} />} label="Телефон">
+              <input value={editedOrder.phone || ''} onChange={e => set('phone', e.target.value)} style={INPUT} type="tel" />
+            </FieldBlock>
           </div>
 
-          {/* ФОРМА */}
-          <div style={{ 
-            background: '#25334A', 
-            borderRadius: '16px', 
-            padding: '16px', 
-            marginBottom: '24px',
-            color: '#ffffff'
-          }}>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* ── ПАРАМЕТРЫ ЗАКАЗА ─────────────────────── */}
+          <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <FieldBlock icon={<Layers size={15} />} label="Марка бетона">
+              <input value={editedOrder.grade || ''} onChange={e => set('grade', e.target.value)} style={INPUT} />
+            </FieldBlock>
 
-              <div>
-                <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Клиент</div>
-                <input 
-                  value={editedOrder.organization_name || editedOrder.full_name || ''} 
-                  onChange={(e) => setEditedOrder({ ...editedOrder, organization_name: e.target.value })}
-                  style={fieldStyle}
-                />
-              </div>
-
-              <div>
-                <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Телефон</div>
-                <input 
-                  value={editedOrder.phone || ''} 
-                  onChange={(e) => setEditedOrder({ ...editedOrder, phone: e.target.value })}
-                  style={fieldStyle}
-                />
-              </div>
-
-              <div>
-                <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Марка бетона</div>
-                <input 
-                  value={editedOrder.grade || ''} 
-                  onChange={(e) => setEditedOrder({ ...editedOrder, grade: e.target.value })}
-                  style={fieldStyle}
-                />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-                <div>
-                  <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Объём</div>
-                  <input 
-                    type="number" step="0.01"
-                    value={editedOrder.volume || ''} 
-                    onChange={(e) => setEditedOrder({ ...editedOrder, volume: e.target.value })}
-                    style={fieldStyle}
-                  />
-                </div>
-                <div>
-                  <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Время</div>
-                  <input 
-                    type="time"
-                    value={editedOrder.delivery_time || ''} 
-                    onChange={(e) => setEditedOrder({ ...editedOrder, delivery_time: e.target.value })}
-                    style={fieldStyle}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Дата доставки</div>
-                <input 
-                  type="date"
-                  value={editedOrder.delivery_date || ''} 
-                  onChange={(e) => setEditedOrder({ ...editedOrder, delivery_date: e.target.value })}
-                  style={fieldStyle}
-                />
-              </div>
-
-              <div>
-                <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Адрес доставки</div>
-                <textarea 
-                  value={editedOrder.address || ''} 
-                  onChange={(e) => setEditedOrder({ ...editedOrder, address: e.target.value })}
-                  rows={3}
-                  style={{ ...fieldStyle, padding: '14px', resize: 'vertical' }}
-                />
-              </div>
-
-              <div>
-                <div style={{ color: '#94A3B8', marginBottom: '6px', fontSize: '14px' }}>Комментарий клиента</div>
-                <textarea 
-                  value={editedOrder.comment || ''} 
-                  onChange={(e) => setEditedOrder({ ...editedOrder, comment: e.target.value })}
-                  rows={5}
-                  style={{ 
-                    ...fieldStyle,
-                    fontSize: '15.5px',
-                    lineHeight: 1.5 
-                  }}
-                />
-              </div>
-
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <FieldBlock icon={<span style={{ fontSize: '13px' }}>м³</span>} label="Объём">
+                <input value={editedOrder.volume || ''} onChange={e => set('volume', e.target.value)} style={INPUT} type="number" step="0.01" />
+              </FieldBlock>
+              <FieldBlock icon={<Clock size={15} />} label="Время">
+                <input value={editedOrder.delivery_time || ''} onChange={e => set('delivery_time', e.target.value)} style={INPUT} type="time" />
+              </FieldBlock>
             </div>
+
+            <FieldBlock icon={<Calendar size={15} />} label="Дата доставки">
+              <input value={editedOrder.delivery_date || ''} onChange={e => set('delivery_date', e.target.value)} style={INPUT} type="date" />
+            </FieldBlock>
           </div>
 
-          {/* КНОПКИ */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <ModalActionButton
-                onClick={handleSave}
-                disabled={isSaving}
-                color="#10B981"
-                icon={<Save size={18} />}
-                label="Сохранить"
-                fullWidth
-                size="lg"
-              />
+          {/* ── АДРЕС + КОММЕНТАРИЙ ────────────────── */}
+          <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <FieldBlock icon={<MapPin size={15} />} label="Адрес доставки">
+              <textarea value={editedOrder.address || ''} onChange={e => set('address', e.target.value)} rows={2} style={{ ...INPUT, resize: 'vertical', lineHeight: 1.5 }} />
+            </FieldBlock>
+            <FieldBlock icon={<MessageSquare size={15} />} label="Комментарий">
+              <textarea value={editedOrder.comment || ''} onChange={e => set('comment', e.target.value)} rows={3} style={{ ...INPUT, resize: 'vertical', lineHeight: 1.5 }} />
+            </FieldBlock>
+          </div>
+
+          {/* ── КНОПКИ ───────────────────────────────── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <ModalActionButton onClick={handleSave} disabled={isSaving} color="#10B981" icon={<Save size={17} />} label={isSaving ? 'Сохраняем...' : 'Сохранить'} fullWidth size="lg" />
               {canDelete && (
-                <ModalActionButton
-                  onClick={() => onDelete && onDelete(editedOrder.id)}
-                  color="#EF4444"
-                  icon={<Trash2 size={18} />}
-                  label="Удалить"
-                  fullWidth
-                  size="lg"
-                />
+                <ModalActionButton onClick={() => onDelete && onDelete(editedOrder.id)} color="#EF4444" icon={<Trash2 size={17} />} label="Удалить" fullWidth size="lg" />
               )}
             </div>
-
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <ModalActionButton
-                onClick={handleShare}
-                color="#3B82F6"
-                icon={<Share2 size={18} />}
-                label="Поделиться"
-                fullWidth
-                size="lg"
-              />
-              <ModalActionButton
-                onClick={handleCopyOrder}
-                color="#8B5CF6"
-                icon={<Copy size={18} />}
-                label="Копировать"
-                fullWidth
-                size="lg"
-              />
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <ModalActionButton onClick={handleShare} color="#3B82F6" icon={<Share2 size={17} />} label="Поделиться" fullWidth size="lg" />
+              <ModalActionButton onClick={handleCopyOrder} color="#8B5CF6" icon={<Copy size={17} />} label="Копировать" fullWidth size="lg" />
             </div>
-
-            <ModalActionButton
-              onClick={onClose}
-              color="#94A3B8"
-              icon={<X size={18} />}
-              label="Отмена"
-              fullWidth
-              size="lg"
-            />
+            <ModalActionButton onClick={onClose} color="#475569" icon={<X size={17} />} label="Закрыть" fullWidth size="lg" />
           </div>
 
         </div>

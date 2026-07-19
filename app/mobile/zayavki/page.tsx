@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import MobileNewOrderModal from '../components/MobileNewOrderModal';
 import MobileOrderDetailModal from '../components/MobileOrderDetailModal';
 import MobileExitButton from '../components/MobileExitButton';
-import { Plus, MapPin } from 'lucide-react';
+import { Plus, MapPin, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { useUserRole } from '../../providers/UserRoleProvider';
 
 export default function MobileZayavkiPage() {
@@ -195,26 +195,35 @@ const { user } = useUserRole();   // ← Берём роль из провайд
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <h1 style={{ fontSize: '26px', fontWeight: '700', margin: 0 }}>Заявки</h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <button 
-              onClick={() => setShowNewOrderModal(true)}
-              style={{
-                background: '#10B981',
-                color: 'white',
-                border: 'none',
-                borderRadius: '9999px',
-                padding: '12px 20px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                fontWeight: '600'
-              }}
-            >
-              <Plus size={20} /> Новая
-            </button>
-            <MobileExitButton />
-          </div>
+          <MobileExitButton />
         </div>
+
+        {/* FAB — создать заявку */}
+        {!showNewOrderModal && !selectedOrder && (
+          <button
+            onClick={() => setShowNewOrderModal(true)}
+            style={{
+              position: 'fixed',
+              bottom: '90px',
+              right: '20px',
+              zIndex: 9000,
+              width: '42px',
+              height: '42px',
+              borderRadius: '9999px',
+              background: 'rgba(16,185,129,0.35)',
+              border: '1.5px solid rgba(16,185,129,0.55)',
+              backdropFilter: 'blur(6px)',
+              boxShadow: '0 2px 12px rgba(16,185,129,0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+            }}
+            aria-label="Новая заявка"
+          >
+            <Plus size={20} color="#10B981" strokeWidth={2.5} />
+          </button>
+        )}
 
        {/* ==================== KPI КАРТОЧКИ ==================== */}
 <div style={{ 
@@ -257,43 +266,82 @@ const { user } = useUserRole();   // ← Берём роль из провайд
 </div>
 
         {/* ==================== НАВИГАЦИЯ ПО ДАТАМ ==================== */}
-        <div style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'space-between',
-          background: '#1E2937',
-          padding: '12px 16px',
-          borderRadius: '16px',
-          marginBottom: '20px'
-        }}>
-          <button 
-            onClick={() => {
-              const prev = new Date(selectedDate);
-              prev.setDate(prev.getDate() - 1);
-              setSelectedDate(prev);
-            }} 
-            style={{ fontSize: '28px', background: 'none', border: 'none', color: '#94A3B8' }}
-          >
-            ←
-          </button>
-          
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontWeight: '700', fontSize: '17px' }}>
-              {selectedDate.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
-            </div>
-          </div>
+        {(() => {
+          const today = new Date();
+          const isToday =
+            selectedDate.getFullYear() === today.getFullYear() &&
+            selectedDate.getMonth() === today.getMonth() &&
+            selectedDate.getDate() === today.getDate();
 
-          <button 
-            onClick={() => {
-              const next = new Date(selectedDate);
-              next.setDate(next.getDate() + 1);
-              setSelectedDate(next);
-            }} 
-            style={{ fontSize: '28px', background: 'none', border: 'none', color: '#94A3B8' }}
-          >
-            →
-          </button>
-        </div>
+          const dayName = selectedDate.toLocaleDateString('ru-RU', { weekday: 'short' });
+          const dayNum = selectedDate.getDate();
+          const monthName = selectedDate.toLocaleDateString('ru-RU', { month: 'long' });
+          const year = selectedDate.getFullYear();
+
+          const navBtn = (dir: 'prev' | 'next') => {
+            const d = new Date(selectedDate);
+            d.setDate(d.getDate() + (dir === 'next' ? 1 : -1));
+            setSelectedDate(d);
+          };
+
+          return (
+            <div style={{
+              background: '#131C2B',
+              borderRadius: '18px',
+              padding: '14px 16px',
+              marginBottom: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+            }}>
+              {/* Стрелка влево */}
+              <button
+                onClick={() => navBtn('prev')}
+                style={{ background: '#1E2937', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+              >
+                <ChevronLeft size={18} color="#64748B" />
+              </button>
+
+              {/* Центр: иконка + дата + пилюля */}
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                <CalendarDays size={18} color={isToday ? '#10B981' : '#475569'} style={{ flexShrink: 0 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '15px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {dayName}, {dayNum} {monthName} {year !== today.getFullYear() ? year : ''}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#475569', marginTop: '1px' }}>
+                    {filteredOrders.length > 0
+                      ? `${filteredOrders.length} заявок · ${totalVolume.toFixed(1)} м³`
+                      : 'Нет заявок'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Кнопка «Сегодня» */}
+              {!isToday && (
+                <button
+                  onClick={() => setSelectedDate(new Date(today.getFullYear(), today.getMonth(), today.getDate()))}
+                  style={{ background: 'transparent', border: '1px solid #334155', borderRadius: '8px', padding: '5px 10px', color: '#64748B', fontSize: '12px', fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}
+                >
+                  Сегодня
+                </button>
+              )}
+              {isToday && (
+                <span style={{ background: '#10B98118', border: '1px solid #10B98140', borderRadius: '8px', padding: '5px 10px', color: '#10B981', fontSize: '12px', fontWeight: 600, flexShrink: 0 }}>
+                  Сегодня
+                </span>
+              )}
+
+              {/* Стрелка вправо */}
+              <button
+                onClick={() => navBtn('next')}
+                style={{ background: '#1E2937', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+              >
+                <ChevronRight size={18} color="#64748B" />
+              </button>
+            </div>
+          );
+        })()}
 
         {/* ==================== СПИСОК ЗАЯВОК ==================== */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>

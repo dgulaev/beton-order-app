@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState, useMemo, type CSSProperties } from 'react';
+import { useEffect, useState, useMemo, useRef, type CSSProperties } from 'react';
 import Image from 'next/image';
 import { useSearchParams } from 'next/navigation';
+import { PlusCircle, ClipboardList, Gift, Wallet } from 'lucide-react';
 import { formatPhoneInput, normalizePhone } from '@/lib/phone';
 import { useDeliveryCoords } from '@/lib/yandexRoute';
 import { calculateDeliveryCost, fetchDeliverySettings, DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
@@ -11,11 +12,33 @@ declare const WebApp: any;
 
 const lightFieldStyle: CSSProperties = {
   width: '100%',
-  padding: '14px',
-  border: '1px solid #d1d5db',
-  borderRadius: '12px',
-  fontSize: '16px',
+  padding: '9px 12px',
+  border: '1px solid rgba(255,255,255,0.12)',
+  borderRadius: '10px',
+  fontSize: '15px',
   boxSizing: 'border-box',
+  background: 'rgba(255,255,255,0.07)',
+  color: '#F8FAFC',
+};
+
+// Стиль кнопок как в adminCifra ModalActionButton — outlined/ghost
+const outlinedBtn = (color: string): CSSProperties => ({
+  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+  padding: '11px 16px',
+  borderRadius: '12px',
+  border: `1px solid ${color}40`,
+  background: 'transparent',
+  color,
+  fontWeight: 600,
+  fontSize: '15px',
+  cursor: 'pointer',
+  transition: 'border-color 0.15s, background 0.15s',
+});
+
+const LABEL: CSSProperties = {
+  display: 'block', marginBottom: '4px',
+  fontWeight: 500, color: 'rgba(255,255,255,0.5)',
+  fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
 };
 
 export default function ConcreteOrderPage() {
@@ -52,6 +75,30 @@ export default function ConcreteOrderPage() {
   const [referralCode, setReferralCode] = useState<string>('Загрузка...');
   const [balance, setBalance] = useState(0);
   const [referredBy, setReferredBy] = useState<number | null>(null);
+
+  // Проверка — открыта ли форма внутри Telegram Mini App
+  const isTelegram = typeof window !== 'undefined'
+    && !!((window as any).Telegram?.WebApp?.initData || (window as any).WebApp?.initData);
+
+  // Навбар: скрывается при скролле вниз, выезжает при скролле вверх
+  const [navVisible, setNavVisible] = useState(true);
+  const lastScrollY = useRef(0);
+
+  useEffect(() => {
+    const onScroll = () => {
+      const y = window.scrollY;
+      if (y < 10) {
+        setNavVisible(true);
+      } else if (y > lastScrollY.current + 6) {
+        setNavVisible(false);
+      } else if (y < lastScrollY.current - 6) {
+        setNavVisible(true);
+      }
+      lastScrollY.current = y;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
   const [orders, setOrders] = useState<any[]>([]);
   const [referrals, setReferrals] = useState<any[]>([]);
@@ -221,15 +268,26 @@ const loadBalance = async () => {
   };
 
   const requestPhone = async () => {
+    const wa = (window as any).Telegram?.WebApp ?? (window as any).WebApp;
+    if (!wa?.requestContact) {
+      alert('Эта кнопка работает только в Telegram. Введите номер вручную.');
+      return;
+    }
     try {
-      const result = await (window as any).WebApp.requestContact();
-      if (result && result.phone) {
-        await registerByPhone(result.phone);
+      const result = await wa.requestContact();
+      // Telegram Bot API 6.9+: { status: 'sent', response: { responseUnsafe: { contact: { phone_number } } } }
+      const raw = result?.response?.responseUnsafe?.contact?.phone_number
+        ?? result?.responseUnsafe?.contact?.phone_number
+        ?? result?.phone_number
+        ?? result?.phone;
+      if (raw) {
+        await registerByPhone(raw);
       } else {
         alert('Вы не поделились номером телефона');
       }
     } catch (e) {
-      alert('Не удалось запросить контакт');
+      console.error('requestContact error:', e);
+      alert('Не удалось запросить контакт. Введите номер вручную.');
     }
   };
 
@@ -597,141 +655,170 @@ const loadReferrals = async () => {
 
   // ====================== ЭКРАН ВЕРИФИКАЦИИ ======================
   if (!isVerified) {
+    const phoneReady = normalizePhone(phone).length === 11;
     return (
-      <div style={{
-        padding: '40px 20px',
-        textAlign: 'center',
-        minHeight: '100vh',
-        backgroundColor: '#f8fafc',
+      <div className="order-page-root" style={{
+        backgroundColor: '#1C2B3D',
         display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center'
+        alignItems: 'center',
+        justifyContent: 'center',
       }}>
-        <div style={{ marginBottom: '40px' }}>
-          <Image src="/logo.jpg" alt="Логотип" width={180} height={70} style={{ objectFit: 'contain' }} />
-        </div>
+        {/* ── Карточка по центру ── */}
+        <div style={{
+          width: '100%',
+          maxWidth: '400px',
+          margin: '0 auto',
+          padding: '32px 24px 36px',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+        }}>
+          {/* Логотип */}
+          <div style={{ marginBottom: '8px' }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-tradecom-white.png" alt="TradeCom" style={{ height: '92px', objectFit: 'contain' }} />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '28px' }}>
+            <div style={{ width: '24px', height: '1px', background: 'rgba(255,255,255,0.2)' }} />
+            <span style={{ fontSize: '11px', fontWeight: 500, color: 'rgba(255,255,255,0.45)', letterSpacing: '0.14em', textTransform: 'uppercase' }}>
+              Заказать бетон
+            </span>
+            <div style={{ width: '24px', height: '1px', background: 'rgba(255,255,255,0.2)' }} />
+          </div>
 
-        <h1 style={{ fontSize: '26px', fontWeight: '700', marginBottom: '12px' }}>
-          Добро пожаловать!
-        </h1>
-        <p style={{ color: '#666', marginBottom: '30px', fontSize: '17px' }}>
-          Для продолжения работы<br />подтвердите ваш номер телефона
-        </p>
+        {/* ── Контент ── */}
+        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0' }}>
 
-                {/* ==================== РЕФЕРАЛЬНЫЙ БЛОК ==================== */}
-        {urlSearchParams.get('ref') && (
-          <div style={{
-            background: '#fefce8',
-            border: '2px solid #eab308',
-            borderRadius: '16px',
-            padding: '20px 20px',        // уменьшил вертикальные отступы
-            marginBottom: '28px',
-            maxWidth: '360px',
-            marginLeft: 'auto',
-            marginRight: 'auto'
-          }}>
-            <div style={{ fontSize: '36px', marginBottom: '8px' }}>🎁</div>
-            
-            <div style={{ 
-              fontWeight: '700', 
-              color: '#ca8a04', 
-              fontSize: '17px', 
-              marginBottom: '12px' 
-            }}>
-              Вы пришли по рекомендации друга!
-            </div>
+          {/* Подзаголовок */}
+          <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '14px', margin: '0 0 24px', textAlign: 'center', lineHeight: 1.5 }}>
+            Подтвердите номер телефона<br />для продолжения работы
+          </p>
 
+          {/* Реферальный блок */}
+          {urlSearchParams.get('ref') && (
             <div style={{
-              background: 'white',
-              padding: '12px 20px',
-              borderRadius: '10px',
-              fontSize: '24px',
-              fontWeight: '700',
-              letterSpacing: '2px',
-              color: '#1e2937',
-              display: 'inline-block'
+              width: '100%',
+              background: 'rgba(234,179,8,0.08)',
+              border: '1px solid rgba(234,179,8,0.3)',
+              borderRadius: '14px',
+              padding: '16px 20px',
+              marginBottom: '24px',
+              textAlign: 'center',
             }}>
-              {urlSearchParams.get('ref')}
+              <div style={{ fontSize: '28px', marginBottom: '6px' }}>🎁</div>
+              <div style={{ fontWeight: 700, color: '#FCD34D', fontSize: '15px', marginBottom: '10px' }}>
+                Вы пришли по рекомендации друга!
+              </div>
+              <div style={{
+                background: 'rgba(255,255,255,0.08)',
+                padding: '8px 18px',
+                borderRadius: '8px',
+                fontSize: '22px',
+                fontWeight: 700,
+                letterSpacing: '3px',
+                color: '#F8FAFC',
+                display: 'inline-block',
+              }}>
+                {urlSearchParams.get('ref')}
+              </div>
+            </div>
+          )}
+
+          {/* Кнопка быстрого ввода номера */}
+          {isTelegram ? (
+            /* Внутри Telegram — берём номер из профиля */
+            <button
+              onClick={requestPhone}
+              style={{
+                ...outlinedBtn('#10B981'),
+                width: '100%',
+                padding: '13px',
+                fontSize: '16px',
+                fontWeight: 700,
+                marginBottom: '20px',
+              }}
+            >
+              📱 Использовать мой номер из Telegram
+            </button>
+          ) : (
+            /* Вне Telegram — вставить из буфера обмена */
+            <button
+              onClick={async () => {
+                try {
+                  const text = await navigator.clipboard.readText();
+                  const digits = text.replace(/\D/g, '');
+                  if (digits.length >= 10) {
+                    setPhone(formatPhoneInput('+' + digits));
+                  } else {
+                    alert('В буфере обмена не найден номер телефона. Скопируйте его и попробуйте снова.');
+                  }
+                } catch {
+                  alert('Нет доступа к буферу обмена. Введите номер вручную.');
+                }
+              }}
+              style={{
+                ...outlinedBtn('#60A5FA'),
+                width: '100%',
+                padding: '13px',
+                fontSize: '16px',
+                fontWeight: 700,
+                marginBottom: '20px',
+              }}
+            >
+              📋 Вставить номер из буфера
+            </button>
+          )}
+
+          {/* Разделитель */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', width: '100%', marginBottom: '20px' }}>
+            <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }} />
+            <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', whiteSpace: 'nowrap' }}>или введите вручную</span>
+            <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }} />
+          </div>
+
+          {/* Поля */}
+          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+            <div>
+              <label style={LABEL}>Телефон</label>
+              <input
+                type="tel"
+                placeholder="+7 (___) ___-__-__"
+                value={phone}
+                onChange={(e) => setPhone(formatPhoneInput(e.target.value))}
+                style={{ ...lightFieldStyle, textAlign: 'center', fontSize: '17px' }}
+                maxLength={18}
+              />
+            </div>
+            <div>
+              <label style={LABEL}>ФИО</label>
+              <input
+                type="text"
+                placeholder="Иванов Иван Иванович"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                style={lightFieldStyle}
+              />
             </div>
           </div>
-        )}
 
-        {/* Кнопка Telegram / Share Phone */}
-        <button 
-          onClick={requestPhone}
-          style={{
-            width: '100%',
-            maxWidth: '420px',
-            margin: '0 auto 16px',
-            padding: '18px',
-            backgroundColor: '#2563eb',
-            color: 'white',
-            border: 'none',
-            borderRadius: '14px',
-            fontSize: '18px',
-            fontWeight: '600'
-          }}
-        >
-          Поделиться моим номером
-        </button>
-
-        <p style={{ color: '#999', margin: '20px 0' }}>или введите вручную</p>
-
-        {/* Ручной ввод телефона */}
-        <input
-          type="tel"
-          placeholder="+7 (___) ___-__-__"
-          value={phone}
-          onChange={(e) => setPhone(formatPhoneInput(e.target.value))}
-          style={{
-            width: '100%',
-            maxWidth: '420px',
-            margin: '0 auto 16px',
-            padding: '16px',
-            borderRadius: '12px',
-            border: '1px solid #ddd',
-            fontSize: '17px',
-            textAlign: 'center',
-            boxSizing: 'border-box'
-          }}
-          maxLength={18}
-        />
-        {/* Поле ФИО */}
-          <input
-            type="text"
-            placeholder="Ваше ФИО"
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
-           style={{
-             width: '100%',
-             maxWidth: '420px',
-             margin: '0 auto 12px',
-             padding: '16px',
-             borderRadius: '12px',
-             border: '1px solid #ddd',
-             fontSize: '17px',
-             boxSizing: 'border-box'
-         }}
-         />
-
-        <button 
-          onClick={() => phone && registerByPhone(phone)}
-          disabled={normalizePhone(phone).length !== 11}
-          style={{
-            width: '100%',
-            maxWidth: '420px',
-            margin: '0 auto',
-            padding: '16px',
-            backgroundColor: (normalizePhone(phone).length === 11) ? '#2563eb' : '#9ca3af',
-            color: 'white',
-            border: 'none',
-            borderRadius: '12px',
-            fontSize: '17px',
-            fontWeight: '600'
-          }}
-        >
-          Продолжить
-        </button>
+          {/* Кнопка продолжить */}
+          <button
+            onClick={() => phone && registerByPhone(phone)}
+            disabled={!phoneReady}
+            style={{
+              ...outlinedBtn(phoneReady ? '#10B981' : 'rgba(255,255,255,0.2)'),
+              width: '100%',
+              padding: '13px',
+              fontSize: '16px',
+              fontWeight: 700,
+              opacity: phoneReady ? 1 : 0.5,
+              cursor: phoneReady ? 'pointer' : 'not-allowed',
+            }}
+          >
+            Продолжить →
+          </button>
+        </div>{/* конец внутреннего flex */}
+        </div>{/* конец карточки */}
       </div>
     );
   }
@@ -739,16 +826,16 @@ const loadReferrals = async () => {
   // Экран успешной отправки заявки
   if (currentScreen === 'success') {
     return (
-      <div style={{ 
+      <div className="order-page-root" style={{ 
         padding: '40px 20px', 
         textAlign: 'center', 
-        minHeight: '100vh', 
-        backgroundColor: '#f8fafc' 
+        backgroundColor: '#1C2B3D',
+        display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center',
       }}>
         <div style={{ fontSize: '80px', marginBottom: '24px' }}>✅</div>
-        <h2 style={{ fontSize: '28px', marginBottom: '16px' }}>Заявка отправлена!</h2>
-        <p style={{ fontSize: '18px', color: '#444', marginBottom: '40px' }}>
-          Номер заявки: <strong>#{orderId}</strong><br />
+        <h2 style={{ fontSize: '28px', marginBottom: '16px', color: '#F8FAFC' }}>Заявка отправлена!</h2>
+        <p style={{ fontSize: '18px', color: 'rgba(255,255,255,0.5)', marginBottom: '40px' }}>
+          Номер заявки: <strong style={{ color: '#10B981' }}>#{orderId}</strong><br />
           Менеджер свяжется с вами в ближайшее время.
         </p>
         
@@ -757,124 +844,61 @@ const loadReferrals = async () => {
             setCurrentScreen('form');
             setActiveTab('new');
           }}
-          style={{
-            display: 'inline-block',
-            minWidth: '260px',
-            padding: '16px 32px',
-            backgroundColor: '#2563eb',
-            color: 'white',
-            border: 'none',
-            borderRadius: '12px',
-            fontSize: '17px',
-            fontWeight: '600',
-            boxShadow: '0 4px 12px rgba(37, 99, 235, 0.3)'
-          }}
+          style={{ ...outlinedBtn('#10B981'), minWidth: '240px', padding: '14px 28px', fontSize: '16px', fontWeight: 700 }}
         >
-          Создать новую заявку
+          + Создать новую заявку
         </button>
       </div>
     );
   }
 
   // Основной интерфейс приложения
+
+  // ── Нижний навбар (компонент внутри рендера) ──────────────────────────────
+  const NAV_ITEMS = [
+    { tab: 'new' as const,      icon: <PlusCircle size={22} />,    label: 'Заявка',    action: () => setActiveTab('new') },
+    { tab: 'history' as const,  icon: <ClipboardList size={22} />, label: 'Мои заявки', action: () => { setActiveTab('history'); loadOrders(); } },
+    { tab: 'referral' as const, icon: <Gift size={22} />,          label: 'Баллы',     action: () => { setActiveTab('referral'); loadReferrals(); } },
+    { tab: 'balance' as const,  icon: <Wallet size={22} />,        label: 'Баланс',    action: () => setActiveTab('balance') },
+  ];
+
   return (
-    <div style={{
-      minHeight: '100vh',
-      backgroundColor: '#f8fafc',
-      display: 'flex',
-      alignItems: 'flex-start',
-      justifyContent: 'center',
-      paddingTop: '16px',
-      paddingRight: '12px',
-      paddingBottom: '20px',
-      paddingLeft: '12px',
-    }}>
-      <div style={{
-        width: '100%',
-        maxWidth: '560px',
-        backgroundColor: 'white',
-        borderRadius: '24px',
-        boxShadow: '0 10px 30px rgba(0, 0, 0, 0.1)',
-        overflow: 'hidden'
-      }}>
+    <div className="order-page-root" style={{ backgroundColor: '#1C2B3D', display: 'flex', flexDirection: 'column' }}>
 
-       {/* ОСНОВНОЕ СОДЕРЖИМОЕ */}
-        <div style={{ padding: '1px' }}>
-        {activeTab === 'new' && (
-  <div style={{ 
-    width: '100%', 
-    maxWidth: '100%', 
-    margin: '0 auto', 
-    background: 'white', 
-    borderRadius: '24px', 
-    overflow: 'hidden',
-    boxShadow: '0 4px 20px rgba(0,0,0,0.06)' 
-  }}>
-
-    {/* ====================== ХЕДЕР С ЗАГОЛОВКОМ И МЕНЮ ====================== */}
-    <div style={{ 
-      display: 'flex', 
-      justifyContent: 'space-between', 
-      alignItems: 'center', 
-      padding: '20px 24px',
-      borderBottom: '1px solid #f1f5f9'
-    }}>
-      
-      <h1 style={{ 
-        fontSize: '26px', 
-        fontWeight: '700', 
-        margin: 0, 
-        color: '#1f2937' 
-      }}>
-        Заказать бетон
-      </h1>
-
-      <div style={{ position: 'relative' }}>
-        <div 
-          onClick={() => setMenuOpen(!menuOpen)} 
-          style={{ 
-            padding: '10px', 
-            cursor: 'pointer' 
-          }}
-        >
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-        </div>
-
-        {menuOpen && (
-          <div style={{
-            position: 'absolute',
-            top: '52px',
-            right: '0',
-            background: 'white',
-            borderRadius: '12px',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
-            padding: '8px 0',
-            zIndex: 100,
-            width: '220px'
-          }}>
-            <div onClick={() => { setActiveTab('new'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Новая заявка</div>
-            <div onClick={() => { setActiveTab('history'); setMenuOpen(false); loadOrders(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои заявки</div>
-            <div onClick={() => { setActiveTab('referral'); setMenuOpen(false); loadReferrals(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои баллы</div>
-            <div onClick={() => { setActiveTab('balance'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Баланс и вывод</div>
+      {/* ── HERO ШАПКА ──────────────────────────────────────────────────────── */}
+      <div style={{ width: '100%', backgroundColor: '#1C2B3D', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <div style={{
+          maxWidth: '480px', margin: '0 auto',
+          padding: '14px 20px 12px',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
+        }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo-tradecom-white.png" alt="TradeCom" style={{ height: '46px', width: 'auto', objectFit: 'contain' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ width: '24px', height: '1px', background: 'rgba(255,255,255,0.2)' }} />
+            <span style={{ fontSize: '11px', fontWeight: 500, color: 'rgba(255,255,255,0.45)', letterSpacing: '0.14em', textTransform: 'uppercase' }}>
+              Заказать бетон
+            </span>
+            <div style={{ width: '24px', height: '1px', background: 'rgba(255,255,255,0.2)' }} />
           </div>
-        )}
+        </div>
       </div>
-    </div>
+
+      {/* ── ОСНОВНОЕ СОДЕРЖИМОЕ ─────────────────────────────────────────────── */}
+      <div className="order-page-content" style={{ width: '100%', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        {/* Центрирующая обёртка для десктопа, на мобильном — 100% */}
+        <div style={{ width: '100%', maxWidth: '480px' }}>
+
+        {activeTab === 'new' && (
+  <div style={{ width: '100%', background: 'transparent' }}>
 
     {/* ====================== САМА ФОРМА ====================== */}
- <div style={{ 
-      paddingTop: '28px', 
-      paddingBottom: '28px', 
-      paddingLeft: '10px', 
-      paddingRight: '10px' 
-    }}>
-      <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+ <div style={{ padding: '12px 16px' }}>
+      <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
           <div>
-            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Марка бетона</label>
+            <label style={LABEL}>Марка бетона</label>
             <select
               value={form.grade}
               onChange={(e) => setForm({ ...form, grade: e.target.value })}
@@ -893,7 +917,7 @@ const loadReferrals = async () => {
           </div>
 
            <div>
-            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Объём (м³)</label>
+            <label style={LABEL}>Объём (м³)</label>
             <input
               type="number"
               value={form.volume}
@@ -909,24 +933,24 @@ const loadReferrals = async () => {
 {volume > 0 && (
   <div style={{ 
     width: '100%',
-    backgroundColor: '#f8fafc', 
+    backgroundColor: 'rgba(255,255,255,0.05)', 
     padding: '16px', 
     borderRadius: '16px', 
-    border: '1px solid #e2e8f0',
+    border: '1px solid rgba(255,255,255,0.1)',
     marginTop: '8px',
     boxSizing: 'border-box'
   }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-      <span style={{ color: '#475569' }}>Бетон:</span>
-      <span style={{ fontWeight: '600' }}>{concreteCost.toLocaleString('ru-RU')} ₽</span>
+      <span style={{ color: 'rgba(255,255,255,0.5)' }}>Бетон:</span>
+      <span style={{ fontWeight: '600', color: '#F8FAFC' }}>{concreteCost.toLocaleString('ru-RU')} ₽</span>
     </div>
     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-      <span style={{ color: '#475569' }}>Доставка:</span>
-      <span style={{ fontWeight: '600' }}>{deliveryCost.toLocaleString('ru-RU')} ₽</span>
+      <span style={{ color: 'rgba(255,255,255,0.5)' }}>Доставка:</span>
+      <span style={{ fontWeight: '600', color: '#F8FAFC' }}>{deliveryCost.toLocaleString('ru-RU')} ₽</span>
     </div>
 
     {deliveryNote && (
-      <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#e0f2fe', borderRadius: '10px', fontSize: '14.5px', color: '#0369a1', textAlign: 'center' }}>
+      <div style={{ marginTop: '10px', padding: '10px', backgroundColor: 'rgba(14,165,233,0.15)', borderRadius: '10px', fontSize: '14.5px', color: '#38BDF8', textAlign: 'center' }}>
         🚚 {deliveryNote}
       </div>
     )}
@@ -936,13 +960,13 @@ const loadReferrals = async () => {
       <div style={{ 
         marginTop: '16px', 
         padding: '14px', 
-        backgroundColor: '#f0fdf4', 
+        backgroundColor: 'rgba(16,185,129,0.1)', 
         borderRadius: '12px', 
-        border: '1px solid #86efac' 
+        border: '1px solid rgba(16,185,129,0.3)' 
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-          <span style={{ fontWeight: '600', color: '#166534' }}>Погасить баллами</span>
-          <span style={{ color: '#166534' }}>Доступно: <strong>{balance} ₽</strong></span>
+          <span style={{ fontWeight: '600', color: '#10B981' }}>Погасить баллами</span>
+          <span style={{ color: '#10B981' }}>Доступно: <strong>{balance} ₽</strong></span>
         </div>
         
         <input
@@ -970,10 +994,12 @@ const loadReferrals = async () => {
             width: '100%', 
             padding: '12px', 
             borderRadius: '10px', 
-            border: '1px solid #86efac', 
+            border: '1px solid rgba(16,185,129,0.4)', 
             fontSize: '16px',
             textAlign: 'center',
-            boxSizing: 'border-box'
+            boxSizing: 'border-box',
+            background: 'rgba(255,255,255,0.05)',
+            color: '#F8FAFC',
           }}
           placeholder="0"
         />
@@ -984,7 +1010,7 @@ const loadReferrals = async () => {
           justifyContent: 'space-between', 
           fontSize: '18px', 
           fontWeight: '700', 
-          color: '#166534' 
+          color: '#10B981' 
         }}>
           <span>Итого к оплате:</span>
           <span>{finalPrice.toLocaleString('ru-RU')} ₽</span>
@@ -992,8 +1018,7 @@ const loadReferrals = async () => {
       </div>
     )}
 
-    {/* Старый итого (оставляем для совместимости) */}
-    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: '700', color: '#1e40af', borderTop: '1px solid #cbd5e1', paddingTop: '10px', marginTop: '12px' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: '700', color: '#60A5FA', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '10px', marginTop: '12px' }}>
       <span>Итого без скидки:</span>
       <span>{totalPrice.toLocaleString('ru-RU')} ₽</span>
     </div>
@@ -1001,7 +1026,7 @@ const loadReferrals = async () => {
 )}
 
         <div>
-          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Дата и время доставки</label>
+          <label style={LABEL}>Дата и время доставки</label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             <input
               type="date"
@@ -1018,64 +1043,40 @@ const loadReferrals = async () => {
           </div>
         </div>
         <div>
-          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Адрес доставки</label>
+          <label style={LABEL}>Адрес доставки</label>
           <textarea
             value={form.address}
             onChange={(e) => setForm({ ...form, address: e.target.value })}
-            rows={3}
+            rows={2}
             style={{ 
               ...lightFieldStyle,
-              borderRadius: '16px', 
-              resize: 'vertical', 
-              minHeight: '80px',
+              borderRadius: '10px', 
+              resize: 'none', 
+              minHeight: '52px',
             }}
             placeholder="Укажите полный адрес"
           />
         </div>
 
         <div>
-          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>Тип заказчика</label>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <button
-              type="button"
-              onClick={() => setForm({ ...form, customerType: 'physical' })}
-              style={{ 
-                flex: 1,
-                padding: '10px 6px', 
-                borderRadius: '12px', 
-                fontWeight: '600', 
-                fontSize: '15px',
-                whiteSpace: 'nowrap',
-                background: form.customerType === 'physical' ? '#2563eb' : '#f3f4f6', 
-                color: form.customerType === 'physical' ? 'white' : '#374151',
-                border: 'none'
-              }}
-            >
-              Физическое лицо
-            </button>
-            <button
-              type="button"
-              onClick={() => setForm({ ...form, customerType: 'legal' })}
-              style={{ 
-                flex: 1,
-                padding: '10px 6px', 
-                borderRadius: '12px', 
-                fontWeight: '600', 
-                fontSize: '15px',
-                whiteSpace: 'nowrap',
-                background: form.customerType === 'legal' ? '#2563eb' : '#f3f4f6', 
-                color: form.customerType === 'legal' ? 'white' : '#374151',
-                border: 'none'
-              }}
-            >
-              Юридическое лицо
-            </button>
+          <label style={LABEL}>Тип заказчика</label>
+          <div style={{ display: 'flex', gap: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '10px', padding: '3px' }}>
+            {(['physical', 'legal'] as const).map(t => (
+              <button key={t} type="button" onClick={() => setForm({ ...form, customerType: t })}
+                style={{ flex: 1, padding: '7px 4px', borderRadius: '8px', fontWeight: 600, fontSize: '13px',
+                  whiteSpace: 'nowrap', border: 'none', transition: 'all 0.15s',
+                  background: form.customerType === t ? '#10B981' : 'transparent',
+                  color: form.customerType === t ? 'white' : 'rgba(255,255,255,0.45)',
+                }}>
+                {t === 'physical' ? 'Физическое лицо' : 'Юридическое лицо'}
+              </button>
+            ))}
           </div>
         </div>
 
         {form.customerType === 'physical' ? (
           <div>
-            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>ФИО</label>
+            <label style={LABEL}>ФИО</label>
             <input
               type="text"
               value={form.fullName}
@@ -1086,7 +1087,7 @@ const loadReferrals = async () => {
           </div>
         ) : (
            <div>
-            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Название организации</label>
+            <label style={LABEL}>Название организации</label>
             <input
               type="text"
               value={form.organizationName}
@@ -1098,7 +1099,7 @@ const loadReferrals = async () => {
         )}
 
         <div>
-          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Телефон для связи</label>
+          <label style={LABEL}>Телефон для связи</label>
           <input
             type="tel"
             value={form.phone}
@@ -1110,18 +1111,18 @@ const loadReferrals = async () => {
         </div>
 
         <div>
-          <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>Комментарий</label>
+          <label style={LABEL}>Комментарий</label>
           <textarea
             value={form.comment}
             onChange={(e) => setForm({ ...form, comment: e.target.value })}
-            rows={3}
+            rows={2}
             style={{ 
               ...lightFieldStyle,
-              borderRadius: '16px', 
-              resize: 'vertical', 
-              minHeight: '90px',
+              borderRadius: '10px', 
+              resize: 'none', 
+              minHeight: '52px',
             }}
-            placeholder="Дополнительная информация. Например труба, насос (необязательно)"
+            placeholder="Насос, лоток, тип подачи, въезд для миксера, особенности объекта…"
           />
         </div>
 
@@ -1129,90 +1130,41 @@ const loadReferrals = async () => {
           type="submit"
           disabled={isSubmitting}
           style={{ 
-            width: '100%', 
-            background: isSubmitting ? '#9ca3af' : '#2563eb', 
-            color: 'white', 
-            padding: '16px', 
-            border: 'none', 
-            borderRadius: '16px', 
-            fontSize: '18px', 
-            fontWeight: '600',
-            marginTop: '12px',
-            boxSizing: 'border-box'
+            width: '100%',
+            ...outlinedBtn('#10B981'),
+            padding: '12px',
+            borderRadius: '12px',
+            fontSize: '16px',
+            fontWeight: 700,
+            marginTop: '4px',
+            boxSizing: 'border-box',
+            opacity: isSubmitting ? 0.5 : 1,
           }}
         >
-          {isSubmitting ? 'Отправляем...' : 'Отправить заявку'}
+          {isSubmitting ? 'Отправляем...' : '✓ Отправить заявку'}
         </button>
       </form>
     </div>
 
-    <div style={{ display: 'flex', justifyContent: 'center', marginTop: '20px', paddingBottom: '28px', opacity: 0.75 }}>
-      <Image 
-        src="/logo.jpg" 
-        alt="Логотип" 
-        width={160} 
-        height={65} 
-        style={{ objectFit: 'contain' }} 
-        loading="eager"
-      />
-    </div>
   </div>
 )}
 
           {activeTab === 'history' && (
   <div>
-    <div style={{ 
-      display: 'flex', 
-      justifyContent: 'flex-end', 
-      padding: '20px 24px',
-      borderBottom: '1px solid #f1f5f9',
-      backgroundColor: 'white'
-    }}>
-      <div style={{ position: 'relative' }}>
-        <div 
-          onClick={() => setMenuOpen(!menuOpen)} 
-          style={{ padding: '10px', cursor: 'pointer' }}
-        >
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-        </div>
-
-        {menuOpen && (
-          <div style={{
-            position: 'absolute',
-            top: '52px',
-            right: '0',
-            background: 'white',
-            borderRadius: '12px',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
-            padding: '8px 0',
-            zIndex: 100,
-            width: '220px'
-          }}>
-            <div onClick={() => { setActiveTab('new'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Новая заявка</div>
-            <div onClick={() => { setActiveTab('history'); setMenuOpen(false); loadOrders(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои заявки</div>
-            <div onClick={() => { setActiveTab('referral'); setMenuOpen(false); loadReferrals(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои баллы</div>
-            <div onClick={() => { setActiveTab('balance'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Баланс и вывод</div>
-          </div>
-        )}
-      </div>
-    </div>
-
-    <div style={{ padding: '24px' }}>
-      <h2 style={{ marginBottom: '20px' }}>Мои заявки</h2>
+    <div style={{ padding: '20px 16px' }}>
+      <h2 style={{ marginBottom: '20px', color: '#F8FAFC', fontSize: '20px' }}>Мои заявки</h2>
       {loadingHistory ? (
-        <p style={{ textAlign: 'center', padding: '60px 0' }}>Загрузка...</p>
+        <p style={{ textAlign: 'center', padding: '60px 0', color: 'rgba(255,255,255,0.4)' }}>Загрузка...</p>
       ) : orders.length === 0 ? (
-        <p style={{ textAlign: 'center', padding: '80px 20px', color: '#888' }}>Пока нет заявок</p>
+        <p style={{ textAlign: 'center', padding: '80px 20px', color: 'rgba(255,255,255,0.3)' }}>Пока нет заявок</p>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {orders.map((order) => (
-            <div key={order.id} style={{ background: 'white', padding: '20px', borderRadius: '16px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
-              <strong>{order.grade} — {order.volume} м³</strong>
-              <div style={{ color: '#555', margin: '8px 0' }}>{order.delivery_date} в {order.delivery_time}</div>
-              <div style={{ color: '#666' }}>{order.address}</div>
-              <div style={{ marginTop: '12px', fontSize: '19px', fontWeight: '700', color: '#2563eb' }}>
+            <div key={order.id} style={{ background: 'rgba(255,255,255,0.06)', padding: '18px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <strong style={{ color: '#F8FAFC' }}>{order.grade} — {order.volume} м³</strong>
+              <div style={{ color: 'rgba(255,255,255,0.5)', margin: '6px 0', fontSize: '14px' }}>{order.delivery_date} в {order.delivery_time}</div>
+              <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '14px' }}>{order.address}</div>
+              <div style={{ marginTop: '12px', fontSize: '19px', fontWeight: '700', color: '#10B981' }}>
                 {order.total_price?.toLocaleString('ru-RU')} ₽
               </div>
             </div>
@@ -1225,64 +1177,35 @@ const loadReferrals = async () => {
 
 {activeTab === 'referral' && (
   <div>
-    {/* Хедер */}
-    <div style={{ 
-      display: 'flex', 
-      justifyContent: 'flex-end', 
-      padding: '20px 24px',
-      borderBottom: '1px solid #f1f5f9',
-      backgroundColor: 'white'
-    }}>
-      <div style={{ position: 'relative' }}>
-        <div onClick={() => setMenuOpen(!menuOpen)} style={{ padding: '10px', cursor: 'pointer' }}>
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-        </div>
-
-        {menuOpen && (
-          <div style={{
-            position: 'absolute', top: '52px', right: '0', background: 'white',
-            borderRadius: '12px', boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
-            padding: '8px 0', zIndex: 100, width: '220px'
-          }}>
-            <div onClick={() => { setActiveTab('new'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Новая заявка</div>
-            <div onClick={() => { setActiveTab('history'); setMenuOpen(false); loadOrders(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои заявки</div>
-            <div onClick={() => { setActiveTab('referral'); setMenuOpen(false); loadReferrals(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои баллы</div>
-            <div onClick={() => { setActiveTab('balance'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Баланс и вывод</div>
-          </div>
-        )}
-      </div>
-    </div>
-
-          <div style={{ padding: '24px', textAlign: 'center' }}>
-           <h2 style={{ marginBottom: '8px' }}>Мои баллы</h2>
+          <div style={{ padding: '20px 16px', textAlign: 'center' }}>
+           <h2 style={{ marginBottom: '8px', color: '#F8FAFC' }}>Мои баллы</h2>
   
            <div style={{ 
            fontSize: '64px', 
            fontWeight: '700', 
-           color: '#2563eb', 
+           color: '#10B981', 
            marginBottom: '8px',
-           textAlign: 'center'        // ← Центрирование большой суммы
+           textAlign: 'center'
         }}>
          {balance} ₽
      </div>
   
         <p style={{ 
-          color: '#666', 
+          color: 'rgba(255,255,255,0.4)', 
           marginBottom: '30px',
-          textAlign: 'center'        // ← Центрирование подписи
+          textAlign: 'center'
        }}>
              Баллы можно использовать как скидку
      </p>
 
        {/* Реферальный код */}
-      <div style={{ marginBottom: '40px' }}>
-        <h3 style={{ marginBottom: '12px', textAlign: 'center' }}>Твой реферальный код</h3>
+      <div style={{ marginBottom: '32px' }}>
+        <h3 style={{ marginBottom: '12px', textAlign: 'center', color: 'rgba(255,255,255,0.7)', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Твой реферальный код</h3>
         <div style={{ 
-          backgroundColor: '#f1f5f9', padding: '20px', borderRadius: '12px', 
+          backgroundColor: 'rgba(255,255,255,0.07)', padding: '18px', borderRadius: '12px', 
           fontSize: '26px', fontWeight: '700', letterSpacing: '3px', 
-          marginBottom: '16px', textAlign: 'center'
+          marginBottom: '14px', textAlign: 'center', color: '#F8FAFC',
+          border: '1px solid rgba(255,255,255,0.1)',
         }}>
           {referralCode}
         </div>
@@ -1292,24 +1215,20 @@ const loadReferrals = async () => {
             navigator.clipboard.writeText(link);
             alert('Реферальная ссылка скопирована!');
           }} 
-          style={{ 
-            display: 'block', width: '80%', maxWidth: '420px', margin: '0 auto',
-            padding: '16px 24px', backgroundColor: '#2563eb', color: 'white',
-            border: 'none', borderRadius: '12px', fontSize: '16px', fontWeight: '600'
-          }}
+          style={{ ...outlinedBtn('#10B981'), width: '80%', maxWidth: '320px', margin: '0 auto', padding: '11px 20px' }}
         >
-          Скопировать реферальную ссылку
+          Скопировать ссылку
         </button>
       </div>
 
-      <h3 style={{ marginBottom: '16px' }}>История операций</h3>
+      <h3 style={{ marginBottom: '16px', color: 'rgba(255,255,255,0.7)', fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.08em', textAlign: 'left' }}>История операций</h3>
 
       {loadingReferrals ? (
-        <p style={{ textAlign: 'center', padding: '60px 0', color: '#888' }}>Загрузка операций...</p>
+        <p style={{ textAlign: 'center', padding: '60px 0', color: 'rgba(255,255,255,0.3)' }}>Загрузка операций...</p>
       ) : referralHistory.length === 0 ? (
-        <p style={{ textAlign: 'center', padding: '80px 20px', color: '#888' }}>Пока нет операций</p>
+        <p style={{ textAlign: 'center', padding: '80px 20px', color: 'rgba(255,255,255,0.3)' }}>Пока нет операций</p>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', textAlign: 'left' }}>
           {referralHistory.map((op: any, index: number) => {
             const isExpanded = expandedReferrer === index;
 
@@ -1318,17 +1237,15 @@ const loadReferrals = async () => {
               const earned = op.earnedBonus || 0;
               return (
                 <div key={index} style={{
-                  background: 'white',
-                  borderRadius: '16px',
+                  background: isExpanded ? 'rgba(16,185,129,0.08)' : 'rgba(255,255,255,0.05)',
+                  borderRadius: '14px',
                   overflow: 'hidden',
-                  boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
-                  border: isExpanded ? '2px solid #2563eb' : '1px solid #e2e8f0'
+                  border: isExpanded ? '1px solid rgba(16,185,129,0.3)' : '1px solid rgba(255,255,255,0.08)'
                 }}>
-                  {/* Закрытая карточка */}
                   <div 
                     onClick={() => setExpandedReferrer(isExpanded ? null : index)}
                     style={{
-                      padding: '18px 20px',
+                      padding: '16px 18px',
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
@@ -1336,50 +1253,49 @@ const loadReferrals = async () => {
                     }}
                   >
                     <div>
-                      <div style={{ fontSize: '15px', color: '#64748b' }}>
+                      <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)' }}>
                         {new Date(op.lastDate).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' })}
                       </div>
-                      <div style={{ fontWeight: '600', marginTop: '4px' }}>
+                      <div style={{ fontWeight: '600', marginTop: '4px', color: '#F8FAFC' }}>
                         От: {op.referrerName}
                       </div>
-                      <div style={{ fontSize: '14px', color: '#64748b' }}>
+                      <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)' }}>
                         {op.referrerPhone}
                       </div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '18px', fontWeight: '700', color: '#166534' }}>
+                      <div style={{ fontSize: '18px', fontWeight: '700', color: '#10B981' }}>
                         +{earned.toLocaleString('ru-RU')} ₽
                       </div>
-                      <div style={{ fontSize: '14px', color: '#64748b' }}>
+                      <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)' }}>
                         {op.totalVolume} м³ • {op.count} заказ{op.count > 1 ? 'а' : ''}
                       </div>
                     </div>
                   </div>
 
-                  {/* Раскрытый список заказов */}
                   {isExpanded && op.orders && op.orders.length > 0 && (
-                    <div style={{ padding: '0 20px 18px', borderTop: '1px solid #f1f5f9' }}>
+                    <div style={{ padding: '0 18px 16px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
                       {op.orders.map((order: any, i: number) => {
                         let statusText = 'В процессе начисления';
-                        let statusColor = '#94a3b8';
+                        let statusColor = 'rgba(255,255,255,0.3)';
 
                         if (order.status === 'completed') {
                           statusText = `+${order.bonus_amount} ₽`;
-                          statusColor = '#166534';
+                          statusColor = '#10B981';
                         } else if (order.status === 'cancelled') {
                           statusText = 'Отмена';
-                          statusColor = '#ef4444';
+                          statusColor = '#F87171';
                         }
 
                         return (
                           <div key={i} style={{
-                            padding: '12px 0',
-                            borderBottom: i < op.orders.length - 1 ? '1px solid #f1f5f9' : 'none',
+                            padding: '10px 0',
+                            borderBottom: i < op.orders.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
                             display: 'flex',
                             justifyContent: 'space-between',
-                            fontSize: '15px'
+                            fontSize: '14px'
                           }}>
-                            <div>Заказ №{order.id || '—'} — {order.volume} м³</div>
+                            <div style={{ color: 'rgba(255,255,255,0.7)' }}>Заказ №{order.id || '—'} — {order.volume} м³</div>
                             <div style={{ color: statusColor, fontWeight: '600' }}>
                               {statusText}
                             </div>
@@ -1394,31 +1310,30 @@ const loadReferrals = async () => {
 
             // === ОДИНОЧНЫЕ ОПЕРАЦИИ (погашение, вывод) ===
             const isNegative = op.type === 'discount' || op.type === 'cash_withdrawal';
-            const amountColor = isNegative ? '#ef4444' : '#166534';
+            const amountColor = isNegative ? '#F87171' : '#10B981';
             const amountText = isNegative ? `-${op.amount} ₽` : `+${op.amount} ₽`;
 
             return (
               <div key={index} style={{
-                background: 'white',
-                borderRadius: '16px',
+                background: 'rgba(255,255,255,0.05)',
+                borderRadius: '14px',
                 overflow: 'hidden',
-                boxShadow: '0 2px 12px rgba(0,0,0,0.06)',
-                border: '1px solid #e2e8f0'
+                border: '1px solid rgba(255,255,255,0.08)'
               }}>
                 <div style={{
-                  padding: '18px 20px',
+                  padding: '16px 18px',
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center'
                 }}>
                   <div>
-                    <div style={{ fontSize: '15px', color: '#64748b' }}>
+                    <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)' }}>
                       {op.date ? new Date(op.date).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' }) : '—'}
                     </div>
-                    <div style={{ fontWeight: '600', marginTop: '4px' }}>
+                    <div style={{ fontWeight: '600', marginTop: '4px', color: '#F8FAFC' }}>
                       {op.title}
                     </div>
-                    {op.subtitle && <div style={{ fontSize: '14px', color: '#64748b' }}>{op.subtitle}</div>}
+                    {op.subtitle && <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)' }}>{op.subtitle}</div>}
                   </div>
                   <div style={{ fontSize: '18px', fontWeight: '700', color: amountColor }}>
                     {amountText}
@@ -1435,115 +1350,55 @@ const loadReferrals = async () => {
 {/* ====================== ВКЛАДКА «БАЛАНС» ====================== */}
 {activeTab === 'balance' && (
   <div>
-    <div style={{ 
-      display: 'flex', 
-      justifyContent: 'flex-end', 
-      padding: '20px 24px',
-      borderBottom: '1px solid #f1f5f9',
-      backgroundColor: 'white'
-    }}>
-      <div style={{ position: 'relative' }}>
-        <div 
-          onClick={() => setMenuOpen(!menuOpen)} 
-          style={{ padding: '10px', cursor: 'pointer' }}
-        >
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-          <div style={{ width: '26px', height: '3px', background: '#1f2937', margin: '5px 0', borderRadius: '2px' }}></div>
-        </div>
-
-        {menuOpen && (
-          <div style={{
-            position: 'absolute',
-            top: '52px',
-            right: '0',
-            background: 'white',
-            borderRadius: '12px',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
-            padding: '8px 0',
-            zIndex: 100,
-            width: '220px'
-          }}>
-            <div onClick={() => { setActiveTab('new'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Новая заявка</div>
-            <div onClick={() => { setActiveTab('history'); setMenuOpen(false); loadOrders(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои заявки</div>
-            <div onClick={() => { setActiveTab('referral'); setMenuOpen(false); loadReferrals(); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Мои баллы</div>
-            <div onClick={() => { setActiveTab('balance'); setMenuOpen(false); }} style={{ padding: '14px 20px', cursor: 'pointer' }}>Баланс и вывод</div>
-          </div>
-        )}
-      </div>
-    </div>
-
-    <div style={{ padding: '24px', textAlign: 'center' }}>
-      <h2 style={{ marginBottom: '20px' }}>Баланс и погашение</h2>
+    <div style={{ padding: '20px 16px', textAlign: 'center' }}>
+      <h2 style={{ marginBottom: '20px', color: '#F8FAFC' }}>Баланс и погашение</h2>
       
-      {/* Сумма баллов */}
         <div style={{ 
            fontSize: '72px', 
            fontWeight: '700', 
-           color: '#2563eb', 
+           color: '#10B981', 
            marginBottom: '8px',
            textAlign: 'center',
            width: '100%'
        }}>
           {balance} ₽
       </div>
-      <p style={{ color: '#666', marginBottom: '40px' }}>
+      <p style={{ color: 'rgba(255,255,255,0.4)', marginBottom: '36px' }}>
         Баллы можно использовать как скидку на заказ или вывести наличными
       </p>
 
-      <button 
-        onClick={() => setActiveTab('new')}
-        style={{
-          width: '60%',
-          maxWidth: '420px',
-          margin: '0 auto 16px',
-          padding: '18px',
-          backgroundColor: '#2563eb',
-          color: 'white',
-          border: 'none',
-          borderRadius: '14px',
-          fontSize: '15px',
-          fontWeight: '600'
-        }}
-      >
-        Использовать на следующий заказ
-      </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '320px', margin: '0 auto' }}>
+        <button 
+          onClick={() => setActiveTab('new')}
+          style={{ ...outlinedBtn('#10B981'), width: '100%', padding: '12px 16px' }}
+        >
+          ✓ Использовать на следующий заказ
+        </button>
 
-      {/* Кнопка вызова модального окна */}
-      <button 
-        onClick={() => setShowWithdrawModal(true)}
-        style={{
-          width: '60%',
-          maxWidth: '420px',
-          margin: '0 auto',
-          padding: '18px',
-          backgroundColor: '#ea580c',
-          color: 'white',
-          border: 'none',
-          borderRadius: '14px',
-          fontSize: '15px',
-          fontWeight: '600'
-        }}
-      >
-        Вывести наличными / на карту
-      </button>
+        <button 
+          onClick={() => setShowWithdrawModal(true)}
+          style={{ ...outlinedBtn('#FB923C'), width: '100%', padding: '12px 16px' }}
+        >
+          ↑ Вывести наличными / на карту
+        </button>
+      </div>
     </div>
 
 {/* ==================== МОДАЛЬНОЕ ОКНО ВЫВОДА ==================== */}
 {showWithdrawModal && (
   <div style={{
     position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.75)', zIndex: 3000,
-    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
+    backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 3000,
+    display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
   }}>
     <div style={{
-      background: 'white', borderRadius: '20px', width: '100%', maxWidth: '420px',
-      maxHeight: '90vh', overflow: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.4)'
+      background: '#1E293B', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: '560px',
+      maxHeight: '85vh', overflow: 'auto', boxShadow: '0 -20px 60px rgba(0,0,0,0.5)',
     }}>
-      <div style={{ padding: '28px 24px' }}>
-        <h3 style={{ textAlign: 'center', marginBottom: '8px', fontSize: '22px' }}>Вывод баллов</h3>
-        <p style={{ textAlign: 'center', color: '#666', marginBottom: '24px' }}>
-          Максимум: <strong>{balance} ₽</strong>
+      <div style={{ padding: '28px 20px' }}>
+        <h3 style={{ textAlign: 'center', marginBottom: '8px', fontSize: '20px', color: '#F8FAFC' }}>Вывод баллов</h3>
+        <p style={{ textAlign: 'center', color: 'rgba(255,255,255,0.4)', marginBottom: '20px' }}>
+          Максимум: <strong style={{ color: '#10B981' }}>{balance} ₽</strong>
         </p>
 
         <input
@@ -1553,41 +1408,41 @@ const loadReferrals = async () => {
           onChange={(e) => setWithdrawAmount(e.target.value)}
           style={{ 
             width: '100%', 
-            padding: '18px', 
+            padding: '16px', 
             fontSize: '20px', 
             textAlign: 'center', 
-            border: '2px solid #e2e8f0', 
-            borderRadius: '16px', 
-            marginBottom: '24px',
-            boxSizing: 'border-box'
+            border: '1px solid rgba(255,255,255,0.15)', 
+            borderRadius: '14px', 
+            marginBottom: '20px',
+            boxSizing: 'border-box',
+            background: 'rgba(255,255,255,0.07)',
+            color: '#F8FAFC',
           }}
         />
 
-        <div style={{ marginBottom: '28px' }}>
-          <p style={{ fontWeight: '600', marginBottom: '12px', color: '#1f2937' }}>
+        <div style={{ marginBottom: '24px' }}>
+          <p style={{ fontWeight: '600', marginBottom: '10px', color: 'rgba(255,255,255,0.6)', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             От какого реферала списать?
           </p>
 
-          <div style={{ border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden' }}>
-            
-            {/* Общий баланс */}
+          <div style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', overflow: 'hidden' }}>
             <div 
               onClick={() => setSelectedReferrerForWithdraw(null)}
               style={{ 
-                padding: '16px', 
-                background: selectedReferrerForWithdraw === null ? '#f0f9ff' : 'white', 
-                borderBottom: '1px solid #f1f5f9', 
+                padding: '14px 16px', 
+                background: selectedReferrerForWithdraw === null ? 'rgba(16,185,129,0.1)' : 'transparent', 
+                borderBottom: '1px solid rgba(255,255,255,0.07)', 
                 cursor: 'pointer',
                 display: 'flex',
                 justifyContent: 'space-between',
-                alignItems: 'center'
+                alignItems: 'center',
+                color: '#F8FAFC',
               }}
             >
-              <div>0 — Общий баланс (без привязки)</div>
-              {selectedReferrerForWithdraw === null && <span style={{ color: '#2563eb', fontSize: '18px' }}>✓</span>}
+              <div>Общий баланс (без привязки)</div>
+              {selectedReferrerForWithdraw === null && <span style={{ color: '#10B981', fontSize: '18px' }}>✓</span>}
             </div>
 
-            {/* Список рефералов — исправленный фильтр */}
             {referralHistory && referralHistory.filter(op => 
               op.type === 'referral_group' && 
               (op.referrerName || op.referrerPhone)
@@ -1601,52 +1456,44 @@ const loadReferrals = async () => {
                       key={i}
                       onClick={() => setSelectedReferrerForWithdraw(op)}
                       style={{
-                        padding: '16px',
-                        borderBottom: i < referralHistory.length - 1 ? '1px solid #f1f5f9' : 'none',
-                        background: isSelected ? '#f0f9ff' : 'white',
+                        padding: '14px 16px',
+                        borderBottom: i < referralHistory.length - 1 ? '1px solid rgba(255,255,255,0.07)' : 'none',
+                        background: isSelected ? 'rgba(16,185,129,0.1)' : 'transparent',
                         cursor: 'pointer',
                         display: 'flex',
                         justifyContent: 'space-between',
-                        alignItems: 'center'
+                        alignItems: 'center',
                       }}
                     >
                       <div>
-                        <div style={{ fontWeight: '600' }}>{op.referrerName}</div>
-                        <div style={{ fontSize: '13px', color: '#64748b' }}>{op.referrerPhone}</div>
+                        <div style={{ fontWeight: '600', color: '#F8FAFC' }}>{op.referrerName}</div>
+                        <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)' }}>{op.referrerPhone}</div>
                       </div>
                       <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontWeight: '700', color: '#166534' }}>
+                        <div style={{ fontWeight: '700', color: '#10B981' }}>
                           {op.earnedBonus || 0} ₽
                         </div>
-                        {isSelected && <span style={{ color: '#2563eb', fontSize: '18px' }}>✓</span>}
+                        {isSelected && <span style={{ color: '#10B981', fontSize: '18px' }}>✓</span>}
                       </div>
                     </div>
                   );
                 })
             ) : (
-              <div style={{ padding: '30px 20px', textAlign: 'center', color: '#94a3b8' }}>
+              <div style={{ padding: '24px 16px', textAlign: 'center', color: 'rgba(255,255,255,0.3)' }}>
                 Пока нет рефералов
               </div>
             )}
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '12px' }}>
+        <div style={{ display: 'flex', gap: '10px' }}>
           <button 
             onClick={() => { 
               setShowWithdrawModal(false); 
               setWithdrawAmount(''); 
               setSelectedReferrerForWithdraw(null); 
             }} 
-            style={{ 
-              flex: 1, 
-              padding: '16px', 
-              background: '#e2e8f0', 
-              color: '#1f2937', 
-              border: 'none', 
-              borderRadius: '12px', 
-              fontWeight: '600' 
-            }}
+            style={{ ...outlinedBtn('rgba(255,255,255,0.5)'), flex: 1, padding: '12px' }}
           >
             Отмена
           </button>
@@ -1655,17 +1502,12 @@ const loadReferrals = async () => {
             onClick={handleWithdraw} 
             disabled={!withdrawAmount || parseInt(withdrawAmount) <= 0} 
             style={{ 
-              flex: 1, 
-              padding: '16px', 
-              background: '#ea580c', 
-              color: 'white', 
-              border: 'none', 
-              borderRadius: '12px', 
-              fontWeight: '600',
-              opacity: (!withdrawAmount || parseInt(withdrawAmount) <= 0) ? 0.6 : 1 
+              ...outlinedBtn('#FB923C'), 
+              flex: 1, padding: '12px',
+              opacity: (!withdrawAmount || parseInt(withdrawAmount) <= 0) ? 0.4 : 1,
             }}
           >
-            Вывести
+            ↑ Вывести
           </button>
         </div>
       </div>
@@ -1674,6 +1516,46 @@ const loadReferrals = async () => {
 )}
   </div>
 )}
+        </div>{/* /centering wrapper */}
+      </div>
+
+      {/* ── НИЖНИЙ НАВБАР ───────────────────────────────────────────────────── */}
+      <div className="order-page-navbar" style={{
+        position: 'fixed', bottom: 0, left: 0, right: 0,
+        backgroundColor: '#131E2C',
+        borderTop: '1px solid rgba(255,255,255,0.07)',
+        zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        transform: navVisible ? 'translateY(0)' : 'translateY(100%)',
+        transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+      }}>
+        {/* Центрирующая обёртка навбара — 480px, как форма */}
+        <div style={{ width: '100%', maxWidth: '480px', display: 'flex', alignItems: 'center', justifyContent: 'space-around', paddingTop: '8px', paddingBottom: '8px' }}>
+          {NAV_ITEMS.map(item => {
+            const active = activeTab === item.tab;
+            return (
+              <button
+                key={item.tab}
+                onClick={item.action}
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '3px',
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  color: active ? '#10B981' : 'rgba(255,255,255,0.4)',
+                  padding: '6px 14px',
+                  borderRadius: '12px',
+                  transition: 'color 0.15s',
+                }}
+              >
+                {item.icon}
+                <span style={{ fontSize: '10px', fontWeight: active ? 700 : 500, letterSpacing: '0.02em' }}>
+                  {item.label}
+                </span>
+                {active && (
+                  <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: '#10B981', marginTop: '1px' }} />
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>

@@ -14,6 +14,56 @@ h1, h2, h3 {
   color: #fff;
 }
 
+/* ── Клиентская форма заявки: корректный full-height на мобильных браузерах ── */
+
+/* Samsung Internet и Яндекс.Браузер не учитывают тулбар в 100vh.
+   dvh = dynamic viewport height, меняется при появлении/скрытии тулбара.
+   ВАЖНО: overflow-x/y не ставим — они превращают min-height в max-height. */
+.order-page-root {
+  min-height: 100vh;
+  min-height: 100svh;   /* small viewport height — без браузерного тулбара */
+  min-height: 100dvh;   /* dynamic — самое точное; последнее поддерживаемое побеждает */
+}
+
+/* html/body — горизонтальный overflow запрещаем здесь, не на root */
+html, body {
+  overflow-x: hidden;
+}
+
+/* Скрываем полосу прокрутки глобально — скролл работает, полоса не видна */
+html,
+body,
+* {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+*::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+}
+
+/* Нижний навбар поднимается выше системных кнопок Android / iPhone */
+.order-page-navbar {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Контент не уходит под навбар + системную зону */
+.order-page-content {
+  padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+}
+
+/* Инпуты — сброс нативных стилей для единого тёмного вида */
+.order-page-root input,
+.order-page-root select,
+.order-page-root textarea {
+  -webkit-appearance: none;
+  appearance: none;
+  color-scheme: dark;
+}
+
 /* ==================== АНИМАЦИИ ДЛЯ УВЕДОМЛЕНИЙ ==================== */
 
 @keyframes bellRing {
