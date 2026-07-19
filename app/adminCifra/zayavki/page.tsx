@@ -8,51 +8,7 @@ import { useMapRouteLinks } from '@/lib/yandexRoute';
 import { Package, Save, Trash2, Send, Share2, Copy, X } from 'lucide-react';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 import OrderRouteMap from '@/app/adminCifra/components/OrderRouteMap';
-
-// ==================== Элегантная кнопка действия в модалке заявки ====================
-// Компактная, без "таблеточного" сплошного фона — тонкая рамка + акцентный
-// цвет текста/иконки, лёгкая подсветка фона при наведении.
-function ModalActionButton({
-  onClick,
-  color,
-  icon,
-  label,
-  disabled,
-}: {
-  onClick: () => void;
-  color: string;
-  icon: React.ReactNode;
-  label: string;
-  disabled?: boolean;
-}) {
-  const [hover, setHover] = useState(false);
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '6px',
-        padding: '8px 14px',
-        borderRadius: '10px',
-        border: `1px solid ${color}${hover && !disabled ? '80' : '30'}`,
-        background: hover && !disabled ? `${color}18` : 'transparent',
-        color,
-        fontWeight: 600,
-        fontSize: '13px',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.5 : 1,
-        transition: 'background 0.15s ease, border-color 0.15s ease',
-      }}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-}
+import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —

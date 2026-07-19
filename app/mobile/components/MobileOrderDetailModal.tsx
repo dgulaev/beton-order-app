@@ -1,12 +1,17 @@
 'use client';
 
 import { useState, useEffect, type CSSProperties } from 'react';
+import { Save, Trash2, Share2, Copy, X } from 'lucide-react';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
+import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
 
+// Тот же фон полей, что в MobileNewOrderModal (#25334A на карточке #1E2937) —
+// раньше здесь стоял #1E2937 (совпадал с фоном модалки, поля "терялись").
 const fieldStyle: CSSProperties = {
   width: '100%',
   padding: '14px',
-  background: '#1E2937',
+  background: '#25334A',
   border: 'none',
   borderRadius: '12px',
   color: '#fff',
@@ -62,6 +67,7 @@ export default function MobileOrderDetailModal({
   }, [order]);
 
   // ==================== 3. ЗАЩИТА ОТ NULL ====================
+  useBodyScrollLock(isOpen && !!editedOrder);
   if (!isOpen || !editedOrder) return null;
 
   const getStatusConfig = (status: string) => {
@@ -77,7 +83,6 @@ export default function MobileOrderDetailModal({
   const statusConfig = getStatusConfig(editedOrder.status);
 
   // ==================== 4. ПРОВЕРКА ПРАВ ====================
-  const canEdit = currentRole === 'admin' || currentRole === 'manager' || currentRole === 'dispatcher';
   const canDelete = currentRole === 'admin';
 
   // ==================== 4. СОХРАНЕНИЕ ====================
@@ -336,35 +341,54 @@ ${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}
           {/* КНОПКИ */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'flex', gap: '12px' }}>
-              <button 
+              <ModalActionButton
                 onClick={handleSave}
                 disabled={isSaving}
-                style={{ flex: 1, padding: '16px', background: '#10B981', color: 'white', border: 'none', borderRadius: '14px', fontSize: '16px', fontWeight: '600' }}
-              >
-                💾 Сохранить изменения
-              </button>
+                color="#10B981"
+                icon={<Save size={18} />}
+                label="Сохранить"
+                fullWidth
+                size="lg"
+              />
               {canDelete && (
-                <button 
+                <ModalActionButton
                   onClick={() => onDelete && onDelete(editedOrder.id)}
-                  style={{ flex: 1, padding: '16px', background: '#EF4444', color: 'white', border: 'none', borderRadius: '14px', fontSize: '16px', fontWeight: '600' }}
-                >
-                  🗑️ Удалить
-                </button>
+                  color="#EF4444"
+                  icon={<Trash2 size={18} />}
+                  label="Удалить"
+                  fullWidth
+                  size="lg"
+                />
               )}
             </div>
 
             <div style={{ display: 'flex', gap: '12px' }}>
-              <button onClick={handleShare} style={{ flex: 1, padding: '16px', background: '#3B82F6', color: 'white', border: 'none', borderRadius: '14px', fontSize: '16px', fontWeight: '600' }}>
-                🔗 Поделиться
-              </button>
-              <button onClick={handleCopyOrder} style={{ flex: 1, padding: '16px', background: '#8B5CF6', color: 'white', border: 'none', borderRadius: '14px', fontSize: '16px', fontWeight: '600' }}>
-                📋 Копировать
-              </button>
+              <ModalActionButton
+                onClick={handleShare}
+                color="#3B82F6"
+                icon={<Share2 size={18} />}
+                label="Поделиться"
+                fullWidth
+                size="lg"
+              />
+              <ModalActionButton
+                onClick={handleCopyOrder}
+                color="#8B5CF6"
+                icon={<Copy size={18} />}
+                label="Копировать"
+                fullWidth
+                size="lg"
+              />
             </div>
 
-            <button onClick={onClose} style={{ padding: '16px', background: '#475569', color: 'white', border: 'none', borderRadius: '14px', fontSize: '16px' }}>
-              Отмена
-            </button>
+            <ModalActionButton
+              onClick={onClose}
+              color="#94A3B8"
+              icon={<X size={18} />}
+              label="Отмена"
+              fullWidth
+              size="lg"
+            />
           </div>
 
         </div>

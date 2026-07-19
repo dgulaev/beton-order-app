@@ -8,6 +8,19 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 // Роут серверный, ключ на клиент не уходит — это безопасно.
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+// ==================== ТРОТТЛИНГ ЛОГА "✅ [Role API] ..." ====================
+// Роут дёргается очень часто (при каждом монтировании страницы, возврате
+// фокуса на вкладку, раз в час на каждой открытой вкладке — см.
+// app/providers/UserRoleProvider.tsx), а сама по себе успешная проверка роли
+// почти всегда "ничего интересного" — роль одного и того же сотрудника не
+// меняется каждую минуту. Полностью убирать лог не хотим (полезно видеть,
+// кто заходил), поэтому просто не печатаем его чаще одного раза в N минут на
+// одного и того же пользователя — а если роль/имя реально поменялись
+// (например, админ только что назначил новую роль), лог печатаем сразу,
+// независимо от троттлинга, т.к. это уже значимое событие.
+const ROLE_LOG_THROTTLE_MS = 10 * 60_000;
+const lastLoggedByUser = new Map<number, { at: number; role: string; full_name: string }>();
+
 export async function POST(request: NextRequest) {
   try {
     let userId: number | null = null;
@@ -57,7 +70,14 @@ export async function POST(request: NextRequest) {
     const full_name = data?.full_name || data?.username || 'Сотрудник';
     const forceLogoutVersion = data?.force_logout_version || 0;
 
-    console.log(`✅ [Role API] ${parsedUserId}: ${role} | ${full_name}`);
+    const lastLog = lastLoggedByUser.get(parsedUserId);
+    const changed = !lastLog || lastLog.role !== role || lastLog.full_name !== full_name;
+    const throttleExpired = !lastLog || Date.now() - lastLog.at > ROLE_LOG_THROTTLE_MS;
+
+    if (changed || throttleExpired) {
+      console.log(`✅ [Role API] ${parsedUserId}: ${role} | ${full_name}`);
+      lastLoggedByUser.set(parsedUserId, { at: Date.now(), role, full_name });
+    }
 
     return NextResponse.json({ 
       success: true, 

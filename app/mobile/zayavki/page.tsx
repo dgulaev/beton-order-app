@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import MobileNewOrderModal from '../components/MobileNewOrderModal';
 import MobileOrderDetailModal from '../components/MobileOrderDetailModal';
 import MobileExitButton from '../components/MobileExitButton';
-import { Package, Plus, MapPin } from 'lucide-react';
+import { Plus, MapPin } from 'lucide-react';
 import { useUserRole } from '../../providers/UserRoleProvider';
 
 export default function MobileZayavkiPage() {
@@ -16,8 +16,6 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
   const [newOrderInitialData, setNewOrderInitialData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-
-  const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'processing' | 'completed' | 'cancelled'>('all');
 
   // ==================== 2. ДАТА ====================
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -99,10 +97,8 @@ const { user } = useUserRole();   // ← Берём роль из провайд
       (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00')
     );
 
-  const filteredOrders = dayOrders.filter(order => {
-    const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
-    return matchesStatus;
-  });
+  // Фильтра по статусу в UI пока нет (см. рекомендации) — список за день без изменений.
+  const filteredOrders = dayOrders;
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -347,7 +343,8 @@ const { user } = useUserRole();   // ← Берём роль из провайд
                 </div>
 
                 <div style={{ color: '#94A3B8', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <MapPin size={16} /> {order.address?.substring(0, 45)}...
+                  <MapPin size={16} />
+                  {(order.address?.length || 0) > 45 ? `${order.address.substring(0, 45)}...` : (order.address || '—')}
                 </div>
               </div>
             ))

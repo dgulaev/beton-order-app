@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react';
 import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
 import MixerHistoryDrawer from './MixerHistoryDrawer';
-import { Truck } from 'lucide-react';
+import DeliverySettingsTab from './DeliverySettingsTab';
+import { useUserRole } from '../../providers/UserRoleProvider';
+import { Truck, DollarSign } from 'lucide-react';
 
 interface Mixer {
   id: number;
@@ -20,6 +22,14 @@ interface Mixer {
 }
 
 export default function MixersPage() {
+  const { isAdmin } = useUserRole();
+
+  // ==================== ВКЛАДКИ: «Миксеры» / «Тарифы доставки» (только admin) ====================
+  const [activeTab, setActiveTab] = useState<'mixers' | 'delivery'>('mixers');
+  useEffect(() => {
+    if (activeTab === 'delivery' && !isAdmin) setActiveTab('mixers');
+  }, [activeTab, isAdmin]);
+
   const [mixers, setMixers] = useState<Mixer[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -156,37 +166,75 @@ export default function MixersPage() {
       boxSizing: 'border-box'
     }}>
       
-      {/* ==================== ЗАГОЛОВОК + КНОПКА ДОБАВИТЬ ==================== */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexShrink: 0 }}>
-        <h1 style={{
-          fontSize: '26px',
-          fontWeight: 700,
-          color: '#fff',
-          marginTop: 0,
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px'
-        }}>
-          <Truck size={26} color="#94A3B8" />
-          Миксеры
-        </h1>
+      {/* ==================== ЗАГОЛОВОК + ВКЛАДКИ + КНОПКА ДОБАВИТЬ ==================== */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexShrink: 0, gap: '16px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '28px' }}>
+          <h1 style={{
+            fontSize: '26px',
+            fontWeight: 700,
+            color: '#fff',
+            marginTop: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px'
+          }}>
+            <Truck size={26} color="#94A3B8" />
+            Миксеры
+          </h1>
 
-        <button 
-          onClick={openAddModal} 
-          style={{ 
-            padding: '10px 22px', 
-            background: '#10B981', 
-            color: 'white', 
-            border: 'none', 
-            borderRadius: '9999px', 
-            fontWeight: '600',
-            fontSize: '14.5px'
-          }}
-        >
-          + Добавить миксер
-        </button>
+          {/* Вкладка «Тарифы доставки» — видна только admin (см. AGENTS.md о доступе), больше никому. */}
+          {isAdmin && (
+            <div style={{ display: 'flex', gap: '6px', background: '#1E2937', borderRadius: '9999px', padding: '4px' }}>
+              <button
+                onClick={() => setActiveTab('mixers')}
+                style={{
+                  padding: '8px 18px', borderRadius: '9999px', border: 'none', cursor: 'pointer',
+                  background: activeTab === 'mixers' ? '#334155' : 'transparent',
+                  color: activeTab === 'mixers' ? '#fff' : '#94A3B8',
+                  fontWeight: 600, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '7px',
+                }}
+              >
+                <Truck size={15} />
+                Миксеры
+              </button>
+              <button
+                onClick={() => setActiveTab('delivery')}
+                style={{
+                  padding: '8px 18px', borderRadius: '9999px', border: 'none', cursor: 'pointer',
+                  background: activeTab === 'delivery' ? '#334155' : 'transparent',
+                  color: activeTab === 'delivery' ? '#fff' : '#94A3B8',
+                  fontWeight: 600, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '7px',
+                }}
+              >
+                <DollarSign size={15} />
+                Тарифы доставки
+              </button>
+            </div>
+          )}
+        </div>
+
+        {activeTab === 'mixers' && (
+          <button 
+            onClick={openAddModal} 
+            style={{ 
+              padding: '10px 22px', 
+              background: '#10B981', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: '9999px', 
+              fontWeight: '600',
+              fontSize: '14.5px'
+            }}
+          >
+            + Добавить миксер
+          </button>
+        )}
       </div>
 
+      {activeTab === 'delivery' ? (
+        <DeliverySettingsTab />
+      ) : (
+      <>
       {/* ==================== ПАНЕЛЬ УПРАВЛЕНИЯ (ФИЛЬТРЫ + ВИД) ==================== */}
       <div style={{
         display: 'flex',
@@ -629,6 +677,8 @@ export default function MixersPage() {
         </>
       )}
       </div>
+      </>
+      )}
 
       {/* ==================== ИСТОРИЯ РЕЙСОВ МИКСЕРА ==================== */}
       <MixerHistoryDrawer

@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Order } from '../../adminCifra/hooks/useCalendarOrders';
 import { useYandexRouteHref } from '@/lib/yandexRoute';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 interface MobileOrderDetailModalProps {
   order: Order | null;
@@ -33,11 +34,16 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
     setHistory,
   } = props;
 
-  if (!order) return null;
-
+  // Хуки должны вызываться в одном и том же порядке на каждый рендер — раньше
+  // `if (!order) return null` стоял перед ними (нарушение Rules of Hooks).
+  // Сейчас родитель всегда монтирует модалку только при order != null, но на
+  // случай будущих изменений держим guard'ы (order?.…) внутри самих хуков,
+  // а ранний return — уже после всех вызовов хуков.
   const [localOrder, setLocalOrder] = useState(order);
   const [history, setLocalHistory] = useState(initialHistory || []);
-  const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(order.address);
+  const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(order?.address);
+
+  useBodyScrollLock(!!order);
 
   // ==================== ЗАГРУЗКА ИСТОРИИ ====================
   useEffect(() => {
@@ -62,6 +68,10 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
   useEffect(() => {
     setLocalOrder(order);
   }, [order]);
+
+  // Проверяем оба — localOrder синхронизируется с order через useEffect выше,
+  // но независимо им сужаем localOrder до не-null для TypeScript ниже по коду.
+  if (!order || !localOrder) return null;
 
   const currentMixers = mixerAssignments
     .filter(m => String(m.orderId) === String(order.id))
@@ -102,7 +112,7 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
     if (newStatus === localOrder.status) return;
 
     const oldStatus = localOrder.status;
-    setLocalOrder(prev => ({ ...prev, status: newStatus }));
+    setLocalOrder(prev => (prev ? { ...prev, status: newStatus } : prev));
     setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: newStatus } : o));
 
     try {
@@ -123,7 +133,7 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
 
       if (!data.success) {
         // Откат
-        setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+        setLocalOrder(prev => (prev ? { ...prev, status: oldStatus } : prev));
         setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: oldStatus } : o));
         alert('Ошибка сохранения: ' + (data.message || ''));
         return;
@@ -138,7 +148,7 @@ export default function MobileOrderDetailModal(props: MobileOrderDetailModalProp
     } catch (err) {
       console.error(err);
       // Откат
-      setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+      setLocalOrder(prev => (prev ? { ...prev, status: oldStatus } : prev));
       setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: oldStatus } : o));
       alert('Не удалось связаться с сервером');
     }

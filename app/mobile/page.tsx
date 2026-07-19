@@ -9,6 +9,7 @@ import MobileExitButton from './components/MobileExitButton';
 import { useUserRole } from '../providers/UserRoleProvider';
 import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 export default function MobileDashboard() {
   // ==================== 1. СТАТУСЫ И СОСТОЯНИЯ ====================
@@ -29,6 +30,7 @@ export default function MobileDashboard() {
   const [mixerAssignments, setMixerAssignments] = useState<any[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [showCalendar, setShowCalendar] = useState(false);
+  useBodyScrollLock(showCalendar);
 
   // ==================== 2. ВЫБОР ДАТЫ ====================
   const [selectedDate, setSelectedDate] = useState(() => {

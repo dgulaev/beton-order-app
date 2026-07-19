@@ -54,6 +54,31 @@ function mentionsBryanskRegion(address: string): boolean {
 }
 
 /**
+ * true — адрес явно указывает на населённый пункт/область ЗА пределами
+ * самого Брянска (другое село/город региона, либо явно написана "Брянская
+ * область"). Используется для тарификации доставки «за городом» — км ×
+ * ставка вместо обычных тарифов «до 10/12/50 м³» (см. lib/deliveryPricing.ts,
+ * calculateDeliveryCost). Логика ветвления и приоритет проверок — те же, что
+ * и в normalizeDeliveryAddress ниже: известный ориентир и явное упоминание
+ * самого Брянска — это ВСЕГДА "в городе"; адрес без населённого пункта вовсе
+ * (по умолчанию считается Брянском, см. normalizeDeliveryAddress) — тоже
+ * "в городе", а не "за городом".
+ */
+export function isOutsideBryansk(rawAddress: string | null | undefined): boolean {
+  const trimmed = (rawAddress || '').trim();
+  if (!trimmed) return false;
+
+  const lower = trimmed.toLowerCase();
+  if (KNOWN_LANDMARKS.some((l) => l.keywords.some((kw) => lower.includes(kw)))) return false;
+
+  if (mentionsBryanskCity(trimmed)) return false;
+  if (mentionsBryanskRegion(trimmed)) return true;
+  if (SETTLEMENT_MARKER.test(trimmed)) return true;
+
+  return false;
+}
+
+/**
  * Достраивает адрес доставки до вида, который Яндекс.Карты однозначно
  * распознают: подставляет известный ориентир, добавляет город Брянск (если
  * населённый пункт не указан вовсе) или область Брянская (если указан другой

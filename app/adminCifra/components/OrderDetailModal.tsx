@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { Order } from '../hooks/useCalendarOrders';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
@@ -452,16 +453,22 @@ const formatVolume = (value: number | string) => {
                 <div style={{
                   backgroundColor: getStatusConfig(localOrder.status).bg,
                   color: getStatusConfig(localOrder.status).color,
-                  padding: '7px 18px',
+                  border: `1px solid ${getStatusConfig(localOrder.status).color}40`,
+                  padding: '7px 16px',
                   borderRadius: '9999px',
                   fontWeight: '600',
-                  fontSize: '14px',
+                  fontSize: '13px',
+                  letterSpacing: '0.2px',
                   whiteSpace: 'nowrap'
                 }}>
                   {getStatusConfig(localOrder.status).label}
                 </div>
               ) : (
-                // Можно менять — сама пилюля и есть select (клик открывает меню статусов)
+                // Можно менять — сама пилюля и есть select (клик открывает меню статусов).
+                // Обёртка нужна, чтобы поверх нативного select нарисовать свой шеврон —
+                // у select убран стандартный вид (appearance: none), иначе на разных ОС/
+                // браузерах он выглядит по-разному и не вписывается в дизайн пилюли.
+                <div style={{ position: 'relative', display: 'inline-flex' }}>
                 <select
                   value={localOrder.status || 'new'}
                   onChange={async (e) => {
@@ -519,12 +526,16 @@ const formatVolume = (value: number | string) => {
                   style={{
                     background: getStatusConfig(localOrder.status).bg,
                     color: getStatusConfig(localOrder.status).color,
-                    border: 'none',
+                    border: `1px solid ${getStatusConfig(localOrder.status).color}40`,
                     borderRadius: '9999px',
-                    padding: '7px 14px',
-                    fontSize: '14px',
+                    padding: '7px 30px 7px 16px',
+                    fontSize: '13px',
                     fontWeight: '600',
-                    cursor: 'pointer'
+                    letterSpacing: '0.2px',
+                    cursor: 'pointer',
+                    appearance: 'none',
+                    WebkitAppearance: 'none',
+                    MozAppearance: 'none',
                   }}
                 >
                   <option value="new">Новая</option>
@@ -532,6 +543,19 @@ const formatVolume = (value: number | string) => {
                   <option value="completed">Выполнена</option>
                   <option value="cancelled">Отменена</option>
                 </select>
+                <ChevronDown
+                  size={14}
+                  strokeWidth={2.5}
+                  style={{
+                    position: 'absolute',
+                    right: '10px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: getStatusConfig(localOrder.status).color,
+                    pointerEvents: 'none',
+                  }}
+                />
+                </div>
               )}
             </div>
 
@@ -891,7 +915,7 @@ const formatVolume = (value: number | string) => {
                 <option value="">— Выберите миксер —</option>
                 {allMixers.map((mixer) => (
                   <option key={mixer.id} value={mixer.id}>
-                    {mixer.number} — {mixer.model} ({mixer.volume} м³)
+                    {mixer.number} — {mixer.model} ({mixer.volume} м³){mixer.driver ? ` · ${mixer.driver}` : ''}
                   </option>
                 ))}
                 <option value="custom">Другой (ввести вручную)</option>

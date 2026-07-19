@@ -2,6 +2,11 @@
 
 import { useState, useEffect, useMemo, type CSSProperties } from 'react';
 import { formatPhoneInput } from '@/lib/phone';
+import { useDeliveryCoords } from '@/lib/yandexRoute';
+import { calculateDeliveryCost, fetchDeliverySettings, DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
+import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
+import { X, Send } from 'lucide-react';
 
 
 const fieldStyle: CSSProperties = {
@@ -38,7 +43,6 @@ export default function MobileNewOrderModal({
   // ==================== 1. ОСНОВНЫЕ СОСТОЯНИЯ ====================
   const [recipes, setRecipes] = useState<any[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [loadingInn, setLoadingInn] = useState(false);
 
   // ==================== 2. ФОРМА ====================
   const [form, setForm] = useState({
@@ -63,7 +67,14 @@ export default function MobileNewOrderModal({
 
    // ==================== 4. ЗАПОЛНЕНИЕ ДАННЫМИ ПРИ КОПИРОВАНИИ ====================
   useEffect(() => {
-    if (!initialData || Object.keys(initialData).length === 0) return;
+    if (!initialData || Object.keys(initialData).length === 0) {
+      // Свежая заявка без дублирования — просто подставляем дату по умолчанию
+      // (день, открытый на странице «Заявки»), иначе поле остаётся пустым.
+      if (defaultDeliveryDate) {
+        setForm(prev => ({ ...prev, deliveryDate: defaultDeliveryDate }));
+      }
+      return;
+    }
 
     let phone = initialData.phone || '+7';
     if (!phone.startsWith('+7')) {
@@ -105,6 +116,25 @@ export default function MobileNewOrderModal({
     loadRecipes();
   }, []);
 
+  // ==================== 5.1 ЗАГРУЗКА ТАРИФОВ ДОСТАВКИ ====================
+  // Те же тарифы, что редактирует admin на вкладке «Тарифы доставки»
+  // страницы «Миксеры» (десктоп) — см. lib/deliveryPricing.ts.
+  const [deliverySettings, setDeliverySettings] = useState<DeliverySettings>(DEFAULT_DELIVERY_SETTINGS);
+  useEffect(() => {
+    fetchDeliverySettings().then(setDeliverySettings);
+  }, []);
+
+  // ==================== 5.2 ДЕБАУНС АДРЕСА ДЛЯ ГЕОКОДИРОВАНИЯ ====================
+  // Нужны координаты адреса, чтобы посчитать км для доставки за городом —
+  // не геокодируем на каждое нажатие клавиши (см. NewOrderModal.tsx, тот же приём).
+  const [previewAddress, setPreviewAddress] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setPreviewAddress(form.address), 600);
+    return () => clearTimeout(timer);
+  }, [form.address]);
+  const addressLooksUsable = previewAddress.trim().length >= 5;
+  const { coords: previewCoords } = useDeliveryCoords(addressLooksUsable ? previewAddress : null);
+
   // ==================== 6. РАСЧЁТ СТОИМОСТИ ====================
   const selectedRecipe = recipes.find(r => r.code === form.grade);
   const volume = parseFloat(form.volume) || 0;
@@ -113,14 +143,15 @@ export default function MobileNewOrderModal({
     return volume > 0 && selectedRecipe ? Math.round(volume * selectedRecipe.price) : 0;
   }, [volume, selectedRecipe]);
 
-  let deliveryCost = 0;
-  let deliveryNote = '';
-  if (volume > 0) {
-    if (volume <= 10) { deliveryCost = 6000; deliveryNote = '6000 ₽'; }
-    else if (volume <= 12) { deliveryCost = 7500; deliveryNote = '7500 ₽'; }
-    else if (volume <= 50) { deliveryCost = Math.ceil(volume / 10) * 6000; deliveryNote = `${Math.ceil(volume / 10)} рейса`; }
-    else { deliveryCost = Math.round(volume * 600); deliveryNote = '600 ₽/м³'; }
-  }
+  const { deliveryCost, deliveryNote } = useMemo(
+    () => calculateDeliveryCost({
+      volume,
+      address: addressLooksUsable ? previewAddress : form.address,
+      coords: previewCoords,
+      settings: deliverySettings,
+    }),
+    [volume, addressLooksUsable, previewAddress, form.address, previewCoords, deliverySettings]
+  );
   const totalPrice = concreteCost + deliveryCost;
 
   // ==================== 7. ОБРАБОТЧИКИ ИЗМЕНЕНИЙ ====================
@@ -155,6 +186,9 @@ export default function MobileNewOrderModal({
       full_name: form.fullName?.trim() || null,
       inn: form.inn?.trim() || null,
       comment: form.comment?.trim() || null,
+      concreteCost: concreteCost || 0,
+      deliveryCost: deliveryCost || 0,
+      totalPrice: totalPrice || 0,
       created_by: localStorage.getItem('userId') ? parseInt(localStorage.getItem('userId')!) : 1777619517739,
       curator_name: currentUserName,
       userRole: currentRole,
@@ -190,6 +224,8 @@ export default function MobileNewOrderModal({
   };
 
   // ==================== 9. РЕНДЕР ====================
+  useBodyScrollLock(isOpen);
+
   if (!isOpen) return null;
 
   return (
@@ -409,50 +445,51 @@ export default function MobileNewOrderModal({
               />
             </div>
 
-            {/* Стоимость */}
+            {/* Стоимость — разбивка на бетон/доставку, как в десктопной админке (NewOrderModal.tsx) */}
             {volume > 0 && (
-              <div style={{ background: '#25334A', padding: '20px', borderRadius: '16px', textAlign: 'center' }}>
-                <div style={{ fontSize: '18px', color: '#94A3B8' }}>Итого к оплате:</div>
-                <div style={{ fontSize: '28px', fontWeight: '700', color: '#60A5FA' }}>
-                  {totalPrice.toLocaleString()} ₽
+              <div style={{ background: '#25334A', padding: '20px', borderRadius: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', color: '#E2E8F0' }}>
+                  <span>Бетон:</span><span>{concreteCost.toLocaleString()} ₽</span>
                 </div>
-                {deliveryNote && <div style={{ color: '#34D399', marginTop: '6px' }}>🚚 {deliveryNote}</div>}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', color: '#E2E8F0', marginTop: '6px' }}>
+                  <span>Доставка:</span><span>{deliveryCost.toLocaleString()} ₽</span>
+                </div>
+                {deliveryNote && <div style={{ color: '#34D399', marginTop: '8px', fontSize: '14px' }}>🚚 {deliveryNote}</div>}
+                <div style={{
+                  marginTop: '12px',
+                  paddingTop: '12px',
+                  borderTop: '1px solid #475569',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontWeight: '700',
+                  fontSize: '19px',
+                  color: '#60A5FA',
+                }}>
+                  <span>Итого:</span><span>{totalPrice.toLocaleString()} ₽</span>
+                </div>
               </div>
             )}
 
             {/* КНОПКИ */}
             <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-              <button 
-                type="button" 
-                onClick={onClose} 
-                style={{ 
-                  flex: 1, 
-                  padding: '18px', 
-                  background: '#334155', 
-                  color: 'white', 
-                  border: 'none', 
-                  borderRadius: '16px', 
-                  fontSize: '17px' 
-                }}
-              >
-                Отмена
-              </button>
-              <button 
-                type="submit" 
-                disabled={isSubmitting} 
-                style={{ 
-                  flex: 1, 
-                  padding: '18px', 
-                  background: '#10B981', 
-                  color: 'white', 
-                  border: 'none', 
-                  borderRadius: '16px', 
-                  fontSize: '17px', 
-                  fontWeight: '600' 
-                }}
-              >
-                {isSubmitting ? 'Создаём...' : 'Создать заявку'}
-              </button>
+              <ModalActionButton
+                type="button"
+                onClick={onClose}
+                color="#94A3B8"
+                icon={<X size={18} />}
+                label="Отмена"
+                fullWidth
+                size="lg"
+              />
+              <ModalActionButton
+                type="submit"
+                disabled={isSubmitting}
+                color="#10B981"
+                icon={<Send size={18} />}
+                label={isSubmitting ? 'Создаём...' : 'Создать'}
+                fullWidth
+                size="lg"
+              />
             </div>
           </form>
         </div>

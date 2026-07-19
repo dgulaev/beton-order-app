@@ -1,7 +1,15 @@
-/* === АГРЕССИВНОЕ СКРЫТИЕ ДЛЯ SAMSUNG INTERNET === */
-::-webkit-scrollbar,
-::-webkit-scrollbar-track,
-::-webkit-scrollbar-thumb {
+/* Скрытие системных скроллбаров внутри мобильной диспетчерской.
+ * Раньше файл существовал, но нигде не импортировался.
+ *
+ * Важно: правила ограничены контейнером #mobile-root (см. app/mobile/layout.tsx),
+ * а не голыми html/body — этот CSS-чанк не выгружается автоматически при
+ * клиентской навигации Next.js, и без скоупинга он мог бы задеть скроллбары
+ * десктопной админки (/adminCifra) после перехода между разделами в одной SPA-сессии.
+ */
+
+#mobile-root ::-webkit-scrollbar,
+#mobile-root ::-webkit-scrollbar-track,
+#mobile-root ::-webkit-scrollbar-thumb {
   display: none !important;
   width: 0 !important;
   height: 0 !important;
@@ -9,32 +17,20 @@
   visibility: hidden !important;
 }
 
-*::-webkit-scrollbar,
-*::-webkit-scrollbar-track,
-*::-webkit-scrollbar-thumb {
-  display: none !important;
-  width: 0 !important;
-  height: 0 !important;
-}
-
 /* Firefox + Edge */
-html, body, div, main, section, #mobile-root, #dashboard-scroll {
+#mobile-root,
+#mobile-root * {
   scrollbar-width: none !important;
   -ms-overflow-style: none !important;
 }
 
-/* Базовые настройки */
-html, body {
+#mobile-root {
   overflow-x: hidden !important;
   -webkit-overflow-scrolling: touch !important;
   overscroll-behavior-y: auto !important;
 }
 
-/* Специально для наших контейнеров */
-#mobile-root, 
-#dashboard-scroll,
-div[style*="overflowY: auto"] {
+#mobile-root #dashboard-scroll,
+#mobile-root div[style*="overflowY: auto"] {
   -webkit-overflow-scrolling: touch !important;
-  scrollbar-width: none !important;
-  -ms-overflow-style: none !important;
 }

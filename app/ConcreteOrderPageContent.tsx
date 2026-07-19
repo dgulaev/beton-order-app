@@ -4,6 +4,8 @@ import { useEffect, useState, useMemo, type CSSProperties } from 'react';
 import Image from 'next/image';
 import { useSearchParams } from 'next/navigation';
 import { formatPhoneInput, normalizePhone } from '@/lib/phone';
+import { useDeliveryCoords } from '@/lib/yandexRoute';
+import { calculateDeliveryCost, fetchDeliverySettings, DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
 
 declare const WebApp: any;
 
@@ -162,7 +164,26 @@ const loadBalance = async () => {
   }
 };
 
-// ==================== РАСЧЁТ СТОИМОСТИ В РЕАЛЬНОМ ВРЕМЕНИ ====================
+// ==================== ТАРИФЫ ДОСТАВКИ ====================
+  // Редактируются admin на вкладке «Тарифы доставки» страницы «Миксеры»
+  // (десктоп-админка) — см. lib/deliveryPricing.ts. Пока не загрузились,
+  // считаем по тем же значениям, что были захардкожены раньше.
+  const [deliverySettings, setDeliverySettings] = useState<DeliverySettings>(DEFAULT_DELIVERY_SETTINGS);
+  useEffect(() => {
+    fetchDeliverySettings().then(setDeliverySettings);
+  }, []);
+
+  // Дебаунс адреса перед геокодированием (нужны координаты только для
+  // расчёта км доставки за городом) — не дёргаем DaData на каждую букву.
+  const [previewAddress, setPreviewAddress] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setPreviewAddress(form.address), 600);
+    return () => clearTimeout(timer);
+  }, [form.address]);
+  const addressLooksUsable = previewAddress.trim().length >= 5;
+  const { coords: previewCoords } = useDeliveryCoords(addressLooksUsable ? previewAddress : null);
+
+  // ==================== РАСЧЁТ СТОИМОСТИ В РЕАЛЬНОМ ВРЕМЕНИ ====================
   const volume = parseFloat(form.volume) || 0;
 
   const pricePerCubic: Record<string, number> = {
@@ -174,27 +195,15 @@ const loadBalance = async () => {
     return volume > 0 ? Math.round(volume * (pricePerCubic[form.grade] || 7230)) : 0;
   }, [volume, form.grade]);
 
-  let deliveryCost = 0;
-  let deliveryNote = '';
-
-  if (volume > 0) {
-    if (volume <= 10) { 
-      deliveryCost = 6000; 
-      deliveryNote = '6000 ₽ за рейс (до 10 м³)'; 
-    }
-    else if (volume <= 12) { 
-      deliveryCost = 7500; 
-      deliveryNote = '7500 ₽ за рейс (12 м³)'; 
-    }
-    else if (volume <= 50) { 
-      deliveryCost = Math.ceil(volume / 10) * 6000; 
-      deliveryNote = `${Math.ceil(volume / 10)} рейса × 6000 ₽`; 
-    }
-    else { 
-      deliveryCost = Math.round(volume * 600); 
-      deliveryNote = '600 ₽ за 1 м³'; 
-    }
-  }
+  const { deliveryCost, deliveryNote } = useMemo(
+    () => calculateDeliveryCost({
+      volume,
+      address: addressLooksUsable ? previewAddress : form.address,
+      coords: previewCoords,
+      settings: deliverySettings,
+    }),
+    [volume, addressLooksUsable, previewAddress, form.address, previewCoords, deliverySettings]
+  );
 
   const totalPrice = concreteCost + deliveryCost;
 

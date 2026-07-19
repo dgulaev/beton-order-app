@@ -397,7 +397,11 @@ const currentMinutes = now.getHours() * 60 + now.getMinutes();
 // Статусы миксеров, при которых бетон уже в движении — заявка исполняется
 const ACTIVE_MIXER_STATUSES = ['В пути', 'На объекте', 'Разгружен', 'Возврат'];
 
-const delayedOrders = todayOrders
+// Задержка — понятие "отстаём от текущего момента". Если открыт не сегодняшний
+// день (вчера/завтра), currentMinutes всё равно берётся из реального "сейчас" —
+// без этой проверки, например, переключившись на завтра, все заявки с утренним
+// временем доставки ошибочно считались "задержанными на 1000+ минут".
+const delayedOrders = selectedDateStr !== today ? [] : todayOrders
   // Выполненные и отменённые заказы не считаются задержанными
   .filter((order: Order) => order.status === 'new' || order.status === 'processing')
   .filter((order: Order) => {

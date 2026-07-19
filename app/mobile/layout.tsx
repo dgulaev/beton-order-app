@@ -23,6 +23,7 @@ import {
 } from './driver/driverClient';
 import DriverDashboard from './driver/components/DriverDashboard';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
+import './globals.css';
 import { hardResetBroadcastSocket } from '@/hooks/useRealtimeBroadcast';
 
 // Сколько ждём ответ /api/driver/auth, прежде чем сдаться (см. пояснение у
