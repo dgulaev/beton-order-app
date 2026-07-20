@@ -950,7 +950,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
           
        {/* ==================== 35. ЗАЯВКИ СЕГОДНЯ ==================== */}
 <div style={{ 
-  background: '#25334A', 
+  background: '#1E2937', 
   borderRadius: '18px', 
   padding: '16px 20px', 
   flex: 1 
@@ -993,7 +993,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
 
   {/* ==================== 36. ВЫПОЛНЕНИЕ ПЛАНА ==================== */}
 <div style={{ 
-  background: '#25334A', 
+  background: '#1E2937', 
   borderRadius: '18px', 
   padding: '16px 20px', 
   flex: 1 
@@ -1031,7 +1031,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
     Разгружен/Возврат) и НЕ покрыт весь объём назначенными миксерами, при этом
     прошло > 15 мин от (delivery_time + время загрузки 2мин×м³). */}
 <div style={{ 
-  background: '#25334A', 
+  background: '#1E2937', 
   borderRadius: '18px', 
   padding: '16px 20px', 
   display: 'flex',
