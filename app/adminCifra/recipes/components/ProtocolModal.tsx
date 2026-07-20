@@ -324,6 +324,7 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
                   type="number"
                   value={prot.design_strength}
                   onChange={(e) => set('design_strength', e.target.value === '' ? '' : Number(e.target.value))}
+                  onWheel={(e) => e.currentTarget.blur()}
                   style={inputStyle}
                 />
               </div>
@@ -368,8 +369,8 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
                 return (
                   <div key={idx} style={{ display: 'grid', gridTemplateColumns: '34px 1fr 1fr 1fr 1fr 34px', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
                     <div style={{ color: COLORS.muted, textAlign: 'center' }}>{idx + 1}</div>
-                    <input type="number" value={s.mass} onChange={(e) => setSpec(idx, 'mass', e.target.value)} style={inputStyle} />
-                    <input type="number" value={s.load} onChange={(e) => setSpec(idx, 'load', e.target.value)} style={inputStyle} />
+                    <input type="number" value={s.mass} onChange={(e) => setSpec(idx, 'mass', e.target.value)} onWheel={(e) => e.currentTarget.blur()} style={inputStyle} />
+                    <input type="number" value={s.load} onChange={(e) => setSpec(idx, 'load', e.target.value)} onWheel={(e) => e.currentTarget.blur()} style={inputStyle} />
                     <div style={{ ...inputStyle, background: '#1B2536', color: COLORS.muted }}>{r && r.density > 0 ? ruInt(r.density) : '—'}</div>
                     <div style={{ ...inputStyle, background: '#1B2536', color: r && r.strength > 0 ? COLORS.accent : COLORS.muted, fontWeight: 600 }}>{r && r.strength > 0 ? ru(r.strength) : '—'}</div>
                     <button onClick={() => delSpec(idx)} style={{ ...ghostButton, padding: '6px 0', background: 'transparent', color: COLORS.danger }}>✕</button>

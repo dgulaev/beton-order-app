@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     // формате ("+7...", "8...", просто 10 цифр и т.п.). Оба запроса
     // независимы — грузим параллельно, а не по очереди, чтобы не платить
     // задержкой сети дважды.
-    const [{ data: staffUsers }, { data: mixers }] = await Promise.all([
+    const [{ data: staffUsers }, { data: mixers }, { data: extraDriverRows }] = await Promise.all([
       supabase
         .from('users')
         .select('user_id, role, full_name, organization_name, phone')
@@ -33,6 +33,11 @@ export async function POST(request: NextRequest) {
       supabase
         .from('mixers')
         .select('number, model, driver, phone')
+        .not('phone', 'is', null),
+      // Дополнительные водители из mixer_drivers (нужен JOIN с mixers)
+      supabase
+        .from('mixer_drivers')
+        .select('driver_name, phone, mixers!inner(number, model)')
         .not('phone', 'is', null),
     ]);
 
@@ -47,9 +52,25 @@ export async function POST(request: NextRequest) {
           }
         : null;
 
-    const driverMixers = (mixers || [])
+    // Основные водители
+    const primaryMatches = (mixers || [])
       .filter((m) => phonesMatch(m.phone, trimmedPhone))
       .map((m) => ({ number: m.number, model: m.model as string | null, driver: m.driver as string }));
+
+    // Дополнительные водители из mixer_drivers
+    const extraMatches = (extraDriverRows || [])
+      .filter((r) => phonesMatch(r.phone, trimmedPhone))
+      .map((r) => {
+        const mx = r.mixers as any;
+        return { number: mx.number as string, model: mx.model as string | null, driver: r.driver_name as string };
+      });
+
+    // Объединяем, убирая дубли по номеру миксера (основной приоритетнее)
+    const seen = new Set(primaryMatches.map((m) => m.number));
+    const driverMixers = [
+      ...primaryMatches,
+      ...extraMatches.filter((m) => !seen.has(m.number)),
+    ];
 
     if (!staff && driverMixers.length === 0) {
       return NextResponse.json(

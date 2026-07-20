@@ -7,6 +7,12 @@ import DeliverySettingsTab from './DeliverySettingsTab';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import { Truck, DollarSign } from 'lucide-react';
 
+interface MixerDriver {
+  id: number;
+  driver_name: string;
+  phone: string;
+}
+
 interface Mixer {
   id: number;
   number: string;
@@ -19,6 +25,7 @@ interface Mixer {
   location?: string;
   created_at?: string;
   unload_allowance_min?: number | null;
+  mixer_drivers?: MixerDriver[];
 }
 
 export default function MixersPage() {
@@ -50,6 +57,13 @@ export default function MixersPage() {
     unload_allowance_min: 50 as number | ''
   });
 
+  // Дополнительные водители миксера
+  const [extraDrivers, setExtraDrivers]       = useState<MixerDriver[]>([]);
+  const [showAddDriver, setShowAddDriver]     = useState(false);
+  const [newDriverName, setNewDriverName]     = useState('');
+  const [newDriverPhone, setNewDriverPhone]   = useState('');
+  const [driverSaving, setDriverSaving]       = useState(false);
+
   // ==================== ЗАГРУЗКА МИКСЕРОВ ====================
   useEffect(() => {
     fetchMixers();
@@ -75,12 +89,6 @@ export default function MixersPage() {
   );
 
   // ==================== ФУНКЦИИ МОДАЛЬНОГО ОКНА ====================
-  const openAddModal = () => {
-    setEditingMixer(null);
-    setFormData({ number: '', model: '', driver: '', phone: '', volume: 10, type: 'own', status: 'Доступен', unload_allowance_min: 50 });
-    setShowModal(true);
-  };
-
   const openEditModal = (mixer: Mixer) => {
     setEditingMixer(mixer);
     setFormData({
@@ -93,6 +101,21 @@ export default function MixersPage() {
       status: mixer.status,
       unload_allowance_min: mixer.unload_allowance_min ?? 50
     });
+    // Подгружаем доп. водителей из ответа API (уже приходят в mixer_drivers)
+    setExtraDrivers(mixer.mixer_drivers || []);
+    setShowAddDriver(false);
+    setNewDriverName('');
+    setNewDriverPhone('');
+    setShowModal(true);
+  };
+
+  const openAddModal = () => {
+    setEditingMixer(null);
+    setFormData({ number: '', model: '', driver: '', phone: '', volume: 10, type: 'own', status: 'Доступен', unload_allowance_min: 50 });
+    setExtraDrivers([]);
+    setShowAddDriver(false);
+    setNewDriverName('');
+    setNewDriverPhone('');
     setShowModal(true);
   };
 
@@ -134,6 +157,44 @@ export default function MixersPage() {
       console.error(err);
       alert('Ошибка соединения');
     }
+  };
+
+  const addExtraDriver = async () => {
+    if (!editingMixer) return;
+    if (!newDriverName.trim() || !newDriverPhone.trim()) {
+      alert('Укажите ФИО и телефон');
+      return;
+    }
+    setDriverSaving(true);
+    try {
+      const res = await fetch(`/api/adminCifra/mixers/${editingMixer.id}/drivers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ driver_name: newDriverName.trim(), phone: newDriverPhone.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) { alert(json.error || 'Ошибка'); return; }
+      setExtraDrivers((prev) => [...prev, json.data]);
+      setNewDriverName('');
+      setNewDriverPhone('');
+      setShowAddDriver(false);
+      fetchMixers();
+    } catch { alert('Ошибка соединения'); }
+    finally { setDriverSaving(false); }
+  };
+
+  const removeExtraDriver = async (driverId: number) => {
+    if (!editingMixer) return;
+    if (!confirm('Удалить этого водителя?')) return;
+    try {
+      const res = await fetch(
+        `/api/adminCifra/mixers/${editingMixer.id}/drivers?driverId=${driverId}`,
+        { method: 'DELETE' }
+      );
+      if (!res.ok) { alert('Ошибка удаления'); return; }
+      setExtraDrivers((prev) => prev.filter((d) => d.id !== driverId));
+      fetchMixers();
+    } catch { alert('Ошибка соединения'); }
   };
 
   const inputStyle: React.CSSProperties = {
@@ -449,6 +510,11 @@ export default function MixersPage() {
                         {mixer.driver}
                       </div>
                       <div style={{ color: '#94A3B8', fontSize: '14.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: '17px', height: '17px', marginTop: '3px' }}>{mixer.phone}</div>
+                      {(mixer.mixer_drivers?.length ?? 0) > 0 && (
+                        <div style={{ color: '#60A5FA', fontSize: '12px', marginTop: '4px' }}>
+                          +{mixer.mixer_drivers!.length} вод.
+                        </div>
+                      )}
                     </div>
 
                     {/* Объём + Статус */}
@@ -748,6 +814,81 @@ export default function MixersPage() {
               onChange={(e) => setFormData({...formData, phone: e.target.value})} 
               style={inputStyle} 
             />
+
+            {/* ── Дополнительные водители (только при редактировании) ── */}
+            {editingMixer && (
+              <div style={{ marginBottom: '20px', background: '#162032', borderRadius: '12px', padding: '14px' }}>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '10px' }}>
+                  Дополнительные водители
+                </div>
+
+                {extraDrivers.length === 0 && !showAddDriver && (
+                  <div style={{ color: '#475569', fontSize: '13px', marginBottom: '10px' }}>
+                    Нет дополнительных водителей
+                  </div>
+                )}
+
+                {/* Список */}
+                {extraDrivers.map((d) => (
+                  <div key={d.id} style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    background: '#25334A', borderRadius: '10px', padding: '10px 12px',
+                    marginBottom: '6px',
+                  }}>
+                    <div>
+                      <div style={{ color: '#E2E8F0', fontSize: '13px', fontWeight: 600 }}>{d.driver_name}</div>
+                      <div style={{ color: '#64748B', fontSize: '12px' }}>{d.phone}</div>
+                    </div>
+                    <button
+                      onClick={() => removeExtraDriver(d.id)}
+                      style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', padding: '4px', fontSize: '16px' }}
+                      title="Удалить водителя"
+                    >✕</button>
+                  </div>
+                ))}
+
+                {/* Форма добавления */}
+                {showAddDriver ? (
+                  <div style={{ background: '#25334A', borderRadius: '10px', padding: '12px', marginTop: '4px' }}>
+                    <input
+                      type="text"
+                      placeholder="ФИО водителя *"
+                      value={newDriverName}
+                      onChange={(e) => setNewDriverName(e.target.value)}
+                      style={{ ...inputStyle, marginBottom: '8px' }}
+                    />
+                    <input
+                      type="tel"
+                      placeholder="Телефон *"
+                      value={newDriverPhone}
+                      onChange={(e) => setNewDriverPhone(e.target.value)}
+                      style={{ ...inputStyle, marginBottom: '10px' }}
+                    />
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => { setShowAddDriver(false); setNewDriverName(''); setNewDriverPhone(''); }}
+                        style={{ flex: 1, padding: '10px', background: '#334155', borderRadius: '9999px', color: '#94A3B8', border: 'none', cursor: 'pointer', fontSize: '13px' }}
+                      >Отмена</button>
+                      <button
+                        onClick={addExtraDriver}
+                        disabled={driverSaving}
+                        style={{ flex: 1, padding: '10px', background: '#10B981', borderRadius: '9999px', color: 'white', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '13px' }}
+                      >{driverSaving ? 'Сохранение...' : 'Добавить'}</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowAddDriver(true)}
+                    style={{
+                      width: '100%', padding: '9px', marginTop: '4px',
+                      background: 'none', border: '1px dashed #334155',
+                      borderRadius: '10px', color: '#60A5FA', fontSize: '13px',
+                      cursor: 'pointer', fontWeight: 600,
+                    }}
+                  >+ Добавить водителя</button>
+                )}
+              </div>
+            )}
 
             <div style={{ marginBottom: '16px' }}>
               <label>Объём (м³)</label>

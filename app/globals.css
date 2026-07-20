@@ -226,3 +226,14 @@ button, a, .clickable {
 .scroll-subtle::-webkit-scrollbar-thumb:hover {
   background-color: rgba(148, 163, 184, 0.6) !important;
 }
+
+/* ── Убираем стрелки-спиннеры у числовых полей ввода ── */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type=number] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

@@ -30,9 +30,23 @@ export async function verifyDriver(number: string, phone: string): Promise<Drive
     .maybeSingle();
 
   if (error || !data) return null;
-  if (!phonesMatch(data.phone, phone)) return null;
 
-  return data as DriverMixer;
+  // Проверяем основного водителя
+  if (phonesMatch(data.phone, phone)) return data as DriverMixer;
+
+  // Проверяем дополнительных водителей из mixer_drivers
+  const { data: extraDrivers } = await supabase
+    .from('mixer_drivers')
+    .select('driver_name, phone')
+    .eq('mixer_id', data.id);
+
+  const matched = (extraDrivers || []).find((d) => phonesMatch(d.phone, phone));
+  if (matched) {
+    // Возвращаем данные миксера, но с именем именно этого водителя
+    return { ...data, driver: matched.driver_name } as DriverMixer;
+  }
+
+  return null;
 }
 
 /** Извлекает и проверяет учётные данные водителя из заголовков запроса. Возвращает null, если доступ запрещён. */

@@ -385,7 +385,7 @@ export default function TestsTab() {
               </div>
               <div>
                 <label style={labelStyle}>Требуемая прочность, МПа</label>
-                <input type="number" value={editing.required_strength ?? 0} onChange={(e) => setEditing({ ...editing, required_strength: Number(e.target.value) })} style={inputStyle} />
+                <input type="number" value={editing.required_strength ?? 0} onChange={(e) => setEditing({ ...editing, required_strength: Number(e.target.value) })} onWheel={(e) => e.currentTarget.blur()} style={inputStyle} />
               </div>
               <div>
                 <label style={labelStyle}>Фактическая прочность, МПа</label>
@@ -447,8 +447,8 @@ export default function TestsTab() {
                 return (
                   <div key={idx} style={{ display: 'grid', gridTemplateColumns: '30px 1fr 1fr 1fr 1fr 30px', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
                     <div style={{ color: COLORS.muted, textAlign: 'center' }}>{idx + 1}</div>
-                    <input type="number" value={s.mass} onChange={(e) => setSpec(idx, 'mass', e.target.value)} style={inputStyle} />
-                    <input type="number" value={s.load} onChange={(e) => setSpec(idx, 'load', e.target.value)} style={inputStyle} />
+                    <input type="number" value={s.mass} onChange={(e) => setSpec(idx, 'mass', e.target.value)} onWheel={(e) => e.currentTarget.blur()} style={inputStyle} />
+                    <input type="number" value={s.load} onChange={(e) => setSpec(idx, 'load', e.target.value)} onWheel={(e) => e.currentTarget.blur()} style={inputStyle} />
                     <div style={{ ...inputStyle, background: '#1B2536', color: COLORS.muted }}>{r && r.density > 0 ? ruInt(r.density) : '—'}</div>
                     <div style={{ ...inputStyle, background: '#1B2536', color: r && r.strength > 0 ? COLORS.accent : COLORS.muted, fontWeight: 600 }}>{r && r.strength > 0 ? ru(r.strength) : '—'}</div>
                     <button onClick={() => delSpec(idx)} style={{ ...ghostButton, padding: '6px 0', background: 'transparent', color: COLORS.danger }}>✕</button>

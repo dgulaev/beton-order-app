@@ -5,10 +5,11 @@ import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
-import { Package, Save, Trash2, Send, Share2, Copy, X } from 'lucide-react';
+import { Package, Save, Trash2, Send, Share2, Copy, X, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 import OrderRouteMap from '@/app/adminCifra/components/OrderRouteMap';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
+import { findRecipeByGrade, getAdditiveDosage, ADDITIVE_NAMES } from '@/lib/recipeAdditives';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
@@ -57,6 +58,9 @@ export default function ZayavkiPage() {
   const [isSendingNotification, setIsSendingNotification] = useState(false);
 
   const [recipes, setRecipes] = useState<any[]>([]);
+  // Остатки добавок на складе (литры), подгружаются один раз
+  const [warehouseAdditives, setWarehouseAdditives] = useState<{ pfm: number; linomix: number } | null>(null);
+  const [showAdditivePopup, setShowAdditivePopup] = useState(false);
 
   // ==================== "СПИСОК УШЁЛ ВНИЗ" — стрелки-подсказки для скроллящихся блоков модалки ====================
   const mixerListRef = useRef<HTMLDivElement>(null);
@@ -579,6 +583,22 @@ ${order.customer_type?.includes('Юридическое')
     fetchRecipes();
   }, []);
 
+  // ==================== ЗАГРУЗКА ОСТАТКОВ СКЛАДА ====================
+  useEffect(() => {
+    const fetchWarehouse = async () => {
+      try {
+        const res = await fetch('/api/adminCifra/warehouse');
+        if (!res.ok) return;
+        const data = await res.json();
+        const adds: any[] = data.additives || [];
+        const pfm    = Number(adds.find((a: any) => Number(a.additive_id) === 1)?.current ?? 0);
+        const linomix = Number(adds.find((a: any) => Number(a.additive_id) === 2)?.current ?? 0);
+        setWarehouseAdditives({ pfm, linomix });
+      } catch { /* тихо */ }
+    };
+    fetchWarehouse();
+  }, []);
+
          // ==================== РАСЧЁТ ЦЕМЕНТА ====================
   const calculateCementNeeded = (onlyCompleted: boolean) => {
     // Исключаем отменённые заявки из расчётов
@@ -655,6 +675,73 @@ ${order.customer_type?.includes('Юридическое')
     return totalKg.toFixed(1);   // в кг
   };
 
+  // ==================== ПРОГНОЗ ДОБАВОК — скользящие 7 дней от selectedDate ====================
+  // Не привязываемся к ПН-ВС: берём selectedDate + 6 следующих дней.
+  const weekAdditiveForecast = (() => {
+    if (!recipes.length) return null;
+
+    // 7 дат начиная с selectedDate
+    const forecastDates: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(selectedDate);
+      d.setDate(d.getDate() + i);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      forecastDates.push(`${y}-${m}-${day}`);
+    }
+    const forecastDateSet = new Set(forecastDates);
+    const dateFrom = forecastDates[0];
+    const dateTo   = forecastDates[6];
+
+    // Активные заявки в диапазоне
+    const forecastOrders = allOrders.filter((o: any) => {
+      if (o.status === 'cancelled') return false;
+      if (!o.delivery_date) return false;
+      const ds = typeof o.delivery_date === 'string'
+        ? o.delivery_date.substring(0, 10)
+        : (() => { const d = new Date(o.delivery_date); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+      return forecastDateSet.has(ds);
+    });
+
+    let pfmLiters = 0;
+    let linomixLiters = 0;
+
+    // Детали по каждой заявке для попапа
+    const details: Array<{
+      id: number; grade: string; volume: number; deliveryDate: string;
+      additiveId: 1 | 2; additiveName: string; kg: number; liters: number;
+    }> = [];
+
+    forecastOrders.forEach((order: any) => {
+      const recipe = findRecipeByGrade(recipes, order.grade);
+      const dosage = getAdditiveDosage(recipe);
+      if (!dosage) return;
+      const volume = Number(order.volume || 0);
+      if (volume <= 0) return;
+      const kg = volume * dosage.kgPerM3;
+      const liters = kg / dosage.densityKgPerLiter;
+      if (dosage.additiveId === 1) pfmLiters += liters;
+      else linomixLiters += liters;
+      const ds = typeof order.delivery_date === 'string'
+        ? order.delivery_date.substring(0, 10)
+        : (() => { const d = new Date(order.delivery_date); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+      details.push({ id: order.id, grade: order.grade || '—', volume, deliveryDate: ds, additiveId: dosage.additiveId, additiveName: dosage.name, kg: Math.round(kg * 10) / 10, liters: Math.round(liters * 10) / 10 });
+    });
+
+    const pfmStock     = warehouseAdditives?.pfm    ?? null;
+    const linomixStock = warehouseAdditives?.linomix ?? null;
+
+    return {
+      dateFrom, dateTo,
+      totalOrders: forecastOrders.length,
+      totalVolume: Math.round(forecastOrders.reduce((s: number, o: any) => s + Number(o.volume || 0), 0)),
+      pfm:     { needed: Math.round(pfmLiters),     stock: pfmStock,     shortage: pfmStock     !== null && pfmStock     < pfmLiters },
+      linomix: { needed: Math.round(linomixLiters),  stock: linomixStock, shortage: linomixStock !== null && linomixStock < linomixLiters },
+      hasAlert: (pfmStock !== null && pfmStock < pfmLiters) || (linomixStock !== null && linomixStock < linomixLiters),
+      details,
+    };
+  })();
 
   return (
     <div style={{ 
@@ -739,6 +826,81 @@ ${order.customer_type?.includes('Юридическое')
             {deliveriesCount}
           </div>
         </div>
+
+        {/* ── Прогноз добавок на неделю ── */}
+        {weekAdditiveForecast && (weekAdditiveForecast.pfm.needed > 0 || weekAdditiveForecast.linomix.needed > 0) && (<>
+          {/* Разделитель */}
+          <div style={{ width: '1px', height: '48px', background: '#334155', flexShrink: 0 }} />
+
+          <div
+            onClick={() => setShowAdditivePopup(true)}
+            style={{
+              background: weekAdditiveForecast.hasAlert ? 'rgba(239,68,68,0.10)' : 'rgba(16,185,129,0.08)',
+              border: `1.5px solid ${weekAdditiveForecast.hasAlert ? 'rgba(239,68,68,0.45)' : 'rgba(16,185,129,0.3)'}`,
+              borderRadius: '14px',
+              padding: '10px 18px',
+              cursor: 'pointer',
+              transition: 'filter 0.15s',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.filter = 'brightness(1.15)')}
+            onMouseLeave={e => (e.currentTarget.style.filter = '')}
+          >
+            {/* Заголовок */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+              {weekAdditiveForecast.hasAlert
+                ? <AlertTriangle size={15} color="#EF4444" />
+                : <CheckCircle2 size={15} color="#10B981" />}
+              <span style={{
+                fontSize: '13px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+                color: weekAdditiveForecast.hasAlert ? '#FCA5A5' : '#6EE7B7',
+              }}>
+                {weekAdditiveForecast.hasAlert ? 'Нехватка добавок!' : 'Запас добавок'}
+              </span>
+              <span style={{ color: '#475569', fontSize: '12px', fontWeight: 400 }}>на неделю</span>
+            </div>
+
+            {/* Строки по каждой добавке */}
+            {([
+              { key: 'pfm' as const, name: ADDITIVE_NAMES[1] },
+              { key: 'linomix' as const, name: ADDITIVE_NAMES[2] },
+            ] as const).filter(({ key }) => weekAdditiveForecast[key].needed > 0).map(({ key, name }) => {
+              const item = weekAdditiveForecast[key];
+              const pct = item.stock !== null && item.needed > 0
+                ? Math.min(100, Math.round((item.stock / item.needed) * 100))
+                : null;
+              return (
+                <div key={key} style={{ marginBottom: key === 'pfm' ? '6px' : 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginBottom: '3px' }}>
+                    <span style={{ color: '#94A3B8', fontSize: '12px', minWidth: '88px' }}>{name}:</span>
+                    <span style={{ fontSize: '20px', fontWeight: 700, color: item.shortage ? '#EF4444' : '#10B981', lineHeight: 1 }}>
+                      {item.stock !== null ? `${Math.round(item.stock)}` : '—'}
+                    </span>
+                    <span style={{ color: '#475569', fontSize: '13px' }}>/ {item.needed} л</span>
+                    {item.shortage && item.stock !== null && (
+                      <span style={{
+                        background: '#EF444425', color: '#F87171',
+                        fontSize: '12px', fontWeight: 700, borderRadius: '7px', padding: '1px 7px', marginLeft: '2px',
+                      }}>
+                        −{item.needed - Math.round(item.stock)} л
+                      </span>
+                    )}
+                  </div>
+                  {/* Мини прогресс-бар */}
+                  {pct !== null && (
+                    <div style={{ height: '3px', background: '#334155', borderRadius: '9999px', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%', borderRadius: '9999px',
+                        width: `${pct}%`,
+                        background: item.shortage ? '#EF4444' : '#10B981',
+                        transition: 'width 0.4s ease',
+                      }} />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>)}
 
       </div>
 
@@ -1861,6 +2023,148 @@ ${order.customer_type?.includes('Юридическое')
     currentUserName={userFullName || 'Сотрудник'}   // ← Реальное имя
   />
 )}
+
+      {/* ==================== ПОПАП: ПРОГНОЗ ДОБАВОК ==================== */}
+      {showAdditivePopup && weekAdditiveForecast && (
+        <div
+          onClick={() => setShowAdditivePopup(false)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+            zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '24px',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="scroll-hidden"
+            style={{
+              background: '#1E2937', borderRadius: '20px', padding: '28px',
+              width: '100%', maxWidth: '560px', maxHeight: '80vh',
+              overflowY: 'auto', boxSizing: 'border-box',
+              border: weekAdditiveForecast.hasAlert ? '1.5px solid rgba(239,68,68,0.4)' : '1.5px solid rgba(16,185,129,0.3)',
+            }}
+          >
+            {/* Заголовок */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                  {weekAdditiveForecast.hasAlert
+                    ? <AlertTriangle size={18} color="#EF4444" />
+                    : <CheckCircle2 size={18} color="#10B981" />}
+                  <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 700 }}>
+                    Прогноз добавок — 7 дней
+                  </h2>
+                </div>
+                <div style={{ color: '#64748B', fontSize: '13px' }}>
+                  {(() => {
+                    const fmt = (ds: string) => {
+                      const [y, m, d] = ds.split('-');
+                      return `${d}.${m}.${y}`;
+                    };
+                    return `${fmt(weekAdditiveForecast.dateFrom)} — ${fmt(weekAdditiveForecast.dateTo)}`;
+                  })()}
+                  {' · '}
+                  {weekAdditiveForecast.totalOrders} заявок, {weekAdditiveForecast.totalVolume} м³
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAdditivePopup(false)}
+                style={{ background: 'none', border: 'none', color: '#64748B', cursor: 'pointer', padding: '4px', fontSize: '20px', lineHeight: 1 }}
+              >✕</button>
+            </div>
+
+            {/* Блоки по каждой добавке */}
+            {([
+              { key: 'pfm' as const, id: 1 as const, name: ADDITIVE_NAMES[1] },
+              { key: 'linomix' as const, id: 2 as const, name: ADDITIVE_NAMES[2] },
+            ] as const).map(({ key, id, name }) => {
+              const item = weekAdditiveForecast[key];
+              if (item.needed === 0) return null;
+              const pct = item.stock !== null && item.needed > 0
+                ? Math.min(100, Math.round((item.stock / item.needed) * 100))
+                : null;
+              const orders = weekAdditiveForecast.details.filter(d => d.additiveId === id);
+              return (
+                <div key={key} style={{
+                  background: '#25334A', borderRadius: '14px', padding: '16px', marginBottom: '14px',
+                  border: item.shortage ? '1px solid rgba(239,68,68,0.3)' : '1px solid #334155',
+                }}>
+                  {/* Шапка добавки */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                    <span style={{ fontWeight: 700, fontSize: '15px' }}>{name}</span>
+                    {item.shortage && item.stock !== null && (
+                      <span style={{ background: '#EF444425', color: '#F87171', fontSize: '12px', fontWeight: 700, borderRadius: '8px', padding: '3px 10px' }}>
+                        Нехватка {item.needed - Math.round(item.stock)} л
+                      </span>
+                    )}
+                    {!item.shortage && (
+                      <span style={{ background: '#10B98120', color: '#34D399', fontSize: '12px', fontWeight: 700, borderRadius: '8px', padding: '3px 10px' }}>
+                        Достаточно
+                      </span>
+                    )}
+                  </div>
+                  {/* Цифры */}
+                  <div style={{ display: 'flex', gap: '24px', marginBottom: '10px' }}>
+                    <div>
+                      <div style={{ color: '#64748B', fontSize: '12px', marginBottom: '2px' }}>На складе</div>
+                      <div style={{ fontSize: '22px', fontWeight: 700, color: item.shortage ? '#EF4444' : '#10B981' }}>
+                        {item.stock !== null ? `${Math.round(item.stock)} л` : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ color: '#64748B', fontSize: '12px', marginBottom: '2px' }}>Нужно</div>
+                      <div style={{ fontSize: '22px', fontWeight: 700, color: '#CBD5E1' }}>{item.needed} л</div>
+                    </div>
+                    {item.stock !== null && (
+                      <div>
+                        <div style={{ color: '#64748B', fontSize: '12px', marginBottom: '2px' }}>Обеспечение</div>
+                        <div style={{ fontSize: '22px', fontWeight: 700, color: item.shortage ? '#FACC15' : '#10B981' }}>{pct}%</div>
+                      </div>
+                    )}
+                  </div>
+                  {/* Прогресс */}
+                  {pct !== null && (
+                    <div style={{ height: '6px', background: '#334155', borderRadius: '9999px', overflow: 'hidden', marginBottom: '14px' }}>
+                      <div style={{ height: '100%', width: `${pct}%`, background: item.shortage ? 'linear-gradient(90deg,#EF4444,#F97316)' : '#10B981', borderRadius: '9999px', transition: 'width 0.4s ease' }} />
+                    </div>
+                  )}
+                  {/* Таблица заявок */}
+                  {orders.length > 0 && (
+                    <>
+                      <div style={{ color: '#475569', fontSize: '12px', fontWeight: 600, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Заявки ({orders.length})
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '48px 1fr 60px 60px 60px', gap: '4px 8px', color: '#64748B', fontSize: '11px', marginBottom: '4px' }}>
+                        <div>№</div><div>Марка</div><div style={{ textAlign: 'right' }}>Объём</div><div style={{ textAlign: 'right' }}>кг</div><div style={{ textAlign: 'right' }}>л</div>
+                      </div>
+                      {orders.sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate)).map((o, i) => (
+                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '48px 1fr 60px 60px 60px', gap: '4px 8px', padding: '5px 0', borderTop: '1px solid #334155', fontSize: '13px', alignItems: 'center' }}>
+                          <div style={{ color: '#60A5FA', fontWeight: 600 }}>#{o.id}</div>
+                          <div style={{ color: '#CBD5E1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {o.grade} <span style={{ color: '#475569', fontSize: '11px' }}>{o.deliveryDate.slice(5).replace('-', '.')}</span>
+                          </div>
+                          <div style={{ textAlign: 'right', color: '#CBD5E1' }}>{o.volume} м³</div>
+                          <div style={{ textAlign: 'right', color: '#94A3B8' }}>{o.kg} кг</div>
+                          <div style={{ textAlign: 'right', color: '#94A3B8' }}>{o.liters} л</div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Кнопка закрытия */}
+            <button
+              onClick={() => setShowAdditivePopup(false)}
+              style={{ width: '100%', padding: '12px', background: '#334155', borderRadius: '12px', color: '#94A3B8', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '14px', marginTop: '4px' }}
+            >
+              Закрыть
+            </button>
+          </div>
+        </div>
+      )}
+
     </div>
     </div>
   );

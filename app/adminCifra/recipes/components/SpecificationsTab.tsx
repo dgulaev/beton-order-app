@@ -348,6 +348,7 @@ export default function SpecificationsTab() {
                     value={editing.order_id ?? ''}
                     onChange={(e) => { setEditing({ ...editing, order_id: e.target.value }); setOrderLookup(null); }}
                     onKeyDown={(e) => e.key === 'Enter' && findOrder()}
+                    onWheel={(e) => e.currentTarget.blur()}
                     placeholder="напр. 583"
                     style={{ ...inputStyle, flex: 1 }}
                   />

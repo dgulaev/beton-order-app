@@ -7,12 +7,12 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// GET — получение всех миксеров
+// GET — получение всех миксеров вместе с доп. водителями
 export async function GET() {
   try {
     const { data, error } = await supabase
       .from('mixers')
-      .select('*')
+      .select('*, mixer_drivers(id, driver_name, phone)')
       .order('created_at', { ascending: false });
 
     if (error) throw error;
