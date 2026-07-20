@@ -138,6 +138,8 @@ function connect(topic: string): BroadcastEntry {
 // сети) — пересоздание одних каналов на мёртвом сокете даёт вечный CHANNEL_ERROR.
 async function hardResetSocket() {
   if (hardResetInProgress) return;
+  // Нечего сбрасывать — каналов нет. Просто обнуляем счётчик ошибок.
+  if (registry.size === 0) { firstErrorAt = null; return; }
   hardResetInProgress = true;
   console.warn('🔌 [Broadcast] Жёсткий сброс WebSocket-сокета (устойчивый сбой)');
 
@@ -236,7 +238,10 @@ function attachGlobalListeners() {
   // страницу через useWakeReload/reconnectAll).
   setInterval(() => {
     if (document.visibilityState !== 'visible') return;
-    if (firstErrorAt !== null && Date.now() - firstErrorAt > HARD_RESET_AFTER_MS) {
+    if (firstErrorAt === null) return;
+    // Нет активных каналов — ошибка устарела, сбрасываем без сброса сокета.
+    if (registry.size === 0) { firstErrorAt = null; return; }
+    if (Date.now() - firstErrorAt > HARD_RESET_AFTER_MS) {
       void hardResetSocket();
     }
   }, 15_000);
@@ -310,6 +315,10 @@ export function useRealtimeBroadcast({
             // Без этого вызова точка застревает в CLOSED/ERROR при переходе
             // на страницу без собственных broadcast-каналов.
             notifyGlobal();
+            // Реестр стал пустым — сбрасываем счётчик ошибок, иначе watchdog
+            // запустит hardResetSocket() по устаревшему firstErrorAt уже после
+            // ухода пользователя на страницу без каналов.
+            if (registry.size === 0) firstErrorAt = null;
           }
           console.log(`🔌 [Broadcast] Канал закрыт (нет подписчиков) → ${topic}`);
         }, 100);

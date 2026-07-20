@@ -62,7 +62,7 @@ function BroadcastDot({ status }: { status: string }) {
         borderRadius: '50%',
         background: color,
         boxShadow: `0 0 ${isOk ? '5px' : '4px'} ${color}`,
-        animation: isOk ? 'pulse 2.5s infinite' : isErr ? 'none' : 'pulse 1s infinite',
+        animation: isErr ? 'none' : 'pulse 2.5s infinite',
         flexShrink: 0,
       }} />
       {isErr && (
