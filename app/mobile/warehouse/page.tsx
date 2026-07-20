@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import MobileExitButton from '../components/MobileExitButton';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
+import { supabase } from '@/lib/supabaseClient';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import {
   findRecipeByGrade,
@@ -172,12 +173,7 @@ export default function MobileWarehousePage() {
   const loadFBS = useCallback(async (available: any[]) => {
     if (!available.length) return;
     try {
-      const { createClient } = await import('@supabase/supabase-js');
-      const sb = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-      );
-      const { data } = await sb.from('fbs_blocks').select('*').order('name');
+      const { data } = await supabase.from('fbs_blocks').select('*').order('name');
       const merged = available.map((r: any) => {
         const ex = (data || []).find((b: any) => b.name === r.name || b.name === r.code);
         return { ...r, id: ex?.id || r.id, name: r.name || r.code, current: Number(ex?.current || 0) };
