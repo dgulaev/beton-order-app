@@ -166,7 +166,10 @@ async function hardResetSocket() {
     for (const { topic, listeners } of preserved) {
       const fresh = connect(topic);
       listeners.forEach((l) => fresh.listeners.add(l));
-      fresh.keepalive = setInterval(() => reconnect(topic), 20_000);
+      // Гарантируем единственный keepalive на топик — старый уже очищен выше.
+      if (!fresh.keepalive) {
+        fresh.keepalive = setInterval(() => reconnect(topic), 20_000);
+      }
     }
     firstErrorAt = null;
     hardResetInProgress = false;
@@ -188,7 +191,10 @@ function reconnect(topic: string) {
 
   const fresh = connect(topic);
   listeners.forEach((l) => fresh.listeners.add(l));
-  fresh.keepalive = setInterval(() => reconnect(topic), 20_000);
+  // Не создаём лишний setInterval если connect() уже поднял keepalive
+  if (!fresh.keepalive) {
+    fresh.keepalive = setInterval(() => reconnect(topic), 20_000);
+  }
   // Сообщаем актуальный статус перенесённым слушателям
   fresh.listeners.forEach((l) => l.onStatusChange?.(fresh.status));
 }
@@ -267,7 +273,7 @@ export function useRealtimeBroadcast({
       clearTimeout(entry.cleanupTimer);
       entry.cleanupTimer = undefined;
     }
-    // Запускаем keepalive один раз на топик
+    // Запускаем keepalive один раз на топик (защита: не создаём дубли)
     if (!entry.keepalive) {
       entry.keepalive = setInterval(() => reconnect(topic), 20_000);
     }
@@ -296,8 +302,15 @@ export function useRealtimeBroadcast({
         current.cleanupTimer = setTimeout(() => {
           if (current.listeners.size > 0) return;
           if (current.keepalive) clearInterval(current.keepalive);
+          if (current.errorTimer) clearTimeout(current.errorTimer);
           void supabase.removeChannel(current.channel);
-          if (registry.get(topic) === current) registry.delete(topic);
+          if (registry.get(topic) === current) {
+            registry.delete(topic);
+            // Уведомляем глобальный индикатор: канал ушёл из реестра.
+            // Без этого вызова точка застревает в CLOSED/ERROR при переходе
+            // на страницу без собственных broadcast-каналов.
+            notifyGlobal();
+          }
           console.log(`🔌 [Broadcast] Канал закрыт (нет подписчиков) → ${topic}`);
         }, 100);
       }
