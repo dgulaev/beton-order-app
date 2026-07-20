@@ -1,4 +1,10 @@
 {
+  "crons": [
+    {
+      "path": "/api/cron/dismiss-notifications",
+      "schedule": "1 21 * * *"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",

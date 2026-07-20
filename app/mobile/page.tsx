@@ -36,6 +36,8 @@ export default function MobileDashboard() {
   const [showMixerSheet, setShowMixerSheet] = useState(false);
   const [showOrdersSheet, setShowOrdersSheet] = useState(false);
   const [showPlanSheet, setShowPlanSheet] = useState(false);
+  // Тик для обновления линии «сейчас» каждую минуту
+  const [, forceNowTick] = useState(0);
   useBodyScrollLock(showCalendar || showMixerSheet || showOrdersSheet || showPlanSheet);
 
   // ==================== 2. ВЫБОР ДАТЫ ====================
@@ -55,6 +57,12 @@ export default function MobileDashboard() {
       console.log('🔄 Исправляем дату на сегодняшнюю!');
       setSelectedDate(localToday);
     }
+  }, []);
+
+  // Обновляем линию «сейчас» каждую минуту
+  useEffect(() => {
+    const id = setInterval(() => forceNowTick(n => n + 1), 60_000);
+    return () => clearInterval(id);
   }, []);
 
  // ==================== 5. ЗАГРУЗКА ДАННЫХ (REAL-TIME + FETCH) ====================
@@ -524,149 +532,252 @@ useEffect(() => {
               completed:  'Выполнена',
               cancelled:  'Отменена',
             };
+            const MIXER_STATUS_COLOR: Record<string, string> = {
+              'В пути': '#3B82F6', 'На объекте': '#10B981',
+              'Загрузка': '#FACC15', 'Проблема': '#EF4444',
+              'Разгружен': '#64748B', 'Возврат': '#64748B',
+            };
 
-            const nowMins = new Date().getHours() * 60 + new Date().getMinutes();
+            const now = new Date();
+            const nowMins = now.getHours() * 60 + now.getMinutes();
             const toMins = (t: string) => {
               const [h, m] = (t || '00:00').split(':').map(Number);
               return h * 60 + (m || 0);
             };
+            const isToday = selectedDateStr === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
-            // Индекс первой заявки, время которой >= сейчас
-            const isToday = selectedDateStr === new Date().toISOString().slice(0, 10);
-            const nowInsertIdx = isToday
-              ? todayOrders.findIndex((o: any) => toMins(o.delivery_time) >= nowMins)
-              : -1;
-
-            const items: React.ReactNode[] = [];
-
-            todayOrders.forEach((order: any, idx: number) => {
-              const color = STATUS_COLOR[order.status] || '#64748B';
-              const volume = Number(order.volume || 0);
-              const timeMins = toMins(order.delivery_time);
-              const isPast = isToday && order.status !== 'completed' && order.status !== 'cancelled' && timeMins < nowMins;
-              const isCompleted = order.status === 'completed';
-              const isCancelled = order.status === 'cancelled';
-
-              // Чипы назначенных миксеров
-              const orderMixers = mixerAssignments.filter((m: any) => String(m.order_id) === String(order.id));
-              const MIXER_STATUS_COLOR: Record<string, string> = {
-                'В пути': '#3B82F6', 'На объекте': '#10B981',
-                'Загрузка': '#FACC15', 'Проблема': '#EF4444',
-                'Разгружен': '#64748B', 'Возврат': '#64748B',
-              };
-
-              // Вставляем линию «сейчас» перед нужным индексом
-              if (isToday && idx === nowInsertIdx) {
-                items.push(
-                  <div key="now-line" style={{ position: 'relative', display: 'flex', alignItems: 'center', margin: '4px 0 4px -4px' }}>
-                    {/* Точка на линии */}
-                    <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#10B981', boxShadow: '0 0 6px #10B981', flexShrink: 0, marginLeft: '15px', zIndex: 2 }} />
-                    {/* Линия */}
-                    <div style={{ flex: 1, height: '1.5px', background: 'linear-gradient(90deg, #10B981, #10B98140)', marginLeft: '0' }} />
-                    {/* Подпись */}
-                    <span style={{ position: 'absolute', left: '32px', top: '-9px', fontSize: '10px', fontWeight: 700, color: '#10B981', background: '#162032', padding: '0 4px', whiteSpace: 'nowrap' }}>
-                      сейчас {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-                );
+            // ── Группируем заявки с одинаковым временем ──────
+            type OGroup = { time: number; orders: any[] };
+            const groups: OGroup[] = [];
+            todayOrders.forEach((o: any) => {
+              const t = toMins(o.delivery_time);
+              if (groups.length > 0 && groups[groups.length - 1].time === t) {
+                groups[groups.length - 1].orders.push(o);
+              } else {
+                groups.push({ time: t, orders: [o] });
               }
-
-              items.push(
-                <div key={order.id} style={{ display: 'flex', gap: '0', position: 'relative', marginBottom: idx < todayOrders.length - 1 ? '4px' : '0' }}>
-                  {/* Левая колонка: время + точка + линия */}
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '52px', flexShrink: 0 }}>
-                    <span style={{ fontSize: '11px', fontWeight: 600, color: isPast ? '#334155' : '#64748B', marginBottom: '4px', letterSpacing: '0.02em' }}>
-                      {order.delivery_time || '—'}
-                    </span>
-                    {/* Точка-маркер */}
-                    <div style={{
-                      width: '12px', height: '12px', borderRadius: '50%', flexShrink: 0,
-                      background: isCancelled ? '#334155' : color,
-                      border: `2px solid #162032`,
-                      boxShadow: !isPast && !isCancelled ? `0 0 6px ${color}60` : 'none',
-                      zIndex: 1,
-                    }} />
-                    {/* Вертикальная линия вниз (не для последней) */}
-                    {idx < todayOrders.length - 1 && (
-                      <div style={{ flex: 1, width: '2px', background: '#25334A', minHeight: '16px' }} />
-                    )}
-                  </div>
-
-                  {/* Карточка заявки */}
-                  <div
-                    onClick={() => setSelectedOrder(order)}
-                    style={{
-                      flex: 1,
-                      background: '#25334A',
-                      borderRadius: '12px',
-                      padding: '11px 14px',
-                      marginLeft: '8px',
-                      marginBottom: '8px',
-                      cursor: 'pointer',
-                      border: `1px solid ${isCancelled ? '#334155' : color + '30'}`,
-                      opacity: isPast ? 0.6 : 1,
-                      borderLeft: `3px solid ${isCancelled ? '#334155' : color}`,
-                    }}
-                  >
-                    {/* Строка 1: клиент + статус-бейдж */}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px', gap: '8px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 600, color: '#E2E8F0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                        {order.organization_name || order.full_name || '—'}
-                      </span>
-                      <span style={{
-                        fontSize: '11px', fontWeight: 700, flexShrink: 0,
-                        color: isCancelled ? '#64748B' : color,
-                      }}>
-                        {STATUS_LABEL[order.status] || order.status}
-                      </span>
-                    </div>
-
-                    {/* Строка 2: ID · объём · марка */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#64748B' }}>
-                      <span>#{order.id}</span>
-                      <span>·</span>
-                      <span style={{ color: isCompleted ? '#10B981' : '#94A3B8', fontWeight: 600 }}>{volume % 1 === 0 ? volume : volume.toFixed(1)} м³</span>
-                      {order.grade && <><span>·</span><span>{order.grade}</span></>}
-                    </div>
-
-                    {/* Чипы миксеров */}
-                    {orderMixers.length > 0 && (
-                      <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '7px' }}>
-                        {orderMixers.map((mx: any) => {
-                          const mc = MIXER_STATUS_COLOR[mx.status] || '#64748B';
-                          return (
-                            <span key={mx.id} style={{
-                              display: 'inline-flex', alignItems: 'center', gap: '4px',
-                              padding: '2px 7px', borderRadius: '9999px',
-                              background: `${mc}18`, border: `1px solid ${mc}40`,
-                              fontSize: '11px', fontWeight: 600, color: mc,
-                            }}>
-                              <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: mc, display: 'inline-block', flexShrink: 0 }} />
-                              {mx.mixer_name}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
             });
 
-            // Если сейчас позже всех заявок — линия в конец
-            if (isToday && nowInsertIdx === -1 && todayOrders.length > 0) {
-              items.push(
-                <div key="now-line-end" style={{ display: 'flex', alignItems: 'center', marginLeft: '15px', marginTop: '4px' }}>
-                  <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#10B981', boxShadow: '0 0 6px #10B981', flexShrink: 0 }} />
-                  <div style={{ flex: 1, height: '1.5px', background: 'linear-gradient(90deg, #10B981, #10B98140)' }} />
-                  <span style={{ fontSize: '10px', fontWeight: 700, color: '#10B981', marginLeft: '6px', whiteSpace: 'nowrap' }}>
-                    сейчас {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                </div>
-              );
+            // ── Логарифмическая шкала зазоров ────────────────
+            // gap = min(cardHeight + 4 + log(1 + dt/5)*10, MAX_GAP)
+            // Маленькие промежутки (~5мин) дают +7px сверх минимума,
+            // большие (1ч+) дают +25px — рост быстро замедляется.
+            const MAX_GAP    = 94;
+            const TOP_PAD    = 6;
+
+            const gPos: number[] = [];
+            groups.forEach((g, i) => {
+              if (i === 0) { gPos.push(TOP_PAD); return; }
+              const prevMaxH = Math.max(...groups[i - 1].orders.map((o: any) =>
+                mixerAssignments.some((m: any) => String(m.order_id) === String(o.id)) ? 90 : 66
+              ));
+              const dt     = g.time - groups[i - 1].time;
+              const logAdd = Math.log(1 + dt / 5) * 10;
+              const gap    = Math.min(prevMaxH + 4 + logAdd, MAX_GAP);
+              gPos.push(gPos[i - 1] + gap);
+            });
+
+            const lastPos = gPos[gPos.length - 1] ?? TOP_PAD;
+
+            // ── Позиция линии «сейчас» ────────────────────────
+            // После последней заявки — фиксируем под ней (не уплывает дальше).
+            let nowVisualY: number | null = null;
+            if (isToday) {
+              const afterIdx = groups.findIndex(g => g.time > nowMins);
+              if (afterIdx === -1) {
+                // Позже всех заявок — фиксируем под последней карточкой
+                const lastGroupMaxH = Math.max(...groups[groups.length - 1].orders.map((o: any) =>
+                  mixerAssignments.some((m: any) => String(m.order_id) === String(o.id)) ? 90 : 66
+                ));
+                nowVisualY = lastPos + lastGroupMaxH + 14;
+              } else if (afterIdx === 0) {
+                // Раньше всех заявок
+                nowVisualY = Math.max(0, gPos[0] - Math.min((groups[0].time - nowMins) * 0.5, TOP_PAD));
+              } else {
+                // Между двумя группами — линейная интерполяция
+                const r = (nowMins - groups[afterIdx - 1].time) / (groups[afterIdx].time - groups[afterIdx - 1].time);
+                nowVisualY = gPos[afterIdx - 1] + r * (gPos[afterIdx] - gPos[afterIdx - 1]);
+              }
             }
 
-            return <div style={{ paddingBottom: '4px' }}>{items}</div>;
+            // Высота последней группы карточек (нужна чтобы они не выходили за контейнер)
+            const lastGroupMaxH = groups.length > 0
+              ? Math.max(...groups[groups.length - 1].orders.map((o: any) =>
+                  mixerAssignments.some((m: any) => String(m.order_id) === String(o.id)) ? 90 : 66
+                ))
+              : 66;
+
+            // totalHeight = позиция последней карточки + её высота + отступ
+            // (иначе карточка вылезает за контейнер и перекрывает следующий блок)
+            const totalHeight = Math.max(
+              lastPos + lastGroupMaxH + 12,
+              nowVisualY !== null ? nowVisualY + 24 : 0
+            );
+
+            // ── Геометрия колонок ─────────────────────────────
+            // dot_center = TIME_W + DOT_GAP + dot_radius
+            //            = 30    + 7       + 3.5 = 40.5 ≈ RAIL_X
+            // 0–30px : текст времени (right-align)
+            // 30–37px: зазор (DOT_GAP = 7px)
+            // 37–44px: точка (7px, центр на 40.5 ≈ RAIL_X)
+            // 41px   : рельс (проходит через центр точки)
+            // 44–52px: зазор
+            // 52px+  : карточки
+            const TIME_W   = 30; // ширина колонки времени
+            const DOT_GAP  = 7;  // зазор текст→точка (left edge точки = TIME_W + DOT_GAP = 37)
+            const RAIL_X   = 41; // x рельса ≈ TIME_W + DOT_GAP + dot_radius = 40.5
+            const CARD_X   = 52; // x начала карточек (правее правого края точки + отступ)
+            const TIME_TOP = 9;  // вертикальный отступ от верха группы до текста
+
+            const nowTimeStr = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+
+            return (
+              <div style={{ position: 'relative', height: `${totalHeight}px`, marginBottom: '20px' }}>
+
+                {/* Вертикальный рельс */}
+                <div style={{
+                  position: 'absolute',
+                  left: `${RAIL_X}px`,
+                  top: `${gPos[0] + TIME_TOP + 5}px`,
+                  width: '1px',
+                  height: `${Math.max(0, lastPos - gPos[0])}px`,
+                  background: '#374E65',
+                  zIndex: 1,
+                }} />
+
+                {/* Метки времени — отдельный слой */}
+                {groups.map((group, gi) => {
+                  const firstOrder = group.orders[0];
+                  const isPast = isToday && firstOrder.status !== 'completed' && firstOrder.status !== 'cancelled' && group.time < nowMins;
+                  const hiddenByNow = isToday && nowVisualY !== null && Math.abs(nowVisualY - gPos[gi]) < 8;
+                  const timeStr = (firstOrder.delivery_time || '').slice(0, 5) || '—';
+                  return (
+                    <span key={`lbl${gi}`} style={{
+                      position: 'absolute',
+                      left: 0, top: `${gPos[gi] + TIME_TOP}px`,
+                      width: `${TIME_W}px`, textAlign: 'right',
+                      fontSize: '10px', fontWeight: 700, lineHeight: 1,
+                      color: isPast ? '#2D3C50' : '#607A93',
+                      opacity: hiddenByNow ? 0 : 1,
+                      transition: 'opacity 0.2s',
+                      userSelect: 'none', pointerEvents: 'none', zIndex: 4,
+                    }}>
+                      {timeStr}
+                    </span>
+                  );
+                })}
+
+                {/* Карточки заявок */}
+                {groups.map((group, gi) => {
+                  const top  = gPos[gi];
+                  const cols = group.orders.length;
+                  return group.orders.map((order, col) => {
+                    const color       = STATUS_COLOR[order.status] || '#64748B';
+                    const volume      = Number(order.volume || 0);
+                    const isPast      = isToday && order.status !== 'completed' && order.status !== 'cancelled' && group.time < nowMins;
+                    const isCompleted = order.status === 'completed';
+                    const isCancelled = order.status === 'cancelled';
+                    const orderMixers = mixerAssignments.filter((m: any) => String(m.order_id) === String(order.id));
+
+                    return (
+                      <div
+                        key={order.id}
+                        style={{
+                          position: 'absolute',
+                          top: `${top}px`,
+                          left: `calc(${CARD_X}px + ${col} * ((100% - ${CARD_X + 4}px) / ${cols}))`,
+                          width: `calc((100% - ${CARD_X + 4}px) / ${cols} - 4px)`,
+                          zIndex: 2,
+                        }}
+                      >
+                        <div
+                          onClick={() => setSelectedOrder(order)}
+                          style={{
+                            background: '#25334A',
+                            borderRadius: '12px',
+                            padding: '10px 12px',
+                            marginBottom: '4px',
+                            cursor: 'pointer',
+                            border: `1px solid ${isCancelled ? '#334155' : color + '30'}`,
+                            borderLeft: `3px solid ${isCancelled ? '#334155' : color}`,
+                            opacity: isPast ? 0.5 : 1,
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '3px', gap: '6px' }}>
+                            <span style={{ fontSize: '13px', fontWeight: 600, color: '#E2E8F0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                              {order.organization_name || order.full_name || '—'}
+                            </span>
+                            <span style={{ fontSize: '10px', fontWeight: 700, flexShrink: 0, color: isCancelled ? '#64748B' : color }}>
+                              {STATUS_LABEL[order.status] || order.status}
+                            </span>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#64748B' }}>
+                            <span>#{order.id}</span>
+                            <span>·</span>
+                            <span style={{ color: isCompleted ? '#10B981' : '#94A3B8', fontWeight: 600 }}>
+                              {volume % 1 === 0 ? volume : volume.toFixed(1)} м³
+                            </span>
+                            {order.grade && <><span>·</span><span>{order.grade}</span></>}
+                          </div>
+
+                          {orderMixers.length > 0 && (
+                            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '6px' }}>
+                              {orderMixers.map((mx: any) => {
+                                const mc = MIXER_STATUS_COLOR[mx.status] || '#64748B';
+                                return (
+                                  <span key={mx.id} style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: '3px',
+                                    padding: '2px 6px', borderRadius: '9999px',
+                                    background: `${mc}18`, border: `1px solid ${mc}40`,
+                                    fontSize: '10px', fontWeight: 600, color: mc,
+                                  }}>
+                                    <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: mc, flexShrink: 0 }} />
+                                    {mx.mixer_name}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  });
+                })}
+
+                {/* Линия «сейчас»:
+                    - текст (left: 0, width: TIME_W) точно совпадает с метками заявок
+                    - зелёный фон перекрывает метку заявки при наезде
+                    - точка сидит на рельсе (x = RAIL_X), линия идёт правее */}
+                {isToday && nowVisualY !== null && (
+                  /* Одна flex-строка: текст | отступ | точка | линия */
+                  <div style={{
+                    position: 'absolute',
+                    top: `${nowVisualY + TIME_TOP}px`,
+                    left: 0, right: 0,
+                    display: 'flex', alignItems: 'center',
+                    zIndex: 10, pointerEvents: 'none',
+                  }}>
+                    <span style={{
+                      width: `${TIME_W}px`, textAlign: 'right', flexShrink: 0,
+                      fontSize: '10px', fontWeight: 800, color: '#10B981',
+                      lineHeight: 1,
+                      background: '#162032', padding: '0 2px',
+                    }}>
+                      {nowTimeStr}
+                    </span>
+                    {/* зазор = DOT_GAP, центр точки попадает точно на RAIL_X */}
+                    <div style={{ width: `${DOT_GAP}px`, flexShrink: 0 }} />
+                    <div style={{
+                      width: '7px', height: '7px', borderRadius: '50%',
+                      background: '#10B981', boxShadow: '0 0 6px #10B981',
+                      flexShrink: 0,
+                    }} />
+                    <div style={{ flex: 1, height: '1.5px', background: 'linear-gradient(90deg, #10B981, #10B98140)' }} />
+                  </div>
+                )}
+              </div>
+            );
           })()}
         </div>
 
@@ -680,6 +791,7 @@ useEffect(() => {
           overflow: 'hidden',
           cursor: totalActiveMixers > 0 ? 'pointer' : 'default',
           boxShadow: hasProblems ? '0 0 18px rgba(239,68,68,0.15)' : 'none',
+          marginTop: '12px',
         }}
       >
         {/* Красный баннер проблем */}

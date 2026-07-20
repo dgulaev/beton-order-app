@@ -8,6 +8,7 @@
 import { LogOut, Eye } from 'lucide-react';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import { clearDriverSession } from '../driver/driverClient';
+import NotificationBell from './NotificationBell';
 
 const BTN_STYLE: React.CSSProperties = {
   background: '#1E2937',
@@ -34,6 +35,9 @@ export default function MobileExitButton() {
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      {/* Колокольчик уведомлений */}
+      <NotificationBell />
+
       {/* Просмотр клиентской формы — ставим флаг чтобы показать кнопку «Назад в админку» */}
       <button
         onClick={() => {
