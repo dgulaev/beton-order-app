@@ -36,7 +36,7 @@ function statusCfg(s: string) {
 
 function InfoRow({ label, value, accent }: { label: string; value: React.ReactNode; accent?: string }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', padding: '10px 0', borderBottom: '1px solid #1E2937' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', padding: '10px 0', borderBottom: '1px solid #334155' }}>
       <span style={{ color: '#475569', fontSize: '13px', flexShrink: 0 }}>{label}</span>
       <span style={{ color: accent || '#CBD5E1', fontSize: '14px', fontWeight: 600, textAlign: 'right', lineHeight: 1.35 }}>{value || '—'}</span>
     </div>
@@ -134,8 +134,8 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
         {/* ── ШАПКА ─────────────────────────────────── */}
         <div style={{
           position: 'sticky', top: 0, zIndex: 10,
-          background: '#131C2B',
-          borderBottom: '1px solid #1E2937',
+          background: '#25334A',
+          borderBottom: '1px solid #334155',
           padding: '14px 16px',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
         }}>
@@ -162,7 +162,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
             )}
           </div>
 
-          <button onClick={onClose} style={{ background: '#1E2937', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+          <button onClick={onClose} style={{ background: '#334155', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
             <X size={16} color="#64748B" />
           </button>
         </div>
@@ -170,7 +170,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
           {/* ── ИНФО О ЗАКАЗЕ ─────────────────────── */}
-          <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px' }}>
+          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
             <InfoRow label="Клиент" value={order.organization_name || order.full_name} />
             <InfoRow label="Телефон" value={order.phone} />
             <InfoRow label="Марка бетона" value={order.grade} accent="#60A5FA" />
@@ -178,7 +178,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
             <InfoRow label="Дата и время" value={`${order.delivery_date} · ${order.delivery_time}`} />
             <InfoRow label="Адрес" value={order.address} />
             {order.comment && (
-              <div style={{ marginTop: '12px', background: '#1E2937', borderRadius: '10px', padding: '12px', color: '#94A3B8', fontSize: '13px', lineHeight: 1.5 }}>
+              <div style={{ marginTop: '12px', background: '#334155', borderRadius: '10px', padding: '12px', color: '#94A3B8', fontSize: '13px', lineHeight: 1.5 }}>
                 <span style={{ color: '#475569', display: 'block', marginBottom: '4px', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Комментарий</span>
                 <div style={{ maxHeight: '120px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
                   {order.comment}
@@ -189,14 +189,14 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
 
           {/* ── ПРОГРЕСС ОБЪЁМА ───────────────────── */}
           {currentMixers.length > 0 && (
-            <div style={{ background: '#131C2B', borderRadius: '16px', padding: '14px 16px' }}>
+            <div style={{ background: '#25334A', borderRadius: '16px', padding: '14px 16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                 <span style={{ color: '#475569', fontSize: '13px' }}>Назначено</span>
                 <span style={{ color: assignedVolume >= orderVolume ? '#10B981' : '#FACC15', fontWeight: 700, fontSize: '14px' }}>
                   {assignedVolume.toFixed(1)} / {orderVolume} м³
                 </span>
               </div>
-              <div style={{ background: '#1E2937', borderRadius: '9999px', height: '6px', overflow: 'hidden' }}>
+              <div style={{ background: '#334155', borderRadius: '9999px', height: '6px', overflow: 'hidden' }}>
                 <div style={{ height: '100%', borderRadius: '9999px', width: `${Math.min(100, (assignedVolume / orderVolume) * 100)}%`, background: assignedVolume >= orderVolume ? '#10B981' : '#FACC15', transition: 'width 0.3s' }} />
               </div>
               {totalDowntimeMin > 0 && (
@@ -208,7 +208,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
           )}
 
           {/* ── МИКСЕРЫ ───────────────────────────── */}
-          <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px' }}>
+          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
             <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
               Миксеры ({currentMixers.length})
             </div>
@@ -218,7 +218,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
               const onSite = formatOnSite(mixer);
               const hasDowntime = Number(mixer.downtimeMinutes) > 0;
               return (
-                <div key={mixer.id} style={{ background: '#1E2937', borderRadius: '12px', padding: '12px 14px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
+                <div key={mixer.id} style={{ background: '#334155', borderRadius: '12px', padding: '12px 14px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
                   <div>
                     <div style={{ fontWeight: 700, fontSize: '14px', color: '#E2E8F0' }}>{mixer.mixerName || mixer.number || 'Миксер'}</div>
                     <div style={{ color: '#475569', fontSize: '12px', marginTop: '2px' }}>{mixer.time}</div>
@@ -250,7 +250,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
                 padding: '13px',
                 background: 'transparent',
                 color: yandexRouteReady ? '#3B82F6' : '#334155',
-                border: `1px solid ${yandexRouteReady ? '#3B82F650' : '#1E2937'}`,
+                border: `1px solid ${yandexRouteReady ? '#3B82F650' : '#334155'}`,
                 borderRadius: '12px',
                 fontSize: '14px', fontWeight: 600,
                 textDecoration: 'none',
@@ -282,7 +282,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
 
           {/* ── ИСТОРИЯ ───────────────────────────── */}
           {history.length > 0 && (
-            <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px' }}>
+            <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
               <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
                 История изменений
               </div>
@@ -293,7 +293,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
                   .replace('processing', 'В работе').replace('completed', 'Выполнена')
                   .replace('new', 'Новая').replace('cancelled', 'Отменена');
                 return (
-                  <div key={i} style={{ padding: '10px 0', borderBottom: i < history.length - 1 ? '1px solid #1E2937' : 'none' }}>
+                  <div key={i} style={{ padding: '10px 0', borderBottom: i < history.length - 1 ? '1px solid #334155' : 'none' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
                       <span style={{ color: '#CBD5E1', fontSize: '13px', fontWeight: 600 }}>{entry.user_name || 'Сотрудник'}</span>
                       <span style={{ color: '#334155', fontSize: '12px' }}>{time}</span>
@@ -312,7 +312,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
             style={{
               width: '100%', padding: '14px',
               background: 'transparent', color: '#475569',
-              border: '1px solid #1E2937', borderRadius: '12px',
+              border: '1px solid #334155', borderRadius: '12px',
               fontWeight: 600, fontSize: '15px', cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
             }}

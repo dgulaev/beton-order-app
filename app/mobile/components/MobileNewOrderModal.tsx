@@ -249,14 +249,14 @@ export default function MobileNewOrderModal({
         {/* ── ШАПКА ──────────────────────────────── */}
         <div style={{
           position: 'sticky', top: 0, zIndex: 10,
-          background: '#131C2B', borderBottom: '1px solid #1E2937',
+          background: '#25334A', borderBottom: '1px solid #334155',
           padding: '14px 16px',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
           <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>
             {isCopy ? 'Копия заявки' : 'Новая заявка'}
           </span>
-          <button onClick={onClose} style={{ background: '#1E2937', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+          <button onClick={onClose} style={{ background: '#334155', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
             <X size={16} color="#64748B" />
           </button>
         </div>
@@ -265,7 +265,7 @@ export default function MobileNewOrderModal({
           <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
             {/* ── КЛИЕНТ ─────────────────────────── */}
-            <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
               {/* Тип */}
               <div>
@@ -312,7 +312,7 @@ export default function MobileNewOrderModal({
             </div>
 
             {/* ── ПАРАМЕТРЫ ЗАКАЗА ────────────────── */}
-            <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
               <div>
                 <Label icon={<Layers size={11} />} text="Марка бетона" />
@@ -339,7 +339,7 @@ export default function MobileNewOrderModal({
             </div>
 
             {/* ── АДРЕС И КОММЕНТАРИЙ ─────────────── */}
-            <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <div>
                 <Label icon={<MapPin size={11} />} text="Адрес доставки" />
                 <textarea name="address" placeholder="г. Брянск, ул. ..." value={form.address} onChange={handleChange} required rows={2} style={{ ...INPUT, resize: 'vertical', lineHeight: 1.5 }} />
@@ -352,12 +352,12 @@ export default function MobileNewOrderModal({
 
             {/* ── СТОИМОСТЬ ───────────────────────── */}
             {volume > 0 && (
-              <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px' }}>
+              <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
                 <Label icon={<Wallet size={11} />} text="Расчёт стоимости" />
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94A3B8', fontSize: '14px', padding: '6px 0' }}>
                   <span>Бетон</span><span>{concreteCost.toLocaleString()} ₽</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94A3B8', fontSize: '14px', padding: '6px 0', borderBottom: '1px solid #1E2937' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94A3B8', fontSize: '14px', padding: '6px 0', borderBottom: '1px solid #334155' }}>
                   <span>Доставка</span><span>{deliveryCost.toLocaleString()} ₽</span>
                 </div>
                 {deliveryNote && (

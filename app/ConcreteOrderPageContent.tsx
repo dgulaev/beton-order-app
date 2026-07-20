@@ -80,6 +80,14 @@ export default function ConcreteOrderPage() {
   const isTelegram = typeof window !== 'undefined'
     && !!((window as any).Telegram?.WebApp?.initData || (window as any).WebApp?.initData);
 
+  // Флаг предпросмотра от мобильной админки — показываем кнопку «Назад в админку»
+  const [isAdminPreview, setIsAdminPreview] = useState(false);
+  useEffect(() => {
+    if (typeof window !== 'undefined' && localStorage.getItem('admin_preview') === '1') {
+      setIsAdminPreview(true);
+    }
+  }, []);
+
   // Навбар: скрывается при скролле вниз, выезжает при скролле вверх
   const [navVisible, setNavVisible] = useState(true);
   const lastScrollY = useRef(0);
@@ -1558,6 +1566,41 @@ const loadReferrals = async () => {
           })}
         </div>
       </div>
+
+      {/* ── КНОПКА ВОЗВРАТА В АДМИНКУ (только для сотрудников, через localStorage-флаг) ── */}
+      {isAdminPreview && (
+        <button
+          onClick={() => {
+            localStorage.removeItem('admin_preview');
+            window.close();
+          }}
+          title="Вернуться в мобильную админку"
+          style={{
+            position: 'fixed',
+            top: '12px',
+            right: '12px',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '8px 14px',
+            borderRadius: '9999px',
+            background: 'rgba(30, 41, 59, 0.92)',
+            border: '1px solid rgba(96, 165, 250, 0.4)',
+            backdropFilter: 'blur(8px)',
+            color: '#60A5FA',
+            fontSize: '13px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+          Закрыть просмотр
+        </button>
+      )}
     </div>
   );
 }

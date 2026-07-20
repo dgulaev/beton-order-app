@@ -149,8 +149,8 @@ export default function MobileOrderDetailModal({
         {/* ── ШАПКА ──────────────────────────────────────── */}
         <div style={{
           position: 'sticky', top: 0, zIndex: 10,
-          background: '#131C2B',
-          borderBottom: '1px solid #1E2937',
+          background: '#25334A',
+          borderBottom: '1px solid #334155',
           padding: '14px 16px',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
         }}>
@@ -192,7 +192,7 @@ export default function MobileOrderDetailModal({
             )}
           </div>
 
-          <button onClick={onClose} style={{ background: '#1E2937', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+          <button onClick={onClose} style={{ background: '#334155', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
             <X size={16} color="#64748B" />
           </button>
         </div>
@@ -200,7 +200,7 @@ export default function MobileOrderDetailModal({
         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
           {/* ── КЛИЕНТ ──────────────────────────────────── */}
-          <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <FieldBlock icon={<User size={15} />} label="Клиент">
               <input value={editedOrder.organization_name || editedOrder.full_name || ''} onChange={e => set('organization_name', e.target.value)} style={INPUT} />
             </FieldBlock>
@@ -210,7 +210,7 @@ export default function MobileOrderDetailModal({
           </div>
 
           {/* ── ПАРАМЕТРЫ ЗАКАЗА ─────────────────────── */}
-          <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <FieldBlock icon={<Layers size={15} />} label="Марка бетона">
               <input value={editedOrder.grade || ''} onChange={e => set('grade', e.target.value)} style={INPUT} />
             </FieldBlock>
@@ -230,7 +230,7 @@ export default function MobileOrderDetailModal({
           </div>
 
           {/* ── АДРЕС + КОММЕНТАРИЙ ────────────────── */}
-          <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <FieldBlock icon={<MapPin size={15} />} label="Адрес доставки">
               <textarea value={editedOrder.address || ''} onChange={e => set('address', e.target.value)} rows={2} style={{ ...INPUT, resize: 'vertical', lineHeight: 1.5 }} />
             </FieldBlock>

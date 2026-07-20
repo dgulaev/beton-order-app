@@ -114,7 +114,7 @@ export default function MobileClientDetailModal({
         left: 0,
         right: 0,
         zIndex: 10001,
-        background: '#131C2B',
+        background: '#25334A',
         borderRadius: '20px 20px 0 0',
         maxHeight: 'calc(90vh - 74px)',
         display: 'flex',
@@ -136,7 +136,7 @@ export default function MobileClientDetailModal({
             </div>
             <button
               onClick={onClose}
-              style={{ background: '#1E2937', border: 'none', borderRadius: '9999px', width: '36px', height: '36px', minWidth: '36px', color: '#94A3B8', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+              style={{ background: '#334155', border: 'none', borderRadius: '9999px', width: '36px', height: '36px', minWidth: '36px', color: '#94A3B8', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
             >
               <X size={18} />
             </button>
@@ -180,12 +180,12 @@ export default function MobileClientDetailModal({
 
           {/* Адрес */}
           {address && (
-            <div style={{ padding: '12px', background: '#1E2937', borderRadius: '12px', marginBottom: '16px', fontSize: '14px', color: '#94A3B8' }}>
+            <div style={{ padding: '12px', background: '#334155', borderRadius: '12px', marginBottom: '16px', fontSize: '14px', color: '#94A3B8' }}>
               📍 {address}
             </div>
           )}
 
-          <div style={{ height: '1px', background: '#1E2937', marginBottom: '12px' }} />
+          <div style={{ height: '1px', background: '#334155', marginBottom: '12px' }} />
         </div>
 
         {/* Список заказов — скроллится */}
@@ -212,7 +212,7 @@ export default function MobileClientDetailModal({
             const amount = Number(order.total_amount || order.amount || 0);
             return (
               <div key={order.id} style={{
-                background: '#1E2937',
+                background: '#334155',
                 borderRadius: '14px',
                 padding: '14px',
                 marginBottom: '8px',
@@ -271,7 +271,7 @@ export default function MobileClientDetailModal({
 
 function StatChip({ label, value, small }: { label: string; value: string | number; small?: boolean }) {
   return (
-    <div style={{ flex: 1, background: '#1E2937', borderRadius: '12px', padding: '10px 12px', minWidth: 0 }}>
+    <div style={{ flex: 1, background: '#334155', borderRadius: '12px', padding: '10px 12px', minWidth: 0 }}>
       <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '3px' }}>{label}</div>
       <div style={{
         fontSize: small ? '12px' : '16px',

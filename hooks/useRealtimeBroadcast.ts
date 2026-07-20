@@ -38,6 +38,23 @@ interface BroadcastEntry {
 const registry = new Map<string, BroadcastEntry>();
 let globalListenersAttached = false;
 
+// ── Глобальный агрегированный статус (наихудший из всех каналов) ──────────────
+const globalStatusListeners = new Set<(s: RealtimeStatus) => void>();
+
+function computeGlobalStatus(): RealtimeStatus {
+  const statuses = Array.from(registry.values()).map((e) => e.status);
+  if (statuses.length === 0) return 'CONNECTING';
+  if (statuses.includes('ERROR')) return 'ERROR';
+  if (statuses.includes('CLOSED')) return 'CLOSED';
+  if (statuses.every((s) => s === 'SUBSCRIBED')) return 'SUBSCRIBED';
+  return 'CONNECTING';
+}
+
+function notifyGlobal() {
+  const s = computeGlobalStatus();
+  globalStatusListeners.forEach((cb) => cb(s));
+}
+
 // Задержка перед тем, как показать ERROR в UI (дебаунс индикатора).
 const ERROR_DEBOUNCE_MS = 6_000;
 // Если сбой держится дольше этого времени — жёстко пересоздаём сам WebSocket-сокет
@@ -53,6 +70,7 @@ function notify(topic: string, status: RealtimeStatus) {
   if (!entry) return;
   entry.status = status;
   entry.listeners.forEach((l) => l.onStatusChange?.(status));
+  notifyGlobal();
 }
 
 function dispatch(topic: string, kind: 'insert' | 'update' | 'delete', record: any, old?: any) {
@@ -287,4 +305,25 @@ export function useRealtimeBroadcast({
   }, [topic, enabled]);
 
   return { status };
+}
+
+/**
+ * Возвращает агрегированный статус всех broadcast-каналов.
+ * 'SUBSCRIBED' — все каналы живы.
+ * 'CONNECTING' — идёт подключение.
+ * 'ERROR' / 'CLOSED' — хотя бы один канал упал.
+ * Нажатие на индикатор → reconnectAllBroadcastChannels().
+ */
+export function useGlobalBroadcastStatus(): RealtimeStatus {
+  const [status, setStatus] = useState<RealtimeStatus>(computeGlobalStatus());
+
+  useEffect(() => {
+    const cb = (s: RealtimeStatus) => setStatus(s);
+    globalStatusListeners.add(cb);
+    // Синхронизируем сразу, если уже что-то есть в registry
+    setStatus(computeGlobalStatus());
+    return () => { globalStatusListeners.delete(cb); };
+  }, []);
+
+  return status;
 }

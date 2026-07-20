@@ -63,8 +63,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, trips: todayTrips.map(formatTrip) });
     }
 
-    // history — последние 200 рейсов, сгруппировать по дням делает фронтенд
-    const { data, error } = await query.limit(200);
+    // history — пагинация: limit + offset передаются с фронтенда
+    const limit = Math.min(parseInt(request.nextUrl.searchParams.get('limit') || '21', 10), 100);
+    const offset = Math.max(parseInt(request.nextUrl.searchParams.get('offset') || '0', 10), 0);
+
+    const { data, error } = await query.range(offset, offset + limit - 1);
     if (error) throw error;
 
     return NextResponse.json({ success: true, trips: (data || []).map(formatTrip) });

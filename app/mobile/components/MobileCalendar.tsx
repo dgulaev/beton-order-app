@@ -13,6 +13,14 @@ interface MobileCalendarProps {
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const WEEKEND_IDX = new Set([5, 6]); // Сб, Вс (0-based в нашей сетке)
 
+// Официальные нерабочие праздничные дни РФ (фиксированные даты по ТК РФ).
+const RUSSIAN_HOLIDAYS: Array<[number, number]> = [
+  [0, 1], [0, 2], [0, 3], [0, 4], [0, 5], [0, 6], [0, 7], [0, 8],
+  [1, 23], [2, 8], [4, 1], [4, 9], [5, 12], [10, 4],
+];
+const isRussianHoliday = (month: number, day: number): boolean =>
+  RUSSIAN_HOLIDAYS.some(([hM, hD]) => hM === month && hD === day);
+
 export default function MobileCalendar({
   selectedDate,
   setSelectedDate,
@@ -119,36 +127,35 @@ export default function MobileCalendar({
         {cells.map((day, idx) => {
           if (!day) return <div key={idx} />;
 
-          const colIdx = idx % 7;
-          const isWeekend = WEEKEND_IDX.has(colIdx);
           const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
           const dayOrders = ordersByDate.get(dateStr) || [];
           const hasOrders = dayOrders.length > 0;
           const totalVol = dayOrders.reduce((s: number, o: any) => s + Number(o.volume || 0), 0);
-          const completedCount = dayOrders.filter((o: any) => o.status === 'completed').length;
-          const allDone = hasOrders && completedCount === dayOrders.length;
+          const cancelledCount = dayOrders.filter((o: any) => o.status === 'cancelled').length;
 
           const isToday = day === today.getDate() && currentMonth === today.getMonth() && currentYear === today.getFullYear();
           const isSelected = day === selectedDate.getDate() && currentMonth === selectedDate.getMonth() && currentYear === selectedDate.getFullYear();
 
-          let bg = '#131C2B';
-          if (isSelected) bg = '#2563EB';
-          else if (isToday) bg = '#10B98120';
-          else if (hasOrders) bg = '#1E2D40';
+          // Праздники и выходные — жёлтый, как в основном Calendar
+          const jsDay = new Date(currentYear, currentMonth, day).getDay();
+          const isWeekendOrHoliday = jsDay === 0 || jsDay === 6 || isRussianHoliday(currentMonth, day);
 
-          let dayColor = '#E2E8F0';
-          if (isSelected) dayColor = '#fff';
-          else if (isWeekend) dayColor = '#F87171';
-          else if (!hasOrders) dayColor = '#475569';
+          let bg = '#25334A';
+          if (isSelected) bg = 'rgba(16,185,129,0.16)';
+          else if (hasOrders || isToday) bg = '#1E2D40';
+
+          const boxShadow = (isSelected || isToday) ? 'inset 0 0 0 2px #10B981' : 'none';
+          const dayColor = isWeekendOrHoliday ? '#FACC15' : '#E2E8F0';
 
           return (
             <button
               key={idx}
               onClick={() => handleDayClick(day)}
               style={{
-                height: '56px',
+                height: '64px',
                 borderRadius: '12px',
-                border: isToday && !isSelected ? '1.5px solid #10B981' : isSelected ? 'none' : '1px solid transparent',
+                border: 'none',
+                boxShadow,
                 background: bg,
                 cursor: 'pointer',
                 display: 'flex',
@@ -158,34 +165,47 @@ export default function MobileCalendar({
                 gap: '2px',
                 padding: '4px 2px',
                 position: 'relative',
-                transition: 'opacity 0.15s',
+                transition: 'background-color 0.15s ease',
               }}
             >
-              <span style={{ fontSize: '15px', fontWeight: isToday || isSelected ? 700 : 500, color: dayColor, lineHeight: 1 }}>
-                {day}
-              </span>
-
+              {/* Количество заявок — правый верхний угол, синий без фона */}
               {hasOrders && (
                 <span style={{
-                  fontSize: '9px',
-                  fontWeight: 600,
-                  color: isSelected ? '#ffffff99' : allDone ? '#10B981' : '#60A5FA',
-                  lineHeight: 1,
+                  position: 'absolute', top: '4px', right: '5px',
+                  fontSize: '9px', fontWeight: 700,
+                  color: isSelected ? '#A7F3D0' : '#60A5FA',
+                  lineHeight: '14px',
                 }}>
-                  {dayOrders.length}×{totalVol % 1 === 0 ? totalVol : totalVol.toFixed(1)}м³
+                  {dayOrders.length}
                 </span>
               )}
 
-              {/* точка-индикатор внизу ячейки */}
+              {/* Отменённые — левый верхний угол, красный без фона */}
+              {cancelledCount > 0 && (
+                <span style={{
+                  position: 'absolute', top: '4px', left: '5px',
+                  fontSize: '9px', fontWeight: 700,
+                  color: '#EF4444',
+                  lineHeight: '14px',
+                }}>
+                  {cancelledCount}
+                </span>
+              )}
+
+              {/* Число */}
+              <span style={{ fontSize: '16px', fontWeight: isToday || isSelected ? 700 : 500, color: dayColor, lineHeight: 1 }}>
+                {day}
+              </span>
+
+              {/* Объём — зелёный, как в основном Calendar */}
               {hasOrders && (
                 <span style={{
-                  position: 'absolute',
-                  bottom: '4px',
-                  width: '4px',
-                  height: '4px',
-                  borderRadius: '50%',
-                  background: allDone ? '#10B981' : '#3B82F6',
-                }} />
+                  fontSize: '13px', fontWeight: 700,
+                  color: isSelected ? '#A7F3D0' : '#10B981',
+                  lineHeight: 1,
+                }}>
+                  {totalVol % 1 === 0 ? totalVol : totalVol.toFixed(1)}м³
+                </span>
               )}
             </button>
           );
@@ -193,18 +213,22 @@ export default function MobileCalendar({
       </div>
 
       {/* ── Легенда ──────────────────────── */}
-      <div style={{ display: 'flex', gap: '16px', justifyContent: 'center', marginTop: '18px', paddingTop: '14px', borderTop: '1px solid #1E2937' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#475569' }}>
-          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3B82F6', display: 'inline-block' }} />
-          Заявки
+      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '18px', paddingTop: '14px', borderTop: '1px solid #334155' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#475569' }}>
+          <span style={{ width: '12px', height: '12px', borderRadius: '3px', boxShadow: 'inset 0 0 0 1.5px #10B981', display: 'inline-block' }} />
+          Сегодня / выбран
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#475569' }}>
-          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10B981', display: 'inline-block' }} />
-          Выполнено
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#475569' }}>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: '#EF4444' }}>1</span>
+          Отменена
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#475569' }}>
-          <span style={{ width: '12px', height: '12px', borderRadius: '3px', border: '1.5px solid #10B981', display: 'inline-block' }} />
-          Сегодня
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#475569' }}>
+          <span style={{ fontSize: '10px', fontWeight: 700, color: '#60A5FA' }}>3</span>
+          Заявок
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#FACC15' }}>
+          <span style={{ fontSize: '14px', fontWeight: 700 }}>7</span>
+          Вых./праздник
         </div>
       </div>
     </div>
@@ -212,7 +236,7 @@ export default function MobileCalendar({
 }
 
 const navBtn: React.CSSProperties = {
-  background: '#1E2937',
+  background: '#334155',
   border: 'none',
   borderRadius: '10px',
   width: '36px',

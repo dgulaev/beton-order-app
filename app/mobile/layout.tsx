@@ -24,7 +24,7 @@ import {
 import DriverDashboard from './driver/components/DriverDashboard';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
 import './globals.css';
-import { hardResetBroadcastSocket } from '@/hooks/useRealtimeBroadcast';
+import { hardResetBroadcastSocket, useGlobalBroadcastStatus, reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
 
 // Сколько ждём ответ /api/driver/auth, прежде чем сдаться (см. пояснение у
 // ROLE_FETCH_TIMEOUT_MS в UserRoleProvider — та же причина).
@@ -32,6 +32,47 @@ const DRIVER_AUTH_TIMEOUT_MS = 12_000;
 
 type DriverMixerOption = { number: string; model: string | null; driver: string };
 type LoginStep = 'phone' | 'password' | 'driver-mixer' | 'choose-role';
+
+function BroadcastDot({ status }: { status: string }) {
+  const isOk   = status === 'SUBSCRIBED';
+  const isErr  = status === 'ERROR' || status === 'CLOSED';
+  const color  = isOk ? '#10B981' : isErr ? '#EF4444' : '#FACC15';
+  const label  = isOk ? 'Онлайн' : isErr ? 'Нет связи' : 'Подключение…';
+
+  return (
+    <button
+      onClick={() => { if (isErr) reconnectAllBroadcastChannels(); }}
+      title={label}
+      style={{
+        position: 'absolute',
+        bottom: '52px',
+        right: '10px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        background: 'none',
+        border: 'none',
+        cursor: isErr ? 'pointer' : 'default',
+        padding: '4px',
+      }}
+    >
+      <div style={{
+        width: '7px',
+        height: '7px',
+        borderRadius: '50%',
+        background: color,
+        boxShadow: `0 0 ${isOk ? '5px' : '4px'} ${color}`,
+        animation: isOk ? 'pulse 2.5s infinite' : isErr ? 'none' : 'pulse 1s infinite',
+        flexShrink: 0,
+      }} />
+      {isErr && (
+        <span style={{ fontSize: '9px', color: '#EF4444', fontWeight: 700, whiteSpace: 'nowrap' }}>
+          нет связи
+        </span>
+      )}
+    </button>
+  );
+}
 
 function NavLink({ href, icon, label, pathname }: { href: string; icon: React.ReactNode; label: string; pathname: string | null }) {
   const isActive = (href === '/mobile/' && (pathname === '/mobile/' || pathname === '/mobile')) || (href !== '/mobile/' && pathname?.startsWith(href));
@@ -53,7 +94,7 @@ const INPUT_STYLE: React.CSSProperties = {
   marginBottom: '14px',
   borderRadius: '12px',
   border: '1px solid #334155',
-  background: '#0F172A',
+  background: '#162032',
   color: '#fff',
   fontSize: '17px',
 };
@@ -299,6 +340,9 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
     if (isOldDriverLink) router.replace('/mobile');
   }, [isOldDriverLink, router]);
 
+  // ==================== BROADCAST ИНДИКАТОР ====================
+  const broadcastStatus = useGlobalBroadcastStatus();
+
   // ==================== НАВБАР: скрывается при скролле вниз, выезжает при скролле вверх ====================
   const [navVisible, setNavVisible] = useState(true);
   const lastScrollY = useRef(0);
@@ -328,7 +372,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
       <div
         style={{
           minHeight: '100vh',
-          background: '#0F172A',
+          background: '#162032',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
@@ -354,7 +398,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
       <div
         style={{
           minHeight: '100vh',
-          backgroundColor: '#0F172A',
+          backgroundColor: '#162032',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -364,7 +408,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
       >
         <div
           style={{
-            background: '#1E2937',
+            background: '#334155',
             padding: '40px 30px',
             borderRadius: '20px',
             width: '100%',
@@ -510,7 +554,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   // (см. MobileExitButton) — фиксированный оверлей здесь перекрывал кнопки
   // в шапках страниц (например, календарь на Дашборде).
   return (
-    <div id="mobile-root" style={{ width: '100vw', maxWidth: '100vw', overflowX: 'hidden', backgroundColor: '#0F172A', minHeight: '100vh', position: 'relative' }}>
+    <div id="mobile-root" style={{ width: '100vw', maxWidth: '100vw', overflowX: 'hidden', backgroundColor: '#162032', minHeight: '100vh', position: 'relative' }}>
       {children}
 
       {/* Нижний навбар с анимацией появления/скрытия */}
@@ -520,7 +564,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
         left: 0,
         right: 0,
         height: '74px',
-        background: '#1E2937',
+        background: '#334155',
         borderTop: '1px solid #334155',
         display: 'flex',
         alignItems: 'center',
@@ -535,6 +579,9 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
         <NavLink href="/mobile/mixers" icon={<Truck size={26} />} label="Миксеры" pathname={pathname} />
         <NavLink href="/mobile/warehouse" icon={<Factory size={26} />} label="Склад" pathname={pathname} />
         <NavLink href="/mobile/clients" icon={<Users size={26} />} label="Клиенты" pathname={pathname} />
+
+        {/* Broadcast-индикатор: правый нижний угол навбара */}
+        <BroadcastDot status={broadcastStatus} />
       </div>
     </div>
   );

@@ -16,6 +16,19 @@ interface Props {
   mixer: DriverMixerInfo;
   /** Выход + возврат к экрану входа (устройство может передаваться другому человеку). */
   onLogout: () => void;
+  /**
+   * Режим просмотра для администратора:
+   * - скрывает кнопки смены статуса (Прибыл / Выгрузка окончена)
+   * - заменяет кнопку «Выход» на «Назад»
+   */
+  readOnly?: boolean;
+  /** Вызывается по кнопке «Назад» в режиме readOnly. */
+  onBack?: () => void;
+  /**
+   * Переопределение загрузки рейсов — используется администратором,
+   * который не имеет driver-сессии. Если не передан — используется driverFetch.
+   */
+  tripsFetcher?: (scope: 'today' | 'history', offset?: number, limit?: number) => Promise<DriverTrip[]>;
 }
 
 type Tab = 'today' | 'history';
@@ -94,10 +107,15 @@ const STATUS_STYLE: Record<string, { label: string; color: string; bg: string }>
   'Проблема': { label: 'Проблема', color: '#EF4444', bg: '#EF444420' },
 };
 
-export default function DriverDashboard({ mixer, onLogout }: Props) {
+export default function DriverDashboard({ mixer, onLogout, readOnly = false, onBack, tripsFetcher }: Props) {
+  const HISTORY_PAGE = 20;
+
   const [tab, setTab] = useState<Tab>('today');
   const [todayTrips, setTodayTrips] = useState<DriverTrip[]>([]);
   const [historyTrips, setHistoryTrips] = useState<DriverTrip[]>([]);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [historyOffset, setHistoryOffset] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedTrip, setSelectedTrip] = useState<DriverTrip | null>(null);
   const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
@@ -156,25 +174,56 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
   // ==================== ЗАГРУЗКА РЕЙСОВ ====================
   const fetchToday = async (): Promise<DriverTrip[]> => {
     try {
-      const res = await driverFetch('/api/driver/trips?scope=today');
-      const data = await res.json();
-      if (data.success) {
-        setTodayTrips(data.trips);
-        return data.trips as DriverTrip[];
+      let trips: DriverTrip[];
+      if (tripsFetcher) {
+        trips = await tripsFetcher('today');
+      } else {
+        const res = await driverFetch('/api/driver/trips?scope=today');
+        const data = await res.json();
+        if (!data.success) return [];
+        trips = data.trips as DriverTrip[];
       }
+      setTodayTrips(trips);
+      return trips;
     } catch (err) {
       console.error('Ошибка загрузки рейсов на сегодня:', err);
     }
     return [];
   };
 
-  const fetchHistory = async () => {
+  const fetchHistory = async (offset = 0, append = false) => {
+    const fetchLimit = HISTORY_PAGE + 1; // запрашиваем на 1 больше чтобы понять есть ли ещё
     try {
-      const res = await driverFetch('/api/driver/trips?scope=history');
-      const data = await res.json();
-      if (data.success) setHistoryTrips(data.trips);
+      let raw: DriverTrip[];
+      if (tripsFetcher) {
+        raw = await tripsFetcher('history', offset, fetchLimit);
+      } else {
+        const res = await driverFetch(`/api/driver/trips?scope=history&offset=${offset}&limit=${fetchLimit}`);
+        const data = await res.json();
+        if (!data.success) return;
+        raw = data.trips as DriverTrip[];
+      }
+      const hasMore = raw.length > HISTORY_PAGE;
+      const page = hasMore ? raw.slice(0, HISTORY_PAGE) : raw;
+
+      if (append) {
+        setHistoryTrips(prev => [...prev, ...page]);
+      } else {
+        setHistoryTrips(page);
+      }
+      setHasMoreHistory(hasMore);
+      setHistoryOffset(offset + page.length);
     } catch (err) {
       console.error('Ошибка загрузки истории поездок:', err);
+    }
+  };
+
+  const loadMoreHistory = async () => {
+    setLoadingMore(true);
+    try {
+      await fetchHistory(historyOffset, true);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -186,10 +235,13 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([fetchToday(), fetchHistory()]).finally(() => {
+    setHistoryOffset(0);
+    setHasMoreHistory(false);
+    Promise.all([fetchToday(), fetchHistory(0, false)]).finally(() => {
       setLoading(false);
       setInitialTripsLoaded(true);
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Мягкое восстановление данных при пробуждении вкладки (без перезагрузки) —
@@ -197,7 +249,8 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
   // hardResetBroadcastSocket).
   useWakeRefresh(() => {
     fetchToday();
-    fetchHistory();
+    setHistoryOffset(0);
+    fetchHistory(0, false);
   });
 
   // ==================== OFFLINE QUEUE: ЗАГРУЗКА + СИНХРОНИЗАЦИЯ ====================
@@ -534,7 +587,7 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
           </a>
         )}
 
-        {showAction && (canGoOnSite || canUnload) && (
+        {showAction && !readOnly && (canGoOnSite || canUnload) && (
           <button
             disabled={isBusy}
             onClick={(e) => {
@@ -707,29 +760,68 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
               </div>
             )}
           </div>
-          <button
-            onClick={onLogout}
-            aria-label="Выйти"
-            title="Выйти / сменить пользователя"
-            style={{
-              background: '#1E2937',
-              border: '1px solid #334155',
-              borderRadius: '9999px',
-              width: '40px',
-              height: '40px',
-              minWidth: '40px',
-              color: '#94A3B8',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-            }}
-          >
-            <LogOut size={18} />
-          </button>
+          {readOnly ? (
+            <button
+              onClick={onBack}
+              aria-label="Назад"
+              title="Вернуться в список миксеров"
+              style={{
+                background: '#1E2937',
+                border: '1px solid #334155',
+                borderRadius: '9999px',
+                padding: '0 14px',
+                height: '40px',
+                color: '#60A5FA',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '13px',
+                fontWeight: 600,
+                flexShrink: 0,
+              }}
+            >
+              ← Назад
+            </button>
+          ) : (
+            <button
+              onClick={onLogout}
+              aria-label="Выйти"
+              title="Выйти / сменить пользователя"
+              style={{
+                background: '#1E2937',
+                border: '1px solid #334155',
+                borderRadius: '9999px',
+                width: '40px',
+                height: '40px',
+                minWidth: '40px',
+                color: '#94A3B8',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <LogOut size={18} />
+            </button>
+          )}
         </div>
 
-        {notifPermission === 'default' && (
+        {readOnly && (
+        <div style={{
+          marginTop: '10px',
+          padding: '8px 12px',
+          borderRadius: '10px',
+          background: 'rgba(96,165,250,0.08)',
+          border: '1px solid rgba(96,165,250,0.2)',
+          fontSize: '12px',
+          color: '#60A5FA',
+          textAlign: 'center',
+        }}>
+          👁 Режим просмотра — кнопки смены статуса отключены
+        </div>
+      )}
+
+      {!readOnly && notifPermission === 'default' && (
           <button
             onClick={requestNotifPermission}
             style={{
@@ -806,17 +898,46 @@ export default function DriverDashboard({ mixer, onLogout }: Props) {
             <div>История поездок пуста</div>
           </div>
         ) : (
-          historyByDay.map(([day, trips]) => (
-            <div key={day} style={{ marginBottom: '20px' }}>
-              <div style={{ color: '#94A3B8', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>
-                {formatDateLabel(day)}
-                <span style={{ color: '#475569', marginLeft: '8px', fontWeight: 400 }}>
-                  {trips.length} {trips.length === 1 ? 'рейс' : trips.length < 5 ? 'рейса' : 'рейсов'}
-                </span>
+          <>
+            {historyByDay.map(([day, trips]) => (
+              <div key={day} style={{ marginBottom: '20px' }}>
+                <div style={{ color: '#94A3B8', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>
+                  {formatDateLabel(day)}
+                  <span style={{ color: '#475569', marginLeft: '8px', fontWeight: 400 }}>
+                    {trips.length} {trips.length === 1 ? 'рейс' : trips.length < 5 ? 'рейса' : 'рейсов'}
+                  </span>
+                </div>
+                {/* Админ видит полные карточки, водитель — краткие */}
+                {trips.map((trip) => readOnly
+                  ? renderTripCard(trip, false)
+                  : renderHistoryCard(trip)
+                )}
               </div>
-              {trips.map((trip) => renderHistoryCard(trip))}
-            </div>
-          ))
+            ))}
+
+            {/* Кнопка «Загрузить ещё» */}
+            {hasMoreHistory && (
+              <button
+                onClick={loadMoreHistory}
+                disabled={loadingMore}
+                style={{
+                  width: '100%',
+                  padding: '13px',
+                  marginTop: '8px',
+                  marginBottom: '20px',
+                  borderRadius: '14px',
+                  border: '1px solid #334155',
+                  background: 'transparent',
+                  color: loadingMore ? '#475569' : '#60A5FA',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: loadingMore ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {loadingMore ? 'Загрузка...' : 'Загрузить ещё'}
+              </button>
+            )}
+          </>
         )}
       </div>
 

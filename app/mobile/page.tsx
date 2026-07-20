@@ -4,7 +4,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import MobileDashboardOrderModal from './components/MobileDashboardOrderModal';
 import MobileCalendar from './components/MobileCalendar';
 import MobileExitButton from './components/MobileExitButton';
-import { ChevronLeft, ChevronRight, CalendarDays, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CalendarDays, X, Truck } from 'lucide-react';
+import Link from 'next/link';
 
 // 🔥 Подключаем хуки авторизации и real-time
 import { useUserRole } from '../providers/UserRoleProvider';
@@ -28,10 +29,14 @@ export default function MobileDashboard() {
   // 🔥 Оставляем только нужные стейты
   const [allOrders, setAllOrders] = useState<any[]>([]);
   const [activeMixers, setActiveMixers] = useState<any[]>([]);
+  const [allMixersList, setAllMixersList] = useState<any[]>([]);
   const [mixerAssignments, setMixerAssignments] = useState<any[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [showCalendar, setShowCalendar] = useState(false);
-  useBodyScrollLock(showCalendar);
+  const [showMixerSheet, setShowMixerSheet] = useState(false);
+  const [showOrdersSheet, setShowOrdersSheet] = useState(false);
+  const [showPlanSheet, setShowPlanSheet] = useState(false);
+  useBodyScrollLock(showCalendar || showMixerSheet || showOrdersSheet || showPlanSheet);
 
   // ==================== 2. ВЫБОР ДАТЫ ====================
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -150,6 +155,14 @@ useWakeRefresh(() => {
     .catch(() => {});
 });
 
+// Список всех миксеров — нужен для определения типа (свой/наёмный) в виджете
+useEffect(() => {
+  fetch('/api/adminCifra/mixers')
+    .then(r => r.ok ? r.json() : [])
+    .then(setAllMixersList)
+    .catch(() => {});
+}, []);
+
 // 🔥 Назначенные миксеры — раньше грузили ВСЮ таблицу order_mixers (за всё
 // время работы завода — сотни КБ и постоянно растёт), хотя на дашборде
 // нужны назначения только для заявок ТЕКУЩЕГО МЕСЯЦА (allOrders уже
@@ -232,13 +245,106 @@ useEffect(() => {
     });
   }, [activeMixers, selectedDateStr]);
 
+  // ── Статистика «В рейсе сегодня» — всегда за СЕГОДНЯ (не зависит от выбранной даты) ──
+  const realTodayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const todayActiveTrips = useMemo(() =>
+    activeMixers.filter(m => (m.delivery_date || '').slice(0, 10) === realTodayStr),
+  [activeMixers, realTodayStr]);
+
+  // Дедупликация по номеру миксера (один миксер = один рейс в виджете)
+  const uniqueTodayMixers = useMemo(() =>
+    Array.from(new Map(todayActiveTrips.map((m: any) => [m.number, m])).values()),
+  [todayActiveTrips]);
+
+  const mixerStatusCounts = useMemo(() => ({
+    loading:   uniqueTodayMixers.filter((m: any) => m.status === 'Загрузка').length,
+    inTransit: uniqueTodayMixers.filter((m: any) => m.status === 'В пути').length,
+    onSite:    uniqueTodayMixers.filter((m: any) => m.status === 'На объекте').length,
+    problem:   uniqueTodayMixers.filter((m: any) => m.status === 'Проблема').length,
+  }), [uniqueTodayMixers]);
+
+  const totalActiveMixers = uniqueTodayMixers.length;
+  const volumeInTransit = useMemo(() =>
+    todayActiveTrips.reduce((s: number, m: any) => s + Number(m.volume || 0), 0),
+  [todayActiveTrips]);
+
+  const problemMixers = useMemo(() =>
+    uniqueTodayMixers.filter((m: any) => m.status === 'Проблема'),
+  [uniqueTodayMixers]);
+
+  const hasProblems = problemMixers.length > 0;
+
+  // Сегодняшний плановый объём (не отменённые)
+  const todayPlannedVolume = useMemo(() =>
+    allOrders
+      .filter((o: any) => (o.delivery_date || '').slice(0, 10) === realTodayStr && o.status !== 'cancelled')
+      .reduce((s: number, o: any) => s + Number(o.volume || 0), 0),
+  [allOrders, realTodayStr]);
+
+  // ── KPI: план/факт по объёму ──────────────────────────────────────────────────
+  const kpiPlanToday = useMemo(() =>
+    todayOrders.reduce((s: number, o: any) => s + Number(o.volume || 0), 0),
+  [todayOrders]);
+
+  const kpiCompletedVolume = useMemo(() =>
+    todayOrders.filter((o: any) => o.status === 'completed')
+               .reduce((s: number, o: any) => s + Number(o.volume || 0), 0),
+  [todayOrders]);
+
+  const kpiCompletedOrders  = useMemo(() => todayOrders.filter((o: any) => o.status === 'completed').length, [todayOrders]);
+  const kpiNewOrders        = useMemo(() => todayOrders.filter((o: any) => o.status === 'new').length, [todayOrders]);
+  const kpiInWorkOrders     = useMemo(() => todayOrders.filter((o: any) => o.status === 'processing').length, [todayOrders]);
+  const kpiCancelledOrders  = useMemo(() => todayOrders.filter((o: any) => o.status === 'cancelled').length, [todayOrders]);
+  const kpiCompletionPct    = kpiPlanToday > 0 ? Math.round((kpiCompletedVolume / kpiPlanToday) * 100) : 0;
+
+  // ── KPI: задержки (упрощённая версия без road_time кэша) ──────────────────────
+  const kpiDelayedOrders = useMemo(() => {
+    const nowMins = new Date().getHours() * 60 + new Date().getMinutes();
+    const todayDateStr = new Date().toISOString().slice(0, 10);
+    // Задержки считаем только за сегодня
+    if (selectedDateStr !== todayDateStr) return [];
+
+    return todayOrders
+      .filter((o: any) => o.status === 'new' || o.status === 'processing')
+      .filter((o: any) => {
+        const orderMixers = activeMixersForDate.filter((m: any) => String(m.orderId) === String(o.id));
+        const hasMoving = orderMixers.some((m: any) => ['В пути', 'На объекте', 'Разгружен', 'Возврат'].includes(m.status));
+        if (hasMoving) return false;
+        const assignedVol = orderMixers.reduce((s: number, m: any) => s + Number(m.volume || 0), 0);
+        if (Number(o.volume || 0) > 0 && assignedVol >= Number(o.volume || 0)) return false;
+        return true;
+      })
+      .map((o: any) => {
+        const [h, m] = (o.delivery_time || '00:00').split(':').map(Number);
+        const plannedStart = h * 60 + m;
+        const loadingTime = Number(o.volume || 0) * 2;
+        const travelTime = 30; // fallback без кэша
+        const expectedDeparture = plannedStart - travelTime - loadingTime;
+        const delay = Math.round(Math.max(0, nowMins - expectedDeparture));
+        return { ...o, delayMinutes: delay };
+      })
+      .filter((o: any) => o.delayMinutes > 15)
+      .sort((a: any, b: any) => b.delayMinutes - a.delayMinutes);
+  }, [todayOrders, activeMixersForDate, selectedDateStr]);
+
+  // Разбивка свои/наёмные по реестру миксеров
+  const { ownActive, rentedActive } = useMemo(() => {
+    let own = 0; let rented = 0;
+    uniqueTodayMixers.forEach((trip: any) => {
+      const mx = allMixersList.find((m: any) => m.number === trip.number);
+      if (mx?.type === 'own') own++; else rented++;
+    });
+    return { ownActive: own, rentedActive: rented };
+  }, [uniqueTodayMixers, allMixersList]);
+
   // ==============================================
   // return (продолжение файла)
   // ==============================================
 
   return (
     <div style={{
-        backgroundColor: '#0F172A',
+        backgroundColor: '#162032',
         minHeight: '100vh',
         width: '100%',
         maxWidth: '100vw',
@@ -257,14 +363,14 @@ useEffect(() => {
         <style jsx global>{`
           #dashboard-scroll::-webkit-scrollbar {
             width: 3px !important;
-            background: #0F172A !important;
+            background: #162032 !important;
           }
           #dashboard-scroll::-webkit-scrollbar-thumb {
-            background: #0F172A !important;   /* тот же цвет что и фон */
+            background: #162032 !important;   /* тот же цвет что и фон */
             border-radius: 10px !important;
           }
           #dashboard-scroll::-webkit-scrollbar-track {
-            background: #0F172A !important;
+            background: #162032 !important;
           }
         `}</style>
 
@@ -276,41 +382,19 @@ useEffect(() => {
         marginBottom: '24px',
         padding: '0 4px'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/logo-tradecom-white.png"
             alt="TradeCom"
-            style={{ height: '50px', width: 'auto', objectFit: 'contain', display: 'block' }}
-          />
-          <span
-            title={
-              ordersRealtimeStatus === 'SUBSCRIBED'
-                ? 'Реалтайм подключен'
-                : ordersRealtimeStatus === 'ERROR'
-                ? 'Нет связи, переподключение...'
-                : 'Подключение...'
-            }
-            style={{
-              width: '8px',
-              height: '8px',
-              borderRadius: '50%',
-              flexShrink: 0,
-              display: 'inline-block',
-              background:
-                ordersRealtimeStatus === 'SUBSCRIBED'
-                  ? '#10B981'
-                  : ordersRealtimeStatus === 'ERROR'
-                  ? '#EF4444'
-                  : '#FACC15',
-            }}
+            style={{ height: '64px', width: 'auto', objectFit: 'contain', display: 'block' }}
           />
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
             onClick={() => setShowCalendar(true)}
-            style={{ background: '#1E2937', border: '1px solid #334155', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+            style={{ background: '#334155', border: '1px solid #334155', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
             title="Открыть календарь"
           >
             <CalendarDays size={17} color="#60A5FA" />
@@ -320,23 +404,41 @@ useEffect(() => {
       </div>
 
         {/* KPI */}
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: '1fr 1fr', 
-          gap: '12px',
-          marginBottom: '28px'
-        }}>
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '18px', textAlign: 'center' }}>
-            <div style={{ color: '#94A3B8', fontSize: '14px' }}>Заявки сегодня</div>
-            <div style={{ fontSize: '48px', fontWeight: '700', color: '#60A5FA' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
+
+          {/* Заявки сегодня */}
+          <div
+            onClick={() => setShowOrdersSheet(true)}
+            style={{ background: '#25334A', borderRadius: '16px', padding: '18px', textAlign: 'center', cursor: 'pointer' }}
+          >
+            <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '4px' }}>Заявки сегодня</div>
+            <div style={{ fontSize: '48px', fontWeight: 700, color: '#60A5FA', lineHeight: 1, marginBottom: '10px' }}>
               {todayOrders.length}
+            </div>
+            {/* Цветные цифры без подписей */}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', fontSize: '15px', fontWeight: 700 }}>
+              {kpiNewOrders > 0      && <span style={{ color: '#FACC15' }}>{kpiNewOrders}</span>}
+              {kpiInWorkOrders > 0   && <span style={{ color: '#60A5FA' }}>{kpiInWorkOrders}</span>}
+              {kpiCompletedOrders > 0 && <span style={{ color: '#10B981' }}>{kpiCompletedOrders}</span>}
+              {kpiCancelledOrders > 0 && <span style={{ color: '#EF4444' }}>{kpiCancelledOrders}</span>}
+              {todayOrders.length === 0 && <span style={{ color: '#475569', fontWeight: 400, fontSize: '13px' }}>—</span>}
             </div>
           </div>
 
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '18px', textAlign: 'center' }}>
-            <div style={{ color: '#94A3B8', fontSize: '14px' }}>Выполнение</div>
-            <div style={{ fontSize: '48px', fontWeight: '700', color: '#10B981' }}>
-              {Math.round(todayOrders.filter((o: any) => o.status === 'completed').length / (todayOrders.length || 1) * 100)}%
+          {/* Выполнение плана */}
+          <div
+            onClick={() => setShowPlanSheet(true)}
+            style={{ background: '#25334A', borderRadius: '16px', padding: '18px', textAlign: 'center', cursor: 'pointer' }}
+          >
+            <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '4px' }}>Выполнение</div>
+            <div style={{ fontSize: '48px', fontWeight: 700, color: '#10B981', lineHeight: 1, marginBottom: '10px' }}>
+              {kpiCompletionPct}%
+            </div>
+            {/* Факт / план без подписей */}
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#64748B' }}>
+              <span style={{ color: '#E2E8F0' }}>{Math.round(kpiCompletedVolume)}</span>
+              <span style={{ color: '#475569' }}> / {Math.round(kpiPlanToday)}</span>
+              <span style={{ color: '#64748B', fontSize: '12px', fontWeight: 400 }}> м³</span>
             </div>
           </div>
         </div>
@@ -353,10 +455,8 @@ useEffect(() => {
 
             const dayName = selectedDate.toLocaleDateString('ru-RU', { weekday: 'short' });
             const dayNum = selectedDate.getDate();
-            const monthName = selectedDate.toLocaleDateString('ru-RU', { month: 'long' });
+            const monthName = selectedDate.toLocaleDateString('ru-RU', { month: 'short' });
             const year = selectedDate.getFullYear();
-            const activeCount = todayOrders.filter((o: any) => o.status !== 'cancelled').length;
-            const totalVol = todayOrders.filter((o: any) => o.status !== 'cancelled').reduce((s: number, o: any) => s + Number(o.volume || 0), 0);
 
             const navBtn = (dir: 'prev' | 'next') => {
               const d = new Date(selectedDate);
@@ -366,171 +466,329 @@ useEffect(() => {
 
             return (
               <div style={{
-                background: '#131C2B',
-                borderRadius: '18px',
-                padding: '14px 16px',
-                marginBottom: '18px',
+                background: '#25334A',
+                borderRadius: '14px',
+                padding: '8px 10px',
+                marginBottom: '14px',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '10px',
+                gap: '8px',
               }}>
                 <button
                   onClick={() => navBtn('prev')}
-                  style={{ background: '#1E2937', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+                  style={{ background: '#334155', border: 'none', borderRadius: '8px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
                 >
-                  <ChevronLeft size={18} color="#64748B" />
+                  <ChevronLeft size={16} color="#64748B" />
                 </button>
 
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                  <CalendarDays size={18} color={isToday ? '#10B981' : '#475569'} style={{ flexShrink: 0 }} />
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: '15px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {dayName}, {dayNum} {monthName} {year !== today.getFullYear() ? year : ''}
-                    </div>
-                    <div style={{ fontSize: '12px', color: '#475569', marginTop: '1px' }}>
-                      {activeCount > 0 ? `${activeCount} заявок · ${totalVol.toFixed(1)} м³` : 'Нет заявок'}
-                    </div>
-                  </div>
+                <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
+                  <span style={{ fontSize: '14px', fontWeight: 700, color: isToday ? '#10B981' : '#E2E8F0', whiteSpace: 'nowrap' }}>
+                    {dayName}, {dayNum} {monthName}{year !== today.getFullYear() ? ` ${year}` : ''}
+                  </span>
                 </div>
 
                 {!isToday && (
                   <button
                     onClick={() => setSelectedDate(new Date(today.getFullYear(), today.getMonth(), today.getDate()))}
-                    style={{ background: 'transparent', border: '1px solid #334155', borderRadius: '8px', padding: '5px 10px', color: '#64748B', fontSize: '12px', fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}
+                    style={{ background: 'transparent', border: '1px solid #334155', borderRadius: '7px', padding: '4px 9px', color: '#64748B', fontSize: '11px', fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}
                   >
                     Сегодня
                   </button>
                 )}
-                {isToday && (
-                  <span style={{ background: '#10B98118', border: '1px solid #10B98140', borderRadius: '8px', padding: '5px 10px', color: '#10B981', fontSize: '12px', fontWeight: 600, flexShrink: 0 }}>
-                    Сегодня
-                  </span>
-                )}
 
                 <button
                   onClick={() => navBtn('next')}
-                  style={{ background: '#1E2937', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+                  style={{ background: '#334155', border: 'none', borderRadius: '8px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
                 >
-                  <ChevronRight size={18} color="#64748B" />
+                  <ChevronRight size={16} color="#64748B" />
                 </button>
               </div>
             );
           })()}
 
-                    {/* Фильтрация заказов на выбранный день */}
-          {todayOrders.length > 0 ? todayOrders.map((order: any) => {
-            const time = order.delivery_time || '—';
-            const volume = Number(order.volume || 0);
-
-            const getOrderIcon = (status: string) => {
-              switch (status) {
-                case 'cancelled':
-                  return { icon: '✕', color: '#EF4444' };
-                case 'completed':
-                  return { icon: '✓', color: '#10B981' };
-                case 'processing':
-                  return { icon: '→', color: '#3B82F6' };
-                default: // new
-                  return { icon: '→', color: '#FACC15' };
-              }
-            };
-
-            const iconStyle = getOrderIcon(order.status);
-
-            return (
-              <div 
-                key={order.id}
-                onClick={() => setSelectedOrder(order)}
-                style={{
-                  background: '#25334A',
-                  padding: '14px 16px',
-                  borderRadius: '12px',
-                  marginBottom: '10px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '12px',
-                  cursor: 'pointer',
-                  color: '#ffffff',
-                  opacity: order.status === 'cancelled' ? 0.9 : 1
-                }}
-              >
-                <div style={{ fontWeight: '700', minWidth: '68px', fontSize: '15.5px' }}>
-                  {time}
-                </div>
-
-                <div style={{ flex: 1, lineHeight: '1.25' }}>
-                  <div>#{order.id} — {order.organization_name || order.full_name || '—'}</div>
-                  <div style={{ fontSize: '13.5px', color: '#94A3B8' }}>
-                    {volume.toFixed(1)} м³ • {order.grade || '—'}
-                  </div>
-                </div>
-
-                <div style={{ 
-                  color: iconStyle.color, 
-                  fontSize: '20px', 
-                  fontWeight: 'bold',
-                  minWidth: '28px',
-                  textAlign: 'center'
-                }}>
-                  {iconStyle.icon}
-                </div>
-              </div>
-            );
-          }) : (
+          {/* ── Вертикальный таймлайн заявок ── */}
+          {todayOrders.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '60px 0', color: '#94A3B8' }}>
               На выбранный день заказов нет
             </div>
+          ) : (() => {
+            const STATUS_COLOR: Record<string, string> = {
+              new:        '#FACC15',
+              processing: '#3B82F6',
+              completed:  '#10B981',
+              cancelled:  '#EF4444',
+            };
+            const STATUS_LABEL: Record<string, string> = {
+              new:        'Новая',
+              processing: 'В работе',
+              completed:  'Выполнена',
+              cancelled:  'Отменена',
+            };
+
+            const nowMins = new Date().getHours() * 60 + new Date().getMinutes();
+            const toMins = (t: string) => {
+              const [h, m] = (t || '00:00').split(':').map(Number);
+              return h * 60 + (m || 0);
+            };
+
+            // Индекс первой заявки, время которой >= сейчас
+            const isToday = selectedDateStr === new Date().toISOString().slice(0, 10);
+            const nowInsertIdx = isToday
+              ? todayOrders.findIndex((o: any) => toMins(o.delivery_time) >= nowMins)
+              : -1;
+
+            const items: React.ReactNode[] = [];
+
+            todayOrders.forEach((order: any, idx: number) => {
+              const color = STATUS_COLOR[order.status] || '#64748B';
+              const volume = Number(order.volume || 0);
+              const timeMins = toMins(order.delivery_time);
+              const isPast = isToday && order.status !== 'completed' && order.status !== 'cancelled' && timeMins < nowMins;
+              const isCompleted = order.status === 'completed';
+              const isCancelled = order.status === 'cancelled';
+
+              // Чипы назначенных миксеров
+              const orderMixers = mixerAssignments.filter((m: any) => String(m.order_id) === String(order.id));
+              const MIXER_STATUS_COLOR: Record<string, string> = {
+                'В пути': '#3B82F6', 'На объекте': '#10B981',
+                'Загрузка': '#FACC15', 'Проблема': '#EF4444',
+                'Разгружен': '#64748B', 'Возврат': '#64748B',
+              };
+
+              // Вставляем линию «сейчас» перед нужным индексом
+              if (isToday && idx === nowInsertIdx) {
+                items.push(
+                  <div key="now-line" style={{ position: 'relative', display: 'flex', alignItems: 'center', margin: '4px 0 4px -4px' }}>
+                    {/* Точка на линии */}
+                    <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#10B981', boxShadow: '0 0 6px #10B981', flexShrink: 0, marginLeft: '15px', zIndex: 2 }} />
+                    {/* Линия */}
+                    <div style={{ flex: 1, height: '1.5px', background: 'linear-gradient(90deg, #10B981, #10B98140)', marginLeft: '0' }} />
+                    {/* Подпись */}
+                    <span style={{ position: 'absolute', left: '32px', top: '-9px', fontSize: '10px', fontWeight: 700, color: '#10B981', background: '#162032', padding: '0 4px', whiteSpace: 'nowrap' }}>
+                      сейчас {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                );
+              }
+
+              items.push(
+                <div key={order.id} style={{ display: 'flex', gap: '0', position: 'relative', marginBottom: idx < todayOrders.length - 1 ? '4px' : '0' }}>
+                  {/* Левая колонка: время + точка + линия */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '52px', flexShrink: 0 }}>
+                    <span style={{ fontSize: '11px', fontWeight: 600, color: isPast ? '#334155' : '#64748B', marginBottom: '4px', letterSpacing: '0.02em' }}>
+                      {order.delivery_time || '—'}
+                    </span>
+                    {/* Точка-маркер */}
+                    <div style={{
+                      width: '12px', height: '12px', borderRadius: '50%', flexShrink: 0,
+                      background: isCancelled ? '#334155' : color,
+                      border: `2px solid #162032`,
+                      boxShadow: !isPast && !isCancelled ? `0 0 6px ${color}60` : 'none',
+                      zIndex: 1,
+                    }} />
+                    {/* Вертикальная линия вниз (не для последней) */}
+                    {idx < todayOrders.length - 1 && (
+                      <div style={{ flex: 1, width: '2px', background: '#25334A', minHeight: '16px' }} />
+                    )}
+                  </div>
+
+                  {/* Карточка заявки */}
+                  <div
+                    onClick={() => setSelectedOrder(order)}
+                    style={{
+                      flex: 1,
+                      background: '#25334A',
+                      borderRadius: '12px',
+                      padding: '11px 14px',
+                      marginLeft: '8px',
+                      marginBottom: '8px',
+                      cursor: 'pointer',
+                      border: `1px solid ${isCancelled ? '#334155' : color + '30'}`,
+                      opacity: isPast ? 0.6 : 1,
+                      borderLeft: `3px solid ${isCancelled ? '#334155' : color}`,
+                    }}
+                  >
+                    {/* Строка 1: клиент + статус-бейдж */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px', gap: '8px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 600, color: '#E2E8F0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                        {order.organization_name || order.full_name || '—'}
+                      </span>
+                      <span style={{
+                        fontSize: '11px', fontWeight: 700, flexShrink: 0,
+                        color: isCancelled ? '#64748B' : color,
+                      }}>
+                        {STATUS_LABEL[order.status] || order.status}
+                      </span>
+                    </div>
+
+                    {/* Строка 2: ID · объём · марка */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#64748B' }}>
+                      <span>#{order.id}</span>
+                      <span>·</span>
+                      <span style={{ color: isCompleted ? '#10B981' : '#94A3B8', fontWeight: 600 }}>{volume % 1 === 0 ? volume : volume.toFixed(1)} м³</span>
+                      {order.grade && <><span>·</span><span>{order.grade}</span></>}
+                    </div>
+
+                    {/* Чипы миксеров */}
+                    {orderMixers.length > 0 && (
+                      <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '7px' }}>
+                        {orderMixers.map((mx: any) => {
+                          const mc = MIXER_STATUS_COLOR[mx.status] || '#64748B';
+                          return (
+                            <span key={mx.id} style={{
+                              display: 'inline-flex', alignItems: 'center', gap: '4px',
+                              padding: '2px 7px', borderRadius: '9999px',
+                              background: `${mc}18`, border: `1px solid ${mc}40`,
+                              fontSize: '11px', fontWeight: 600, color: mc,
+                            }}>
+                              <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: mc, display: 'inline-block', flexShrink: 0 }} />
+                              {mx.mixer_name}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            });
+
+            // Если сейчас позже всех заявок — линия в конец
+            if (isToday && nowInsertIdx === -1 && todayOrders.length > 0) {
+              items.push(
+                <div key="now-line-end" style={{ display: 'flex', alignItems: 'center', marginLeft: '15px', marginTop: '4px' }}>
+                  <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#10B981', boxShadow: '0 0 6px #10B981', flexShrink: 0 }} />
+                  <div style={{ flex: 1, height: '1.5px', background: 'linear-gradient(90deg, #10B981, #10B98140)' }} />
+                  <span style={{ fontSize: '10px', fontWeight: 700, color: '#10B981', marginLeft: '6px', whiteSpace: 'nowrap' }}>
+                    сейчас {new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+              );
+            }
+
+            return <div style={{ paddingBottom: '4px' }}>{items}</div>;
+          })()}
+        </div>
+
+      {/* ── Миксеры в работе (сегодня) ── */}
+      <div
+        onClick={() => totalActiveMixers > 0 && setShowMixerSheet(true)}
+        style={{
+          background: '#25334A',
+          borderRadius: '16px',
+          border: hasProblems ? '1.5px solid #EF444470' : '1px solid #334155',
+          overflow: 'hidden',
+          cursor: totalActiveMixers > 0 ? 'pointer' : 'default',
+          boxShadow: hasProblems ? '0 0 18px rgba(239,68,68,0.15)' : 'none',
+        }}
+      >
+        {/* Красный баннер проблем */}
+        {hasProblems && (
+          <div style={{
+            background: 'rgba(239,68,68,0.12)',
+            borderBottom: '1px solid #EF444440',
+            padding: '8px 16px',
+            display: 'flex', alignItems: 'center', gap: '8px',
+          }}>
+            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#EF4444', boxShadow: '0 0 6px #EF4444', animation: 'pulse 1.5s infinite', flexShrink: 0 }} />
+            <span style={{ fontSize: '13px', fontWeight: 700, color: '#EF4444' }}>
+              Проблема: {problemMixers.map((m: any) => m.number).join(', ')}
+            </span>
+          </div>
+        )}
+
+        <div style={{ padding: '16px' }}>
+          {/* Заголовок */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{
+                width: '8px', height: '8px', borderRadius: '50%', background: '#10B981',
+                boxShadow: '0 0 6px rgba(16,185,129,0.8)', flexShrink: 0,
+                animation: totalActiveMixers > 0 ? 'pulse 2s infinite' : 'none',
+              }} />
+              <span style={{ fontSize: '16px', fontWeight: 700, color: '#E2E8F0' }}>Миксеры сегодня</span>
+              {totalActiveMixers > 0 && (
+                <span style={{ padding: '1px 8px', borderRadius: '9999px', fontSize: '12px', fontWeight: 700, background: '#10B98120', color: '#10B981' }}>
+                  {totalActiveMixers}
+                </span>
+              )}
+            </div>
+            <Link
+              href="/mobile/mixers"
+              onClick={e => e.stopPropagation()}
+              style={{ fontSize: '12px', color: '#60A5FA', textDecoration: 'none', fontWeight: 600, flexShrink: 0 }}
+            >
+              Все миксеры →
+            </Link>
+          </div>
+
+          {totalActiveMixers === 0 ? (
+            <div style={{ textAlign: 'center', padding: '16px 0', color: '#475569', fontSize: '14px' }}>
+              Нет активных рейсов сегодня
+            </div>
+          ) : (
+            <>
+              {/* Статусные плашки */}
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '14px' }}>
+                {[
+                  { label: 'Загрузка',   count: mixerStatusCounts.loading,   color: '#FACC15' },
+                  { label: 'В пути',     count: mixerStatusCounts.inTransit, color: '#3B82F6' },
+                  { label: 'На объекте', count: mixerStatusCounts.onSite,    color: '#10B981' },
+                  { label: 'Проблема',   count: mixerStatusCounts.problem,   color: '#EF4444' },
+                ].filter(s => s.count > 0).map(s => (
+                  <div key={s.label} style={{
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    padding: '6px 12px', borderRadius: '10px',
+                    background: `${s.color}12`, border: `1px solid ${s.color}30`,
+                  }}>
+                    <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: s.color, boxShadow: s.label !== 'Проблема' ? `0 0 5px ${s.color}` : undefined, flexShrink: 0 }} />
+                    <span style={{ fontSize: '15px', fontWeight: 700, color: s.color }}>{s.count}</span>
+                    <span style={{ fontSize: '13px', color: '#94A3B8' }}>{s.label}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Объём в пути + свои/наёмные */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
+                  <span style={{ fontSize: '28px', fontWeight: 700, color: '#E2E8F0', lineHeight: 1 }}>
+                    {volumeInTransit % 1 === 0 ? volumeInTransit : volumeInTransit.toFixed(1)}
+                  </span>
+                  <span style={{ fontSize: '14px', color: '#64748B' }}>м³ в движении</span>
+                </div>
+                {(ownActive > 0 || rentedActive > 0) && (
+                  <div style={{ fontSize: '15px', fontWeight: 600, color: '#64748B', textAlign: 'right' }}>
+                    {ownActive > 0 && <span style={{ color: '#10B981' }}>{ownActive} св.</span>}
+                    {ownActive > 0 && rentedActive > 0 && <span style={{ color: '#475569' }}> · </span>}
+                    {rentedActive > 0 && <span style={{ color: '#FACC15' }}>{rentedActive} наём.</span>}
+                  </div>
+                )}
+              </div>
+
+              {/* Прогресс-бар: объём в движении / плановый объём сегодня */}
+              {todayPlannedVolume > 0 && (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#475569', marginBottom: '6px' }}>
+                    <span>Загрузка парка сегодня</span>
+                    <span style={{ color: '#94A3B8', fontWeight: 600 }}>
+                      {volumeInTransit % 1 === 0 ? volumeInTransit : volumeInTransit.toFixed(1)} / {todayPlannedVolume % 1 === 0 ? todayPlannedVolume : todayPlannedVolume.toFixed(1)} м³
+                    </span>
+                  </div>
+                  <div style={{ height: '8px', borderRadius: '9999px', background: '#334155', overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${Math.min(100, (volumeInTransit / todayPlannedVolume) * 100)}%`,
+                      borderRadius: '9999px',
+                      background: 'linear-gradient(90deg, #3B82F6, #10B981)',
+                      transition: 'width 0.4s ease',
+                    }} />
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
-
-     {/* Миксеры в работе */}
-        <div style={{ 
-          background: '#1E2937', 
-          padding: '24px 16px', 
-          borderRadius: '16px',
-          color: '#ffffff'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-            <h2 style={{ margin: 0, fontSize: '19px', color: '#ffffff' }}>
-              Миксеры в работе
-            </h2>
-            <div style={{ 
-              background: '#334155', 
-              color: '#60A5FA', 
-              padding: '6px 14px', 
-              borderRadius: '9999px',
-              fontSize: '14px',
-              fontWeight: '600'
-            }}>
-              {activeMixersForDate.length} на линии
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-around', textAlign: 'center', gap: '20px' }}>
-            
-            <div>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: '#FBBF24' }}>
-                {activeMixersForDate.filter(m => 
-                  !m.status || 
-                  String(m.status).toLowerCase().includes('load') || 
-                  String(m.status).toLowerCase().includes('загр')
-                ).length}
-              </div>
-              <div style={{ fontSize: '14px', color: '#94A3B8' }}>Загрузка</div>
-            </div>
-
-            <div>
-              <div style={{ fontSize: '32px', fontWeight: '700', color: '#60A5FA' }}>
-                {activeMixersForDate.filter(m => 
-                  !m.status || 
-                  String(m.status).toLowerCase().includes('way') || 
-                  String(m.status).toLowerCase().includes('пут')
-                ).length}
-              </div>
-              <div style={{ fontSize: '14px', color: '#94A3B8' }}>В пути</div>
-            </div>
-          </div>
-        </div>
+      </div>
 
                   {/* Модалка заказа */}
       {selectedOrder && (
@@ -553,6 +811,195 @@ useEffect(() => {
         />
       )}
 
+      {/* ==================== ШТОРКА: ЗАЯВКИ СЕГОДНЯ ==================== */}
+      {showOrdersSheet && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }} onClick={() => setShowOrdersSheet(false)} />
+          <div style={{ position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001, background: '#25334A', borderRadius: '20px 20px 0 0', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0' }}>
+              <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px 16px' }}>
+              <span style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0' }}>Заявки сегодня</span>
+              <button onClick={() => setShowOrdersSheet(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+                <X size={20} color="#64748B" />
+              </button>
+            </div>
+            <div style={{ padding: '0 20px 28px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {/* Итого */}
+              <div style={{ textAlign: 'center', paddingBottom: '12px', borderBottom: '1px solid #334155' }}>
+                <span style={{ fontSize: '56px', fontWeight: 700, color: '#60A5FA', lineHeight: 1 }}>{todayOrders.length}</span>
+                <div style={{ color: '#64748B', fontSize: '13px', marginTop: '4px' }}>заявок на {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}</div>
+              </div>
+              {/* Детализация */}
+              {[
+                { label: 'Новые',     count: kpiNewOrders,       color: '#FACC15', icon: '🟡' },
+                { label: 'В работе',  count: kpiInWorkOrders,    color: '#60A5FA', icon: '→'  },
+                { label: 'Выполнены', count: kpiCompletedOrders, color: '#10B981', icon: '✓'  },
+                { label: 'Отменены',  count: kpiCancelledOrders, color: '#EF4444', icon: '✕'  },
+              ].map(row => (
+                <div key={row.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: '#1E2D40', borderRadius: '12px' }}>
+                  <span style={{ color: '#94A3B8', fontSize: '15px' }}>{row.icon} {row.label}</span>
+                  <span style={{ fontSize: '22px', fontWeight: 700, color: row.color }}>{row.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ==================== ШТОРКА: ВЫПОЛНЕНИЕ ПЛАНА ==================== */}
+      {showPlanSheet && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }} onClick={() => setShowPlanSheet(false)} />
+          <div style={{ position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001, background: '#25334A', borderRadius: '20px 20px 0 0', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0' }}>
+              <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px 16px' }}>
+              <span style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0' }}>Выполнение плана</span>
+              <button onClick={() => setShowPlanSheet(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+                <X size={20} color="#64748B" />
+              </button>
+            </div>
+            <div style={{ padding: '0 20px 28px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Процент */}
+              <div style={{ textAlign: 'center', paddingBottom: '16px', borderBottom: '1px solid #334155' }}>
+                <div style={{
+                  fontSize: '64px', fontWeight: 700, lineHeight: 1,
+                  color: kpiCompletionPct >= 90 ? '#10B981' : kpiCompletionPct >= 60 ? '#FACC15' : '#EF4444',
+                }}>{kpiCompletionPct}%</div>
+                <div style={{ color: '#64748B', fontSize: '14px', marginTop: '6px' }}>выполнение плана</div>
+              </div>
+              {/* Объём */}
+              {[
+                { label: 'Выполнено',    value: `${Math.round(kpiCompletedVolume)} м³`, color: '#10B981' },
+                { label: 'Запланировано', value: `${Math.round(kpiPlanToday)} м³`,       color: '#E2E8F0' },
+                { label: 'Осталось',     value: `${Math.max(0, Math.round(kpiPlanToday - kpiCompletedVolume))} м³`, color: '#64748B' },
+                { label: 'Заявок выполнено', value: `${kpiCompletedOrders} из ${todayOrders.length}`, color: '#60A5FA' },
+              ].map(row => (
+                <div key={row.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: '#1E2D40', borderRadius: '12px' }}>
+                  <span style={{ color: '#94A3B8', fontSize: '15px' }}>{row.label}</span>
+                  <span style={{ fontSize: '18px', fontWeight: 700, color: row.color }}>{row.value}</span>
+                </div>
+              ))}
+              {/* Прогресс-бар */}
+              {kpiPlanToday > 0 && (
+                <div>
+                  <div style={{ height: '10px', borderRadius: '9999px', background: '#334155', overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${Math.min(100, kpiCompletionPct)}%`,
+                      borderRadius: '9999px',
+                      background: kpiCompletionPct >= 90 ? '#10B981' : kpiCompletionPct >= 60 ? '#FACC15' : '#EF4444',
+                      transition: 'width 0.4s ease',
+                    }} />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ==================== ШТОРКА: МИКСЕРЫ В РЕЙСЕ ==================== */}
+      {showMixerSheet && (
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }}
+            onClick={() => setShowMixerSheet(false)}
+          />
+          <div style={{
+            position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001,
+            background: '#25334A', borderRadius: '20px 20px 0 0',
+            maxHeight: 'calc(85vh - 74px)', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          }}>
+            {/* Handle */}
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0', flexShrink: 0 }}>
+              <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
+            </div>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px 10px', flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10B981', boxShadow: '0 0 6px rgba(16,185,129,0.8)', animation: 'pulse 2s infinite' }} />
+                <span style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0' }}>В рейсе сегодня</span>
+                <span style={{ padding: '1px 8px', borderRadius: '9999px', fontSize: '12px', fontWeight: 700, background: '#10B98120', color: '#10B981' }}>
+                  {totalActiveMixers}
+                </span>
+              </div>
+              <button onClick={() => setShowMixerSheet(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+                <X size={20} color="#64748B" />
+              </button>
+            </div>
+
+            {/* List */}
+            <div style={{ overflowY: 'auto', flex: 1, padding: '0 16px 20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {(() => {
+                const STATUS_ORDER = ['Проблема', 'Загрузка', 'В пути', 'На объекте'];
+                const STATUS_COLORS: Record<string, string> = {
+                  'В пути': '#3B82F6', 'Загрузка': '#FACC15', 'На объекте': '#10B981', 'Проблема': '#EF4444',
+                };
+                const sorted = [...uniqueTodayMixers].sort((a: any, b: any) =>
+                  (STATUS_ORDER.indexOf(a.status) === -1 ? 99 : STATUS_ORDER.indexOf(a.status)) -
+                  (STATUS_ORDER.indexOf(b.status) === -1 ? 99 : STATUS_ORDER.indexOf(b.status))
+                );
+                return sorted.map((trip: any) => {
+                  const color = STATUS_COLORS[trip.status] || '#64748B';
+                  const mx = allMixersList.find((m: any) => m.number === trip.number);
+                  const isOwn = mx?.type === 'own';
+                  const driver = mx?.driver || trip.driver || '—';
+                  const ini = driver.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+                  return (
+                    <div key={trip.number} style={{
+                      display: 'flex', alignItems: 'center', gap: '12px',
+                      padding: '12px 14px', background: '#1E2D40',
+                      borderRadius: '12px', border: `1px solid ${color}40`,
+                    }}>
+                      {/* Полоска слева */}
+                      <div style={{ width: '3px', alignSelf: 'stretch', borderRadius: '9999px', background: color, flexShrink: 0 }} />
+                      {/* Аватар */}
+                      <div style={{
+                        width: '36px', height: '36px', borderRadius: '9999px', flexShrink: 0,
+                        background: `${color}20`, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '13px', fontWeight: 700, color,
+                      }}>
+                        {ini}
+                      </div>
+                      {/* Инфо */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
+                          <span style={{ fontSize: '15px', fontWeight: 700, color: '#E2E8F0' }}>{trip.number}</span>
+                          <span style={{
+                            fontSize: '11px', fontWeight: 600, padding: '1px 7px', borderRadius: '9999px',
+                            background: isOwn ? '#10B98118' : '#FACC1518',
+                            color: isOwn ? '#10B981' : '#FACC15',
+                          }}>
+                            {isOwn ? 'Свой' : 'Наёмный'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {driver}
+                        </div>
+                      </div>
+                      {/* Статус + объём */}
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', justifyContent: 'flex-end', marginBottom: '3px' }}>
+                          <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: color, boxShadow: `0 0 4px ${color}` }} />
+                          <span style={{ fontSize: '12px', fontWeight: 700, color }}>{trip.status}</span>
+                        </div>
+                        {trip.volume > 0 && (
+                          <span style={{ fontSize: '11px', color: '#64748B' }}>{trip.volume} м³</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+        </>
+      )}
+
       {/* ==================== МОДАЛКА КАЛЕНДАРЯ ==================== */}
       {showCalendar && (
         <div
@@ -573,7 +1020,7 @@ useEffect(() => {
               <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>Планирование</span>
               <button
                 onClick={() => setShowCalendar(false)}
-                style={{ background: '#1E2937', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                style={{ background: '#334155', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
               >
                 <X size={16} color="#64748B" />
               </button>

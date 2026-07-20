@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Phone, Plus, X, Save, Truck, DollarSign, Trash2, RotateCcw, MapPin } from 'lucide-react';
+import { Phone, Plus, X, Save, Truck, DollarSign, Trash2, RotateCcw, MapPin, ExternalLink } from 'lucide-react';
+import Link from 'next/link';
 import MobileExitButton from '../components/MobileExitButton';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
@@ -52,7 +53,7 @@ function statusColor(status: string): { color: string; bg: string } {
   if (status === 'На объекте')  return { color: '#10B981', bg: '#10B98120' };
   if (status === 'Загрузка')    return { color: '#FACC15', bg: '#FACC1520' };
   if (status === 'Проблема')    return { color: '#EF4444', bg: '#EF444420' };
-  return { color: '#64748B', bg: '#1E2937' };
+  return { color: '#64748B', bg: '#334155' };
 }
 
 function initials(name: string): string {
@@ -66,13 +67,13 @@ function FilterBtn({ active, onClick, label }: { active: boolean; onClick: () =>
     <button
       onClick={onClick}
       style={{
-        padding: '8px 18px',
+        padding: '5px 14px',
         borderRadius: '9999px',
         border: `1px solid ${active ? '#10B981' : '#334155'}`,
-        background: active ? '#10B98120' : 'transparent',
+        background: 'transparent',
         color: active ? '#10B981' : '#64748B',
         fontWeight: 600,
-        fontSize: '14px',
+        fontSize: '13px',
         cursor: 'pointer',
       }}
     >
@@ -191,7 +192,7 @@ function TariffsTab() {
         alignItems: 'center',
         gap: '12px',
         padding: '12px 0',
-        borderBottom: '1px solid #1E2937',
+        borderBottom: '1px solid #334155',
       }}>
         <div>
           <div style={{ fontWeight: 600, fontSize: '14px', color: '#E2E8F0' }}>{label}</div>
@@ -222,7 +223,7 @@ function TariffsTab() {
       </div>
 
       {/* В черте Брянска */}
-      <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', marginBottom: '12px' }}>
+      <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', marginBottom: '12px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
           <Truck size={16} color="#10B981" />
           <div style={{ fontWeight: 700, fontSize: '15px', color: '#E2E8F0' }}>В черте Брянска</div>
@@ -237,7 +238,7 @@ function TariffsTab() {
       </div>
 
       {/* За городом */}
-      <div style={{ background: '#131C2B', borderRadius: '16px', padding: '16px', marginBottom: '16px' }}>
+      <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', marginBottom: '16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
           <MapPin size={16} color="#3B82F6" />
           <div style={{ fontWeight: 700, fontSize: '15px', color: '#E2E8F0' }}>За пределами Брянска</div>
@@ -323,15 +324,21 @@ export default function MobileMixersPage() {
   const [form, setForm] = useState<FormData>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [activeTrips, setActiveTrips] = useState<any[]>([]);
+  const [showTripSheet, setShowTripSheet] = useState(false);
 
-  useBodyScrollLock(!!sheet);
+  useBodyScrollLock(!!sheet || showTripSheet);
 
   // ── Fetch mixers ────────────────────────────────────────────────────────────
   const fetchMixers = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/adminCifra/mixers');
-      if (res.ok) setMixers(await res.json());
+      const [mixersRes, tripsRes] = await Promise.all([
+        fetch('/api/adminCifra/mixers'),
+        fetch('/api/adminCifra/active-mixers'),
+      ]);
+      if (mixersRes.ok) setMixers(await mixersRes.json());
+      if (tripsRes.ok) setActiveTrips(await tripsRes.json());
     } catch (e) {
       console.error('Ошибка загрузки миксеров:', e);
     } finally {
@@ -431,9 +438,37 @@ export default function MobileMixersPage() {
   // ── Filtered list ───────────────────────────────────────────────────────────
   const filtered = mixers.filter(m => filter === 'all' || m.type === filter);
 
+  // ── Активные рейсы сегодня — данные из order_mixers ─────────────────────────
+  // activeTrips: [{ number, status, volume, time, ... }] из /api/adminCifra/active-mixers
+  // Для каждого рейса находим карточку миксера чтобы показать имя водителя
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayActiveTrips = activeTrips.filter((t: any) => {
+    const d = t.deliveryDate || t.delivery_date || '';
+    return String(d).slice(0, 10) === todayStr;
+  });
+
+  // Обогащаем каждый рейс данными из mixers (имя водителя, id)
+  const enrichedTrips = todayActiveTrips.map((trip: any) => {
+    const mixer = mixers.find(m => m.number === trip.number);
+    return { ...trip, driver: mixer?.driver || '', mixerId: mixer?.id };
+  });
+
+  const PROBLEM_STATUS = 'Проблема';
+  const activeInTrip  = enrichedTrips.filter((t: any) => t.status !== PROBLEM_STATUS);
+  const problemTrips  = enrichedTrips.filter((t: any) => t.status === PROBLEM_STATUS);
+
+  // Убираем дубликаты — один миксер может иметь несколько рейсов за день,
+  // в виджете показываем только последний (activeTrips уже sorted desc)
+  const uniqueActive = Array.from(
+    new Map(activeInTrip.map((t: any) => [t.number, t])).values()
+  );
+  const uniqueProblem = Array.from(
+    new Map(problemTrips.map((t: any) => [t.number, t])).values()
+  );
+
   // ─── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div style={{ minHeight: '100vh', paddingBottom: '100px', background: '#0D1520' }}>
+    <div style={{ minHeight: '100vh', paddingBottom: '100px', background: '#162032' }}>
 
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 16px 0' }}>
@@ -479,6 +514,88 @@ export default function MobileMixersPage() {
       {/* ══════════════ TAB: FLEET ══════════════ */}
       {tab === 'fleet' && (
         <>
+          {/* ── Виджет «В рейсе сегодня» — компактная сводка ── */}
+          {!loading && enrichedTrips.length > 0 && (() => {
+            const statuses = ['В пути', 'Загрузка', 'На объекте', 'Проблема'] as const;
+            const allUnique = Array.from(new Map(enrichedTrips.map((t: any) => [t.number, t])).values());
+            const countByStatus = (s: string) => allUnique.filter((t: any) => t.status === s).length;
+            const totalActive = allUnique.length;
+            const ownCount = allUnique.filter((t: any) => {
+              const mx = mixers.find(m => m.number === (t as any).number);
+              return mx?.type === 'own';
+            }).length;
+            const rentedCount = totalActive - ownCount;
+
+            const statCells = [
+              { label: 'В пути',      color: '#3B82F6', count: countByStatus('В пути') },
+              { label: 'Загрузка',    color: '#FACC15', count: countByStatus('Загрузка') },
+              { label: 'На объекте',  color: '#10B981', count: countByStatus('На объекте') },
+              { label: 'Проблема',    color: '#EF4444', count: countByStatus('Проблема') },
+            ].filter(s => s.count > 0);
+
+            return (
+              <div style={{ padding: '14px 16px 0' }}>
+                <button
+                  onClick={() => setShowTripSheet(true)}
+                  style={{
+                    width: '100%',
+                    background: '#1E2D40',
+                    borderRadius: '14px',
+                    padding: '12px 14px',
+                    border: '1px solid #334155',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  {/* Заголовок */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{
+                        width: '8px', height: '8px', borderRadius: '50%', background: '#10B981',
+                        boxShadow: '0 0 6px rgba(16,185,129,0.8)',
+                        animation: 'pulse 2s infinite', flexShrink: 0,
+                      }} />
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: '#E2E8F0' }}>В рейсе сегодня</span>
+                      <span style={{
+                        padding: '1px 8px', borderRadius: '9999px', fontSize: '12px', fontWeight: 700,
+                        background: '#10B98120', color: '#10B981',
+                      }}>{totalActive}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '11px', color: '#64748B' }}>
+                        {ownCount > 0 && `${ownCount} св.`}{ownCount > 0 && rentedCount > 0 && ' · '}{rentedCount > 0 && `${rentedCount} наём.`}
+                      </span>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
+                    </div>
+                  </div>
+
+                  {/* Статусные ячейки */}
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {statCells.map(cell => (
+                      <div key={cell.label} style={{
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        padding: '5px 10px',
+                        borderRadius: '8px',
+                        background: `${cell.color}12`,
+                        border: `1px solid ${cell.color}30`,
+                      }}>
+                        <div style={{
+                          width: '6px', height: '6px', borderRadius: '50%',
+                          background: cell.color, flexShrink: 0,
+                          boxShadow: cell.label !== 'Проблема' ? `0 0 4px ${cell.color}` : undefined,
+                        }} />
+                        <span style={{ fontSize: '12px', fontWeight: 700, color: cell.color }}>{cell.count}</span>
+                        <span style={{ fontSize: '11px', color: '#94A3B8' }}>{cell.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </button>
+              </div>
+            );
+          })()}
+
           {/* Filters */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '14px 16px' }}>
             <FilterBtn active={filter === 'all'}    onClick={() => setFilter('all')}    label="Все" />
@@ -499,82 +616,100 @@ export default function MobileMixersPage() {
               </div>
             )}
             {filtered.map(mixer => {
-              const sc = statusColor(mixer.status);
               const isOwn = mixer.type === 'own';
+              // Берём актуальный статус из активного рейса (если есть)
+              const activeTrip = enrichedTrips.find((t: any) => t.number === mixer.number);
+              const tripStatus = activeTrip?.status || null;
+              const sc = tripStatus ? statusColor(tripStatus) : { color: '#334155', bg: 'transparent' };
+              const hasActiveTrip = !!tripStatus;
               return (
                 <div
                   key={mixer.id}
                   onClick={() => openCard(mixer)}
                   style={{
-                    background: '#131C2B',
-                    borderRadius: '16px',
-                    padding: '16px',
+                    background: '#25334A',
+                    borderRadius: '14px',
+                    border: `1px solid ${hasActiveTrip ? sc.color + '50' : '#334155'}`,
                     cursor: 'pointer',
-                    border: '1px solid #1E2937',
+                    overflow: 'hidden',
+                    display: 'flex',
                   }}
                 >
-                  {/* Row 1: номер + тип + статус */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>{mixer.number}</div>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                      <span style={{
-                        padding: '4px 10px', borderRadius: '9999px', fontSize: '12px', fontWeight: 600,
-                        background: isOwn ? '#10B98120' : '#FACC1520',
-                        color: isOwn ? '#10B981' : '#FACC15',
-                      }}>
-                        {isOwn ? 'Свой' : 'Наёмный'}
-                      </span>
-                      <span style={{
-                        padding: '4px 10px', borderRadius: '9999px', fontSize: '12px', fontWeight: 600,
-                        background: sc.bg, color: sc.color,
-                      }}>
-                        {mixer.status}
-                      </span>
-                    </div>
-                  </div>
+                  {/* Цветной индикатор слева */}
+                  <div style={{
+                    width: '4px',
+                    flexShrink: 0,
+                    background: hasActiveTrip ? sc.color : '#334155',
+                  }} />
 
-                  {/* Row 2: водитель + объём */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div>
-                      {/* Аватар + имя */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <div style={{
-                          width: '36px', height: '36px', borderRadius: '9999px',
-                          background: '#25334A', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: '13px', fontWeight: 700, color: '#94A3B8', flexShrink: 0,
+                  {/* Основное содержимое */}
+                  <div style={{ flex: 1, padding: '11px 12px', minWidth: 0 }}>
+                    {/* Строка 1: номер + модель | тип + объём */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                        <span style={{ fontSize: '16px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
+                          {mixer.number}
+                        </span>
+                        <span style={{ fontSize: '12px', color: '#64748B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {mixer.model || ''}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                        <span style={{
+                          fontSize: '11px', fontWeight: 600,
+                          color: isOwn ? '#10B981' : '#FACC15',
                         }}>
-                          {initials(mixer.driver)}
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: '14px', color: '#CBD5E1' }}>{mixer.driver}</div>
-                          <div style={{ fontSize: '12px', color: '#475569', marginTop: '1px' }}>{mixer.model || '—'}</div>
-                        </div>
+                          {isOwn ? 'свой' : 'наём.'}
+                        </span>
+                        <span style={{ fontSize: '16px', fontWeight: 700, color: '#CBD5E1' }}>
+                          {mixer.volume}<span style={{ fontSize: '11px', color: '#64748B', fontWeight: 400 }}> м³</span>
+                        </span>
                       </div>
                     </div>
 
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '24px', fontWeight: 700, color: '#E2E8F0', lineHeight: 1 }}>
-                        {mixer.volume}
-                        <span style={{ fontSize: '13px', color: '#64748B', fontWeight: 400 }}> м³</span>
+                    {/* Строка 2: водитель | статус рейса | кнопки */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <span style={{ fontSize: '13px', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                        {mixer.driver}
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                        {hasActiveTrip && (
+                          <span style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '4px',
+                            fontSize: '11px', fontWeight: 600, color: sc.color,
+                          }}>
+                            <span style={{
+                              width: '6px', height: '6px', borderRadius: '50%',
+                              background: sc.color, display: 'inline-block',
+                            }} />
+                            {tripStatus}
+                          </span>
+                        )}
+                        <a
+                          href={`tel:${mixer.phone}`}
+                          onClick={e => e.stopPropagation()}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '3px',
+                            padding: '3px 8px', borderRadius: '9999px',
+                            background: '#10B98115', color: '#10B981',
+                            fontSize: '11px', fontWeight: 600, textDecoration: 'none',
+                          }}
+                        >
+                          <Phone size={10} />
+                        </a>
+                        <Link
+                          href={`/mobile/mixers/driver-view/${mixer.id}`}
+                          onClick={e => e.stopPropagation()}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '3px',
+                            padding: '3px 8px', borderRadius: '9999px',
+                            background: '#60A5FA15', color: '#60A5FA',
+                            fontSize: '11px', fontWeight: 600, textDecoration: 'none',
+                          }}
+                        >
+                          <ExternalLink size={10} />
+                        </Link>
                       </div>
-                      {/* Кнопка звонка — stopPropagation чтобы не открывать шторку */}
-                      <a
-                        href={`tel:${mixer.phone}`}
-                        onClick={e => e.stopPropagation()}
-                        style={{
-                          display: 'inline-flex', alignItems: 'center', gap: '4px',
-                          marginTop: '4px',
-                          padding: '4px 10px',
-                          borderRadius: '9999px',
-                          background: '#10B98115',
-                          color: '#10B981',
-                          fontSize: '12px',
-                          fontWeight: 600,
-                          textDecoration: 'none',
-                        }}
-                      >
-                        <Phone size={11} /> Позвонить
-                      </a>
                     </div>
                   </div>
                 </div>
@@ -628,7 +763,7 @@ export default function MobileMixersPage() {
           <div style={{
             position: 'fixed', bottom: '74px', left: 0, right: 0,
             zIndex: 10001,
-            background: '#131C2B',
+            background: '#25334A',
             borderRadius: '20px 20px 0 0',
             maxHeight: 'calc(80vh - 74px)',
             overflow: 'hidden',
@@ -690,7 +825,7 @@ export default function MobileMixersPage() {
           <div style={{
             position: 'fixed', bottom: '74px', left: 0, right: 0,
             zIndex: 10001,
-            background: '#131C2B',
+            background: '#25334A',
             borderRadius: '20px 20px 0 0',
             maxHeight: 'calc(90vh - 74px)',
             display: 'flex', flexDirection: 'column',
@@ -751,7 +886,7 @@ export default function MobileMixersPage() {
                   hint="Время сверх нормы считается простоем водителя"
                 />
               ) : (
-                <div style={{ padding: '12px 14px', background: '#1E2937', borderRadius: '10px', color: '#475569', fontSize: '13px', marginBottom: '16px' }}>
+                <div style={{ padding: '12px 14px', background: '#334155', borderRadius: '10px', color: '#475569', fontSize: '13px', marginBottom: '16px' }}>
                   Норма разгрузки для своих — {OWN_UNLOAD_ALLOWANCE_MIN} мин (общая настройка)
                 </div>
               )}
@@ -781,7 +916,7 @@ export default function MobileMixersPage() {
               {sheet === 'edit' && selected && (
                 <div style={{ marginTop: '16px' }}>
                   {confirmDelete ? (
-                    <div style={{ background: '#1E2937', borderRadius: '12px', padding: '14px' }}>
+                    <div style={{ background: '#334155', borderRadius: '12px', padding: '14px' }}>
                       <div style={{ color: '#EF4444', fontWeight: 600, fontSize: '14px', marginBottom: '10px', textAlign: 'center' }}>
                         Удалить миксер «{selected.number}»?
                       </div>
@@ -823,6 +958,131 @@ export default function MobileMixersPage() {
           </div>
         </>
       )}
+
+      {/* ══════════════ BOTTOM SHEET: В РЕЙСЕ СЕГОДНЯ ══════════════ */}
+      {showTripSheet && (() => {
+        const allUnique: any[] = Array.from(
+          new Map(enrichedTrips.map((t: any) => [t.number, t])).values()
+        );
+        const order = ['Проблема', 'Загрузка', 'В пути', 'На объекте'];
+        const sorted = [...allUnique].sort((a, b) => {
+          const ai = order.indexOf(a.status);
+          const bi = order.indexOf(b.status);
+          return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+        });
+
+        return (
+          <>
+            <div
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }}
+              onClick={() => setShowTripSheet(false)}
+            />
+            <div style={{
+              position: 'fixed', bottom: '74px', left: 0, right: 0,
+              zIndex: 10001,
+              background: '#25334A',
+              borderRadius: '20px 20px 0 0',
+              maxHeight: 'calc(85vh - 74px)',
+              display: 'flex', flexDirection: 'column',
+              overflow: 'hidden',
+            }}>
+              {/* Handle */}
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0', flexShrink: 0 }}>
+                <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
+              </div>
+              {/* Header */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px 10px', flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{
+                    width: '8px', height: '8px', borderRadius: '50%', background: '#10B981',
+                    boxShadow: '0 0 6px rgba(16,185,129,0.8)', animation: 'pulse 2s infinite',
+                  }} />
+                  <span style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0' }}>В рейсе сегодня</span>
+                  <span style={{
+                    padding: '1px 8px', borderRadius: '9999px', fontSize: '12px', fontWeight: 700,
+                    background: '#10B98120', color: '#10B981',
+                  }}>{sorted.length}</span>
+                </div>
+                <button onClick={() => setShowTripSheet(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+                  <X size={20} color="#64748B" />
+                </button>
+              </div>
+
+              {/* List */}
+              <div style={{ overflowY: 'auto', flex: 1, padding: '0 16px 20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {sorted.map((trip: any) => {
+                  const sc = statusColor(trip.status);
+                  const mx = mixers.find(m => m.number === trip.number);
+                  const isOwn = mx?.type === 'own';
+                  return (
+                    <button
+                      key={trip.number}
+                      onClick={() => { if (mx) { openCard(mx); setShowTripSheet(false); } }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '12px',
+                        padding: '12px 14px',
+                        background: '#1E2D40',
+                        borderRadius: '12px',
+                        border: `1px solid ${sc.color}40`,
+                        cursor: mx ? 'pointer' : 'default',
+                        textAlign: 'left',
+                        width: '100%',
+                      }}
+                    >
+                      {/* Цветная полоска слева */}
+                      <div style={{
+                        width: '3px', alignSelf: 'stretch', borderRadius: '9999px',
+                        background: sc.color, flexShrink: 0,
+                      }} />
+
+                      {/* Инициалы */}
+                      <div style={{
+                        width: '36px', height: '36px', borderRadius: '9999px', flexShrink: 0,
+                        background: `${sc.color}20`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '13px', fontWeight: 700, color: sc.color,
+                      }}>
+                        {initials(trip.driver || mx?.driver || '')}
+                      </div>
+
+                      {/* Основная инфо */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
+                          <span style={{ fontSize: '15px', fontWeight: 700, color: '#E2E8F0' }}>{trip.number}</span>
+                          <span style={{
+                            fontSize: '11px', fontWeight: 600, padding: '1px 7px', borderRadius: '9999px',
+                            background: isOwn ? '#10B98118' : '#FACC1518',
+                            color: isOwn ? '#10B981' : '#FACC15',
+                          }}>
+                            {isOwn ? 'Свой' : 'Наёмный'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {trip.driver || mx?.driver || '—'}
+                        </div>
+                      </div>
+
+                      {/* Статус + объём */}
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', justifyContent: 'flex-end', marginBottom: '3px' }}>
+                          <div style={{
+                            width: '6px', height: '6px', borderRadius: '50%',
+                            background: sc.color, boxShadow: `0 0 4px ${sc.color}`,
+                          }} />
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: sc.color }}>{trip.status}</span>
+                        </div>
+                        {trip.volume > 0 && (
+                          <span style={{ fontSize: '11px', color: '#64748B' }}>{trip.volume} м³</span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 }
@@ -833,7 +1093,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div style={{
       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      padding: '12px 0', borderBottom: '1px solid #1E2937',
+      padding: '12px 0', borderBottom: '1px solid #334155',
     }}>
       <span style={{ color: '#475569', fontSize: '13px' }}>{label}</span>
       <span style={{ color: '#CBD5E1', fontSize: '14px', fontWeight: 600 }}>{value}</span>

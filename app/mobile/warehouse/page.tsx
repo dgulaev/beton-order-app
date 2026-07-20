@@ -14,7 +14,7 @@ import {
 
 function KpiCard({ label, value, unit, color }: { label: string; value: number; unit: string; color: string }) {
   return (
-    <div style={{ background: '#1E2937', borderRadius: '16px', padding: '16px', flex: 1, minWidth: 0 }}>
+    <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', border: '1px solid #334155', flex: 1, minWidth: 0 }}>
       <div style={{ fontSize: '12px', color: '#94A3B8', marginBottom: '6px', lineHeight: 1.3 }}>{label}</div>
       <div style={{ fontSize: '26px', fontWeight: '700', color, lineHeight: 1 }}>
         {value} <span style={{ fontSize: '14px', color: '#64748B', fontWeight: 400 }}>{unit}</span>
@@ -63,7 +63,7 @@ function InputModal({ title, unit, onConfirm, onClose }: InputModalProps) {
       onClick={onClose}
     >
       <div
-        style={{ background: '#1E2937', borderRadius: '20px', padding: '28px', width: '100%', maxWidth: '380px' }}
+        style={{ background: '#334155', borderRadius: '20px', padding: '28px', width: '100%', maxWidth: '380px' }}
         onClick={e => e.stopPropagation()}
       >
         <div style={{ fontSize: '17px', fontWeight: '600', color: '#fff', marginBottom: '16px' }}>{title}</div>
@@ -321,14 +321,14 @@ export default function MobileWarehousePage() {
 
   if (loading) {
     return (
-      <div style={{ padding: '16px', paddingBottom: '100px', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ padding: '16px', paddingBottom: '100px', minHeight: '100vh', background: '#162032', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ color: '#64748B', fontSize: '16px' }}>Загрузка...</div>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: '16px', paddingBottom: '100px', minHeight: '100vh' }}>
+    <div style={{ padding: '16px', paddingBottom: '100px', minHeight: '100vh', background: '#162032' }}>
 
       {/* ШАПКА */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
@@ -354,7 +354,7 @@ export default function MobileWarehousePage() {
           const negative = current < 0;
 
           return (
-            <div key={silo.silo_id} style={{ background: '#1E2937', borderRadius: '16px', padding: '16px' }}>
+            <div key={silo.silo_id} style={{ background: '#25334A', borderRadius: '16px', padding: '16px', border: '1px solid #334155' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
                 <span style={{ fontWeight: '600', fontSize: '16px', color: '#E2E8F0' }}>{silo.name}</span>
                 <span style={{ fontSize: '18px', fontWeight: '700', color: negative ? '#F87171' : low ? '#FBBF24' : '#34D399' }}>
@@ -386,7 +386,7 @@ export default function MobileWarehousePage() {
           const barColor = idx === 0 ? '#8B5CF6' : '#F59E0B';
 
           return (
-            <div key={add.id || idx} style={{ background: '#1E2937', borderRadius: '16px', padding: '16px' }}>
+            <div key={add.id || idx} style={{ background: '#25334A', borderRadius: '16px', padding: '16px', border: '1px solid #334155' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
                 <span style={{ fontWeight: '600', fontSize: '16px', color: '#E2E8F0' }}>{add.name}</span>
                 <span style={{ fontSize: '18px', fontWeight: '700', color: low ? '#FBBF24' : barColor }}>
@@ -415,7 +415,7 @@ export default function MobileWarehousePage() {
             {fbsBlocks.map((block: any) => {
               const qty = Number(block.current || 0);
               return (
-                <div key={block.id} style={{ background: '#1E2937', borderRadius: '16px', padding: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div key={block.id} style={{ background: '#25334A', borderRadius: '16px', padding: '16px', border: '1px solid #334155', display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: '600', fontSize: '15px', color: '#E2E8F0' }}>{block.name}</div>
                     {block.dimensions && <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>{block.dimensions}</div>}

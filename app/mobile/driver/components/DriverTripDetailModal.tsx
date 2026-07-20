@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import { MapPin, Package, Clock, Phone, Navigation } from 'lucide-react';
 import { DriverTrip } from '../driverClient';
 import RouteButton from './RouteButton';
 
@@ -9,9 +10,18 @@ interface Props {
   onClose: () => void;
 }
 
-function formatDateTime(iso: string | null): string {
+const STATUS_STYLE: Record<string, { label: string; color: string; bg: string }> = {
+  'Загрузка':   { label: 'Загрузка на БСУ', color: '#FACC15', bg: '#FACC1520' },
+  'В пути':     { label: 'В пути',           color: '#3B82F6', bg: '#3B82F620' },
+  'На объекте': { label: 'На объекте',        color: '#10B981', bg: '#10B98120' },
+  'Разгружен':  { label: 'Разгружен',         color: '#94A3B8', bg: '#33415520' },
+  'Возврат':    { label: 'Возврат',           color: '#94A3B8', bg: '#33415520' },
+  'Проблема':   { label: 'Проблема',          color: '#EF4444', bg: '#EF444420' },
+};
+
+function formatTime(iso: string | null): string {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 
 function formatMinutesOnSite(trip: DriverTrip): string | null {
@@ -19,14 +29,29 @@ function formatMinutesOnSite(trip: DriverTrip): string | null {
   const end = trip.unloadedAt ? new Date(trip.unloadedAt) : new Date();
   const minutes = Math.round((end.getTime() - new Date(trip.onSiteAt).getTime()) / 60000);
   if (minutes < 0) return null;
-  return `${minutes} мин`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return h > 0 ? `${h}ч ${m}м` : `${m} мин`;
+}
+
+function Row({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+      padding: '12px 0', borderBottom: '1px solid rgba(255,255,255,0.05)',
+    }}>
+      <span style={{ fontSize: '13px', color: '#64748B', flexShrink: 0, paddingRight: '12px' }}>{label}</span>
+      <span style={{ fontSize: '13px', color: valueColor || '#CBD5E1', fontWeight: 600, textAlign: 'right' }}>{value}</span>
+    </div>
+  );
 }
 
 export default function DriverTripDetailModal({ trip, onClose }: Props) {
+  const ss = STATUS_STYLE[trip.status] || { label: trip.status, color: '#64748B', bg: '#1E293720' };
   const onSiteDuration = formatMinutesOnSite(trip);
   const downtime = trip.downtimeMinutes;
 
-  // Блокируем скролл body пока модалка открыта (iOS Safari игнорирует overflow:hidden на body)
+  // Блокируем скролл body пока шторка открыта
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -40,94 +65,144 @@ export default function DriverTripDetailModal({ trip, onClose }: Props) {
   }, []);
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.75)',
-        zIndex: 100000,
-        display: 'flex',
-        alignItems: 'flex-start',
-        justifyContent: 'center',
-        touchAction: 'none',
-      }}
-      onClick={onClose}
-      onTouchMove={(e) => e.target === e.currentTarget && e.preventDefault()}
-    >
+    <>
+      {/* Затемнение */}
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed', inset: 0,
+          background: 'rgba(0,0,0,0.6)',
+          zIndex: 10000,
+          touchAction: 'none',
+        }}
+        onTouchMove={e => e.preventDefault()}
+      />
+
+      {/* Шторка снизу */}
       <div
         style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0,
+          zIndex: 10001,
           background: '#1E2937',
-          width: '100%',
-          maxWidth: '560px',
-          boxSizing: 'border-box',
-          borderRadius: '0 0 20px 20px',
-          paddingTop: 'max(24px, env(safe-area-inset-top, 24px))',
-          paddingLeft: '20px',
-          paddingRight: '20px',
-          paddingBottom: '32px',
+          borderRadius: '20px 20px 0 0',
+          paddingBottom: 'max(32px, env(safe-area-inset-bottom, 32px))',
           maxHeight: '88dvh',
           overflowY: 'auto',
           WebkitOverflowScrolling: 'touch',
           overscrollBehavior: 'contain',
-          touchAction: 'pan-y',
         }}
-        onClick={(e) => e.stopPropagation()}
-        onTouchMove={(e) => e.stopPropagation()}
+        onClick={e => e.stopPropagation()}
+        onTouchMove={e => e.stopPropagation()}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h2 style={{ margin: 0, fontSize: '20px', color: '#fff' }}>Рейс — заявка #{trip.orderId}</h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '30px', color: '#94A3B8', lineHeight: 1 }}>
-            ×
+        {/* Ручка */}
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 0 4px' }}>
+          <div style={{ width: '36px', height: '4px', borderRadius: '9999px', background: '#334155' }} />
+        </div>
+
+        {/* Шапка */}
+        <div style={{ padding: '12px 20px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: '11px', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '4px' }}>
+              Заявка #{trip.orderId}
+            </div>
+            <span style={{
+              display: 'inline-block',
+              padding: '4px 12px', borderRadius: '9999px',
+              fontSize: '13px', fontWeight: 700,
+              background: ss.bg, color: ss.color,
+            }}>
+              {ss.label}
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              width: '32px', height: '32px', borderRadius: '9999px',
+              background: '#263040', border: 'none', cursor: 'pointer',
+              color: '#64748B', fontSize: '18px', display: 'flex',
+              alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            ✕
           </button>
         </div>
 
-        <div style={{ background: '#25334A', borderRadius: '16px', padding: '18px', marginBottom: '16px', color: '#fff' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 12px', fontSize: '15px' }}>
-            <div style={{ color: '#94A3B8' }}>Объём миксера</div>
-            <div style={{ fontWeight: '700', color: '#10B981' }}>{trip.volume} м³</div>
+        {/* Основные данные */}
+        <div style={{ padding: '0 20px 20px' }}>
 
-            <div style={{ color: '#94A3B8' }}>Марка бетона</div>
-            <div style={{ fontWeight: '600', color: '#60A5FA' }}>{trip.order?.grade || '—'}</div>
-
-            <div style={{ color: '#94A3B8' }}>Дата доставки</div>
-            <div style={{ fontWeight: '600' }}>{trip.order?.deliveryDate || '—'}</div>
-
-            <div style={{ color: '#94A3B8' }}>Время доставки</div>
-            <div style={{ fontWeight: '600' }}>{trip.time || trip.order?.deliveryTime || '—'}</div>
-
-            <div style={{ color: '#94A3B8' }}>Адрес</div>
-            <div style={{ fontWeight: '600', lineHeight: 1.35 }}>{trip.order?.address || '—'}</div>
-
-            <div style={{ color: '#94A3B8' }}>Статус рейса</div>
-            <div style={{ fontWeight: '600' }}>{trip.status}</div>
+          {/* Ключевые показатели */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+            <div style={{ background: '#263040', borderRadius: '14px', padding: '14px' }}>
+              <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '4px' }}>Объём</div>
+              <div style={{ fontSize: '22px', fontWeight: 700, color: '#10B981', lineHeight: 1 }}>
+                {trip.volume}<span style={{ fontSize: '13px', color: '#64748B', fontWeight: 400 }}> м³</span>
+              </div>
+            </div>
+            <div style={{ background: '#263040', borderRadius: '14px', padding: '14px' }}>
+              <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '4px' }}>Марка</div>
+              <div style={{ fontSize: '22px', fontWeight: 700, color: '#60A5FA', lineHeight: 1 }}>
+                {trip.order?.grade || '—'}
+              </div>
+            </div>
           </div>
 
+          {/* Строки с деталями */}
+          <div style={{ background: '#263040', borderRadius: '14px', padding: '0 16px', marginBottom: '12px' }}>
+            <Row label="Время рейса" value={trip.time || trip.order?.deliveryTime || '—'} />
+            <Row label="Дата"
+              value={trip.order?.deliveryDate
+                ? new Date(trip.order.deliveryDate).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long' })
+                : '—'} />
+            {trip.order?.clientName && (
+              <Row label="Клиент" value={trip.order.clientName} />
+            )}
+            {trip.order?.address && (
+              <Row label="Адрес" value={trip.order.address} />
+            )}
+            {trip.order?.comment && (
+              <Row label="Комментарий" value={trip.order.comment} valueColor="#FDE68A" />
+            )}
+          </div>
+
+          {/* Время на объекте */}
+          <div style={{ background: '#263040', borderRadius: '14px', padding: '0 16px', marginBottom: '12px' }}>
+            <Row label="Начало загрузки" value={formatTime(trip.loadingStartedAt)} />
+            <Row label="Прибытие на объект" value={formatTime(trip.onSiteAt)} />
+            <Row label="Окончание разгрузки" value={formatTime(trip.unloadedAt)} />
+            {onSiteDuration && (
+              <Row label="Время на объекте" value={onSiteDuration} />
+            )}
+            <Row
+              label="Простой"
+              value={downtime !== null && downtime !== undefined ? `${downtime} мин` : '—'}
+              valueColor={Number(downtime) > 0 ? '#F97316' : '#10B981'}
+            />
+          </div>
+
+          {/* Маршрут */}
           {trip.order?.address && (
-            <div style={{ marginTop: '16px' }}>
+            <div style={{ marginBottom: '12px' }}>
               <RouteButton address={trip.order.address} />
             </div>
           )}
-        </div>
 
-        <div style={{ background: '#25334A', borderRadius: '16px', padding: '18px', color: '#fff' }}>
-          <h3 style={{ margin: '0 0 14px', fontSize: '16px', color: '#94A3B8' }}>Время на объекте</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px 12px', fontSize: '15px' }}>
-            <div style={{ color: '#94A3B8' }}>Прибытие на объект</div>
-            <div style={{ fontWeight: '600' }}>{formatDateTime(trip.onSiteAt)}</div>
-
-            <div style={{ color: '#94A3B8' }}>Окончание разгрузки</div>
-            <div style={{ fontWeight: '600' }}>{formatDateTime(trip.unloadedAt)}</div>
-
-            <div style={{ color: '#94A3B8' }}>Время на объекте</div>
-            <div style={{ fontWeight: '600' }}>{onSiteDuration || '—'}</div>
-
-            <div style={{ color: '#94A3B8' }}>Простой</div>
-            <div style={{ fontWeight: '700', color: Number(downtime) > 0 ? '#F97316' : '#10B981' }}>
-              {downtime !== null && downtime !== undefined ? `${downtime} мин` : '—'}
-            </div>
-          </div>
+          {/* Телефон клиента */}
+          {trip.order?.phone && (
+            <a
+              href={`tel:${trip.order.phone.replace(/\D/g, '').replace(/^8/, '+7')}`}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                padding: '13px', borderRadius: '14px',
+                border: '1px solid rgba(16,185,129,0.3)',
+                background: 'transparent', color: '#10B981',
+                fontSize: '15px', fontWeight: 700, textDecoration: 'none',
+              }}
+            >
+              <Phone size={16} /> Позвонить клиенту
+            </a>
+          )}
         </div>
       </div>
-    </div>
+    </>
   );
 }

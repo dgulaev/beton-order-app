@@ -190,7 +190,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
 
   return (
     <>
-      <div style={{ padding: '16px', paddingBottom: '100px' }}>
+      <div style={{ padding: '16px', paddingBottom: '100px', minHeight: '100vh', background: '#162032' }}>
         
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
@@ -235,7 +235,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   {/* Выполнение (Бетон) */}
   <div style={{ 
     flex: 1, 
-    background: '#1E2937', 
+    background: '#334155', 
     borderRadius: '16px', 
     padding: '16px 18px' 
   }}>
@@ -251,7 +251,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   {/* Цемент */}
   <div style={{ 
     flex: 1, 
-    background: '#1E2937', 
+    background: '#334155', 
     borderRadius: '16px', 
     padding: '16px 18px' 
   }}>
@@ -286,7 +286,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
 
           return (
             <div style={{
-              background: '#131C2B',
+              background: '#25334A',
               borderRadius: '18px',
               padding: '14px 16px',
               marginBottom: '16px',
@@ -297,7 +297,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
               {/* Стрелка влево */}
               <button
                 onClick={() => navBtn('prev')}
-                style={{ background: '#1E2937', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+                style={{ background: '#334155', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
               >
                 <ChevronLeft size={18} color="#64748B" />
               </button>
@@ -335,7 +335,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
               {/* Стрелка вправо */}
               <button
                 onClick={() => navBtn('next')}
-                style={{ background: '#1E2937', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+                style={{ background: '#334155', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
               >
                 <ChevronRight size={18} color="#64748B" />
               </button>
