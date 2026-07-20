@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { X, MapPin, Navigation, ChevronDown, Clock } from 'lucide-react';
+import { X, MapPin, Navigation, ChevronDown, Clock, Bot, CheckCircle, XCircle, Truck, RefreshCw, User, Weight, AlertTriangle, PackageCheck } from 'lucide-react';
 import { Order } from '../../adminCifra/hooks/useCalendarOrders';
 import { useYandexRouteHref } from '@/lib/yandexRoute';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
@@ -283,25 +283,108 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
           {/* ── ИСТОРИЯ ───────────────────────────── */}
           {history.length > 0 && (
             <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
-              <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
+              <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '14px' }}>
                 История изменений
               </div>
-              <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
-              {history.map((entry: any, i: number) => {
-                const time = new Date(entry.created_at).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
-                let action = (entry.action || '')
-                  .replace('processing', 'В работе').replace('completed', 'Выполнена')
-                  .replace('new', 'Новая').replace('cancelled', 'Отменена');
-                return (
-                  <div key={i} style={{ padding: '10px 0', borderBottom: i < history.length - 1 ? '1px solid #334155' : 'none' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
-                      <span style={{ color: '#CBD5E1', fontSize: '13px', fontWeight: 600 }}>{entry.user_name || 'Сотрудник'}</span>
-                      <span style={{ color: '#334155', fontSize: '12px' }}>{time}</span>
+              <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
+                {history.map((entry: any, i: number) => {
+                  const d = new Date(entry.created_at);
+                  const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+                  const timeStr = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+                  const isLast  = i === history.length - 1;
+
+                  let action = (entry.action || '')
+                    .replace(/\bprocessing\b/g, 'В работе')
+                    .replace(/\bcompleted\b/g,  'Выполнена')
+                    .replace(/\bnew\b/g,         'Новая')
+                    .replace(/\bcancelled\b/g,   'Отменена');
+
+                  // Подбираем иконку и цвет по тексту события
+                  const isSystem  = (entry.user_name || '') === 'Система';
+                  const hasMixer  = action.includes('миксер') || action.includes('Миксер');
+                  const hasDone   = action.includes('Выполнена') || action.includes('Разгружен');
+                  const hasCancel = action.includes('Отменена');
+                  const hasVolume = action.includes('объём') || action.includes('объем');
+                  const hasAddr   = action.includes('адрес') || action.includes('Адрес');
+                  const hasProb   = action.includes('Проблема') || action.includes('проблем');
+
+                  let iconEl: React.ReactNode;
+                  let iconColor: string;
+
+                  if (isSystem) {
+                    iconEl = <Bot size={13} />;
+                    iconColor = '#A78BFA';
+                  } else if (hasProb) {
+                    iconEl = <AlertTriangle size={13} />;
+                    iconColor = '#EF4444';
+                  } else if (hasCancel) {
+                    iconEl = <XCircle size={13} />;
+                    iconColor = '#EF4444';
+                  } else if (hasDone) {
+                    iconEl = <PackageCheck size={13} />;
+                    iconColor = '#10B981';
+                  } else if (hasMixer) {
+                    iconEl = <Truck size={13} />;
+                    iconColor = '#60A5FA';
+                  } else if (hasVolume) {
+                    iconEl = <Weight size={13} />;
+                    iconColor = '#FACC15';
+                  } else if (hasAddr) {
+                    iconEl = <MapPin size={13} />;
+                    iconColor = '#FB923C';
+                  } else if (action.includes('статус')) {
+                    iconEl = <RefreshCw size={13} />;
+                    iconColor = '#60A5FA';
+                  } else {
+                    iconEl = <User size={13} />;
+                    iconColor = '#94A3B8';
+                  }
+
+                  return (
+                    <div key={i} style={{ display: 'flex', gap: '10px' }}>
+
+                      {/* Левая колонка: иконка + вертикальная линия */}
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '26px', flexShrink: 0 }}>
+                        <div style={{
+                          width: '26px', height: '26px', borderRadius: '50%',
+                          background: `${iconColor}18`,
+                          border: `1.5px solid ${iconColor}50`,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          color: iconColor, flexShrink: 0, zIndex: 1,
+                        }}>
+                          {iconEl}
+                        </div>
+                        {!isLast && (
+                          <div style={{
+                            width: '1px', flex: 1, minHeight: '12px',
+                            background: '#334155', marginTop: '3px',
+                          }} />
+                        )}
+                      </div>
+
+                      {/* Правая колонка: автор + время + действие */}
+                      <div style={{ flex: 1, paddingBottom: isLast ? 0 : '14px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                          <span style={{ color: '#E2E8F0', fontSize: '13px', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {entry.user_name || 'Сотрудник'}
+                          </span>
+                          <span style={{
+                            color: '#94A3B8', fontSize: '11px', fontWeight: 600,
+                            flexShrink: 0, whiteSpace: 'nowrap',
+                            background: '#162032', padding: '2px 7px',
+                            borderRadius: '6px', border: '1px solid #334155',
+                          }}>
+                            {dateStr} · {timeStr}
+                          </span>
+                        </div>
+                        <div style={{ color: '#64748B', fontSize: '12px', lineHeight: 1.5 }}>
+                          {action}
+                        </div>
+                      </div>
+
                     </div>
-                    <div style={{ color: '#64748B', fontSize: '13px', lineHeight: 1.4 }}>{action}</div>
-                  </div>
-                );
-              })}
+                  );
+                })}
               </div>
             </div>
           )}

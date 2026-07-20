@@ -336,6 +336,12 @@ useEffect(() => {
       .sort((a: any, b: any) => b.delayMinutes - a.delayMinutes);
   }, [todayOrders, activeMixersForDate, selectedDateStr]);
 
+  // Map id → delayMinutes для O(1) поиска при рендере таймлайна
+  const delayedMap = useMemo(
+    () => new Map(kpiDelayedOrders.map((o: any) => [String(o.id), o.delayMinutes as number])),
+    [kpiDelayedOrders]
+  );
+
   // Разбивка свои/наёмные по реестру миксеров
   const { ownActive, rentedActive } = useMemo(() => {
     let own = 0; let rented = 0;
@@ -679,6 +685,15 @@ useEffect(() => {
                     const isCancelled = order.status === 'cancelled';
                     const orderMixers = mixerAssignments.filter((m: any) => String(m.order_id) === String(order.id));
 
+                    // Задержка доставки
+                    const delayMins   = delayedMap.get(String(order.id));
+                    const isDelayed   = !!delayMins && delayMins > 0;
+                    const delayText   = isDelayed
+                      ? delayMins! >= 60
+                        ? `+${Math.floor(delayMins! / 60)}ч ${delayMins! % 60}м`
+                        : `+${delayMins} мин`
+                      : '';
+
                     return (
                       <div
                         key={order.id}
@@ -693,13 +708,13 @@ useEffect(() => {
                         <div
                           onClick={() => setSelectedOrder(order)}
                           style={{
-                            background: '#25334A',
+                            background: isDelayed ? 'rgba(239,68,68,0.07)' : '#25334A',
                             borderRadius: '12px',
                             padding: '10px 12px',
                             marginBottom: '4px',
                             cursor: 'pointer',
-                            border: `1px solid ${isCancelled ? '#334155' : color + '30'}`,
-                            borderLeft: `3px solid ${isCancelled ? '#334155' : color}`,
+                            border: `1px solid ${isDelayed ? '#EF444440' : isCancelled ? '#334155' : color + '30'}`,
+                            borderLeft: `3px solid ${isDelayed ? '#EF4444' : isCancelled ? '#334155' : color}`,
                             opacity: isPast ? 0.5 : 1,
                           }}
                         >
@@ -707,9 +722,20 @@ useEffect(() => {
                             <span style={{ fontSize: '13px', fontWeight: 600, color: '#E2E8F0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                               {order.organization_name || order.full_name || '—'}
                             </span>
-                            <span style={{ fontSize: '10px', fontWeight: 700, flexShrink: 0, color: isCancelled ? '#64748B' : color }}>
-                              {STATUS_LABEL[order.status] || order.status}
-                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                              {isDelayed && (
+                                <span style={{
+                                  fontSize: '10px', fontWeight: 700, color: '#EF4444',
+                                  background: 'rgba(239,68,68,0.15)', padding: '1px 5px',
+                                  borderRadius: '5px', flexShrink: 0,
+                                }}>
+                                  {delayText}
+                                </span>
+                              )}
+                              <span style={{ fontSize: '10px', fontWeight: 700, color: isCancelled ? '#64748B' : color }}>
+                                {STATUS_LABEL[order.status] || order.status}
+                              </span>
+                            </div>
                           </div>
 
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#64748B' }}>
