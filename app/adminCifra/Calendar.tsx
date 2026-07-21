@@ -22,6 +22,8 @@ interface CalendarProps {
   onQuickCreateOrder: (dateStr: string) => void;
   /** Общая функция стилей статуса — та же, что использует весь дашборд */
   getStatusConfig?: (status: string) => StatusConfig;
+  /** Вызывается при переходе в другой месяц — дашборд подгружает данные для него */
+  onViewMonthChange?: (year: number, month: number) => void;
 }
 
 // Корректное склонение русского слова «заказ» по числу (1 заказ, 2 заказа, 5 заказов...)
@@ -106,7 +108,7 @@ const closeIconButtonStyle: React.CSSProperties = {
   transition: 'all 0.2s',
 };
 
-export default function Calendar({ onClose, orders: externalOrders, onSelectOrder, onQuickCreateOrder, getStatusConfig = defaultGetStatusConfig }: CalendarProps) {
+export default function Calendar({ onClose, orders: externalOrders, onSelectOrder, onQuickCreateOrder, getStatusConfig = defaultGetStatusConfig, onViewMonthChange }: CalendarProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   // Сразу выбираем сегодняшний день — тогда заявки в боковой панели видны
   // немедленно при открытии календаря, без обязательного клика по дню.
@@ -166,13 +168,17 @@ export default function Calendar({ onClose, orders: externalOrders, onSelectOrde
   });
 
   const handlePrevMonth = () => {
-    setCurrentDate(new Date(year, month - 1, 1));
+    const d = new Date(year, month - 1, 1);
+    setCurrentDate(d);
     setSelectedDay(null);
+    onViewMonthChange?.(d.getFullYear(), d.getMonth() + 1);
   };
 
   const handleNextMonth = () => {
-    setCurrentDate(new Date(year, month + 1, 1));
+    const d = new Date(year, month + 1, 1);
+    setCurrentDate(d);
     setSelectedDay(null);
+    onViewMonthChange?.(d.getFullYear(), d.getMonth() + 1);
   };
 
   const handleToday = () => {

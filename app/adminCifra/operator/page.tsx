@@ -413,7 +413,7 @@ export default function OperatorBSUPage() {
   useEffect(() => {
     const fetchCompletedTrips = async () => {
       try {
-        const res = await fetch('/api/adminCifra/production-log');
+        const res = await fetch('/api/adminCifra/production-log?today=true');
         if (res.ok) {
           const data = await res.json();
           setCompletedTrips(Array.isArray(data) ? data : []);

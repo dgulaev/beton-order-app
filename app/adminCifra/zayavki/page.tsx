@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
@@ -422,25 +422,21 @@ ${order.customer_type?.includes('Юридическое')
     }
   }, [allOrders, selectedOrder?.id]);
 
-  // Загрузка всех заказов при открытии страницы (realtime не отдаёт существующие строки)
-  useEffect(() => {
-    const fetchAllOrders = async () => {
-      setLoading(true);
-      try {
-        const res = await fetch('/api/adminCifra/all-orders');
-        if (res.ok) {
-          const data = await res.json();
-          setAllOrders(data);
-        }
-      } catch (err) {
-        console.error('Ошибка загрузки заказов:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
+  // Загружаем заказы только за выбранный месяц вместо всей истории.
+  // При смене месяца (selectedDate) делаем новый запрос.
+  const selYear = selectedDate.getFullYear();
+  const selMonth = selectedDate.getMonth() + 1;
 
-    fetchAllOrders();
-  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetch(`/api/adminCifra/orders?year=${selYear}&month=${selMonth}`)
+      .then(r => r.ok ? r.json() : [])
+      .then((data: any[]) => { if (!cancelled) setAllOrders(data); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [selYear, selMonth]);
 
   // ==================== 1. РАБОТА С ДАТАМИ (ИСПРАВЛЕНО) ====================
   // Новая функция — надёжно получает дату в локальном часовом поясе
@@ -625,6 +621,7 @@ ${order.customer_type?.includes('Юридическое')
   }, []);
 
          // ==================== РАСЧЁТ ЦЕМЕНТА ====================
+  // П5: useMemo — функция остаётся, но memoизированные значения ниже
   const calculateCementNeeded = (onlyCompleted: boolean) => {
     // Исключаем отменённые заявки из расчётов
     let orders = dayOrders.filter((o: Order) => o.status !== 'cancelled');
@@ -700,9 +697,20 @@ ${order.customer_type?.includes('Юридическое')
     return totalKg.toFixed(1);   // в кг
   };
 
+  // П5: weekOrderCounts — подсчёт заявок для каждого дня недели
+  const weekOrderCounts = useMemo(() =>
+    weekDays.map((d: Date) => getOrdersCountForDate(d))
+  , [allOrders, weekDays]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // П5: memoизированные значения для рендера (избегаем пересчёта при каждом ререндере)
+  const cementCompletedMemo  = useMemo(() => calculateCementNeeded(true),  [dayOrders, recipes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cementAllMemo        = useMemo(() => calculateCementNeeded(false), [dayOrders, recipes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const additiveCompletedMemo = useMemo(() => calculateAdditiveNeeded(true),  [dayOrders, recipes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const additiveAllMemo       = useMemo(() => calculateAdditiveNeeded(false), [dayOrders, recipes]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ==================== ПРОГНОЗ ДОБАВОК — скользящие 7 дней от selectedDate ====================
   // Не привязываемся к ПН-ВС: берём selectedDate + 6 следующих дней.
-  const weekAdditiveForecast = (() => {
+  const weekAdditiveForecast = useMemo(() => {
     if (!recipes.length) return null;
 
     // 7 дат начиная с selectedDate
@@ -766,7 +774,7 @@ ${order.customer_type?.includes('Юридическое')
       hasAlert: (pfmStock !== null && pfmStock < pfmLiters) || (linomixStock !== null && linomixStock < linomixLiters),
       details,
     };
-  })();
+  }, [allOrders, selectedDate, recipes, warehouseAdditives]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div style={{ 
@@ -826,9 +834,9 @@ ${order.customer_type?.includes('Юридическое')
         <div>
           <div style={{ color: '#94A3B8', fontSize: '14px' }}>Понадобится цемента</div>
           <div style={{ fontSize: '28px', fontWeight: '700', color: '#60A5FA' }}>
-            {calculateCementNeeded(true)} / 
+            {cementCompletedMemo} / 
             <span style={{ opacity: 0.6, color: '#94A3B8' }}>
-              {Math.round(Number(calculateCementNeeded(false)))}
+              {Math.round(Number(cementAllMemo))}
             </span> т
           </div>
         </div>
@@ -837,9 +845,9 @@ ${order.customer_type?.includes('Юридическое')
         <div>
           <div style={{ color: '#94A3B8', fontSize: '14px' }}>Понадобится добавок</div>
           <div style={{ fontSize: '28px', fontWeight: '700', color: '#FACC15' }}>
-            {calculateAdditiveNeeded(true)} / 
+            {additiveCompletedMemo} / 
             <span style={{ opacity: 0.6, color: '#94A3B8' }}>
-              {Math.round(Number(calculateAdditiveNeeded(false)))}
+              {Math.round(Number(additiveAllMemo))}
             </span> кг
           </div>
         </div>
@@ -1032,9 +1040,9 @@ ${order.customer_type?.includes('Юридическое')
   gap: '6px',
   overflow: 'hidden'
 }}>
-  {weekDays.map((d: Date) => {
+  {weekDays.map((d: Date, dIdx: number) => {
     const dateStr = d.toISOString().split('T')[0];
-    const count = getOrdersCountForDate(d);
+    const count = weekOrderCounts[dIdx];
     const isSelected = dateStr === selectedDateStr;
     const isToday = d.toDateString() === new Date().toDateString();
 
@@ -1236,7 +1244,7 @@ ${order.customer_type?.includes('Юридическое')
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <span style={{ fontSize: '15px' }}>Всего заявок:</span>
                   <strong style={{ fontSize: '17px' }}>
-                    {weekDays.reduce((sum, d) => sum + getOrdersCountForDate(d), 0)}
+                    {weekOrderCounts.reduce((sum, c) => sum + c, 0)}
                   </strong>
                 </div>
                 

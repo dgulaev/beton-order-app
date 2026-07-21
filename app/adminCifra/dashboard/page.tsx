@@ -224,65 +224,51 @@ useEffect(() => {
   };
 }, [userRole, userId]);
 
-  // ==================== 7. ЗАГРУЗКА ВСЕХ ЗАКАЗОВ ====================
-  useEffect(() => {
-    const fetchAllOrders = async () => {
-      setLoadingOrders(true);
-      try {
-        const res = await fetch('/api/adminCifra/all-orders');
-        if (res.ok) {
-          const data = await res.json();
-          setAllOrders(data);
+  // ==================== 7. ЗАГРУЗКА ЗАКАЗОВ ЗА МЕСЯЦ ====================
+  // Загружаем только текущий месяц вместо всей истории — на Vercel это
+  // в 10–50x быстрее из-за cold start serverless + latency до Supabase.
+  const fetchOrdersForMonth = useCallback(async (year: number, month: number) => {
+    try {
+      const res = await fetch(`/api/adminCifra/orders?year=${year}&month=${month}`);
+      if (!res.ok) return;
+      const data: any[] = await res.json();
+      setAllOrders(prev => {
+        const prefix = `${year}-${String(month).padStart(2, '0')}`;
+        const others = prev.filter((o: any) => !String(o.delivery_date || '').startsWith(prefix));
+        return [...others, ...data].sort((a: any, b: any) =>
+          String(a.delivery_date || '').localeCompare(String(b.delivery_date || ''))
+        );
+      });
+      // Подгружаем миксеры только для этих заказов (П2)
+      const ids = data.map((o: any) => o.id).join(',');
+      if (ids) {
+        const mr = await fetch(`/api/adminCifra/order-mixers?orderIds=${ids}`);
+        if (mr.ok) {
+          const mixers: any[] = await mr.json();
+          setMixerAssignments(prev => {
+            const orderIdSet = new Set(data.map((o: any) => String(o.id)));
+            const others2 = prev.filter((m: any) => !orderIdSet.has(String(m.orderId)));
+            return [...others2, ...mixers];
+          });
         }
-      } catch (err) {
-        console.error('Ошибка загрузки заказов:', err);
-      } finally {
-        setLoadingOrders(false);
       }
-    };
-    fetchAllOrders();
+    } catch (err) {
+      console.error('Ошибка загрузки заказов за месяц:', err);
+    }
   }, []);
 
-    // ==================== 7b. ФОНОВЫЙ РАСЧЁТ ВРЕМЕНИ В ПУТИ ДЛЯ СЕГОДНЯШНИХ ЗАКАЗОВ ====================
   useEffect(() => {
-    if (!allOrders.length) return;
-    const today = new Date();
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    const todayActive = allOrders.filter(
-      (o: any) => o.delivery_date === todayStr && (o.status === 'new' || o.status === 'processing')
+    const now = new Date();
+    setLoadingOrders(true);
+    fetchOrdersForMonth(now.getFullYear(), now.getMonth() + 1).finally(() =>
+      setLoadingOrders(false)
     );
+  }, [fetchOrdersForMonth]);
 
-    const calcMissing = async () => {
-      for (const order of todayActive) {
-        const orderId = String(order.id);
-        // Уже есть в state или уже записано в поле заказа — пропускаем
-        if (roadTimes[orderId] !== undefined) continue;
-        if ((order as any).road_time_min !== null && (order as any).road_time_min !== undefined) {
-          setRoadTimes(prev => ({ ...prev, [orderId]: (order as any).road_time_min }));
-          continue;
-        }
-        // Считаем через API (геокодирование + Хаверсин)
-        try {
-          const res = await fetch('/api/adminCifra/travel-time', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ orderId: order.id, address: (order as any).address || '' }),
-          });
-          if (res.ok) {
-            const { road_time_min } = await res.json();
-            if (typeof road_time_min === 'number') {
-              setRoadTimes(prev => ({ ...prev, [orderId]: road_time_min }));
-            }
-          }
-        } catch {
-          // Не критично — при ошибке используется fallback 30 мин
-        }
-      }
-    };
-
-    calcMissing();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allOrders]);
+  // Колбэк для Calendar — загружает данные когда пользователь листает на другой месяц
+  const handleCalendarMonthChange = useCallback((year: number, month: number) => {
+    fetchOrdersForMonth(year, month);
+  }, [fetchOrdersForMonth]);
 
     // ==================== 8. ЗАГРУЗКА АКТИВНЫХ МИКСЕРОВ ====================
   useEffect(() => {
@@ -327,6 +313,57 @@ const selectedYear = selectedDate.getFullYear();
 const selectedMonth = String(selectedDate.getMonth() + 1).padStart(2, '0');
 const selectedDay = String(selectedDate.getDate()).padStart(2, '0');
 const selectedDateStr = `${selectedYear}-${selectedMonth}-${selectedDay}`;
+
+  // ==================== 7b. ФОНОВЫЙ РАСЧЁТ ВРЕМЕНИ В ПУТИ ДЛЯ СЕГОДНЯШНИХ ЗАКАЗОВ ====================
+  // П3: используем selectedDateStr как триггер (не allOrders!) — иначе каждый
+  // realtime-апдейт заявки перезапускал storm из N последовательных POST-запросов.
+  // AbortController отменяет незавершённые запросы при смене даты или unmount.
+  const allOrdersRef = useRef<any[]>([]);
+  useEffect(() => { allOrdersRef.current = allOrders; }, [allOrders]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const calcMissing = async () => {
+      const orders = allOrdersRef.current;
+      if (!orders.length) return;
+      const activeOrders = orders.filter(
+        (o: any) => o.delivery_date === selectedDateStr && (o.status === 'new' || o.status === 'processing')
+      );
+      for (const order of activeOrders) {
+        if (controller.signal.aborted) break;
+        const orderId = String(order.id);
+        if (roadTimes[orderId] !== undefined) continue;
+        if ((order as any).road_time_min !== null && (order as any).road_time_min !== undefined) {
+          setRoadTimes(prev => ({ ...prev, [orderId]: (order as any).road_time_min }));
+          continue;
+        }
+        try {
+          const res = await fetch('/api/adminCifra/travel-time', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ orderId: order.id, address: (order as any).address || '' }),
+            signal: controller.signal,
+          });
+          if (res.ok) {
+            const { road_time_min } = await res.json();
+            if (typeof road_time_min === 'number') {
+              setRoadTimes(prev => ({ ...prev, [orderId]: road_time_min }));
+            }
+          }
+        } catch (e: any) {
+          if (e?.name === 'AbortError') break;
+        }
+      }
+    };
+
+    const timer = setTimeout(calcMissing, 500);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDateStr]);
 
 const todayOrders = allOrders
   .filter((o: Order) => {
@@ -644,23 +681,9 @@ useEffect(() => {
     return () => clearInterval(interval);
   }, []);
 
-    // ==================== 22. ГЛОБАЛЬНАЯ ЗАГРУЗКА ВСЕХ НАЗНАЧЕННЫХ МИКСЕРОВ ===============
-  useEffect(() => {
-    const fetchAllAssignedMixers = async () => {
-      try {
-        const res = await fetch('/api/adminCifra/order-mixers');
-        if (res.ok) {
-          const data = await res.json();
-          setMixerAssignments(data);
-          console.log(`[MixerAssignments] Загружено ${data.length} записей`);
-        }
-      } catch (err) {
-        console.error('Ошибка загрузки mixerAssignments:', err);
-      }
-    };
-
-    fetchAllAssignedMixers();
-  }, []);
+    // ==================== 22. ЗАГРУЗКА НАЗНАЧЕННЫХ МИКСЕРОВ ====================
+  // Начальная загрузка встроена в fetchOrdersForMonth (П1+П2 оптимизация).
+  // Этот блок удалён — больше не делаем полный дамп order_mixers.
 
     // ==================== 24. ЗАГРУЗКА МИКСЕРОВ ДЛЯ ОТКРЫТОЙ МОДАЛКИ ==========================
     // ⚠️ mixerAssignments — ОБЩИЙ список назначений всех заказов (нужен для меток
@@ -2158,6 +2181,7 @@ const generateDailyReport = () => {
                 setShowQuickNewOrder(true);
               }}
               getStatusConfig={getStatusConfig}
+              onViewMonthChange={handleCalendarMonthChange}
             />
           </div>
         </div>
