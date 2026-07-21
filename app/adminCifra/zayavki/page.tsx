@@ -827,8 +827,8 @@ ${order.customer_type?.includes('Юридическое')
           </div>
         </div>
 
-        {/* ── Прогноз добавок на неделю ── */}
-        {weekAdditiveForecast && (weekAdditiveForecast.pfm.needed > 0 || weekAdditiveForecast.linomix.needed > 0) && (<>
+        {/* ── Прогноз добавок на неделю — только при нехватке ── */}
+        {weekAdditiveForecast?.hasAlert && (<>
           {/* Разделитель */}
           <div style={{ width: '1px', height: '48px', background: '#334155', flexShrink: 0 }} />
 
@@ -838,7 +838,7 @@ ${order.customer_type?.includes('Юридическое')
               background: weekAdditiveForecast.hasAlert ? 'rgba(239,68,68,0.10)' : 'rgba(16,185,129,0.08)',
               border: `1.5px solid ${weekAdditiveForecast.hasAlert ? 'rgba(239,68,68,0.45)' : 'rgba(16,185,129,0.3)'}`,
               borderRadius: '14px',
-              padding: '10px 18px',
+              padding: '8px 16px',
               cursor: 'pointer',
               transition: 'filter 0.15s',
             }}
@@ -846,59 +846,60 @@ ${order.customer_type?.includes('Юридическое')
             onMouseLeave={e => (e.currentTarget.style.filter = '')}
           >
             {/* Заголовок */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '6px' }}>
               {weekAdditiveForecast.hasAlert
-                ? <AlertTriangle size={15} color="#EF4444" />
-                : <CheckCircle2 size={15} color="#10B981" />}
+                ? <AlertTriangle size={13} color="#EF4444" />
+                : <CheckCircle2 size={13} color="#10B981" />}
               <span style={{
-                fontSize: '13px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+                fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
                 color: weekAdditiveForecast.hasAlert ? '#FCA5A5' : '#6EE7B7',
               }}>
                 {weekAdditiveForecast.hasAlert ? 'Нехватка добавок!' : 'Запас добавок'}
               </span>
-              <span style={{ color: '#475569', fontSize: '12px', fontWeight: 400 }}>на неделю</span>
+              <span style={{ color: '#94A3B8', fontSize: '11px' }}>на 7 дней</span>
             </div>
 
-            {/* Строки по каждой добавке */}
-            {([
-              { key: 'pfm' as const, name: ADDITIVE_NAMES[1] },
-              { key: 'linomix' as const, name: ADDITIVE_NAMES[2] },
-            ] as const).filter(({ key }) => weekAdditiveForecast[key].needed > 0).map(({ key, name }) => {
-              const item = weekAdditiveForecast[key];
-              const pct = item.stock !== null && item.needed > 0
-                ? Math.min(100, Math.round((item.stock / item.needed) * 100))
-                : null;
-              return (
-                <div key={key} style={{ marginBottom: key === 'pfm' ? '6px' : 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginBottom: '3px' }}>
-                    <span style={{ color: '#94A3B8', fontSize: '12px', minWidth: '88px' }}>{name}:</span>
-                    <span style={{ fontSize: '20px', fontWeight: 700, color: item.shortage ? '#EF4444' : '#10B981', lineHeight: 1 }}>
-                      {item.stock !== null ? `${Math.round(item.stock)}` : '—'}
-                    </span>
-                    <span style={{ color: '#475569', fontSize: '13px' }}>/ {item.needed} л</span>
-                    {item.shortage && item.stock !== null && (
-                      <span style={{
-                        background: '#EF444425', color: '#F87171',
-                        fontSize: '12px', fontWeight: 700, borderRadius: '7px', padding: '1px 7px', marginLeft: '2px',
-                      }}>
-                        −{item.needed - Math.round(item.stock)} л
-                      </span>
-                    )}
-                  </div>
-                  {/* Мини прогресс-бар */}
-                  {pct !== null && (
-                    <div style={{ height: '3px', background: '#334155', borderRadius: '9999px', overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%', borderRadius: '9999px',
-                        width: `${pct}%`,
-                        background: item.shortage ? '#EF4444' : '#10B981',
-                        transition: 'width 0.4s ease',
-                      }} />
+            {/* Обе добавки — горизонтально в одну строку */}
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              {([
+                { key: 'pfm' as const, name: ADDITIVE_NAMES[1], shortName: 'ПФМ' },
+                { key: 'linomix' as const, name: ADDITIVE_NAMES[2], shortName: 'Линомикс' },
+              ] as const).filter(({ key }) => weekAdditiveForecast[key].needed > 0).map(({ key, shortName }, idx, arr) => {
+                const item = weekAdditiveForecast[key];
+                const pct = item.stock !== null && item.needed > 0
+                  ? Math.min(100, Math.round((item.stock / item.needed) * 100))
+                  : null;
+                return (
+                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {/* Вертикальный разделитель между добавками */}
+                    {idx > 0 && <div style={{ width: '1px', height: '32px', background: '#334155', flexShrink: 0 }} />}
+
+                    <div>
+                      <div style={{ color: '#94A3B8', fontSize: '11px', marginBottom: '2px' }}>{shortName}</div>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
+                        <span style={{ fontSize: '18px', fontWeight: 700, lineHeight: 1, color: item.shortage ? '#EF4444' : '#10B981' }}>
+                          {item.stock !== null ? Math.round(item.stock) : '—'}
+                        </span>
+                        <span style={{ color: '#94A3B8', fontSize: '12px' }}>/{item.needed} л</span>
+                        {item.shortage && item.stock !== null && (
+                          <span style={{
+                            background: '#EF444425', color: '#F87171',
+                            fontSize: '11px', fontWeight: 700, borderRadius: '6px', padding: '1px 5px',
+                          }}>−{item.needed - Math.round(item.stock)}</span>
+                        )}
+                        {!item.shortage && <span style={{ color: '#10B981', fontSize: '11px' }}>✓</span>}
+                      </div>
+                      {/* Мини прогресс */}
+                      {pct !== null && (
+                        <div style={{ width: '80px', height: '2px', background: '#334155', borderRadius: '9999px', marginTop: '3px' }}>
+                          <div style={{ height: '100%', width: `${pct}%`, background: item.shortage ? '#EF4444' : '#10B981', borderRadius: '9999px' }} />
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </>)}
 
@@ -1598,7 +1599,8 @@ ${order.customer_type?.includes('Юридическое')
                       body: JSON.stringify({
                         id: selectedOrder.id,
                         is_questionable: newValue,
-                        userRole: currentRole
+                        userRole: currentRole || 'admin',
+                        userName: userFullName || 'Сотрудник',
                       })
                     });
 

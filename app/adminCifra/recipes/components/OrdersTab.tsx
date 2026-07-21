@@ -15,12 +15,16 @@ interface Props {
   newOrderIds: Set<string>;
   /** id заказов, для которых уже есть паспорт */
   passportOrderIds: Set<string>;
+  /** orderId → { '7': result, '28': result } */
+  testSummary?: Map<string, Record<string, string>>;
   /** гарантировать загрузку заявок за нужный месяц (year, month 1-based) */
   onEnsureMonth: (year: number, month: number) => void;
   onAcknowledge: (id: string) => void;
   onAcknowledgeAll: () => void;
   /** паспорт по заказу сохранён — отметить заказ как «с паспортом» */
   onPassportSaved: (orderId: number | null) => void;
+  /** перейти на вкладку «Испытания» */
+  onOpenTests?: () => void;
 }
 
 const STATUS_META: Record<string, { label: string; bg: string; color: string }> = {
@@ -54,16 +58,54 @@ function fmtTime(t?: string) {
   return t ? String(t).slice(0, 5) : '';
 }
 
+/** Элегантная пилюля испытания: «7 сут» / «28 сут» */
+function TestBadge({ days, result, onClick }: { days: '7' | '28'; result: string; onClick?: () => void }) {
+  const cfg = {
+    pass:    { bg: days === '7' ? 'rgba(250,204,21,0.15)'  : 'rgba(16,185,129,0.15)',  border: days === '7' ? 'rgba(250,204,21,0.5)'  : 'rgba(16,185,129,0.5)',  color: days === '7' ? '#FDE047' : '#34D399' },
+    fail:    { bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.45)',  color: '#F87171' },
+    pending: { bg: 'rgba(100,116,139,0.15)', border: 'rgba(100,116,139,0.4)', color: '#94A3B8' },
+  }[result] || { bg: 'rgba(100,116,139,0.15)', border: 'rgba(100,116,139,0.4)', color: '#94A3B8' };
+
+  const icon = result === 'pass' ? '✓' : result === 'fail' ? '✕' : '◎';
+
+  return (
+    <button
+      onClick={onClick}
+      title={`Испытание ${days} суток — ${result === 'pass' ? 'соответствует' : result === 'fail' ? 'не соответствует' : 'ожидает'}`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: '4px',
+        padding: '3px 9px',
+        background: cfg.bg,
+        border: `1px solid ${cfg.border}`,
+        borderRadius: '9999px',
+        color: cfg.color,
+        fontSize: '12px',
+        fontWeight: 700,
+        cursor: onClick ? 'pointer' : 'default',
+        whiteSpace: 'nowrap',
+        transition: 'filter 0.15s',
+      }}
+      onMouseEnter={e => onClick && (e.currentTarget.style.filter = 'brightness(1.2)')}
+      onMouseLeave={e => (e.currentTarget.style.filter = '')}
+    >
+      <span style={{ fontSize: '10px' }}>{icon}</span>
+      {days} сут
+    </button>
+  );
+}
+
 export default function OrdersTab({
   orders,
   loading,
   monthLoading,
   newOrderIds,
   passportOrderIds,
+  testSummary,
   onEnsureMonth,
   onAcknowledge,
   onAcknowledgeAll,
   onPassportSaved,
+  onOpenTests,
 }: Props) {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [statusFilter, setStatusFilter] = useState<StatusKey>('all');
@@ -428,6 +470,7 @@ export default function OrdersTab({
                 const hasPassport = passportOrderIds.has(String(o.id));
                 const sm = STATUS_META[o.status] || { label: o.status || '—', bg: '#334155', color: '#E2E8F0' };
                 const client = o.organization_name || o.full_name || 'Без названия';
+                const tests = testSummary?.get(String(o.id));
                 return (
                   <div
                     key={o.id}
@@ -455,6 +498,13 @@ export default function OrdersTab({
                       <span style={{ fontSize: '17px', fontWeight: 700, color: COLORS.accent }}>{o.volume ?? '—'} м³</span>
                       {hasPassport && <span title="Паспорт оформлен" style={{ marginLeft: 'auto', color: COLORS.accent, fontSize: '13px', fontWeight: 700 }}>✓ паспорт</span>}
                     </div>
+                    {/* Бейджи испытаний */}
+                    {tests && (tests['7'] || tests['28']) && (
+                      <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+                        {tests['7']  && <TestBadge days="7"  result={tests['7']}  onClick={onOpenTests} />}
+                        {tests['28'] && <TestBadge days="28" result={tests['28']} onClick={onOpenTests} />}
+                      </div>
+                    )}
                     <div className="lab-clamp1" style={{ fontSize: '12.5px', color: '#CBD5E1', marginBottom: '12px' }} title={o.address || ''}>{o.address || '—'}</div>
                     <div style={{ display: 'flex', gap: '8px', marginTop: 'auto' }}>
                       <button onClick={() => openPassport(o)} style={{ ...primaryButton(), flex: 1, justifyContent: 'center', padding: '9px 14px', fontSize: '13.5px' }}>
@@ -473,6 +523,7 @@ export default function OrdersTab({
                 const hasPassport = passportOrderIds.has(String(o.id));
                 const sm = STATUS_META[o.status] || { label: o.status || '—', bg: '#334155', color: '#E2E8F0' };
                 const client = o.organization_name || o.full_name || 'Без названия';
+                const tests = testSummary?.get(String(o.id));
                 return (
                   <div
                     key={o.id}
@@ -494,9 +545,16 @@ export default function OrdersTab({
                       </div>
                       <div style={{ color: COLORS.muted, fontSize: '13px' }}>{o.grade || '—'} • {o.volume ?? '—'} м³</div>
                     </div>
-                    {hasPassport && <span title="Паспорт оформлен" style={{ color: COLORS.accent, fontSize: '13px', fontWeight: 700 }}>✓</span>}
-                    <span style={{ ...pillStyle(sm.bg, sm.color), padding: '4px 12px', fontSize: '12.5px' }}>{sm.label}</span>
-                    <button onClick={() => openPassport(o)} style={{ ...primaryButton(), padding: '8px 16px', fontSize: '13.5px' }}>
+                    {/* Бейджи испытаний в строке */}
+                    {tests && (
+                      <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }}>
+                        {tests['7']  && <TestBadge days="7"  result={tests['7']}  onClick={onOpenTests} />}
+                        {tests['28'] && <TestBadge days="28" result={tests['28']} onClick={onOpenTests} />}
+                      </div>
+                    )}
+                    {hasPassport && <span title="Паспорт оформлен" style={{ color: COLORS.accent, fontSize: '13px', fontWeight: 700, flexShrink: 0 }}>✓</span>}
+                    <span style={{ ...pillStyle(sm.bg, sm.color), padding: '4px 12px', fontSize: '12.5px', flexShrink: 0 }}>{sm.label}</span>
+                    <button onClick={() => openPassport(o)} style={{ ...primaryButton(), padding: '8px 16px', fontSize: '13.5px', flexShrink: 0 }}>
                       {hasPassport ? 'Паспорт' : 'Оформить паспорт'}
                     </button>
                   </div>

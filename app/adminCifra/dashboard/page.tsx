@@ -1747,12 +1747,13 @@ const generateDailyReport = () => {
 
   {/* Вертикальный таймлайн */}
   {timelineMode === 'vertical' && (
-    <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: '8px' }}>
+    <div className="timeline-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: '4px' }}>
       <VerticalTimelinePanel
         orders={todayOrders}
         mixerAssignments={mixerAssignments}
         selectedDateStr={selectedDateStr}
         onOrderClick={(order) => setSelectedOrder(order)}
+        delayedOrders={delayedOrders.map((o: any) => ({ id: o.id, delayMinutes: o.delayMinutes, delayText: o.delayText }))}
       />
     </div>
   )}

@@ -39,16 +39,17 @@ html, body {
   overflow-x: hidden;
 }
 
-/* Скрываем полосу прокрутки глобально — скролл работает, полоса не видна */
+/* Скрываем полосу прокрутки глобально — скролл работает, полоса не видна.
+   .timeline-scrollbar исключён через :not() чтобы его кастомный скроллбар работал. */
 html,
 body,
-* {
+*:not(.timeline-scrollbar) {
   scrollbar-width: none !important;
   -ms-overflow-style: none !important;
 }
 html::-webkit-scrollbar,
 body::-webkit-scrollbar,
-*::-webkit-scrollbar {
+*:not(.timeline-scrollbar)::-webkit-scrollbar {
   width: 0 !important;
   height: 0 !important;
   display: none !important;
@@ -197,6 +198,28 @@ button, a, .clickable {
   display: none;
   width: 0;
   height: 0;
+}
+
+/* Кастомный скроллбар для вертикального таймлайна */
+.timeline-scrollbar {
+  scrollbar-width: thin !important;
+  scrollbar-color: #334155 transparent !important;
+  overscroll-behavior: none;
+}
+.timeline-scrollbar::-webkit-scrollbar {
+  width: 4px !important;
+  display: block !important;
+}
+.timeline-scrollbar::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+.timeline-scrollbar::-webkit-scrollbar-thumb {
+  background: #334155 !important;
+  border-radius: 2px !important;
+  min-height: 40px !important;
+}
+.timeline-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #475569 !important;
 }
 
 /* Ненавязчивый серый полупрозрачный скролл — виден, но не бросается в глаза.

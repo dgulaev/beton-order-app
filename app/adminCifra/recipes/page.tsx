@@ -34,6 +34,8 @@ export default function LaboratoryPage() {
   const [monthLoading, setMonthLoading] = useState(false);
   const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
   const [passportOrderIds, setPassportOrderIds] = useState<Set<string>>(new Set());
+  // Сводка испытаний: orderId → { '7': result, '28': result }
+  const [testSummary, setTestSummary] = useState<Map<string, Record<string, string>>>(new Map());
   const loadedMonthsRef = useRef<Set<string>>(new Set());
 
   const mergeOrders = (prev: any[], incoming: any[]) => {
@@ -69,7 +71,11 @@ export default function LaboratoryPage() {
         const now = new Date();
         await ensureMonth(now.getFullYear(), now.getMonth() + 1);
 
-        const passRes = await fetch('/api/adminCifra/concrete-passports');
+        const [passRes, testsRes] = await Promise.all([
+          fetch('/api/adminCifra/concrete-passports'),
+          fetch('/api/adminCifra/concrete-tests'),
+        ]);
+
         if (passRes.ok) {
           const passports = await passRes.json();
           const ids = new Set<string>(
@@ -78,6 +84,19 @@ export default function LaboratoryPage() {
               .filter(Boolean) as string[]
           );
           setPassportOrderIds(ids);
+        }
+
+        if (testsRes.ok) {
+          const tests: any[] = await testsRes.json();
+          const map = new Map<string, Record<string, string>>();
+          tests.forEach((t) => {
+            if (t.order_id == null) return;
+            const key = String(t.order_id);
+            const cur = map.get(key) || {};
+            cur[String(t.test_type)] = t.result || 'pending';
+            map.set(key, cur);
+          });
+          setTestSummary(map);
         }
       } catch (e) {
         console.error(e);
@@ -333,10 +352,12 @@ export default function LaboratoryPage() {
           monthLoading={monthLoading}
           newOrderIds={newOrderIds}
           passportOrderIds={passportOrderIds}
+          testSummary={testSummary}
           onEnsureMonth={ensureMonth}
           onAcknowledge={acknowledgeOrder}
           onAcknowledgeAll={acknowledgeAllOrders}
           onPassportSaved={markPassportSaved}
+          onOpenTests={() => setTab('tests')}
         />
       )}
       {tab === 'specifications' && <SpecificationsTab />}

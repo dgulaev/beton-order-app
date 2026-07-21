@@ -290,19 +290,23 @@ useEffect(() => {
       .reduce((s: number, o: any) => s + Number(o.volume || 0), 0),
   [allOrders, realTodayStr]);
 
-  // ── KPI: план/факт по объёму ──────────────────────────────────────────────────
-  const kpiPlanToday = useMemo(() =>
-    todayOrders.reduce((s: number, o: any) => s + Number(o.volume || 0), 0),
+  // ── KPI: план/факт по объёму (отменённые не учитываются) ─────────────────────
+  const kpiActiveOrders = useMemo(() =>
+    todayOrders.filter((o: any) => o.status !== 'cancelled'),
   [todayOrders]);
+
+  const kpiPlanToday = useMemo(() =>
+    kpiActiveOrders.reduce((s: number, o: any) => s + Number(o.volume || 0), 0),
+  [kpiActiveOrders]);
 
   const kpiCompletedVolume = useMemo(() =>
-    todayOrders.filter((o: any) => o.status === 'completed')
+    kpiActiveOrders.filter((o: any) => o.status === 'completed')
                .reduce((s: number, o: any) => s + Number(o.volume || 0), 0),
-  [todayOrders]);
+  [kpiActiveOrders]);
 
-  const kpiCompletedOrders  = useMemo(() => todayOrders.filter((o: any) => o.status === 'completed').length, [todayOrders]);
-  const kpiNewOrders        = useMemo(() => todayOrders.filter((o: any) => o.status === 'new').length, [todayOrders]);
-  const kpiInWorkOrders     = useMemo(() => todayOrders.filter((o: any) => o.status === 'processing').length, [todayOrders]);
+  const kpiCompletedOrders  = useMemo(() => kpiActiveOrders.filter((o: any) => o.status === 'completed').length, [kpiActiveOrders]);
+  const kpiNewOrders        = useMemo(() => kpiActiveOrders.filter((o: any) => o.status === 'new').length, [kpiActiveOrders]);
+  const kpiInWorkOrders     = useMemo(() => kpiActiveOrders.filter((o: any) => o.status === 'processing').length, [kpiActiveOrders]);
   const kpiCancelledOrders  = useMemo(() => todayOrders.filter((o: any) => o.status === 'cancelled').length, [todayOrders]);
   const kpiCompletionPct    = kpiPlanToday > 0 ? Math.round((kpiCompletedVolume / kpiPlanToday) * 100) : 0;
 
@@ -427,7 +431,7 @@ useEffect(() => {
           >
             <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '4px' }}>Заявки сегодня</div>
             <div style={{ fontSize: '48px', fontWeight: 700, color: '#60A5FA', lineHeight: 1, marginBottom: '10px' }}>
-              {todayOrders.length}
+              {kpiActiveOrders.length}
             </div>
             {/* Цветные цифры без подписей */}
             <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', fontSize: '15px', fontWeight: 700 }}>
@@ -680,9 +684,9 @@ useEffect(() => {
                   return group.orders.map((order, col) => {
                     const color       = STATUS_COLOR[order.status] || '#64748B';
                     const volume      = Number(order.volume || 0);
-                    const isPast      = isToday && order.status !== 'completed' && order.status !== 'cancelled' && group.time < nowMins;
                     const isCompleted = order.status === 'completed';
                     const isCancelled = order.status === 'cancelled';
+                    const isPast      = isCompleted || isCancelled;
                     const orderMixers = mixerAssignments.filter((m: any) => String(m.order_id) === String(order.id));
 
                     // Задержка доставки
