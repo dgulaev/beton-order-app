@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Save, Trash2, Share2, Copy, X, User, Phone, Layers, Clock, Calendar, MapPin, MessageSquare, ChevronDown } from 'lucide-react';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
@@ -15,6 +15,8 @@ interface MobileOrderDetailModalProps {
   onCopyOrder?: (copiedData: any) => void;
   currentRole?: string;
   currentUserName?: string;
+  recipes?: any[];
+  clients?: any[];
 }
 
 const STATUS_OPTIONS = [
@@ -60,9 +62,26 @@ export default function MobileOrderDetailModal({
   onCopyOrder,
   currentRole = 'admin',
   currentUserName = 'Сотрудник',
+  recipes = [],
+  clients = [],
 }: MobileOrderDetailModalProps) {
   const [editedOrder, setEditedOrder] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Поиск клиента
+  const [clientQuery, setClientQuery] = useState('');
+  const [showClientDropdown, setShowClientDropdown] = useState(false);
+  const clientDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (clientDropdownRef.current && !clientDropdownRef.current.contains(e.target as Node)) {
+        setShowClientDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
   useRealtimeBroadcast({
     topic: 'orders:all',
@@ -202,7 +221,72 @@ export default function MobileOrderDetailModal({
           {/* ── КЛИЕНТ ──────────────────────────────────── */}
           <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <FieldBlock icon={<User size={15} />} label="Клиент">
-              <input value={editedOrder.organization_name || editedOrder.full_name || ''} onChange={e => set('organization_name', e.target.value)} style={INPUT} />
+              <div ref={clientDropdownRef} style={{ position: 'relative' }}>
+                <input
+                  value={clientQuery !== '' ? clientQuery : (editedOrder.organization_name || editedOrder.full_name || '')}
+                  placeholder="Поиск по имени, ИНН, телефону…"
+                  onChange={e => { setClientQuery(e.target.value); setShowClientDropdown(true); }}
+                  onFocus={() => { setClientQuery(''); setShowClientDropdown(true); }}
+                  style={INPUT}
+                />
+                {showClientDropdown && (() => {
+                  const q = clientQuery.toLowerCase();
+                  const filtered = clients.filter((c: any) => {
+                    const name = (c.organization_name || c.full_name || '').toLowerCase();
+                    const phone = (c.phone || '').toLowerCase();
+                    const inn = (c.inn || '').toLowerCase();
+                    return !q || name.includes(q) || phone.includes(q) || inn.includes(q);
+                  }).slice(0, 8);
+                  if (!filtered.length) return null;
+                  return (
+                    <div style={{
+                      position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
+                      background: '#1A2537', border: '1px solid #334155', borderRadius: '10px',
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.5)', maxHeight: '240px', overflowY: 'auto',
+                      marginTop: '4px',
+                    }}>
+                      {filtered.map((c: any, ci: number) => {
+                        const displayName = c.organization_name || c.full_name || '—';
+                        const isLegal = !!c.organization_name;
+                        return (
+                          <div
+                            key={`${c.user_id ?? 'x'}-${ci}`}
+                            onTouchStart={() => {
+                              set('organization_name', c.organization_name || '');
+                              set('full_name', c.full_name || '');
+                              set('phone', c.phone || editedOrder.phone);
+                              set('inn', c.inn || editedOrder.inn);
+                              set('user_id', c.user_id);
+                              setClientQuery('');
+                              setShowClientDropdown(false);
+                            }}
+                            onMouseDown={() => {
+                              set('organization_name', c.organization_name || '');
+                              set('full_name', c.full_name || '');
+                              set('phone', c.phone || editedOrder.phone);
+                              set('inn', c.inn || editedOrder.inn);
+                              set('user_id', c.user_id);
+                              setClientQuery('');
+                              setShowClientDropdown(false);
+                            }}
+                            style={{
+                              padding: '10px 14px', cursor: 'pointer',
+                              borderBottom: '1px solid #334155',
+                            }}
+                          >
+                            <div style={{ fontSize: '14px', fontWeight: 600, color: '#E2E8F0' }}>
+                              {isLegal ? '🏢 ' : '👤 '}{displayName}
+                            </div>
+                            <div style={{ fontSize: '12px', color: '#64748B', marginTop: '2px' }}>
+                              {[c.phone, c.inn ? `ИНН ${c.inn}` : null].filter(Boolean).join(' · ')}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
             </FieldBlock>
             <FieldBlock icon={<Phone size={15} />} label="Телефон">
               <input value={editedOrder.phone || ''} onChange={e => set('phone', e.target.value)} style={INPUT} type="tel" />
@@ -212,7 +296,25 @@ export default function MobileOrderDetailModal({
           {/* ── ПАРАМЕТРЫ ЗАКАЗА ─────────────────────── */}
           <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <FieldBlock icon={<Layers size={15} />} label="Марка бетона">
-              <input value={editedOrder.grade || ''} onChange={e => set('grade', e.target.value)} style={INPUT} />
+              {recipes.length > 0 ? (
+                <select
+                  value={editedOrder.grade || ''}
+                  onChange={e => set('grade', e.target.value)}
+                  style={{ ...INPUT, color: editedOrder.grade ? '#E2E8F0' : '#64748B' }}
+                >
+                  {!editedOrder.grade && <option value="">— выберите марку —</option>}
+                  {recipes
+                    .map((r: any) => r.code || r.name)
+                    .filter((v: string, i: number, arr: string[]) => v && arr.indexOf(v) === i)
+                    .sort()
+                    .map((grade: string) => (
+                      <option key={grade} value={grade}>{grade}</option>
+                    ))
+                  }
+                </select>
+              ) : (
+                <input value={editedOrder.grade || ''} onChange={e => set('grade', e.target.value)} style={INPUT} />
+              )}
             </FieldBlock>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>

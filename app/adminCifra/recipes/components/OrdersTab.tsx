@@ -4,6 +4,96 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { COLORS, inputStyle, ghostButton, primaryButton, pillStyle } from '../labStyles';
 import PassportModal from './PassportModal';
 
+// ==================== Дропдаун списка паспортов ====================
+function PassportDropdown({
+  passports,
+  onOpen,
+  onNew,
+  onClose,
+}: {
+  passports: any[];
+  onOpen: (rec: any) => void;
+  onNew: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        position: 'absolute',
+        right: 0,
+        top: '100%',
+        marginTop: '4px',
+        zIndex: 100,
+        background: '#1E2937',
+        border: '1px solid #334155',
+        borderRadius: '12px',
+        minWidth: '220px',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+        overflow: 'hidden',
+      }}
+    >
+      {passports.map((p, i) => {
+        const batchNo = p.payload?.batch_no || p.passport_no || `#${p.id}`;
+        const mixer = p.payload?.mixer_number ? ` · ${p.payload.mixer_number}` : '';
+        const vol = p.payload?.volume ? ` · ${p.payload.volume} м³` : '';
+        return (
+          <button
+            key={p.id}
+            onMouseDown={() => onOpen(p)}
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              padding: '10px 16px',
+              background: 'transparent',
+              border: 'none',
+              borderBottom: i < passports.length - 1 ? '1px solid #334155' : 'none',
+              color: '#E2E8F0',
+              fontSize: '13.5px',
+              cursor: 'pointer',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = '#2A3852')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          >
+            <span style={{ fontWeight: 700, color: COLORS.blue }}>{batchNo}</span>
+            <span style={{ color: COLORS.muted }}>{mixer}{vol}</span>
+          </button>
+        );
+      })}
+      <button
+        onMouseDown={onNew}
+        style={{
+          display: 'block',
+          width: '100%',
+          textAlign: 'left',
+          padding: '10px 16px',
+          background: 'rgba(16,185,129,0.08)',
+          border: 'none',
+          borderTop: '1px solid #334155',
+          color: COLORS.accent,
+          fontSize: '13.5px',
+          fontWeight: 700,
+          cursor: 'pointer',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.15)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'rgba(16,185,129,0.08)')}
+      >
+        + Новый паспорт
+      </button>
+    </div>
+  );
+}
+
 type StatusKey = 'all' | 'new' | 'processing' | 'completed' | 'cancelled';
 
 interface Props {
@@ -13,8 +103,8 @@ interface Props {
   monthLoading: boolean;
   /** id заявок, пришедших по realtime и ещё не просмотренных лаборантом */
   newOrderIds: Set<string>;
-  /** id заказов, для которых уже есть паспорт */
-  passportOrderIds: Set<string>;
+  /** orderId → массив паспортов этой заявки */
+  passportsByOrder: Map<string, any[]>;
   /** orderId → { '7': result, '28': result } */
   testSummary?: Map<string, Record<string, string>>;
   /** гарантировать загрузку заявок за нужный месяц (year, month 1-based) */
@@ -99,7 +189,7 @@ export default function OrdersTab({
   loading,
   monthLoading,
   newOrderIds,
-  passportOrderIds,
+  passportsByOrder,
   testSummary,
   onEnsureMonth,
   onAcknowledge,
@@ -111,7 +201,14 @@ export default function OrdersTab({
   const [statusFilter, setStatusFilter] = useState<StatusKey>('all');
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
+
+  // passportOrder — заявка для которой открыта модалка паспорта
   const [passportOrder, setPassportOrder] = useState<any>(null);
+  // existingRecord — конкретная запись паспорта (null = создаём новый)
+  const [passportRecord, setPassportRecord] = useState<any | null>(null);
+  const [isNewPassport, setIsNewPassport] = useState(false);
+  // passportDropdownFor — orderId, для которого открыт дропдаун
+  const [passportDropdownFor, setPassportDropdownFor] = useState<string | null>(null);
 
   const selectedStr = localDateStr(selectedDate);
   const todayStr = localDateStr(new Date());
@@ -188,7 +285,7 @@ export default function OrdersTab({
     const dayset = new Set(weekDays.map(localDateStr));
     const active = orders.filter((o) => dayset.has(orderDateStr(o)) && o.status !== 'cancelled');
     const totalVol = active.reduce((s, o) => s + (Number(o.volume) || 0), 0);
-    const withPassport = active.filter((o) => passportOrderIds.has(String(o.id))).length;
+    const withPassport = active.filter((o) => (passportsByOrder.get(String(o.id)) || []).length > 0).length;
     const completed = active.filter((o) => o.status === 'completed').length;
 
     const gradeMap = new Map<string, { count: number; vol: number }>();
@@ -210,11 +307,33 @@ export default function OrdersTab({
       grades,
       passportPct: active.length > 0 ? Math.round((withPassport / active.length) * 100) : 0,
     };
-  }, [orders, weekDays, passportOrderIds]);
+  }, [orders, weekDays, passportsByOrder]);
 
+  // Открыть последний паспорт заявки (или новый если их нет)
   const openPassport = (order: any) => {
     onAcknowledge(String(order.id));
+    const passports = passportsByOrder.get(String(order.id)) || [];
     setPassportOrder(order);
+    setPassportRecord(passports.length > 0 ? passports[0] : null);
+    setIsNewPassport(false);
+    setPassportDropdownFor(null);
+  };
+
+  // Открыть конкретный паспорт из дропдауна
+  const openExistingPassport = (order: any, rec: any) => {
+    setPassportOrder(order);
+    setPassportRecord(rec);
+    setIsNewPassport(false);
+    setPassportDropdownFor(null);
+  };
+
+  // Создать новый паспорт для заявки
+  const createNewPassport = (order: any) => {
+    onAcknowledge(String(order.id));
+    setPassportOrder(order);
+    setPassportRecord(null);
+    setIsNewPassport(true);
+    setPassportDropdownFor(null);
   };
 
   const goWeek = (delta: number) => {
@@ -467,10 +586,12 @@ export default function OrdersTab({
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px', alignItems: 'stretch' }}>
               {dayOrders.map((o) => {
                 const isNew = newOrderIds.has(String(o.id));
-                const hasPassport = passportOrderIds.has(String(o.id));
+                const passports = passportsByOrder.get(String(o.id)) || [];
+                const pCount = passports.length;
                 const sm = STATUS_META[o.status] || { label: o.status || '—', bg: '#334155', color: '#E2E8F0' };
                 const client = o.organization_name || o.full_name || 'Без названия';
                 const tests = testSummary?.get(String(o.id));
+                const oid = String(o.id);
                 return (
                   <div
                     key={o.id}
@@ -496,7 +617,6 @@ export default function OrdersTab({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
                       <span style={{ ...pillStyle('rgba(96,165,250,0.15)', COLORS.blue), padding: '3px 10px', fontSize: '12.5px' }}>{o.grade || '—'}</span>
                       <span style={{ fontSize: '17px', fontWeight: 700, color: COLORS.accent }}>{o.volume ?? '—'} м³</span>
-                      {hasPassport && <span title="Паспорт оформлен" style={{ marginLeft: 'auto', color: COLORS.accent, fontSize: '13px', fontWeight: 700 }}>✓ паспорт</span>}
                     </div>
                     {/* Бейджи испытаний */}
                     {tests && (tests['7'] || tests['28']) && (
@@ -506,11 +626,28 @@ export default function OrdersTab({
                       </div>
                     )}
                     <div className="lab-clamp1" style={{ fontSize: '12.5px', color: '#CBD5E1', marginBottom: '12px' }} title={o.address || ''}>{o.address || '—'}</div>
-                    <div style={{ display: 'flex', gap: '8px', marginTop: 'auto' }}>
-                      <button onClick={() => openPassport(o)} style={{ ...primaryButton(), flex: 1, justifyContent: 'center', padding: '9px 14px', fontSize: '13.5px' }}>
-                        {hasPassport ? 'Паспорт' : 'Оформить паспорт'}
-                      </button>
-                      {isNew && <button onClick={() => onAcknowledge(String(o.id))} style={{ ...ghostButton, padding: '9px 14px' }} title="Просмотрено">✓</button>}
+                    <div style={{ display: 'flex', gap: '8px', marginTop: 'auto', position: 'relative' }}>
+                      {pCount === 0 ? (
+                        <button onClick={() => createNewPassport(o)} style={{ ...primaryButton(), flex: 1, justifyContent: 'center', padding: '9px 14px', fontSize: '13.5px' }}>
+                          Оформить паспорт
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setPassportDropdownFor(prev => prev === oid ? null : oid)}
+                          style={{ ...primaryButton(), flex: 1, justifyContent: 'center', padding: '9px 14px', fontSize: '13.5px' }}
+                        >
+                          Паспорта ({pCount}) ▾
+                        </button>
+                      )}
+                      {isNew && <button onClick={() => onAcknowledge(oid)} style={{ ...ghostButton, padding: '9px 14px' }} title="Просмотрено">✓</button>}
+                      {passportDropdownFor === oid && (
+                        <PassportDropdown
+                          passports={passports}
+                          onOpen={(rec) => openExistingPassport(o, rec)}
+                          onNew={() => createNewPassport(o)}
+                          onClose={() => setPassportDropdownFor(null)}
+                        />
+                      )}
                     </div>
                   </div>
                 );
@@ -520,10 +657,12 @@ export default function OrdersTab({
             <div style={{ background: COLORS.card, borderRadius: '16px', overflow: 'hidden' }}>
               {dayOrders.map((o, idx) => {
                 const isNew = newOrderIds.has(String(o.id));
-                const hasPassport = passportOrderIds.has(String(o.id));
+                const passports = passportsByOrder.get(String(o.id)) || [];
+                const pCount = passports.length;
                 const sm = STATUS_META[o.status] || { label: o.status || '—', bg: '#334155', color: '#E2E8F0' };
                 const client = o.organization_name || o.full_name || 'Без названия';
                 const tests = testSummary?.get(String(o.id));
+                const oid = String(o.id);
                 return (
                   <div
                     key={o.id}
@@ -552,11 +691,29 @@ export default function OrdersTab({
                         {tests['28'] && <TestBadge days="28" result={tests['28']} onClick={onOpenTests} />}
                       </div>
                     )}
-                    {hasPassport && <span title="Паспорт оформлен" style={{ color: COLORS.accent, fontSize: '13px', fontWeight: 700, flexShrink: 0 }}>✓</span>}
                     <span style={{ ...pillStyle(sm.bg, sm.color), padding: '4px 12px', fontSize: '12.5px', flexShrink: 0 }}>{sm.label}</span>
-                    <button onClick={() => openPassport(o)} style={{ ...primaryButton(), padding: '8px 16px', fontSize: '13.5px', flexShrink: 0 }}>
-                      {hasPassport ? 'Паспорт' : 'Оформить паспорт'}
-                    </button>
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      {pCount === 0 ? (
+                        <button onClick={() => createNewPassport(o)} style={{ ...primaryButton(), padding: '8px 16px', fontSize: '13.5px' }}>
+                          Оформить паспорт
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setPassportDropdownFor(prev => prev === oid ? null : oid)}
+                          style={{ ...primaryButton(), padding: '8px 16px', fontSize: '13.5px' }}
+                        >
+                          Паспорта ({pCount}) ▾
+                        </button>
+                      )}
+                      {passportDropdownFor === oid && (
+                        <PassportDropdown
+                          passports={passports}
+                          onOpen={(rec) => openExistingPassport(o, rec)}
+                          onNew={() => createNewPassport(o)}
+                          onClose={() => setPassportDropdownFor(null)}
+                        />
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -568,7 +725,10 @@ export default function OrdersTab({
       {passportOrder && (
         <PassportModal
           orderId={Number(passportOrder.id)}
-          onClose={() => setPassportOrder(null)}
+          existingRecord={passportRecord}
+          isNewPassport={isNewPassport}
+          passportCount={(passportsByOrder.get(String(passportOrder.id)) || []).length}
+          onClose={() => { setPassportOrder(null); setPassportRecord(null); setIsNewPassport(false); }}
           onSaved={onPassportSaved}
         />
       )}

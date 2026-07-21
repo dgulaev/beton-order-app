@@ -33,7 +33,8 @@ export default function LaboratoryPage() {
   const [ordersLoading, setOrdersLoading] = useState(true);
   const [monthLoading, setMonthLoading] = useState(false);
   const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
-  const [passportOrderIds, setPassportOrderIds] = useState<Set<string>>(new Set());
+  // orderId → массив всех паспортов этой заявки (полные записи)
+  const [passportsByOrder, setPassportsByOrder] = useState<Map<string, any[]>>(new Map());
   // Сводка испытаний: orderId → { '7': result, '28': result }
   const [testSummary, setTestSummary] = useState<Map<string, Record<string, string>>>(new Map());
   const loadedMonthsRef = useRef<Set<string>>(new Set());
@@ -77,13 +78,15 @@ export default function LaboratoryPage() {
         ]);
 
         if (passRes.ok) {
-          const passports = await passRes.json();
-          const ids = new Set<string>(
-            (passports || [])
-              .map((p: any) => (p.order_id != null ? String(p.order_id) : null))
-              .filter(Boolean) as string[]
-          );
-          setPassportOrderIds(ids);
+          const passports: any[] = await passRes.json();
+          const map = new Map<string, any[]>();
+          (passports || []).forEach((p: any) => {
+            if (p.order_id == null) return;
+            const key = String(p.order_id);
+            if (!map.has(key)) map.set(key, []);
+            map.get(key)!.push(p);
+          });
+          setPassportsByOrder(map);
         }
 
         if (testsRes.ok) {
@@ -132,15 +135,21 @@ export default function LaboratoryPage() {
 
   const acknowledgeAllOrders = useCallback(() => setNewOrderIds(new Set()), []);
 
-  // Паспорт по заказу сохранён/обновлён — помечаем заказ как «с паспортом»,
-  // чтобы кнопка сразу стала «Паспорт» без перезагрузки страницы.
-  const markPassportSaved = useCallback((orderId: number | null) => {
+  // После сохранения паспорта — перегружаем список паспортов для этой заявки
+  const markPassportSaved = useCallback(async (orderId: number | null) => {
     if (orderId == null) return;
-    setPassportOrderIds((prev) => {
-      const next = new Set(prev);
-      next.add(String(orderId));
-      return next;
-    });
+    try {
+      const res = await fetch(`/api/adminCifra/concrete-passports?order_id=${orderId}`);
+      if (!res.ok) return;
+      const list: any[] = await res.json();
+      setPassportsByOrder((prev) => {
+        const next = new Map(prev);
+        next.set(String(orderId), list);
+        return next;
+      });
+    } catch (e) {
+      console.error(e);
+    }
   }, []);
 
   // ==================== СОСТОЯНИЕ КАТАЛОГА РЕЦЕПТУР ====================
@@ -351,7 +360,7 @@ export default function LaboratoryPage() {
           loading={ordersLoading}
           monthLoading={monthLoading}
           newOrderIds={newOrderIds}
-          passportOrderIds={passportOrderIds}
+          passportsByOrder={passportsByOrder}
           testSummary={testSummary}
           onEnsureMonth={ensureMonth}
           onAcknowledge={acknowledgeOrder}

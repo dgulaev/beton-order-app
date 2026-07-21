@@ -46,6 +46,8 @@ export default function ZayavkiPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'processing' | 'completed' | 'cancelled'>('all');
+  // Режим расширенного поиска по всему месяцу
+  const [searchMode, setSearchMode] = useState(false);
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
   const [newOrderInitialData, setNewOrderInitialData] = useState<any>(null);
   const [orderHistory, setOrderHistory] = useState<any[]>([]);
@@ -563,6 +565,39 @@ ${order.customer_type?.includes('Юридическое')
 
     return matchesSearch && matchesStatus;
   });
+
+  // Результаты расширенного поиска — по всему загруженному месяцу
+  const searchResults = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.trim().toLowerCase();
+    return allOrders
+      .filter((order: any) => {
+        const matchesSearch =
+          (order.organization_name || '').toLowerCase().includes(q) ||
+          (order.full_name || '').toLowerCase().includes(q) ||
+          String(order.id).includes(q) ||
+          (order.inn || '').includes(q) ||
+          (order.grade || '').toLowerCase().includes(q) ||
+          (order.address || '').toLowerCase().includes(q);
+        const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
+        return matchesSearch && matchesStatus;
+      })
+      .sort((a: any, b: any) => {
+        const dc = String(b.delivery_date || '').localeCompare(String(a.delivery_date || ''));
+        if (dc !== 0) return dc;
+        return String(a.delivery_time || '').localeCompare(String(b.delivery_time || ''));
+      });
+  }, [searchMode, searchQuery, allOrders, statusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const runSearch = () => {
+    if (!searchQuery.trim()) return;
+    setSearchMode(true);
+  };
+
+  const clearSearch = () => {
+    setSearchMode(false);
+    setSearchQuery('');
+  };
   
 
        // ==================== ЗАГРУЗКА РЕЦЕПТОВ ====================
@@ -860,81 +895,7 @@ ${order.customer_type?.includes('Юридическое')
           </div>
         </div>
 
-        {/* ── Прогноз добавок на неделю — только при нехватке ── */}
-        {weekAdditiveForecast?.hasAlert && (<>
-          {/* Разделитель */}
-          <div style={{ width: '1px', height: '48px', background: '#334155', flexShrink: 0 }} />
-
-          <div
-            onClick={() => setShowAdditivePopup(true)}
-            style={{
-              background: weekAdditiveForecast.hasAlert ? 'rgba(239,68,68,0.10)' : 'rgba(16,185,129,0.08)',
-              border: `1.5px solid ${weekAdditiveForecast.hasAlert ? 'rgba(239,68,68,0.45)' : 'rgba(16,185,129,0.3)'}`,
-              borderRadius: '14px',
-              padding: '8px 16px',
-              cursor: 'pointer',
-              transition: 'filter 0.15s',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.filter = 'brightness(1.15)')}
-            onMouseLeave={e => (e.currentTarget.style.filter = '')}
-          >
-            {/* Заголовок */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '6px' }}>
-              {weekAdditiveForecast.hasAlert
-                ? <AlertTriangle size={13} color="#EF4444" />
-                : <CheckCircle2 size={13} color="#10B981" />}
-              <span style={{
-                fontSize: '12px', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
-                color: weekAdditiveForecast.hasAlert ? '#FCA5A5' : '#6EE7B7',
-              }}>
-                {weekAdditiveForecast.hasAlert ? 'Нехватка добавок!' : 'Запас добавок'}
-              </span>
-              <span style={{ color: '#94A3B8', fontSize: '11px' }}>на 7 дней</span>
-            </div>
-
-            {/* Обе добавки — горизонтально в одну строку */}
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-              {([
-                { key: 'pfm' as const, name: ADDITIVE_NAMES[1], shortName: 'ПФМ' },
-                { key: 'linomix' as const, name: ADDITIVE_NAMES[2], shortName: 'Линомикс' },
-              ] as const).filter(({ key }) => weekAdditiveForecast[key].needed > 0).map(({ key, shortName }, idx, arr) => {
-                const item = weekAdditiveForecast[key];
-                const pct = item.stock !== null && item.needed > 0
-                  ? Math.min(100, Math.round((item.stock / item.needed) * 100))
-                  : null;
-                return (
-                  <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {/* Вертикальный разделитель между добавками */}
-                    {idx > 0 && <div style={{ width: '1px', height: '32px', background: '#334155', flexShrink: 0 }} />}
-
-                    <div>
-                      <div style={{ color: '#94A3B8', fontSize: '11px', marginBottom: '2px' }}>{shortName}</div>
-                      <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
-                        <span style={{ fontSize: '18px', fontWeight: 700, lineHeight: 1, color: item.shortage ? '#EF4444' : '#10B981' }}>
-                          {item.stock !== null ? Math.round(item.stock) : '—'}
-                        </span>
-                        <span style={{ color: '#94A3B8', fontSize: '12px' }}>/{item.needed} л</span>
-                        {item.shortage && item.stock !== null && (
-                          <span style={{
-                            background: '#EF444425', color: '#F87171',
-                            fontSize: '11px', fontWeight: 700, borderRadius: '6px', padding: '1px 5px',
-                          }}>−{item.needed - Math.round(item.stock)}</span>
-                        )}
-                        {!item.shortage && <span style={{ color: '#10B981', fontSize: '11px' }}>✓</span>}
-                      </div>
-                      {/* Мини прогресс */}
-                      {pct !== null && (
-                        <div style={{ width: '80px', height: '2px', background: '#334155', borderRadius: '9999px', marginTop: '3px' }}>
-                          <div style={{ height: '100%', width: `${pct}%`, background: item.shortage ? '#EF4444' : '#10B981', borderRadius: '9999px' }} />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </>)}
+        {/* Пилюля нехватки добавок перенесена к кнопке Новая заявка */}
 
       </div>
 
@@ -1313,68 +1274,125 @@ ${order.customer_type?.includes('Юридическое')
         {/* ==================== ПРАВАЯ КОЛОНКА — ОСНОВНОЙ СПИСОК ==================== */}
 <div style={{ flex: 1, minHeight: 0, height: '100%', boxSizing: 'border-box', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
 
-  <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
-    <h2 style={{ margin: 0 }}>
-      Заявки на {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
+  {/* Заголовок + поиск + кнопки — всё в одну строку */}
+  <div style={{ marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, flexWrap: 'wrap' }}>
+    {/* Заголовок */}
+    <h2 style={{ margin: 0, flexShrink: 0, fontSize: '18px' }}>
+      {searchMode
+        ? <><span style={{ color: '#3B82F6' }}>«{searchQuery}»</span> <span style={{ color: '#64748B', fontSize: '14px', fontWeight: 400 }}>{searchResults.length} заявок</span></>
+        : selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
     </h2>
 
-    <button 
+    {/* Разделитель */}
+    <div style={{ width: '1px', height: '22px', background: '#334155', flexShrink: 0 }} />
+
+    {/* Строка поиска */}
+    <input
+      type="text"
+      placeholder="Поиск по клиенту, №, ИНН, адресу, марке..."
+      value={searchQuery}
+      onChange={(e) => { setSearchQuery(e.target.value); if (searchMode) setSearchMode(false); }}
+      onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+      style={{
+        padding: '8px 16px',
+        background: searchMode ? 'rgba(59,130,246,0.12)' : '#25334A',
+        border: searchMode ? '1.5px solid rgba(59,130,246,0.4)' : '1.5px solid transparent',
+        borderRadius: '9999px',
+        width: '300px',
+        color: '#fff',
+        fontSize: '14px',
+        outline: 'none',
+        transition: 'all 0.2s',
+        flexShrink: 0,
+      }}
+    />
+
+    <button
+      onClick={runSearch}
+      disabled={!searchQuery.trim()}
+      style={{
+        padding: '8px 18px',
+        background: searchQuery.trim() ? '#3B82F6' : '#25334A',
+        border: 'none',
+        borderRadius: '9999px',
+        color: searchQuery.trim() ? '#fff' : '#64748B',
+        fontSize: '14px',
+        fontWeight: 600,
+        cursor: searchQuery.trim() ? 'pointer' : 'default',
+        transition: 'all 0.2s',
+        flexShrink: 0,
+      }}
+    >
+      Найти
+    </button>
+
+    {searchMode && (
+      <button
+        onClick={clearSearch}
+        style={{
+          padding: '8px 14px',
+          background: 'transparent',
+          border: '1.5px solid #334155',
+          borderRadius: '9999px',
+          color: '#94A3B8',
+          fontSize: '13px',
+          fontWeight: 600,
+          cursor: 'pointer',
+          flexShrink: 0,
+        }}
+      >
+        ✕ Сбросить
+      </button>
+    )}
+
+    {/* Отступ вправо */}
+    <div style={{ flex: 1 }} />
+
+    {/* Пилюля нехватки добавок */}
+    {weekAdditiveForecast?.hasAlert && (
+      <button
+        onClick={() => setShowAdditivePopup(true)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '5px',
+          padding: '8px 14px',
+          background: 'rgba(239,68,68,0.10)',
+          border: '1.5px solid rgba(239,68,68,0.40)',
+          borderRadius: '9999px',
+          color: '#FCA5A5',
+          fontSize: '13px',
+          fontWeight: 600,
+          cursor: 'pointer',
+          transition: 'filter 0.15s',
+          whiteSpace: 'nowrap',
+          flexShrink: 0,
+        }}
+        onMouseEnter={e => (e.currentTarget.style.filter = 'brightness(1.2)')}
+        onMouseLeave={e => (e.currentTarget.style.filter = '')}
+        title="Нехватка добавок — нажмите для деталей"
+      >
+        <AlertTriangle size={13} color="#EF4444" />
+        Не хватает добавок
+      </button>
+    )}
+
+    {/* Кнопка Новая заявка */}
+    <button
       onClick={() => setShowNewOrderModal(true)}
       style={{
-        padding: '14px 32px',
+        padding: '8px 22px',
         background: '#10B981',
         color: 'white',
         border: 'none',
         borderRadius: '9999px',
-        fontSize: '16px',
-        fontWeight: '600',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        cursor: 'pointer'
+        fontSize: '14px',
+        fontWeight: 600,
+        display: 'flex', alignItems: 'center', gap: '6px',
+        cursor: 'pointer',
+        flexShrink: 0,
       }}
     >
       + Новая заявка
     </button>
-  </div>
-
-  {/* Поиск и фильтры */}
-  <div style={{ display: 'flex', gap: '16px', marginBottom: '16px', flexShrink: 0 }}>
-    <input
-      type="text"
-      placeholder="Поиск по клиенту, № заявки или ИНН..."
-      value={searchQuery}
-      onChange={(e) => setSearchQuery(e.target.value)}
-      style={{
-        padding: '12px 20px',
-        background: '#25334A',
-        border: 'none',
-        borderRadius: '9999px',
-        width: '320px',
-        color: '#fff',
-        fontSize: '15px'
-      }}
-    />
-
-    <select 
-      value={statusFilter}
-      onChange={(e) => setStatusFilter(e.target.value as 'all' | 'new' | 'processing' | 'completed' | 'cancelled')}
-      style={{
-        padding: '12px 20px',
-        background: '#25334A',
-        border: 'none',
-        borderRadius: '9999px',
-        color: '#fff',
-        fontSize: '15px',
-        minWidth: '160px'
-      }}
-    >
-      <option value="all">Все статусы</option>
-      <option value="new">🟡 Новая</option>
-      <option value="processing">🔵 В работе</option>
-      <option value="completed">🟢 Выполнена</option>
-      <option value="cancelled">🔴 Отменена</option>
-    </select>
   </div>
 
     {/* ==================== СПИСОК ЗАЯВОК СО СКРОЛЛОМ ==================== */}
@@ -1400,7 +1418,7 @@ ${order.customer_type?.includes('Юридическое')
   }}>
     {loading ? (
       <div style={{ textAlign: 'center', padding: '100px', color: '#64748B' }}>Загрузка заявок...</div>
-    ) : filteredOrders.length > 0 ? filteredOrders.map((order: Order, index: number) => (
+    ) : (searchMode ? searchResults : filteredOrders).length > 0 ? (searchMode ? searchResults : filteredOrders).map((order: Order, index: number) => (
       <div
   key={order.id}
   onClick={() => handleOpenOrder(order)}
@@ -1428,10 +1446,24 @@ ${order.customer_type?.includes('Юридическое')
           {index + 1}
         </div>
 
-        {/* Время */}
+        {/* Дата — только в режиме поиска */}
+        {searchMode && (
+          <div style={{ width: '90px', flexShrink: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: '13px', color: '#CBD5E1' }}>
+              {order.delivery_date ? new Date(order.delivery_date + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '—'}
+            </div>
+            <div style={{ fontSize: '12px', color: '#64748B' }}>
+              {(order as any).delivery_time ? String((order as any).delivery_time).slice(0, 5) : ''}
+            </div>
+          </div>
+        )}
+
+        {/* Время — только вне режима поиска */}
+        {!searchMode && (
         <div style={{ width: '76px', fontWeight: '700', fontSize: '15px' }}>
           {order.delivery_time}
         </div>
+        )}
 
         {/* Информация о заявке */}
         <div style={{ flex: 1, lineHeight: 1.25 }}>
@@ -1476,9 +1508,11 @@ ${order.customer_type?.includes('Юридическое')
           {order.status === 'cancelled' && 'Отменена'}
         </div>
       </div>
-    )) : (
+    )    ) : (
       <div style={{ textAlign: 'center', padding: '140px 0', color: '#64748B', fontSize: '18px' }}>
-        По выбранным фильтрам ничего не найдено
+        {searchMode
+          ? <>Ничего не найдено по запросу <strong style={{ color: '#94A3B8' }}>«{searchQuery}»</strong></>
+          : 'По выбранным фильтрам ничего не найдено'}
       </div>
     )}
   </div>

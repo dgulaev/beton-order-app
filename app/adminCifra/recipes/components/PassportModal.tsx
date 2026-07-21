@@ -11,6 +11,12 @@ interface Props {
   onClose: () => void;
   /** вызывается после сохранения паспорта (для обновления списка заявок) */
   onSaved?: (orderId: number | null) => void;
+  /** Если передан — открываем именно эту запись паспорта (без доп. запроса) */
+  existingRecord?: any | null;
+  /** true = принудительно создаём новый, не загружаем существующий */
+  isNewPassport?: boolean;
+  /** сколько паспортов уже есть у этой заявки (для авто-суффикса номера) */
+  passportCount?: number;
 }
 
 type PassportData = Record<string, any>;
@@ -27,7 +33,7 @@ function composeDesignation(d: PassportData): string {
     .join(' ');
 }
 
-export default function PassportModal({ orderId, specId, initialDocKind = 'concrete', onClose, onSaved }: Props) {
+export default function PassportModal({ orderId, specId, initialDocKind = 'concrete', onClose, onSaved, existingRecord, isNewPassport, passportCount = 0 }: Props) {
   const [docKind, setDocKind] = useState<'concrete' | 'mortar'>(initialDocKind);
   const [data, setData] = useState<PassportData>({ doc_kind: initialDocKind });
   const [loading, setLoading] = useState(true);
@@ -35,6 +41,8 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
   // id уже сохранённого паспорта этого заказа — чтобы правки перезаписывали
   // существующую запись, а не создавали дубликат.
   const [recordId, setRecordId] = useState<number | null>(null);
+  // Рейсы миксеров этой заявки (для dropdown в форме)
+  const [orderMixers, setOrderMixers] = useState<any[]>([]);
 
   const loadAutofill = async (kind: 'concrete' | 'mortar') => {
     setLoading(true);
@@ -46,6 +54,12 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
           draft.designation = composeDesignation(draft);
           draft.issue_date = new Date().toLocaleDateString('ru-RU');
           if (!draft.decl_reg_date) draft.decl_reg_date = kind === 'mortar' ? '' : '18.12.2023';
+          // Авто-суффикс: если уже есть паспорта у этой заявки → добавляем /N+1
+          if (passportCount > 0 && draft.batch_no) {
+            // Убираем старый суффикс если вдруг есть, ставим новый
+            const base = String(draft.batch_no).replace(/\/\d+$/, '');
+            draft.batch_no = `${base}/${passportCount + 1}`;
+          }
           setData(draft);
         }
       } else {
@@ -78,19 +92,35 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
     }
   };
 
-  // При открытии — если по заказу уже есть паспорт, загружаем именно его
-  // (сохранённые данные + id для перезаписи). Иначе собираем черновик.
+  // При открытии — загружаем данные паспорта:
+  // 1. Если передан existingRecord — открываем его напрямую (без запроса)
+  // 2. Если isNewPassport — создаём новый черновик (autofill)
+  // 3. Иначе — старое поведение: ищем последний сохранённый паспорт
   const initPassport = async () => {
     setLoading(true);
     try {
-      // Ищем уже сохранённый паспорт по заказу (или по спецификации).
+      if (existingRecord) {
+        const kind = existingRecord.doc_kind === 'mortar' ? 'mortar' : 'concrete';
+        setRecordId(existingRecord.id);
+        setDocKind(kind);
+        setData({ ...(existingRecord.payload || {}), doc_kind: kind });
+        setLoading(false);
+        return;
+      }
+
+      if (isNewPassport) {
+        await loadAutofill(initialDocKind);
+        return;
+      }
+
+      // Старое поведение: ищем последний сохранённый паспорт по заказу/спецификации
       const q = orderId ? `order_id=${orderId}` : specId ? `spec_id=${specId}` : '';
       if (q) {
         const res = await fetch(`/api/adminCifra/concrete-passports?${q}`);
         if (res.ok) {
           const list = await res.json();
           if (Array.isArray(list) && list.length > 0) {
-            const rec = list[0]; // роут отдаёт по created_at desc — берём последний
+            const rec = list[0];
             const kind = rec.doc_kind === 'mortar' ? 'mortar' : 'concrete';
             setRecordId(rec.id);
             setDocKind(kind);
@@ -106,6 +136,15 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
       setLoading(false);
     }
   };
+
+  // Загружаем рейсы миксеров для этой заявки (если есть orderId)
+  useEffect(() => {
+    if (!orderId) return;
+    fetch(`/api/adminCifra/order-mixers?orderId=${orderId}`)
+      .then(r => r.ok ? r.json() : [])
+      .then((list: any[]) => setOrderMixers(list))
+      .catch(() => {});
+  }, [orderId]);
 
   useEffect(() => {
     initPassport();
@@ -354,7 +393,11 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
     <div style={overlayStyle} onClick={onClose}>
       <div style={modalStyle(720)} onClick={(e) => e.stopPropagation()} className="scroll-hidden">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h2 style={{ fontSize: '20px', color: '#fff', margin: 0 }}>Паспорт качества</h2>
+          <h2 style={{ fontSize: '20px', color: '#fff', margin: 0 }}>
+            {recordId ? `Паспорт качества` : 'Новый паспорт качества'}
+            {data.batch_no && <span style={{ color: COLORS.muted, fontSize: '15px', marginLeft: '10px' }}>#{data.batch_no}</span>}
+            {data.mixer_number && <span style={{ color: COLORS.blue, fontSize: '14px', marginLeft: '8px' }}>· {data.mixer_number}</span>}
+          </h2>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               onClick={() => changeKind('concrete')}
@@ -375,6 +418,36 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
           <p style={{ color: COLORS.muted }}>Загрузка данных...</p>
         ) : (
           <>
+            {/* Привязка к рейсу миксера — показываем только если есть рейсы */}
+            {orderMixers.length > 0 && (
+              <div style={{ marginBottom: '14px' }}>
+                <label style={labelStyle}>Миксер / рейс</label>
+                <select
+                  value={data.mixer_number || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) {
+                      set('mixer_number', '');
+                      return;
+                    }
+                    const trip = orderMixers.find((m: any) => String(m.mixer_name || m.number || '') === val);
+                    set('mixer_number', val);
+                    if (trip?.volume) set('volume', trip.volume);
+                    if (trip?.time) set('shipment_date', String(trip.time).slice(0, 5));
+                  }}
+                  style={{ ...inputStyle, cursor: 'pointer' }}
+                >
+                  <option value="">— не привязан —</option>
+                  {orderMixers.map((m: any, i: number) => {
+                    const num = m.mixer_name || m.number || `Рейс ${i + 1}`;
+                    const vol = m.volume ? ` · ${m.volume} м³` : '';
+                    const t = m.time ? ` · ${String(m.time).slice(0, 5)}` : '';
+                    return <option key={m.id || i} value={num}>{num}{vol}{t}</option>;
+                  })}
+                </select>
+              </div>
+            )}
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
               {field('Номер партии', 'batch_no')}
               {field('№ номинального состава', 'mix_no')}

@@ -24,8 +24,9 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   });
 
 
-    // ==================== 3. РЕЦЕПТЫ + РОЛЬ ====================
+    // ==================== 3. РЕЦЕПТЫ + КЛИЕНТЫ + РОЛЬ ====================
   const [recipes, setRecipes] = useState<any[]>([]);
+  const [allClients, setAllClients] = useState<any[]>([]);
 
   // Роль и имя берём из UserRoleProvider
   const currentRole = user?.role || 'admin';
@@ -38,6 +39,13 @@ const { user } = useUserRole();   // ← Берём роль из провайд
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => setRecipes(data))
       .catch((err) => console.error('Ошибка загрузки рецептов:', err));
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/adminCifra/clients')
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setAllClients(Array.isArray(data) ? data : []))
+      .catch(() => {});
   }, []);
 
   // Заявки — грузим только за МЕСЯЦ выбранной даты (как на дашборде), а не
@@ -428,6 +436,8 @@ const { user } = useUserRole();   // ← Берём роль из провайд
         onCopyOrder={handleCopyToNewOrder}
         currentRole={currentRole}
         currentUserName={userFullName}
+        recipes={recipes}
+        clients={allClients}
       />
     </>
   );
