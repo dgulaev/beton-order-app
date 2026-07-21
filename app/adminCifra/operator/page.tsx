@@ -409,12 +409,19 @@ export default function OperatorBSUPage() {
         // ==================== 1.2 ОТГРУЖЕНО СЕГОДНЯ (загрузка из базы) ====================
   const [completedTrips, setCompletedTrips] = useState<any[]>([]);
 
-  // Загрузка отгруженных рейсов из базы
+  // Загрузка отгруженных рейсов из базы — перезагружается при смене даты
   useEffect(() => {
+    let cancelled = false;
     const fetchCompletedTrips = async () => {
       try {
-        const res = await fetch('/api/adminCifra/production-log?today=true');
-        if (res.ok) {
+        const now = new Date();
+        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const selStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
+        // Для сегодня используем ?today=true (быстрый фильтр по created_at),
+        // для прошлых дат — ?date=YYYY-MM-DD (фильтр по orders.delivery_date)
+        const param = selStr === todayStr ? 'today=true' : `date=${selStr}`;
+        const res = await fetch(`/api/adminCifra/production-log?${param}`);
+        if (res.ok && !cancelled) {
           const data = await res.json();
           setCompletedTrips(Array.isArray(data) ? data : []);
         }
@@ -424,7 +431,8 @@ export default function OperatorBSUPage() {
     };
 
     fetchCompletedTrips();
-  }, []);
+    return () => { cancelled = true; };
+  }, [selectedDate]);
 
   // Live-обновление ленты "Отгружено сегодня" — подхватывает записи от любого оператора
   useRealtimeProductionLogs(setCompletedTrips);

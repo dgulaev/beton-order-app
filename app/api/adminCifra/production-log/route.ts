@@ -11,6 +11,9 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const todayOnly = searchParams.get('today') === 'true';
+    // ?date=YYYY-MM-DD — фильтр по конкретной дате (используется оператором
+    // при переключении на прошлые дни). Если не передан — поведение прежнее.
+    const dateParam = searchParams.get('date'); // формат YYYY-MM-DD
 
     let query = supabase
       .from('production_logs')
@@ -27,8 +30,11 @@ export async function GET(request: NextRequest) {
       `)
       .order('created_at', { ascending: false });
 
-    // Если запрос с ?today=true — фильтруем только сегодняшний день
-    if (todayOnly) {
+    if (dateParam) {
+      // Фильтруем по конкретной дате через delivery_date в таблице orders
+      query = query.eq('orders.delivery_date', dateParam);
+    } else if (todayOnly) {
+      // Обратная совместимость: ?today=true фильтрует по created_at >= начало сегодня
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       query = query.gte('created_at', todayStart.toISOString());
@@ -68,7 +74,7 @@ export async function GET(request: NextRequest) {
         .map((id: any) => String(id))
     );
 
-    const { data: orphanMixers, error: orphanError } = await supabase
+    let orphanQuery = supabase
       .from('order_mixers')
       .select(`
         id,
@@ -83,6 +89,17 @@ export async function GET(request: NextRequest) {
         orders!inner ( delivery_date, delivery_time, volume, grade )
       `)
       .in('status', ['Разгружен', 'Возврат']);
+
+    // При фильтрации по конкретной дате ограничиваем и осиротевшие рейсы
+    if (dateParam) {
+      orphanQuery = orphanQuery.eq('orders.delivery_date', dateParam);
+    } else if (todayOnly) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      orphanQuery = orphanQuery.gte('updated_at', todayStart.toISOString());
+    }
+
+    const { data: orphanMixers, error: orphanError } = await orphanQuery;
 
     if (orphanError) {
       console.error('Production log orphan mixers error:', orphanError);
