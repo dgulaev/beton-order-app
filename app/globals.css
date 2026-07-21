@@ -123,7 +123,7 @@ body::-webkit-scrollbar,
 @keyframes chartReveal {
   from {
     opacity: 0;
-    transform: scale(0.82);
+    transform: scale(0.92);
   }
   to {
     opacity: 1;

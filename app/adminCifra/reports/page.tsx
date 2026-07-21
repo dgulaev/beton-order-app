@@ -1,15 +1,244 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell 
 } from 'recharts';
+import { findRecipeByGrade, getAdditiveDosage, type RecipeLike } from '@/lib/recipeAdditives';
 
 const COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
 
 // Кеш данных между переключениями вкладок — не нужно рефетчить каждый раз
 let _historyCache: any[] | null = null;
+
+// Кеш рецептов для нормы добавок (сверка без склада)
+let _recipesCache: RecipeLike[] | null = null;
+
+// Кеш факта по маркам из production_logs (кнопка «Сверка» / модалка)
+const _gradesActualCache = new Map<string, { grade: string; volumeM3: number }[]>();
+
+/** Порог итогового расхождения объёма по маркам (план MEKA vs факт отгрузки), %. */
+const RECONCILE_VOLUME_ALERT_PERCENT = 0.5;
+
+async function loadRecipesForReconcile(): Promise<RecipeLike[]> {
+  if (_recipesCache) return _recipesCache;
+  const res = await fetch('/api/adminCifra/recipes', { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Рецепты: HTTP ${res.status}`);
+  const data = await res.json();
+  _recipesCache = Array.isArray(data) ? data : [];
+  return _recipesCache;
+}
+
+/** Дата отчёта в YYYY-MM-DD — из report_date или первой строки raw_data (ДД.ММ.ГГГГ). */
+function getReportDateIso(report: any): string | null {
+  const raw = report?.report_date || report?.raw_data?.[0]?.date || '';
+  if (!raw) return null;
+  if (raw.includes('.')) {
+    const [day, month, year] = String(raw).split('.');
+    if (!day || !month || !year) return null;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  // Уже YYYY-MM-DD (или ISO с временем)
+  return String(raw).substring(0, 10);
+}
+
+/**
+ * Расход добавок по отчёту MEKA (кг) — колонки «Добавка 1 ПФМ» / «Добавка 2 Линомикс».
+ * Склад и ручные операции не участвуют.
+ */
+function getMekaPlantAdditives(rawData: any[] | null | undefined) {
+  const rows = Array.isArray(rawData) ? rawData : [];
+  const pfmKg = rows.reduce((sum, r) => sum + (Number(r.additive) || 0), 0);
+  const linomixKg = rows.reduce((sum, r) => sum + (Number(r.additive2) || 0), 0);
+  return {
+    pfmKg: Math.round(pfmKg * 10) / 10,
+    linomixKg: Math.round(linomixKg * 10) / 10,
+  };
+}
+
+/**
+ * Норма добавок (кг) по отгрузкам завода: объём марки × дозировка рецепта.
+ * Пример: м300 10 м³ × 3.8 кг/м³ = 38 кг.
+ * Объёмы — из отгрузок (production_logs), как у сверки марок; не из MEKA qty.
+ */
+function getNormativeAdditivesFromShipments(
+  shipments: { grade: string; volumeM3: number }[],
+  recipes: RecipeLike[]
+) {
+  let pfmKg = 0;
+  let linomixKg = 0;
+  (Array.isArray(shipments) ? shipments : []).forEach((row) => {
+    const volumeM3 = Number(row?.volumeM3) || 0;
+    if (volumeM3 <= 0) return;
+    const recipe = findRecipeByGrade(recipes, row?.grade);
+    const dosage = getAdditiveDosage(recipe);
+    if (!dosage) return;
+    const kg = volumeM3 * dosage.kgPerM3;
+    if (dosage.additiveId === 1) pfmKg += kg;
+    else if (dosage.additiveId === 2) linomixKg += kg;
+  });
+  return {
+    pfmKg: Math.round(pfmKg * 10) / 10,
+    linomixKg: Math.round(linomixKg * 10) / 10,
+  };
+}
+
+/** Нормализация марки/рецепта для сопоставления MEKA ↔ приложение. */
+function normalizeGradeKey(value: string): string {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/Ё/g, 'Е')
+    .replace(/\s+/g, '')
+    .replace(/M(?=\d)/g, 'М'); // латинская M перед цифрой → кириллическая М
+}
+
+/** План по маркам (м³) из строк отчёта MEKA: recipe → Σ qty. */
+function getPlanGrades(rawData: any[] | null | undefined): { grade: string; volumeM3: number }[] {
+  const groups = new Map<string, { grade: string; volumeM3: number }>();
+  (Array.isArray(rawData) ? rawData : []).forEach((row: any) => {
+    const recipe = String(row?.recipe || '').trim();
+    if (!recipe || recipe === 'Неизвестно' || recipe.includes('ИТОГО')) return;
+    const key = normalizeGradeKey(recipe);
+    if (!key) return;
+    const prev = groups.get(key);
+    const qty = Number(row.qty) || 0;
+    if (prev) prev.volumeM3 += qty;
+    else groups.set(key, { grade: recipe, volumeM3: qty });
+  });
+  return Array.from(groups.values()).map((g) => ({
+    grade: g.grade,
+    volumeM3: Math.round(g.volumeM3 * 10) / 10,
+  }));
+}
+
+/** Факт по маркам (м³) из production_logs (+ осиротевшие рейсы). */
+function getActualGradesFromLogs(logs: any[]): { grade: string; volumeM3: number }[] {
+  const groups = new Map<string, { grade: string; volumeM3: number }>();
+  (Array.isArray(logs) ? logs : []).forEach((log: any) => {
+    const grade = String(log?.concrete_grade || '').trim() || '—';
+    const key = normalizeGradeKey(grade);
+    if (!key) return;
+    const prev = groups.get(key);
+    const vol = Number(log.volume) || 0;
+    if (prev) prev.volumeM3 += vol;
+    else groups.set(key, { grade, volumeM3: vol });
+  });
+  return Array.from(groups.values()).map((g) => ({
+    grade: g.grade,
+    volumeM3: Math.round(g.volumeM3 * 10) / 10,
+  }));
+}
+
+/**
+ * Сводит план (MEKA recipe) и факт (concrete_grade) в общие строки.
+ * Сопоставление: точный ключ → без хвостового «И» → вхождение одной строки в другую.
+ */
+function mergeGradeRows(
+  plan: { grade: string; volumeM3: number }[],
+  actual: { grade: string; volumeM3: number }[]
+): { grade: string; planM3: number; actualM3: number }[] {
+  const actualByKey = new Map(
+    actual.map((a) => [normalizeGradeKey(a.grade), { ...a }])
+  );
+  const usedActual = new Set<string>();
+
+  const findActualKey = (planKey: string): string | null => {
+    if (actualByKey.has(planKey)) return planKey;
+    const withoutI = planKey.replace(/И$/, '');
+    if (withoutI && actualByKey.has(withoutI)) return withoutI;
+    if (withoutI) {
+      for (const key of actualByKey.keys()) {
+        if (key.replace(/И$/, '') === withoutI) return key;
+      }
+    }
+    for (const key of actualByKey.keys()) {
+      if (key.includes(planKey) || planKey.includes(key)) return key;
+    }
+    return null;
+  };
+
+  const rows: { grade: string; planM3: number; actualM3: number }[] = [];
+
+  plan.forEach((p) => {
+    const planKey = normalizeGradeKey(p.grade);
+    const actualKey = findActualKey(planKey);
+    let actualM3 = 0;
+    if (actualKey && !usedActual.has(actualKey)) {
+      actualM3 = actualByKey.get(actualKey)?.volumeM3 ?? 0;
+      usedActual.add(actualKey);
+    }
+    rows.push({ grade: p.grade, planM3: p.volumeM3, actualM3 });
+  });
+
+  actual.forEach((a) => {
+    const key = normalizeGradeKey(a.grade);
+    if (usedActual.has(key)) return;
+    rows.push({ grade: a.grade, planM3: 0, actualM3: a.volumeM3 });
+  });
+
+  return rows.sort((a, b) => (b.planM3 + b.actualM3) - (a.planM3 + a.actualM3));
+}
+
+/**
+ * Итоговое расхождение объёма, %: |факт − план| / план × 100.
+ * При plan ≤ 0: 0 если факта нет, иначе Infinity (считаем алертом).
+ */
+function getVolumeDeltaPercent(planM3: number, actualM3: number): number {
+  if (planM3 <= 0) return actualM3 > 0 ? Infinity : 0;
+  return (Math.abs(actualM3 - planM3) / planM3) * 100;
+}
+
+function isVolumeOverAlertThreshold(planM3: number, actualM3: number): boolean {
+  return getVolumeDeltaPercent(planM3, actualM3) > RECONCILE_VOLUME_ALERT_PERCENT;
+}
+
+type VolumeAlertInfo = {
+  over: boolean;
+  percent: number;
+  planM3: number;
+  actualM3: number;
+};
+
+async function fetchGradesActualForDate(dateIso: string): Promise<{ grade: string; volumeM3: number }[]> {
+  const cached = _gradesActualCache.get(dateIso);
+  if (cached) return cached;
+
+  const res = await fetch(`/api/adminCifra/production-log?date=${dateIso}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Отгрузка: HTTP ${res.status}`);
+  const logs = await res.json();
+  const gradesActual = getActualGradesFromLogs(Array.isArray(logs) ? logs : []);
+  _gradesActualCache.set(dateIso, gradesActual);
+  return gradesActual;
+}
+
+function computeVolumeAlert(
+  rawData: any[] | null | undefined,
+  gradesActual: { grade: string; volumeM3: number }[]
+): VolumeAlertInfo {
+  const planM3 = getPlanGrades(rawData).reduce((s, g) => s + g.volumeM3, 0);
+  const actualM3 = gradesActual.reduce((s, g) => s + g.volumeM3, 0);
+  const percent = getVolumeDeltaPercent(planM3, actualM3);
+  return {
+    over: isVolumeOverAlertThreshold(planM3, actualM3),
+    percent: Number.isFinite(percent) ? Math.round(percent * 100) / 100 : percent,
+    planM3: Math.round(planM3 * 10) / 10,
+    actualM3: Math.round(actualM3 * 10) / 10,
+  };
+}
+
+type ReconcileModalState = {
+  dateIso: string;
+  dateLabel: string;
+  fileName: string;
+  plan: { pfmKg: number; linomixKg: number };
+  actual: { pfmKg: number; linomixKg: number } | null;
+  trips: number | null;
+  grades: { grade: string; planM3: number; actualM3: number }[];
+  loading: boolean;
+  error: string | null;
+};
 
 // Вызывается из operator/page.tsx при его монтировании — загружает данные фоново,
 // пока пользователь ещё смотрит на вкладку «Заявки». К моменту клика на «Отчёты»
@@ -26,16 +255,99 @@ export async function preloadReportsData(): Promise<void> {
   }
 }
 
+/** Быстрые периоды для фильтра истории / статистики. */
+type PeriodPreset = 'month' | 'last_month' | 'week' | 'days30' | 'year' | 'last_year' | 'all' | 'custom';
+
+function toIsoDate(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function getPeriodRange(preset: Exclude<PeriodPreset, 'custom'>): { from: string; to: string } {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  switch (preset) {
+    case 'month': {
+      const lastDay = new Date(y, m + 1, 0).getDate();
+      return { from: `${y}-${pad(m + 1)}-01`, to: `${y}-${pad(m + 1)}-${pad(lastDay)}` };
+    }
+    case 'last_month': {
+      const lm = m === 0 ? 11 : m - 1;
+      const ly = m === 0 ? y - 1 : y;
+      const lastDay = new Date(ly, lm + 1, 0).getDate();
+      return { from: `${ly}-${pad(lm + 1)}-01`, to: `${ly}-${pad(lm + 1)}-${pad(lastDay)}` };
+    }
+    case 'week': {
+      const from = new Date(now);
+      from.setDate(from.getDate() - 6);
+      return { from: toIsoDate(from), to: toIsoDate(now) };
+    }
+    case 'days30': {
+      const from = new Date(now);
+      from.setDate(from.getDate() - 29);
+      return { from: toIsoDate(from), to: toIsoDate(now) };
+    }
+    case 'year':
+      return { from: `${y}-01-01`, to: toIsoDate(now) };
+    case 'last_year': {
+      const from = new Date(now);
+      from.setFullYear(from.getFullYear() - 1);
+      return { from: toIsoDate(from), to: toIsoDate(now) };
+    }
+    case 'all':
+      return { from: '', to: '' };
+  }
+}
+
+const PERIOD_PRESETS: { key: PeriodPreset; label: string }[] = [
+  { key: 'month', label: 'Этот месяц' },
+  { key: 'last_month', label: 'Прошлый месяц' },
+  { key: 'week', label: '7 дней' },
+  { key: 'days30', label: '30 дней' },
+  { key: 'year', label: 'Этот год' },
+  { key: 'last_year', label: '12 месяцев' },
+  { key: 'all', label: 'Всё время' },
+  { key: 'custom', label: 'Период' },
+];
+
+function formatRuDateShort(iso: string): string {
+  if (!iso || iso.length < 10) return iso;
+  const [y, m, d] = iso.split('-');
+  return `${d}.${m}.${y.slice(2)}`;
+}
+
 export default function ReportsPage() {
   const [history, setHistory] = useState<any[]>(_historyCache || []);
   const [isLoading, setIsLoading] = useState(!_historyCache);
   const [reportData, setReportData] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  // По умолчанию — текущий месяц (статистика и список сразу за месяц, не за всё время)
+  const [periodPreset, setPeriodPreset] = useState<PeriodPreset>('month');
+  const [dateFrom, setDateFrom] = useState(() => getPeriodRange('month').from);
+  const [dateTo, setDateTo] = useState(() => getPeriodRange('month').to);
   const [viewMode, setViewMode] = useState<'month' | 'day'>('day');
   const [currentPage, setCurrentPage] = useState(1);
   const [scaleMode, setScaleMode] = useState<'linear' | 'log'>('linear');
+
+  const applyPeriodPreset = (preset: PeriodPreset) => {
+    setPeriodPreset(preset);
+    setCurrentPage(1);
+    if (preset === 'custom') {
+      // Если дат ещё нет — подставляем текущий месяц как стартовую рамку для правки
+      if (!dateFrom && !dateTo) {
+        const range = getPeriodRange('month');
+        setDateFrom(range.from);
+        setDateTo(range.to);
+      }
+      return;
+    }
+    const range = getPeriodRange(preset);
+    setDateFrom(range.from);
+    setDateTo(range.to);
+  };
 
   // Список загруженных отчётов не скроллится — вместо этого подстраиваем
   // количество строк на странице под реально доступную высоту (адаптивно
@@ -90,7 +402,7 @@ export default function ReportsPage() {
   useEffect(() => {
     const el = historyListRef.current;
     if (!el) return;
-    const GAP = 8;
+    const GAP = 5;
     const adjust = () => {
       if (el.clientHeight <= 0) return;
       const rows = Array.from(el.children) as HTMLElement[];
@@ -148,11 +460,77 @@ export default function ReportsPage() {
   // Метаданные отчёта, открытого в модалке (для заголовка) — сами строки лежат в reportData
   const [openReportMeta, setOpenReportMeta] = useState<{ fileName: string; dateLabel: string } | null>(null);
 
+  // Сверка: добавки (норма по рецепту vs завод MEKA) + марки (MEKA vs отгрузка)
+  const [reconcileModal, setReconcileModal] = useState<ReconcileModalState | null>(null);
+  const [reconcileLoadingId, setReconcileLoadingId] = useState<string | number | null>(null);
+  // Индикатор на кнопке «Сверка»: итоговое расхождение объёма по маркам > 0.5%
+  const [volumeAlerts, setVolumeAlerts] = useState<Record<string, VolumeAlertInfo>>({});
+  const volumeAlertCheckedRef = useRef<Set<string>>(new Set());
+
   const closeReportModal = () => {
     setReportData([]);
     setOpenReportMeta(null);
     setSelectedRecipes(null);
     setRecipeFilterOpen(false);
+  };
+
+  const openReconcileForReport = async (report: any) => {
+    const dateIso = getReportDateIso(report);
+    if (!dateIso) {
+      alert('Не удалось определить дату отчёта для сверки');
+      return;
+    }
+
+    const excelDate = report.raw_data?.[0]?.date || report.report_date || dateIso;
+    const planGrades = getPlanGrades(report.raw_data);
+    // Факт добавок — сразу из MEKA (завод). Склад/ручные списания не трогаем.
+    const plantAdditives = getMekaPlantAdditives(report.raw_data);
+    const mekaBatches = Array.isArray(report.raw_data) ? report.raw_data.length : 0;
+
+    setReconcileLoadingId(report.id);
+    setReconcileModal({
+      dateIso,
+      dateLabel: excelDate,
+      fileName: report.file_name || '',
+      plan: { pfmKg: 0, linomixKg: 0 },
+      actual: plantAdditives,
+      trips: mekaBatches,
+      grades: planGrades.map((g) => ({ grade: g.grade, planM3: g.volumeM3, actualM3: 0 })),
+      loading: true,
+      error: null,
+    });
+
+    try {
+      const [recipes, gradesActual] = await Promise.all([
+        loadRecipesForReconcile(),
+        fetchGradesActualForDate(dateIso),
+      ]);
+
+      // Добавки: MEKA (колонки ПФМ/Линомикс) vs отгрузки × рецепт — как у марок
+      const plan = getNormativeAdditivesFromShipments(gradesActual, recipes);
+      const grades = mergeGradeRows(planGrades, gradesActual);
+      const volumeAlert = computeVolumeAlert(report.raw_data, gradesActual);
+      volumeAlertCheckedRef.current.add(String(report.id));
+      setVolumeAlerts((prev) => ({ ...prev, [String(report.id)]: volumeAlert }));
+
+      setReconcileModal((prev) => prev ? {
+        ...prev,
+        plan,
+        actual: plantAdditives,
+        trips: mekaBatches,
+        grades,
+        loading: false,
+      } : prev);
+    } catch (err) {
+      console.error('Не удалось получить сверку:', err);
+      setReconcileModal((prev) => prev ? {
+        ...prev,
+        loading: false,
+        error: 'Не удалось загрузить норму по рецептам / отгрузку',
+      } : prev);
+    } finally {
+      setReconcileLoadingId(null);
+    }
   };
 
   // Закрытие модалки детального отчёта по Escape
@@ -164,6 +542,16 @@ export default function ReportsPage() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [reportData.length]);
+
+  // Закрытие модалки сверки по Escape
+  useEffect(() => {
+    if (!reconcileModal) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setReconcileModal(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [reconcileModal]);
 
   const loadHistory = async (force = false) => {
     // Если данные уже есть в кеше и не форс — показываем мгновенно
@@ -178,6 +566,9 @@ export default function ReportsPage() {
       if (res.ok) {
         const data = await res.json();
         _historyCache = data;
+        // Новая история — пересчитаем индикаторы на кнопках «Сверка»
+        volumeAlertCheckedRef.current.clear();
+        setVolumeAlerts({});
         setHistory(data);
         setCurrentPage(1);
       } else {
@@ -222,21 +613,15 @@ export default function ReportsPage() {
 
   // ==================== ФИЛЬТРАЦИЯ И ПАГИНАЦИЯ ====================
   const filteredHistory = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
     return history.filter(report => {
-      let excelDate = report.raw_data?.[0]?.date || report.report_date || '';
-      let reportDateStr = '';
+      const reportDateStr = getReportDateIso(report) || '';
+      const excelDate = report.raw_data?.[0]?.date || report.report_date || '';
 
-      if (excelDate.includes('.')) {
-        const [day, month, year] = excelDate.split('.');
-        reportDateStr = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-      } else {
-        reportDateStr = String(excelDate);
-      }
-
-      const matchesSearch = 
-        report.file_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        excelDate.includes(searchTerm) ||
-        reportDateStr.includes(searchTerm);
+      const matchesSearch = !q ||
+        String(report.file_name || '').toLowerCase().includes(q) ||
+        String(excelDate).toLowerCase().includes(q) ||
+        reportDateStr.includes(q);
 
       let matchesDate = true;
       if (dateFrom) matchesDate = matchesDate && reportDateStr >= dateFrom;
@@ -245,6 +630,28 @@ export default function ReportsPage() {
       return matchesSearch && matchesDate;
     });
   }, [history, searchTerm, dateFrom, dateTo]);
+
+  const periodLabel = useMemo(() => {
+    switch (periodPreset) {
+      case 'month':
+        return new Date().toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+      case 'last_month': {
+        const d = new Date();
+        d.setMonth(d.getMonth() - 1);
+        return d.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+      }
+      case 'week': return 'последние 7 дней';
+      case 'days30': return 'последние 30 дней';
+      case 'year': return `год ${new Date().getFullYear()}`;
+      case 'last_year': return 'последние 12 месяцев';
+      case 'all': return 'всё время';
+      case 'custom':
+        if (dateFrom && dateTo) return `${formatRuDateShort(dateFrom)} — ${formatRuDateShort(dateTo)}`;
+        if (dateFrom) return `с ${formatRuDateShort(dateFrom)}`;
+        if (dateTo) return `по ${formatRuDateShort(dateTo)}`;
+        return 'свой период';
+    }
+  }, [periodPreset, dateFrom, dateTo]);
 
   const totalPages = Math.ceil(filteredHistory.length / itemsPerPage);
 
@@ -296,6 +703,43 @@ export default function ReportsPage() {
     (safeCurrentPage - 1) * itemsPerPage,
     safeCurrentPage * itemsPerPage
   );
+
+  // Фоновый расчёт индикатора на кнопке «Сверка» для видимых строк истории.
+  // В checked попадают только успешно посчитанные id — иначе при отмене эффекта
+  // из‑за ре-рендера строка навсегда осталась бы без индикатора.
+  const visibleReportKey = currentReports.map((r: any) => r.id).join(',');
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkVisible = async () => {
+      for (const report of currentReports) {
+        if (cancelled) return;
+        const id = String(report.id);
+        if (volumeAlertCheckedRef.current.has(id)) continue;
+
+        const dateIso = getReportDateIso(report);
+        if (!dateIso) {
+          volumeAlertCheckedRef.current.add(id);
+          continue;
+        }
+
+        try {
+          const gradesActual = await fetchGradesActualForDate(dateIso);
+          if (cancelled) return;
+          const info = computeVolumeAlert(report.raw_data, gradesActual);
+          volumeAlertCheckedRef.current.add(id);
+          setVolumeAlerts((prev) => ({ ...prev, [id]: info }));
+        } catch (err) {
+          console.error(`Не удалось проверить расхождение объёма для отчёта #${id}:`, err);
+        }
+      }
+    };
+
+    checkVisible();
+    return () => { cancelled = true; };
+  // visibleReportKey стабилизирует зависимость: сам currentReports — новый массив каждый рендер
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleReportKey]);
 
     // ==================== ГРАФИКИ ====================
 
@@ -352,13 +796,14 @@ export default function ReportsPage() {
 
           return {
             label,
-            value: Math.round(Number(volume) || 0),   // ← Округляем до целого
+            value: Math.round(Number(volume) || 0),
             fullDate,
-            dateObj: new Date(fullDate)
+            dateObj: new Date(`${fullDate}T12:00:00`)
           };
         })
-        .sort((a, b) => b.dateObj.getTime() - a.dateObj.getTime())
-        .slice(0, 31);
+        // Слева → направо: от старых к новым (удобнее читать период)
+        .sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime())
+        .slice(-31);
     }, [filteredHistory]);
 
       // ==================== КАСТОМНЫЙ TOOLTIP ====================
@@ -450,11 +895,11 @@ export default function ReportsPage() {
     });
 
     return [
-      { name: "Цемент",   value: Math.round(cement),   fill: "#F59E0B" },
-      { name: "Песок",    value: Math.round(sand),     fill: "#3B82F6" },
-      { name: "Щебень",   value: Math.round(gravel),   fill: "#10B981" },
-      { name: "Вода",     value: Math.round(water),    fill: "#8B5CF6" },
-      { name: "Добавка",  value: Math.round(additive), fill: "#EF4444" }
+      { name: 'Цемент', value: Math.round(cement), fill: '#F59E0B' },
+      { name: 'Песок', value: Math.round(sand), fill: '#3B82F6' },
+      { name: 'Щебень', value: Math.round(gravel), fill: '#10B981' },
+      { name: 'Вода', value: Math.round(water), fill: '#8B5CF6' },
+      { name: 'Добавка', value: Math.round(additive), fill: '#EF4444' },
     ];
   }, [filteredHistory]);
 
@@ -494,7 +939,7 @@ export default function ReportsPage() {
     return null;
   };
 
-    // ==================== СТАТИСТИКА ====================
+    // ==================== СТАТИСТИКА (по выбранному периоду фильтра) ====================
   const stats = useMemo(() => {
     const totalVolume = filteredHistory.reduce((sum, r) => sum + (r.total_volume || 0), 0);
     const totalCement = filteredHistory.reduce((sum, r) => sum + (r.total_cement || 0), 0);
@@ -546,146 +991,189 @@ export default function ReportsPage() {
       overflow: 'hidden',
       gap: 'clamp(6px, 0.9vh, 14px)'
     }}>
-          {/* ==================== СТАТИСТИКА СВЕРХУ ====================
-              Компактные карточки с адаптивными (clamp) отступами/шрифтом —
-              на 4K они крупнее, на маленьких экранах ужимаются, но не скроллятся.
-              Кнопка загрузки отчёта перенесена вниз, к шапке "История..." —
-              освободившееся место отдано под эти карточки. */}
-<div style={{ 
-  display: 'grid', 
-  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
-  gap: 'clamp(8px, 1vw, 14px)',
-  flexShrink: 0
-}}>
-  
-  {/* Всего отчётов */}
-  <div style={{ 
-    background: '#1E2937', 
-    borderRadius: '16px', 
-    padding: 'clamp(8px, 1.2vh, 16px) clamp(12px, 1.4vw, 20px)' 
-  }}>
-    <div style={{ color: '#94A3B8', fontSize: 'clamp(11px, 0.9vw, 13.5px)', marginBottom: '4px' }}>Всего отчётов</div>
-    <div style={{ fontSize: 'clamp(20px, 2.2vw, 32px)', fontWeight: '700' }}>{stats.reports}</div>
-  </div>
-
-  {/* Общий объём */}
-  <div style={{ 
-    background: '#1E2937', 
-    borderRadius: '16px', 
-    padding: 'clamp(8px, 1.2vh, 16px) clamp(12px, 1.4vw, 20px)' 
-  }}>
-    <div style={{ color: '#94A3B8', fontSize: 'clamp(11px, 0.9vw, 13.5px)', marginBottom: '4px' }}>Общий объём</div>
-    <div style={{ fontSize: 'clamp(20px, 2.2vw, 32px)', fontWeight: '700', color: '#10B981' }}>
-      {stats.volume} м³
-    </div>
-  </div>
-
-  {/* Цемент */}
-  <div style={{ 
-    background: '#1E2937', 
-    borderRadius: '16px', 
-    padding: 'clamp(8px, 1.2vh, 16px) clamp(12px, 1.4vw, 20px)' 
-  }}>
-    <div style={{ color: '#94A3B8', fontSize: 'clamp(11px, 0.9vw, 13.5px)', marginBottom: '4px' }}>Цемент израсходовано</div>
-    <div style={{ fontSize: 'clamp(20px, 2.2vw, 32px)', fontWeight: '700', color: '#F59E0B' }}>
-      {stats.cement} т
-    </div>
-  </div>
-
-  {/* Добавка 1 */}
-  <div style={{ 
-    background: '#1E2937', 
-    borderRadius: '16px', 
-    padding: 'clamp(8px, 1.2vh, 16px) clamp(12px, 1.4vw, 20px)' 
-  }}>
-    <div style={{ color: '#94A3B8', fontSize: 'clamp(11px, 0.9vw, 13.5px)', marginBottom: '4px' }}>Добавка 1 (ПФМ-НЛК)</div>
-    <div style={{ fontSize: 'clamp(20px, 2.2vw, 32px)', fontWeight: '700', color: '#8B5CF6' }}>
-      {stats.additive1} кг
-    </div>
-  </div>
-
-  {/* Добавка 2 */}
-  <div style={{ 
-    background: '#1E2937', 
-    borderRadius: '16px', 
-    padding: 'clamp(8px, 1.2vh, 16px) clamp(12px, 1.4vw, 20px)' 
-  }}>
-    <div style={{ color: '#94A3B8', fontSize: 'clamp(11px, 0.9vw, 13.5px)', marginBottom: '4px' }}>Добавка 2 (Линомикс)</div>
-    <div style={{ fontSize: 'clamp(20px, 2.2vw, 32px)', fontWeight: '700', color: '#EC4899' }}>
-      {stats.additive2} кг
-    </div>
-  </div>
-
-</div>
-
-          {/* Фильтры */}
-          <div style={{ display: 'flex', gap: 'clamp(8px, 1vw, 16px)', flexWrap: 'wrap', alignItems: 'end', flexShrink: 0 }}>
-            <div>
-              <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px' }}>Поиск</div>
-              <input 
-                type="text" 
-                placeholder="Имя файла или дата..." 
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                style={{
-                  padding: 'clamp(8px, 1vh, 14px) 20px',
-                  backgroundColor: '#1E2937',
-                  border: 'none',
-                  borderRadius: '9999px',
-                  color: 'white',
-                  width: 'clamp(220px, 22vw, 340px)',
-                  fontSize: '14px'
-                }}
-              />
+          {/* ==================== СТАТИСТИКА + ФИЛЬТРЫ ====================
+              Статистика считается по выбранному периоду (по умолчанию — текущий месяц).
+              Пресеты периода влияют и на карточки, и на список/графики. */}
+          <div style={{
+            background: '#1E2937',
+            borderRadius: '16px',
+            border: '1px solid #334155',
+            padding: 'clamp(10px, 1.2vh, 14px) clamp(12px, 1.4vw, 18px)',
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 'clamp(8px, 1vh, 12px)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+              <div style={{ color: '#E2E8F0', fontSize: 'clamp(13px, 1vw, 15px)', fontWeight: 600 }}>
+                Статистика
+                <span style={{ color: '#94A3B8', fontWeight: 500, marginLeft: '8px', fontSize: 'clamp(11px, 0.85vw, 13px)' }}>
+                  · {periodLabel}
+                </span>
+              </div>
             </div>
 
-            <div>
-              <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px' }}>С даты</div>
-              <input 
-                type="date" 
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                style={{
-                  padding: 'clamp(8px, 1vh, 14px) 20px',
-                  backgroundColor: '#1E2937',
-                  border: 'none',
-                  borderRadius: '9999px',
-                  color: 'white',
-                  fontSize: '14px'
-                }}
-              />
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+              gap: 'clamp(6px, 0.8vw, 10px)',
+            }}>
+              {([
+                { label: 'Отчётов', value: String(stats.reports), unit: '', color: '#CBD5E1' },
+                { label: 'Объём', value: stats.volume, unit: 'м³', color: '#6EE7B7' },
+                { label: 'Цемент', value: stats.cement, unit: 'т', color: '#FBBF24' },
+                { label: 'ПФМ-НЛК', value: String(stats.additive1), unit: 'кг', color: '#A78BFA' },
+                { label: 'Линомикс', value: String(stats.additive2), unit: 'кг', color: '#F9A8D4' },
+              ] as const).map((card) => (
+                <div
+                  key={card.label}
+                  style={{
+                    background: '#25334A',
+                    borderRadius: '12px',
+                    padding: 'clamp(6px, 0.9vh, 10px) clamp(8px, 1vw, 12px)',
+                    border: '1px solid #334155',
+                    minWidth: 0,
+                  }}
+                >
+                  <div style={{ color: '#94A3B8', fontSize: 'clamp(10px, 0.8vw, 12px)', marginBottom: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {card.label}
+                  </div>
+                  <div style={{
+                    fontSize: 'clamp(16px, 1.6vw, 24px)',
+                    fontWeight: 700,
+                    color: card.color,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    lineHeight: 1.15,
+                  }}>
+                    {card.value}
+                    {card.unit ? (
+                      <span style={{ fontSize: '0.55em', fontWeight: 600, color: '#94A3B8', marginLeft: '4px' }}>
+                        {card.unit}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
             </div>
 
-            <div>
-              <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px' }}>По дату</div>
-              <input 
-                type="date" 
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                style={{
-                  padding: 'clamp(8px, 1vh, 14px) 20px',
-                  backgroundColor: '#1E2937',
-                  border: 'none',
-                  borderRadius: '9999px',
-                  color: 'white',
-                  fontSize: '14px'
-                }}
-              />
-            </div>
+            {/* Период — чипы + поиск + свой диапазон */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+                {PERIOD_PRESETS.map((p) => {
+                  const active = periodPreset === p.key;
+                  return (
+                    <button
+                      key={p.key}
+                      type="button"
+                      onClick={() => applyPeriodPreset(p.key)}
+                      style={{
+                        padding: '5px 12px',
+                        borderRadius: '9999px',
+                        border: active ? '1px solid #5B8DEF' : '1px solid #334155',
+                        background: active ? 'rgba(74, 106, 138, 0.55)' : '#25334A',
+                        color: active ? '#E2E8F0' : '#94A3B8',
+                        fontSize: '12px',
+                        fontWeight: active ? 600 : 500,
+                        cursor: 'pointer',
+                        lineHeight: 1.2,
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </div>
 
-            <button 
-              onClick={() => { setSearchTerm(''); setDateFrom(''); setDateTo(''); }}
-              style={{ 
-                padding: 'clamp(8px, 1vh, 14px) 28px', 
-                borderRadius: '9999px', 
-                backgroundColor: '#334155', 
-                border: 'none', 
-                color: 'white', 
-                cursor: 'pointer'
-              }}
-            >
-              Сбросить
-            </button>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  placeholder="Поиск: файл или дата…"
+                  value={searchTerm}
+                  onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                  style={{
+                    flex: '1 1 200px',
+                    minWidth: '180px',
+                    maxWidth: '320px',
+                    padding: '7px 14px',
+                    backgroundColor: '#25334A',
+                    border: '1px solid #334155',
+                    borderRadius: '10px',
+                    color: '#E2E8F0',
+                    fontSize: '13px',
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                  }}
+                />
+
+                {periodPreset === 'custom' && (
+                  <>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#94A3B8', fontSize: '12px' }}>
+                      с
+                      <input
+                        type="date"
+                        value={dateFrom}
+                        onChange={(e) => {
+                          setDateFrom(e.target.value);
+                          setCurrentPage(1);
+                        }}
+                        style={{
+                          padding: '6px 10px',
+                          backgroundColor: '#25334A',
+                          border: '1px solid #334155',
+                          borderRadius: '10px',
+                          color: '#E2E8F0',
+                          fontSize: '13px',
+                          colorScheme: 'dark',
+                        }}
+                      />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#94A3B8', fontSize: '12px' }}>
+                      по
+                      <input
+                        type="date"
+                        value={dateTo}
+                        onChange={(e) => {
+                          setDateTo(e.target.value);
+                          setCurrentPage(1);
+                        }}
+                        style={{
+                          padding: '6px 10px',
+                          backgroundColor: '#25334A',
+                          border: '1px solid #334155',
+                          borderRadius: '10px',
+                          color: '#E2E8F0',
+                          fontSize: '13px',
+                          colorScheme: 'dark',
+                        }}
+                      />
+                    </label>
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchTerm('');
+                    applyPeriodPreset('month');
+                  }}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: '10px',
+                    backgroundColor: '#334155',
+                    border: '1px solid #475569',
+                    color: '#CBD5E1',
+                    fontSize: '12.5px',
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                  }}
+                  title="Сбросить поиск и вернуть текущий месяц"
+                >
+                  Сбросить
+                </button>
+              </div>
+            </div>
           </div>
 
          {/* Графики + история — общий flex:1 контейнер. Так сумма высот ВСЕГДА
@@ -709,18 +1197,19 @@ export default function ReportsPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexShrink: 0 }}>
                 <h3 style={{ color: '#E2E8F0', margin: 0, fontSize: 'clamp(13px, 1vw, 16px)' }}>Объём производства</h3>
                 
-                <div style={{ display: 'flex', backgroundColor: '#334155', borderRadius: '9999px', padding: '3px' }}>
+                <div style={{ display: 'flex', backgroundColor: '#25334A', borderRadius: '9999px', padding: '3px', border: '1px solid #334155' }}>
                   <button
                     onClick={() => setViewMode('month')}
                     style={{
                       padding: '5px 14px',
                       borderRadius: '9999px',
-                      backgroundColor: viewMode === 'month' ? '#10B981' : 'transparent',
-                      color: viewMode === 'month' ? 'white' : '#94A3B8',
+                      backgroundColor: viewMode === 'month' ? '#3D6B5A' : 'transparent',
+                      color: viewMode === 'month' ? '#E2E8F0' : '#94A3B8',
                       border: 'none',
                       fontSize: 'clamp(11px, 0.8vw, 13px)',
                       fontWeight: '600',
-                      cursor: 'pointer'
+                      cursor: 'pointer',
+                      transition: 'background-color 0.2s ease, color 0.2s ease',
                     }}
                   >
                     По месяцам
@@ -730,12 +1219,13 @@ export default function ReportsPage() {
                     style={{
                       padding: '5px 14px',
                       borderRadius: '9999px',
-                      backgroundColor: viewMode === 'day' ? '#10B981' : 'transparent',
-                      color: viewMode === 'day' ? 'white' : '#94A3B8',
+                      backgroundColor: viewMode === 'day' ? '#3D6B5A' : 'transparent',
+                      color: viewMode === 'day' ? '#E2E8F0' : '#94A3B8',
                       border: 'none',
                       fontSize: 'clamp(11px, 0.8vw, 13px)',
                       fontWeight: '600',
-                      cursor: 'pointer'
+                      cursor: 'pointer',
+                      transition: 'background-color 0.2s ease, color 0.2s ease',
                     }}
                   >
                     По дням
@@ -745,25 +1235,36 @@ export default function ReportsPage() {
 
               <div style={{ flex: 1, minHeight: 0 }}>
               <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
-                <BarChart 
-  data={viewMode === 'month' ? monthlyVolume : dailyVolume}
-  barCategoryGap={viewMode === 'month' ? 80 : 18}
->
-  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-  <XAxis 
-    dataKey="label" 
-    stroke="#94A3B8" 
-    tickLine={false}
-  />
-  <YAxis stroke="#94A3B8" />
-  
-  <Tooltip 
-    content={<CustomTooltip />} 
-    cursor={false}           // ← Правильное место
-  />
-  
-  <Bar dataKey="value" fill="#10B981" radius={12} />
-</BarChart>
+                <BarChart
+                  data={viewMode === 'month' ? monthlyVolume : dailyVolume}
+                  // Доля зазора от ширины категории — столбцы заполняют слот и при
+                  // редких днях месяца (раньше maxBarSize=28 оставлял «иголки»).
+                  barCategoryGap={viewMode === 'month' ? '40%' : '22%'}
+                  barGap={4}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+                  <XAxis
+                    dataKey="label"
+                    stroke="#94A3B8"
+                    tickLine={false}
+                    axisLine={false}
+                    interval="preserveStartEnd"
+                    minTickGap={8}
+                  />
+                  <YAxis stroke="#94A3B8" tickLine={false} axisLine={false} width={40} />
+                  <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }} />
+                  <Bar
+                    dataKey="value"
+                    fill="#10B981"
+                    radius={[6, 6, 0, 0]}
+                    // Без жёсткого maxBarSize: иначе при 8–12 днях в месяце
+                    // слот широкий, а столбец остаётся тонкой линией.
+                    isAnimationActive
+                    animationDuration={450}
+                    animationEasing="ease-out"
+                    activeBar={{ fill: '#34D399', stroke: 'none' }}
+                  />
+                </BarChart>
               </ResponsiveContainer>
               </div>
             </div>
@@ -805,7 +1306,7 @@ export default function ReportsPage() {
         width: '100%',
         height: '100%',
         animation: topRecipes.length > 0
-          ? 'chartReveal 0.65s cubic-bezier(0.34, 1.56, 0.64, 1) forwards'
+          ? 'chartReveal 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards'
           : 'none',
         transformOrigin: 'center',
       }}>
@@ -817,9 +1318,13 @@ export default function ReportsPage() {
               cy="50%"
               innerRadius="55%"
               outerRadius="82%"
+              paddingAngle={topRecipes.length > 1 ? 2 : 0}
               dataKey="value"
               nameKey="name"
-              isAnimationActive={false}
+              isAnimationActive
+              animationDuration={500}
+              animationEasing="ease-out"
+              stroke="none"
             >
               {topRecipes.map((entry, index) => (
                 <Cell key={`cell-${index}`} fill={entry.fill} />
@@ -882,41 +1387,41 @@ export default function ReportsPage() {
   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexShrink: 0 }}>
     <h3 style={{ margin: 0, color: '#94A3B8', fontSize: 'clamp(13px, 1vw, 16px)' }}>Расход материалов</h3>
     
-    {/* Красивый переключатель */}
-    <div style={{ 
-      background: '#25334A', 
-      borderRadius: '9999px', 
-      padding: '3px', 
-      display: 'flex' 
+    <div style={{
+      background: '#25334A',
+      borderRadius: '9999px',
+      padding: '3px',
+      display: 'flex',
+      border: '1px solid #334155',
     }}>
-      <button 
+      <button
         onClick={() => setScaleMode('linear')}
         style={{
           padding: '5px 14px',
           borderRadius: '9999px',
-          background: scaleMode === 'linear' ? '#10B981' : 'transparent',
-          color: scaleMode === 'linear' ? '#fff' : '#94A3B8',
+          background: scaleMode === 'linear' ? '#3D6B5A' : 'transparent',
+          color: scaleMode === 'linear' ? '#E2E8F0' : '#94A3B8',
           border: 'none',
           fontWeight: '600',
           fontSize: 'clamp(11px, 0.8vw, 13px)',
           cursor: 'pointer',
-          transition: 'all 0.2s'
+          transition: 'background-color 0.2s ease, color 0.2s ease',
         }}
       >
         Линейный
       </button>
-      <button 
+      <button
         onClick={() => setScaleMode('log')}
         style={{
           padding: '5px 14px',
           borderRadius: '9999px',
-          background: scaleMode === 'log' ? '#10B981' : 'transparent',
-          color: scaleMode === 'log' ? '#fff' : '#94A3B8',
+          background: scaleMode === 'log' ? '#3D6B5A' : 'transparent',
+          color: scaleMode === 'log' ? '#E2E8F0' : '#94A3B8',
           border: 'none',
           fontWeight: '600',
           fontSize: 'clamp(11px, 0.8vw, 13px)',
           cursor: 'pointer',
-          transition: 'all 0.2s'
+          transition: 'background-color 0.2s ease, color 0.2s ease',
         }}
       >
         Логарифмический
@@ -926,46 +1431,50 @@ export default function ReportsPage() {
   
   <div style={{ flex: 1, minHeight: 0 }}>
   <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
-    <BarChart data={materialConsumption} barCategoryGap={40}>
-      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-      <XAxis 
-        dataKey="name" 
-        stroke="#94A3B8" 
+    <BarChart
+      data={materialConsumption}
+      barCategoryGap="28%"
+    >
+      <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+      <XAxis dataKey="name" stroke="#94A3B8" tickLine={false} axisLine={false} />
+      <YAxis
+        stroke="#94A3B8"
         tickLine={false}
-      />
-      <YAxis 
-        stroke="#94A3B8" 
-        scale={scaleMode === 'log' ? "log" : "linear"}
+        axisLine={false}
+        width={40}
+        scale={scaleMode === 'log' ? 'log' : 'linear'}
         domain={scaleMode === 'log' ? [1, 'dataMax'] : [0, 'dataMax']}
         tickFormatter={(value) => (value / 1000).toFixed(0) + 'k'}
       />
-      
-      <Tooltip content={<MaterialTooltip />} cursor={false} />
-
-      <Bar dataKey="value" fill="#10B981" radius={8} />
+      <Tooltip content={<MaterialTooltip />} cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }} />
+      <Bar
+        dataKey="value"
+        radius={[6, 6, 0, 0]}
+        isAnimationActive
+        animationDuration={450}
+        animationEasing="ease-out"
+      >
+        {materialConsumption.map((entry, index) => (
+          <Cell key={`mat-${index}`} fill={entry.fill} />
+        ))}
+      </Bar>
     </BarChart>
   </ResponsiveContainer>
   </div>
 
-  {/* Легенда */}
-  <div style={{ 
-    display: 'flex', 
-    flexWrap: 'wrap', 
-    gap: '6px 16px', 
+  {/* Легенда — цвета как у столбцов */}
+  <div style={{
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px 16px',
     justifyContent: 'center',
     flexShrink: 0,
-    fontSize: 'clamp(11px, 0.8vw, 13px)'
+    fontSize: 'clamp(11px, 0.8vw, 13px)',
   }}>
-    {[
-      { color: '#F59E0B', label: 'Цемент' },
-      { color: '#3B82F6', label: 'Песок' },
-      { color: '#10B981', label: 'Щебень' },
-      { color: '#8B5CF6', label: 'Вода' },
-      { color: '#EF4444', label: 'Добавка' }
-    ].map((item, i) => (
-      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <div style={{ width: '14px', height: '14px', backgroundColor: item.color, borderRadius: '4px' }} />
-        <span style={{ fontWeight: '500' }}>{item.label}</span>
+    {materialConsumption.map((item) => (
+      <div key={item.name} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ width: '12px', height: '12px', backgroundColor: item.fill, borderRadius: '3px' }} />
+        <span style={{ fontWeight: 500 }}>{item.name}</span>
       </div>
     ))}
   </div>
@@ -1060,21 +1569,18 @@ export default function ReportsPage() {
                     if (res.ok) {
                       let successMessage = `✅ Отчёт "${file.name}" успешно загружен!\nПартий: ${processed.length} • Объём: ${totalVolume} м³`;
 
-                      // === СВЕРКА ДОБАВОК: план по отчёту MEKA vs факт, уже списанный в реальном времени ===
-                      // Склад теперь списывается сразу при разгрузке каждого рейса
-                      // (см. lib/orderMixers.ts), а не пакетно из отчёта — отчёт
-                      // используется только для проверки, не разошлись ли цифры.
+                      // Сверка добавок: колонки MEKA vs отгрузки × рецепт (без склада).
                       if ((totalAdditive1 > 0 || totalAdditive2 > 0) && reportDate) {
                         try {
-                          const resReconcile = await fetch(`/api/adminCifra/warehouse/reconcile?date=${reportDate}`, { cache: 'no-store' });
-                          if (resReconcile.ok) {
-                            const reconcile = await resReconcile.json();
-                            const actual = reconcile.actual || {};
-                            successMessage +=
-                              `\n\nСверка добавок за ${reportDate}:\n` +
-                              `ПФМ-НЛК — план по отчёту: ${totalAdditive1.toFixed(1)} кг, списано в реальном времени: ${(actual.pfmKg ?? 0).toFixed(1)} кг\n` +
-                              `Линомикс ТипР — план по отчёту: ${totalAdditive2.toFixed(1)} кг, списано в реальном времени: ${(actual.linomixKg ?? 0).toFixed(1)} кг`;
-                          }
+                          const [recipes, gradesActual] = await Promise.all([
+                            loadRecipesForReconcile(),
+                            fetchGradesActualForDate(reportDate),
+                          ]);
+                          const normative = getNormativeAdditivesFromShipments(gradesActual, recipes);
+                          successMessage +=
+                            `\n\nСверка добавок:\n` +
+                            `ПФМ-НЛК — отгрузки×рецепт: ${normative.pfmKg.toFixed(1)} кг, MEKA: ${totalAdditive1.toFixed(1)} кг\n` +
+                            `Линомикс ТипР — отгрузки×рецепт: ${normative.linomixKg.toFixed(1)} кг, MEKA: ${totalAdditive2.toFixed(1)} кг`;
                         } catch (err) {
                           console.error('Не удалось получить сверку добавок:', err);
                         }
@@ -1142,22 +1648,50 @@ export default function ReportsPage() {
 
           {/* Список не скроллится — количество строк (itemsPerPage) подстраивается
               под реально доступную высоту через ResizeObserver на этом контейнере. */}
-          <div ref={historyListRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {currentReports.length > 0 ? currentReports.map((report: any) => (
+          <div ref={historyListRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+            {currentReports.length > 0 ? currentReports.map((report: any) => {
+              // Компактные кнопки одной ширины — колонки ровные по всему списку,
+              // текст «Сверка !» не раздвигает ряд (алерт только цветом).
+              const historyBtnBase: CSSProperties = {
+                width: '72px',
+                height: '24px',
+                padding: 0,
+                border: 'none',
+                borderRadius: '6px',
+                fontSize: '11.5px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                color: '#E2E8F0',
+                lineHeight: '24px',
+                textAlign: 'center',
+                flexShrink: 0,
+                boxSizing: 'border-box',
+              };
+              const volumeAlert = volumeAlerts[String(report.id)];
+              const isVolumeAlert = Boolean(volumeAlert?.over);
+              const percentLabel = volumeAlert && Number.isFinite(volumeAlert.percent)
+                ? `${volumeAlert.percent.toFixed(2)}%`
+                : volumeAlert?.over
+                  ? '>0.5%'
+                  : null;
+
+              return (
               <div 
                 key={report.id} 
                 style={{
                   backgroundColor: '#25334A',
-                  padding: '10px 20px',
-                  borderRadius: '12px',
+                  padding: '5px 14px',
+                  borderRadius: '10px',
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                  fontSize: 'clamp(12px, 0.9vw, 15px)',
-                  flexShrink: 0
+                  gap: '12px',
+                  fontSize: 'clamp(11px, 0.85vw, 13.5px)',
+                  flexShrink: 0,
+                  minHeight: 0,
                 }}
               >
-                <div>
+                <div style={{ minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
                   <strong>
                     {(() => {
                       const excelDate = report.raw_data?.[0]?.date || report.report_date || '';
@@ -1169,14 +1703,21 @@ export default function ReportsPage() {
                       return dateStr;
                     })()}
                   </strong>
-                  <span style={{ color: '#94A3B8', marginLeft: '12px' }}>
+                  <span style={{ color: '#94A3B8', marginLeft: '10px' }}>
                     {report.raw_data?.length || 0} партий • {Math.round(report.total_volume || 0)} м³ • {report.file_name}
                   </span>
                 </div>
 
-                <div style={{ display: 'flex', gap: '6px' }}>
+                {/* Сетка с фиксированными колонками — кнопки не смещаются между строками */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: userRole === 'admin' ? 'repeat(4, 72px)' : 'repeat(3, 72px)',
+                  gap: '5px',
+                  flexShrink: 0,
+                  alignItems: 'center',
+                }}>
                   <button 
-                    style={{ backgroundColor: '#10B981', color: 'white', border: 'none', padding: '6px 16px', borderRadius: '9999px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
+                    style={{ ...historyBtnBase, backgroundColor: '#3D6B5A' }}
                     onClick={() => {
                       const excelDate = report.raw_data?.[0]?.date || report.report_date || '';
                       setReportData(report.raw_data || []);
@@ -1187,54 +1728,60 @@ export default function ReportsPage() {
                   >
                     Открыть
                   </button>
+                  <button
+                    style={{
+                      ...historyBtnBase,
+                      backgroundColor: isVolumeAlert ? '#9A7B3C' : '#4A6A8A',
+                      cursor: reconcileLoadingId === report.id ? 'wait' : 'pointer',
+                      opacity: reconcileLoadingId === report.id ? 0.7 : 1,
+                    }}
+                    disabled={reconcileLoadingId === report.id}
+                    onClick={() => openReconcileForReport(report)}
+                    title={isVolumeAlert && volumeAlert
+                      ? `Расхождение объёма ${percentLabel} (> ${RECONCILE_VOLUME_ALERT_PERCENT}%): план ${volumeAlert.planM3} м³, факт ${volumeAlert.actualM3} м³`
+                      : 'Сверка: добавки (норма/завод MEKA) и марки (MEKA vs отгрузка). Склад не учитывается.'}
+                  >
+                    {reconcileLoadingId === report.id ? '…' : 'Сверка'}
+                  </button>
                   <button 
-                    style={{ backgroundColor: '#64748B', color: 'white', border: 'none', padding: '6px 16px', borderRadius: '9999px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
+                    style={{ ...historyBtnBase, backgroundColor: '#4A5568' }}
                     onClick={closeReportModal}
                   >
                     Скрыть
                   </button>
-                {/* Кнопка Удалить — только для Админа */}
-{userRole === 'admin' && (
-  <button 
-    style={{ 
-      backgroundColor: '#EF4444', 
-      color: 'white', 
-      border: 'none', 
-      padding: '6px 16px', 
-      borderRadius: '9999px', 
-      fontSize: '13px', 
-      fontWeight: '600', 
-      cursor: 'pointer' 
-    }}
-    onClick={async () => {
-      if (!confirm('Удалить этот отчёт?')) return;
+                  {userRole === 'admin' && (
+                    <button 
+                      style={{ ...historyBtnBase, backgroundColor: '#8B4A4A' }}
+                      onClick={async () => {
+                        if (!confirm('Удалить этот отчёт?')) return;
 
-      try {
-        console.log(`🗑 Удаляем отчёт #${report.id}`);
+                        try {
+                          console.log(`🗑 Удаляем отчёт #${report.id}`);
 
-        const deleteRes = await fetch(`/api/adminCifra/meka-report?id=${report.id}`, { 
-          method: 'DELETE' 
-        });
+                          const deleteRes = await fetch(`/api/adminCifra/meka-report?id=${report.id}`, { 
+                            method: 'DELETE' 
+                          });
 
-        if (deleteRes.ok) {
-          console.log('✅ Отчёт успешно удалён');
-          loadHistory();
-          alert('✅ Отчёт успешно удалён');
-        } else {
-          alert('❌ Ошибка при удалении отчёта');
-        }
-      } catch (err) {
-        console.error('❌ Ошибка при удалении:', err);
-        alert('Произошла ошибка при удалении');
-      }
-    }}
-  >
-    Удалить
-  </button>
-)}
+                          if (deleteRes.ok) {
+                            console.log('✅ Отчёт успешно удалён');
+                            loadHistory();
+                            alert('✅ Отчёт успешно удалён');
+                          } else {
+                            alert('❌ Ошибка при удалении отчёта');
+                          }
+                        } catch (err) {
+                          console.error('❌ Ошибка при удалении:', err);
+                          alert('Произошла ошибка при удалении');
+                        }
+                      }}
+                    >
+                      Удалить
+                    </button>
+                  )}
                 </div>
               </div>
-            )) : (
+              );
+            }) : (
               <div data-report-placeholder="true" style={{ padding: '60px', textAlign: 'center', color: '#64748B', backgroundColor: '#25334A', borderRadius: '16px' }}>
                 Отчёты по выбранным фильтрам не найдены
               </div>
@@ -1565,6 +2112,217 @@ export default function ReportsPage() {
                     </div>
                   </>
                 )}
+              </div>
+            </>
+          )}
+
+          {/* Сверка: добавки + марки (план MEKA vs факт приложения) */}
+          {reconcileModal && (
+            <>
+              <div
+                onClick={() => setReconcileModal(null)}
+                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 220 }}
+              />
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="scroll-hidden"
+                style={{
+                  position: 'fixed',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  zIndex: 221,
+                  background: '#1E2937',
+                  borderRadius: '20px',
+                  padding: '28px 32px',
+                  width: '100%',
+                  maxWidth: '560px',
+                  maxHeight: '85vh',
+                  overflowY: 'auto',
+                  color: '#fff',
+                  boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+                  boxSizing: 'border-box',
+                }}
+              >
+                <div style={{ fontSize: '20px', fontWeight: 700, marginBottom: '6px' }}>
+                  Сверка план / факт
+                </div>
+                <div style={{ color: '#94A3B8', fontSize: '13.5px', marginBottom: '22px' }}>
+                  {reconcileModal.dateLabel}
+                  {reconcileModal.fileName ? ` · ${reconcileModal.fileName}` : ''}
+                </div>
+
+                {reconcileModal.loading ? (
+                  <div style={{ color: '#94A3B8', textAlign: 'center', padding: '24px 0' }}>
+                    Считаем норму по рецептам и отгрузку…
+                  </div>
+                ) : reconcileModal.error ? (
+                  <div style={{ color: '#F87171', textAlign: 'center', padding: '24px 0' }}>
+                    {reconcileModal.error}
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ color: '#94A3B8', fontSize: '12.5px', fontWeight: 600, marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Добавки
+                    </div>
+                    {(
+                      [
+                        { key: 'pfm', label: 'ПФМ-НЛК', plan: reconcileModal.plan.pfmKg, actual: reconcileModal.actual?.pfmKg ?? 0 },
+                        { key: 'linomix', label: 'Линомикс ТипР', plan: reconcileModal.plan.linomixKg, actual: reconcileModal.actual?.linomixKg ?? 0 },
+                      ] as const
+                    ).map((row) => {
+                      const delta = Math.round((row.actual - row.plan) * 10) / 10;
+                      const deltaColor = Math.abs(delta) < 0.05 ? '#10B981' : delta > 0 ? '#F59E0B' : '#F87171';
+                      return (
+                        <div
+                          key={row.key}
+                          style={{
+                            background: '#25334A',
+                            borderRadius: '14px',
+                            padding: '14px 18px',
+                            marginBottom: '10px',
+                          }}
+                        >
+                          <div style={{ fontWeight: 600, marginBottom: '10px' }}>{row.label}</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', fontSize: '13.5px' }}>
+                            <div>
+                              <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '2px' }}>Отгрузки×рецепт</div>
+                              <div style={{ fontWeight: 600 }}>{row.plan.toFixed(1)} кг</div>
+                            </div>
+                            <div>
+                              <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '2px' }}>MEKA</div>
+                              <div style={{ fontWeight: 600 }}>{row.actual.toFixed(1)} кг</div>
+                            </div>
+                            <div>
+                              <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '2px' }}>Дельта</div>
+                              <div style={{ fontWeight: 700, color: deltaColor }}>
+                                {delta > 0 ? '+' : ''}{delta.toFixed(1)} кг
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div style={{ color: '#64748B', fontSize: '12.5px', marginTop: '2px', marginBottom: '22px' }}>
+                      Партий MEKA: {reconcileModal.trips ?? 0}
+                      {' · '}отгрузки×рецепт = м³ отгрузки × кг/м³ из рецепта
+                      {' · '}MEKA = колонки «Добавка 1/2» отчёта
+                      {' · '}склад не учитывается
+                    </div>
+
+                    <div style={{ color: '#94A3B8', fontSize: '12.5px', fontWeight: 600, marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Марки бетона
+                    </div>
+                    <div style={{
+                      background: '#25334A',
+                      borderRadius: '14px',
+                      overflow: 'hidden',
+                      marginBottom: '8px',
+                    }}>
+                      <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1.4fr 0.8fr 0.8fr 0.9fr',
+                        gap: '8px',
+                        padding: '10px 16px',
+                        color: '#94A3B8',
+                        fontSize: '12px',
+                        borderBottom: '1px solid #334155',
+                      }}>
+                        <div>Марка</div>
+                        <div style={{ textAlign: 'right' }}>MEKA, м³</div>
+                        <div style={{ textAlign: 'right' }}>Отгрузка, м³</div>
+                        <div style={{ textAlign: 'right' }}>Дельта</div>
+                      </div>
+                      {reconcileModal.grades.length > 0 ? reconcileModal.grades.map((row) => {
+                        const delta = Math.round((row.actualM3 - row.planM3) * 10) / 10;
+                        const deltaColor = Math.abs(delta) < 0.05 ? '#10B981' : delta > 0 ? '#F59E0B' : '#F87171';
+                        return (
+                          <div
+                            key={row.grade}
+                            style={{
+                              display: 'grid',
+                              gridTemplateColumns: '1.4fr 0.8fr 0.8fr 0.9fr',
+                              gap: '8px',
+                              padding: '11px 16px',
+                              fontSize: '13.5px',
+                              borderBottom: '1px solid #1E2937',
+                              alignItems: 'center',
+                            }}
+                          >
+                            <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.grade}>
+                              {row.grade}
+                            </div>
+                            <div style={{ textAlign: 'right' }}>{row.planM3.toFixed(1)}</div>
+                            <div style={{ textAlign: 'right' }}>{row.actualM3.toFixed(1)}</div>
+                            <div style={{ textAlign: 'right', fontWeight: 700, color: deltaColor }}>
+                              {delta > 0 ? '+' : ''}{delta.toFixed(1)}
+                            </div>
+                          </div>
+                        );
+                      }) : (
+                        <div style={{ padding: '20px', textAlign: 'center', color: '#64748B', fontSize: '13.5px' }}>
+                          Нет данных по маркам за этот день
+                        </div>
+                      )}
+                      {reconcileModal.grades.length > 0 && (
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: '1.4fr 0.8fr 0.8fr 0.9fr',
+                          gap: '8px',
+                          padding: '12px 16px',
+                          fontSize: '13.5px',
+                          fontWeight: 700,
+                          borderTop: '1px solid #334155',
+                          color: '#E2E8F0',
+                        }}>
+                          <div>Итого</div>
+                          <div style={{ textAlign: 'right' }}>
+                            {reconcileModal.grades.reduce((s, r) => s + r.planM3, 0).toFixed(1)}
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            {reconcileModal.grades.reduce((s, r) => s + r.actualM3, 0).toFixed(1)}
+                          </div>
+                          <div style={{ textAlign: 'right', color: (() => {
+                            const d = Math.round((
+                              reconcileModal.grades.reduce((s, r) => s + r.actualM3, 0) -
+                              reconcileModal.grades.reduce((s, r) => s + r.planM3, 0)
+                            ) * 10) / 10;
+                            return Math.abs(d) < 0.05 ? '#10B981' : d > 0 ? '#F59E0B' : '#F87171';
+                          })() }}>
+                            {(() => {
+                              const d = Math.round((
+                                reconcileModal.grades.reduce((s, r) => s + r.actualM3, 0) -
+                                reconcileModal.grades.reduce((s, r) => s + r.planM3, 0)
+                              ) * 10) / 10;
+                              return `${d > 0 ? '+' : ''}${d.toFixed(1)}`;
+                            })()}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ color: '#64748B', fontSize: '12.5px', marginBottom: '18px' }}>
+                      Марки: MEKA — объём партий в отчёте · отгрузка — рейсы в приложении (дата доставки)
+                      {' · '}дельта = отгрузка − MEKA
+                    </div>
+                  </>
+                )}
+
+                <button
+                  onClick={() => setReconcileModal(null)}
+                  style={{
+                    width: '100%',
+                    padding: '14px',
+                    background: '#334155',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '9999px',
+                    fontSize: '15px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Закрыть
+                </button>
               </div>
             </>
           )}

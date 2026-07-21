@@ -1,10 +1,15 @@
 // app/api/adminCifra/warehouse/reconcile/route.ts
-// Сверка «план по отчёту MEKA» vs «факт, уже списанный в реальном времени»
-// за конкретную дату. Раньше загрузка отчёта MEKA сама списывала добавки со
-// склада (см. историю в /api/adminCifra/warehouse/subtract) — теперь склад
-// меняется только в момент разгрузки конкретного рейса (lib/orderMixers.ts),
-// а отчёт MEKA используется просто для сверки: не потерялся ли рейс, не
-// разошлись ли цифры с тем, что реально списалось.
+//
+// РАНЬШЕ: сверка «MEKA vs складское списание рейсов» (order_mixers.additive_write_off_*).
+// Это смешивало расход завода со складским учётом (и косвенно с логикой списаний).
+//
+// СЕЙЧАС UI сверки на вкладке Отчёты считает добавки только по заводу:
+//   норма = объём партий MEKA × дозировка рецепта;
+//   факт  = колонки additive/additive2 из отчёта MEKA.
+// Ручной ввод/списание на складе туда не входят.
+//
+// Этот endpoint оставлен для обратной совместимости: возвращает складские
+// списания рейсов за день, но UI сверки добавок его больше не использует.
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 
@@ -50,6 +55,9 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       date: dateParam,
+      // Складские списания рейсов — НЕ «расход завода». Для сверки в UI не использовать.
+      source: 'warehouse_trip_writeoffs',
+      deprecatedForPlantReconcile: true,
       actual: {
         pfmKg: Math.round(pfmKg * 10) / 10,
         pfmLiters: Math.round(pfmLiters * 10) / 10,
