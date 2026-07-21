@@ -49,11 +49,11 @@ const EMPTY_FORM: FormData = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function statusColor(status: string): { color: string; bg: string } {
+  if (status === 'Загрузка')    return { color: '#FACC15', bg: '#FACC1520' };
   if (status === 'В пути')      return { color: '#3B82F6', bg: '#3B82F620' };
   if (status === 'На объекте')  return { color: '#10B981', bg: '#10B98120' };
-  if (status === 'Загрузка')    return { color: '#FACC15', bg: '#FACC1520' };
   if (status === 'Проблема')    return { color: '#EF4444', bg: '#EF444420' };
-  return { color: '#64748B', bg: '#334155' };
+  return { color: '#64748B', bg: '#334155' }; // Доступен / прочие
 }
 
 function initials(name: string): string {
@@ -619,9 +619,9 @@ export default function MobileMixersPage() {
               const isOwn = mixer.type === 'own';
               // Берём актуальный статус из активного рейса (если есть)
               const activeTrip = enrichedTrips.find((t: any) => t.number === mixer.number);
-              const tripStatus = activeTrip?.status || null;
-              const sc = tripStatus ? statusColor(tripStatus) : { color: '#334155', bg: 'transparent' };
-              const hasActiveTrip = !!tripStatus;
+              const tripStatus = activeTrip?.status || 'Доступен';
+              const sc = statusColor(tripStatus);
+              const hasActiveTrip = !!activeTrip;
               return (
                 <div
                   key={mixer.id}
@@ -639,7 +639,7 @@ export default function MobileMixersPage() {
                   <div style={{
                     width: '4px',
                     flexShrink: 0,
-                    background: hasActiveTrip ? sc.color : '#334155',
+                    background: sc.color,
                   }} />
 
                   {/* Основное содержимое */}
@@ -673,18 +673,16 @@ export default function MobileMixersPage() {
                         {mixer.driver}
                       </span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                        {hasActiveTrip && (
+                        <span style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '4px',
+                          fontSize: '11px', fontWeight: 600, color: sc.color,
+                        }}>
                           <span style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '4px',
-                            fontSize: '11px', fontWeight: 600, color: sc.color,
-                          }}>
-                            <span style={{
-                              width: '6px', height: '6px', borderRadius: '50%',
-                              background: sc.color, display: 'inline-block',
-                            }} />
-                            {tripStatus}
-                          </span>
-                        )}
+                            width: '6px', height: '6px', borderRadius: '50%',
+                            background: sc.color, display: 'inline-block',
+                          }} />
+                          {tripStatus}
+                        </span>
                         <a
                           href={`tel:${mixer.phone}`}
                           onClick={e => e.stopPropagation()}

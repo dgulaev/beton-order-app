@@ -39,6 +39,8 @@ export default function MixersPage() {
 
   const [mixers, setMixers] = useState<Mixer[]>([]);
   const [loading, setLoading] = useState(true);
+  // Маппинг: номер миксера → актуальный статус рейса (если рейс есть)
+  const [activeTripMap, setActiveTripMap] = useState<Map<string, string>>(new Map());
 
   const [filter, setFilter] = useState<'all' | 'own' | 'rented'>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -67,6 +69,7 @@ export default function MixersPage() {
   // ==================== ЗАГРУЗКА МИКСЕРОВ ====================
   useEffect(() => {
     fetchMixers();
+    fetchActiveTrips();
   }, []);
 
   const fetchMixers = async () => {
@@ -81,6 +84,20 @@ export default function MixersPage() {
       console.error('Ошибка загрузки миксеров:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchActiveTrips = async () => {
+    try {
+      const res = await fetch('/api/adminCifra/active-mixers');
+      if (res.ok) {
+        const data = await res.json();
+        const map = new Map<string, string>();
+        for (const t of data) map.set(t.number as string, t.status as string);
+        setActiveTripMap(map);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки активных рейсов:', err);
     }
   };
 
@@ -209,11 +226,16 @@ export default function MixersPage() {
   };
 
   const getStatusStyle = (status: string) => {
-    if (status === 'В пути') return { color: '#3B82F6', bg: '#3B82F620' };
+    if (status === 'Загрузка')   return { color: '#FACC15', bg: '#FACC1520' };
+    if (status === 'В пути')     return { color: '#3B82F6', bg: '#3B82F620' };
     if (status === 'На объекте') return { color: '#10B981', bg: '#10B98120' };
-    if (status === 'Загрузка') return { color: '#FACC15', bg: '#FACC1520' };
-    return { color: '#94A3B8', bg: '#334155' };
+    if (status === 'Проблема')   return { color: '#EF4444', bg: '#EF444420' };
+    return { color: '#94A3B8', bg: '#334155' }; // Доступен / прочие
   };
+
+  // Эффективный статус: если есть активный рейс — показываем его статус, иначе «Доступен»
+  const effectiveStatus = (mixer: Mixer) =>
+    activeTripMap.get(mixer.number) ?? 'Доступен';
 
   return (
     <div style={{ 
@@ -443,7 +465,8 @@ export default function MixersPage() {
               paddingBottom: '4px'
             }}>
               {filteredMixers.map((mixer) => {
-                const statusStyle = getStatusStyle(mixer.status);
+                const dispStatus = effectiveStatus(mixer);
+                const statusStyle = getStatusStyle(dispStatus);
                 return (
                   <div 
                     key={mixer.id} 
@@ -534,7 +557,7 @@ export default function MixersPage() {
                         fontSize: '14px',
                         whiteSpace: 'nowrap'
                       }}>
-                        {mixer.status}
+                        {dispStatus}
                       </div>
                     </div>
 
@@ -586,23 +609,6 @@ export default function MixersPage() {
                       >
                         ✏️ Редактировать
                       </button>
-                      <button 
-                        style={{ 
-                          flex: 1, 
-                          padding: '8px 12px',
-                          background: '#334155',
-                          color: '#E2E8F0',
-                          border: 'none', 
-                          borderRadius: '9999px', 
-                          fontWeight: '500',
-                          fontSize: '13.5px',
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis'
-                        }}
-                      >
-                        📍 На карте
-                      </button>
                     </div>
                   </div>
                 );
@@ -619,7 +625,8 @@ export default function MixersPage() {
               boxShadow: '0 10px 30px rgba(0,0,0,0.3)'
             }}>
               {filteredMixers.map((mixer) => {
-                const statusStyle = getStatusStyle(mixer.status);
+                const dispStatus = effectiveStatus(mixer);
+                const statusStyle = getStatusStyle(dispStatus);
                 return (
                   <div 
                     key={mixer.id} 
@@ -666,7 +673,7 @@ export default function MixersPage() {
                         fontSize: '13px',
                         whiteSpace: 'nowrap'
                       }}>
-                        {mixer.status}
+                        {dispStatus}
                       </span>
                     </div>
 

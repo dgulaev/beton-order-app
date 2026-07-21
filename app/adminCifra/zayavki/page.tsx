@@ -62,6 +62,12 @@ export default function ZayavkiPage() {
   const [warehouseAdditives, setWarehouseAdditives] = useState<{ pfm: number; linomix: number } | null>(null);
   const [showAdditivePopup, setShowAdditivePopup] = useState(false);
 
+  // ==================== ПОИСК КЛИЕНТА В МОДАЛКЕ РЕДАКТИРОВАНИЯ ====================
+  const [allClients, setAllClients] = useState<any[]>([]);
+  const [clientQuery, setClientQuery] = useState('');
+  const [showClientDropdown, setShowClientDropdown] = useState(false);
+  const clientDropdownRef = useRef<HTMLDivElement>(null);
+
   // ==================== "СПИСОК УШЁЛ ВНИЗ" — стрелки-подсказки для скроллящихся блоков модалки ====================
   const mixerListRef = useRef<HTMLDivElement>(null);
   const [mixerListHasMore, setMixerListHasMore] = useState(false);
@@ -581,6 +587,25 @@ ${order.customer_type?.includes('Юридическое')
     };
 
     fetchRecipes();
+  }, []);
+
+  // ==================== ЗАГРУЗКА КЛИЕНТОВ ДЛЯ ПОИСКА ====================
+  useEffect(() => {
+    fetch('/api/adminCifra/clients')
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setAllClients(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, []);
+
+  // Закрытие dropdown при клике вне
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (clientDropdownRef.current && !clientDropdownRef.current.contains(e.target as Node)) {
+        setShowClientDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
   }, []);
 
   // ==================== ЗАГРУЗКА ОСТАТКОВ СКЛАДА ====================
@@ -1630,18 +1655,76 @@ ${order.customer_type?.includes('Юридическое')
             <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '7px', alignItems: 'center' }}>
 
               <div style={{ color: '#94A3B8' }}>Клиент</div>
-<input 
-  value={selectedOrder.organization_name || selectedOrder.full_name || ''} 
-  onChange={(e) => {
-    // Запись в историю происходит централизованно при нажатии "Сохранить"
-    // (через /api/adminCifra/orders/update, который сам пишет диф изменений).
-    setSelectedOrder({ 
-      ...selectedOrder, 
-      organization_name: e.target.value 
-    });
-  }}
-  style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
-/>
+              {/* ── Поиск клиента ── */}
+              <div ref={clientDropdownRef} style={{ position: 'relative' }}>
+                <input
+                  value={clientQuery !== '' ? clientQuery : (selectedOrder.organization_name || selectedOrder.full_name || '')}
+                  placeholder="Поиск по имени или организации…"
+                  onChange={(e) => {
+                    setClientQuery(e.target.value);
+                    setShowClientDropdown(true);
+                  }}
+                  onFocus={() => {
+                    setClientQuery('');
+                    setShowClientDropdown(true);
+                  }}
+                  style={{ width: '100%', background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff', boxSizing: 'border-box' }}
+                />
+                {showClientDropdown && (() => {
+                  const q = clientQuery.toLowerCase();
+                  const filtered = allClients.filter((c: any) => {
+                    const name = (c.organization_name || c.full_name || c.name || '').toLowerCase();
+                    const phone = (c.phone || '').toLowerCase();
+                    const inn = (c.inn || '').toLowerCase();
+                    return !q || name.includes(q) || phone.includes(q) || inn.includes(q);
+                  }).slice(0, 10);
+                  if (!filtered.length) return null;
+                  return (
+                    <div style={{
+                      position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
+                      background: '#1E2937', border: '1px solid #334155', borderRadius: '8px',
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.4)', maxHeight: '220px', overflowY: 'auto',
+                      marginTop: '4px',
+                    }}>
+                      {filtered.map((c: any, ci: number) => {
+                        const displayName = c.organization_name || c.full_name || c.name || '—';
+                        const isLegal = !!c.organization_name;
+                        return (
+                          <div
+                            key={`${c.id ?? 'x'}-${ci}`}
+                            onMouseDown={() => {
+                              setSelectedOrder({
+                                ...selectedOrder,
+                                organization_name: c.organization_name || '',
+                                full_name: c.full_name || '',
+                                phone: c.phone || selectedOrder.phone,
+                                inn: c.inn || selectedOrder.inn,
+                                user_id: c.user_id ?? c.id,
+                              });
+                              setClientQuery('');
+                              setShowClientDropdown(false);
+                            }}
+                            style={{
+                              padding: '8px 12px', cursor: 'pointer',
+                              borderBottom: '1px solid #334155',
+                              display: 'flex', flexDirection: 'column', gap: '2px',
+                            }}
+                            onMouseEnter={e => (e.currentTarget.style.background = '#25334A')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                          >
+                            <span style={{ fontSize: '13px', fontWeight: 600, color: '#E2E8F0' }}>
+                              {isLegal ? '🏢 ' : '👤 '}{displayName}
+                            </span>
+                            <span style={{ fontSize: '11px', color: '#64748B' }}>
+                              {[c.phone, c.inn ? `ИНН ${c.inn}` : null].filter(Boolean).join(' · ')}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
 
               {selectedOrder.inn !== undefined && (
                 <>
@@ -1662,11 +1745,21 @@ ${order.customer_type?.includes('Юридическое')
               />
 
               <div style={{ color: '#94A3B8' }}>Марка бетона</div>
-              <input 
-                value={selectedOrder.grade || ''} 
+              <select
+                value={selectedOrder.grade || ''}
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, grade: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
-              />
+                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: selectedOrder.grade ? '#fff' : '#64748B', width: '100%' }}
+              >
+                {!selectedOrder.grade && <option value="">— выберите марку —</option>}
+                {recipes
+                  .map((r: any) => r.code || r.name)
+                  .filter((v: string, i: number, arr: string[]) => v && arr.indexOf(v) === i)
+                  .sort()
+                  .map((grade: string) => (
+                    <option key={grade} value={grade}>{grade}</option>
+                  ))
+                }
+              </select>
 
               <div style={{ color: '#94A3B8' }}>Объём</div>
               <input 

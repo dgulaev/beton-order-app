@@ -81,7 +81,7 @@ export async function PUT(request: NextRequest) {
     const fieldsToTrack = [
       'grade', 'volume', 'delivery_date', 'delivery_time',
       'address', 'phone', 'organization_name', 'full_name',
-      'inn', 'comment', 'status', 'is_questionable', 'logistics_ready'
+      'inn', 'comment', 'status', 'is_questionable', 'logistics_ready', 'user_id'
     ];
 
     const fieldNames: Record<string, string> = {
@@ -97,7 +97,8 @@ export async function PUT(request: NextRequest) {
       comment: 'комментарий',
       status: 'статус',
       is_questionable: 'метку "Под вопросом"',
-      logistics_ready: 'готовность логистики'
+      logistics_ready: 'готовность логистики',
+      user_id: 'клиента'
     };
 
     // Русские названия статусов
