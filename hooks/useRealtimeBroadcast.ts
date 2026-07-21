@@ -38,6 +38,11 @@ interface BroadcastEntry {
 const registry = new Map<string, BroadcastEntry>();
 let globalListenersAttached = false;
 
+// Защита от параллельных вызовов reconnect() для одного топика.
+// Без этого visibilitychange + keepalive-timer могут одновременно инициировать
+// reconnect одного канала → двойное removeChannel + двойной connect → конфликт топиков.
+const reconnectingTopics = new Set<string>();
+
 // ── Глобальный агрегированный статус (наихудший из всех каналов) ──────────────
 const globalStatusListeners = new Set<(s: RealtimeStatus) => void>();
 
@@ -136,7 +141,13 @@ function connect(topic: string): BroadcastEntry {
 // Жёсткий сброс: пересоздаём сам WebSocket-сокет и все каналы поверх свежего
 // соединения. Нужно, когда сокет «умер» (idle-таймаут за ночь, длинный обрыв
 // сети) — пересоздание одних каналов на мёртвом сокете даёт вечный CHANNEL_ERROR.
-async function hardResetSocket() {
+//
+// ⚠️ КРИТИЧНО: НЕ используем await для supabase.removeChannel()!
+// Если WebSocket мёртв, removeChannel пытается отправить "leave" на сервер
+// и ждёт ack, который никогда не придёт. С await это замораживает функцию
+// на таймаут (десятки секунд) для КАЖДОГО канала — именно это вызывает
+// зависание страницы после пробуждения ноутбука от спящего режима.
+function hardResetSocket() {
   if (hardResetInProgress) return;
   // Нечего сбрасывать — каналов нет. Просто обнуляем счётчик ошибок.
   if (registry.size === 0) { firstErrorAt = null; return; }
@@ -148,11 +159,9 @@ async function hardResetSocket() {
     preserved.push({ topic, listeners: entry.listeners });
     if (entry.keepalive) clearInterval(entry.keepalive);
     if (entry.errorTimer) clearTimeout(entry.errorTimer);
-    try {
-      await supabase.removeChannel(entry.channel);
-    } catch {
-      // канал мог уже быть мёртв — игнорируем
-    }
+    // Fire-and-forget: не await — removeChannel на мёртвом WebSocket зависает
+    // в ожидании серверного ack. Принудительно закроем сокет ниже через disconnect().
+    try { void supabase.removeChannel(entry.channel); } catch {}
   }
   registry.clear();
 
@@ -179,11 +188,16 @@ async function hardResetSocket() {
 }
 
 function reconnect(topic: string) {
+  // Защита от параллельных reconnect() одного топика:
+  // visibilitychange + keepalive-timer могут сработать одновременно.
+  if (reconnectingTopics.has(topic)) return;
+
   const entry = registry.get(topic);
   if (!entry) return;
   const state = (entry.channel as any)?.state;
   if (state === 'joined') return; // уже здоров
 
+  reconnectingTopics.add(topic);
   console.warn(`🔁 [Broadcast] Переподключение → ${topic} (состояние: ${state})`);
   const listeners = entry.listeners;
   if (entry.keepalive) clearInterval(entry.keepalive);
@@ -199,6 +213,9 @@ function reconnect(topic: string) {
   }
   // Сообщаем актуальный статус перенесённым слушателям
   fresh.listeners.forEach((l) => l.onStatusChange?.(fresh.status));
+
+  // Снимаем блокировку после того, как новый канал начал подключаться
+  setTimeout(() => reconnectingTopics.delete(topic), 5_000);
 }
 
 // Публичная функция — ручной реконнект всех broadcast-каналов (клик по индикатору)
@@ -217,13 +234,30 @@ function attachGlobalListeners() {
   if (globalListenersAttached || typeof document === 'undefined') return;
   globalListenersAttached = true;
 
+  // Немедленный (не-шахматный) реконнект: для online/pageshow/resume — там нет "шторма"
   const reconnectAll = () => {
     if (document.visibilityState !== 'visible') return;
     registry.forEach((_e, topic) => reconnect(topic));
   };
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') reconnectAll();
+    if (document.visibilityState === 'hidden') {
+      // При уходе в фон сбрасываем счётчик ошибок. Без этого watchdog видит
+      // firstErrorAt = "до сна" и немедленно запускает hardReset при пробуждении
+      // (даже если ошибка исчезла до начала сна и есть только из-за кратковременного
+      // обрыва сети, который давно восстановился).
+      firstErrorAt = null;
+    } else {
+      // При пробуждении: шахматное переподключение со стартовой задержкой.
+      // Задержка 500ms даёт useWakeReload время выполнить window.location.reload()
+      // (если сон был длинным) ДО того, как начнётся шторм реконнектов.
+      // Шаг 200ms между топиками размазывает нагрузку на event loop.
+      let i = 0;
+      registry.forEach((_e, topic) => {
+        setTimeout(() => reconnect(topic), 500 + i * 200);
+        i++;
+      });
+    }
   });
   window.addEventListener('online', reconnectAll);
   // Мобильные: возврат из bfcache и выход из «заморозки» (Page Lifecycle)

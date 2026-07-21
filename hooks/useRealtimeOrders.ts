@@ -201,7 +201,24 @@ function attachForceReconnectListeners() {
   };
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') forceReconnectAll('вкладка снова активна');
+    if (document.visibilityState === 'visible') {
+      // Шахматное переподключение: 500ms начальная задержка синхронизирована
+      // с аналогичной задержкой в useRealtimeBroadcast, чтобы оба потока
+      // реконнекта не конкурировали за ресурсы в один момент времени.
+      let i = 0;
+      channelRegistry.forEach((entry, channelKey) => {
+        if (entry.status !== 'SUBSCRIBED') {
+          setTimeout(() => {
+            const current = channelRegistry.get(channelKey);
+            if (!current || current.status === 'SUBSCRIBED') return;
+            console.log(`🔁 [Realtime] Форс-переподключение (вкладка снова активна) → ${current.table}`);
+            current.retryCount = 0;
+            reconnectChannel(channelKey, current.table, current.event, current.filter);
+          }, 500 + i * 200);
+          i++;
+        }
+      });
+    }
   });
 
   window.addEventListener('online', () => forceReconnectAll('сеть восстановлена'));

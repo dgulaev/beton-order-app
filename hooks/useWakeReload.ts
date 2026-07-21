@@ -1,5 +1,7 @@
 'use client';
 
+import { supabase } from '@/lib/supabaseClient';
+
 // useWakeReload — восстановление «замороженной» вкладки после долгого простоя.
 //
 // Проблема: если оставить вкладку в фоне (свёрнутый браузер) или с выключенным
@@ -55,7 +57,13 @@ export function useWakeReload(enabled = true) {
         // sessionStorage может быть недоступен — не критично.
       }
       console.warn(`♻️ [WakeReload] Перезагрузка страницы: ${reason}`);
-      window.location.reload();
+      // Принудительно закрываем WebSocket ПЕРЕД перезагрузкой.
+      // Без этого React unmount пытается graceful-завершить каналы через
+      // removeChannel() на мёртвом сокете — ждёт ack, который не придёт,
+      // и браузер показывает диалог «Страница не отвечает».
+      try { supabase.realtime.disconnect(); } catch { /* ignore */ }
+      // Небольшая пауза: даём disconnect() закрыть сокет до reload.
+      setTimeout(() => window.location.reload(), 150);
     };
 
     // Тик heartbeat: ловит замороженную вкладку, которая наконец получила
