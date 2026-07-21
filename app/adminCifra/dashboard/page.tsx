@@ -7,7 +7,8 @@ import { useRealtimeOrders, useRealtimeOrderMixers, formatOrderMixer } from '../
 import OrderDetailModal from '../components/OrderDetailModal';
 import NewOrderModal from '../components/NewOrderModal';
 import Image from 'next/image';
-import { Home } from 'lucide-react';
+import { Home, LayoutList, AlignJustify } from 'lucide-react';
+import VerticalTimelinePanel from '../components/VerticalTimelinePanel';
 
 export default function AdminCifraDashboard() {
 
@@ -48,6 +49,7 @@ export default function AdminCifraDashboard() {
  // Быстрое создание заявки на конкретную дату (ПКМ / долгое нажатие на день в календаре)
  const [showQuickNewOrder, setShowQuickNewOrder] = useState(false);
  const [quickNewOrderDate, setQuickNewOrderDate] = useState<string | undefined>(undefined);
+ const [timelineMode, setTimelineMode] = useState<'horizontal' | 'vertical'>('horizontal');
  const [history, setHistory] = useState<any[]>([]);
  const [currentUser, setCurrentUser] = useState<{ id: number; name?: string; role: string } | null>(null);
  // road_time_min: Map orderId → минут в пути (кэш, заполняется фоново)
@@ -1250,13 +1252,55 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
       >
         След. день →
       </button>
+
+      {/* Переключатель режима таймлайна */}
+      <div style={{
+        display: 'flex',
+        background: '#1A2740',
+        borderRadius: '10px',
+        padding: '3px',
+        gap: '2px',
+      }}>
+        <button
+          onClick={() => setTimelineMode('horizontal')}
+          title="Горизонтальный таймлайн"
+          style={{
+            width: '32px', height: '32px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: timelineMode === 'horizontal' ? '#2D4060' : 'transparent',
+            border: 'none',
+            borderRadius: '7px',
+            color: timelineMode === 'horizontal' ? '#93C5FD' : '#4A6080',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+          }}
+        >
+          <AlignJustify size={15} />
+        </button>
+        <button
+          onClick={() => setTimelineMode('vertical')}
+          title="Вертикальный таймлайн"
+          style={{
+            width: '32px', height: '32px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: timelineMode === 'vertical' ? '#2D4060' : 'transparent',
+            border: 'none',
+            borderRadius: '7px',
+            color: timelineMode === 'vertical' ? '#93C5FD' : '#4A6080',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+          }}
+        >
+          <LayoutList size={15} />
+        </button>
+      </div>
     </div>
   </div>
 
-  {/* ==================== 39. ТОЧНАЯ ШКАЛА ВРЕМЕНИ ====================
+  {/* ==================== 39. ТОЧНАЯ ШКАЛА ВРЕМЕНИ (только горизонтальный режим) ====================
       paddingRight: 20px совпадает с контейнером заказов.
       left: (i/24)*100% = точное совпадение с leftPercent плашек. */}
-<div style={{ marginBottom: '10px', paddingRight: '20px', userSelect: 'none' }}>
+{timelineMode === 'horizontal' && <div style={{ marginBottom: '10px', paddingRight: '20px', userSelect: 'none' }}>
   <div style={{ display: 'contents' }}>
     <div style={{ position: 'relative', height: '42px' }}>
 
@@ -1354,10 +1398,10 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
       })}
     </div>
   </div>
-</div>
+</div>} {/* end timelineMode === 'horizontal' ruler */}
 
-  {/* Область заказов (скролл) + фиксированная линия времени */}
-  <div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
+  {/* Горизонтальный: область заказов (скролл) + фиксированная линия времени */}
+  {timelineMode === 'horizontal' && <div style={{ flex: 1, minHeight: 0, position: 'relative', overflow: 'hidden' }}>
   <div 
     id="timeline-container"
     ref={timelineScrollRef}
@@ -1699,7 +1743,19 @@ const generateDailyReport = () => {
         }} />
       </>
     )}
-  </div>
+  </div>} {/* end timelineMode === 'horizontal' order area */}
+
+  {/* Вертикальный таймлайн */}
+  {timelineMode === 'vertical' && (
+    <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: '8px' }}>
+      <VerticalTimelinePanel
+        orders={todayOrders}
+        mixerAssignments={mixerAssignments}
+        selectedDateStr={selectedDateStr}
+        onOrderClick={(order) => setSelectedOrder(order)}
+      />
+    </div>
+  )}
     </div>
    </div>
             {/* ==================== 45. МИКСЕРЫ В РАБОТЕ ==================== */}
