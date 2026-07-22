@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { X, MapPin, Navigation, ChevronDown, Clock, Bot, CheckCircle, XCircle, Truck, RefreshCw, User, Weight, AlertTriangle, PackageCheck } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, MapPin, Navigation, ChevronDown, Clock } from 'lucide-react';
 import { Order } from '../../adminCifra/hooks/useCalendarOrders';
 import { useYandexRouteHref } from '@/lib/yandexRoute';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
+import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 
 interface MobileOrderDetailModalProps {
   order: Order | null;
@@ -56,7 +57,12 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
 
   const [localOrder, setLocalOrder] = useState(order);
   const [history, setLocalHistory] = useState(initialHistory || []);
+  const [questionableSaving, setQuestionableSaving] = useState(false);
+  const questionableSavingRef = useRef(false);
   const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(order?.address);
+
+  const role = (currentUser?.role || '').toLowerCase().trim();
+  const canManageQuestionable = ['admin', 'manager', 'dispatcher', 'logist'].includes(role);
 
   useBodyScrollLock(!!order);
 
@@ -73,7 +79,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
   if (!order || !localOrder) return null;
 
   const currentMixers = mixerAssignments
-    .filter(m => String(m.orderId) === String(order.id))
+    .filter(m => String(m.orderId ?? m.order_id) === String(order.id))
     .sort((a, b) => (a.time || '00:00').localeCompare(b.time || '00:00'));
 
   const assignedVolume = currentMixers.reduce((s, m) => s + Number(m.volume || 0), 0);
@@ -90,12 +96,31 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
     return m < 0 ? null : `${m} мин`;
   };
 
+  const reloadHistory = async () => {
+    const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
+    if (histRes.ok) {
+      const d = await histRes.json();
+      setLocalHistory(d);
+      if (setHistory) setHistory(d);
+    }
+  };
+
   const handleOrderStatusChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newStatus = e.target.value;
     if (newStatus === localOrder.status) return;
     const oldStatus = localOrder.status;
-    setLocalOrder(prev => prev ? { ...prev, status: newStatus } : prev);
-    setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: newStatus } : o));
+    const oldQuestionable = !!(localOrder as any).is_questionable;
+    const clearQuestionable = newStatus === 'processing' && oldStatus !== 'processing';
+
+    setLocalOrder(prev => prev
+      ? ({ ...prev, status: newStatus, ...(clearQuestionable ? { is_questionable: false } : {}) } as any)
+      : prev
+    );
+    setAllOrders(prev => prev.map(o =>
+      o.id === order.id
+        ? ({ ...o, status: newStatus, ...(clearQuestionable ? { is_questionable: false } : {}) } as any)
+        : o
+    ));
     try {
       const res = await fetch('/api/adminCifra/orders/update', {
         method: 'PUT',
@@ -104,17 +129,71 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
       });
       const data = await res.json();
       if (!data.success) {
-        setLocalOrder(prev => prev ? { ...prev, status: oldStatus } : prev);
-        setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: oldStatus } : o));
+        setLocalOrder(prev => prev
+          ? ({ ...prev, status: oldStatus, is_questionable: oldQuestionable } as any)
+          : prev
+        );
+        setAllOrders(prev => prev.map(o =>
+          o.id === order.id
+            ? ({ ...o, status: oldStatus, is_questionable: oldQuestionable } as any)
+            : o
+        ));
         alert('Ошибка: ' + (data.message || ''));
         return;
       }
-      const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
-      if (histRes.ok) { const d = await histRes.json(); setLocalHistory(d); if (setHistory) setHistory(d); }
+      await reloadHistory();
     } catch {
-      setLocalOrder(prev => prev ? { ...prev, status: oldStatus } : prev);
-      setAllOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: oldStatus } : o));
+      setLocalOrder(prev => prev
+        ? ({ ...prev, status: oldStatus, is_questionable: oldQuestionable } as any)
+        : prev
+      );
+      setAllOrders(prev => prev.map(o =>
+        o.id === order.id
+          ? ({ ...o, status: oldStatus, is_questionable: oldQuestionable } as any)
+          : o
+      ));
       alert('Ошибка соединения');
+    }
+  };
+
+  const toggleQuestionable = async (newValue: boolean) => {
+    if (questionableSavingRef.current || !order?.id) return;
+    questionableSavingRef.current = true;
+    setQuestionableSaving(true);
+    const prevValue = !!(localOrder as any).is_questionable;
+
+    setLocalOrder(prev => prev ? ({ ...prev, is_questionable: newValue } as any) : prev);
+    setAllOrders(prev => prev.map(o =>
+      o.id === order.id ? ({ ...o, is_questionable: newValue } as any) : o
+    ));
+
+    try {
+      const res = await fetch('/api/adminCifra/orders/update', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: order.id,
+          is_questionable: newValue,
+          userName: currentUser?.name || 'Пользователь',
+          userRole: currentUser?.role || 'unknown',
+        }),
+      });
+      if (!res.ok) {
+        setLocalOrder(prev => prev ? ({ ...prev, is_questionable: prevValue } as any) : prev);
+        setAllOrders(prev => prev.map(o =>
+          o.id === order.id ? ({ ...o, is_questionable: prevValue } as any) : o
+        ));
+      } else {
+        await reloadHistory();
+      }
+    } catch {
+      setLocalOrder(prev => prev ? ({ ...prev, is_questionable: prevValue } as any) : prev);
+      setAllOrders(prev => prev.map(o =>
+        o.id === order.id ? ({ ...o, is_questionable: prevValue } as any) : o
+      ));
+    } finally {
+      questionableSavingRef.current = false;
+      setQuestionableSaving(false);
     }
   };
 
@@ -136,29 +215,56 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
           position: 'sticky', top: 0, zIndex: 10,
           background: '#25334A',
           borderBottom: '1px solid #334155',
-          padding: '14px 16px',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
+          padding: '12px 14px',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
-            <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, paddingRight: '4px' }}>
+            <span style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
               Заявка #{order.id}
             </span>
 
             {isFinal ? (
-              <span style={{ padding: '5px 12px', borderRadius: '9999px', fontSize: '12px', fontWeight: 700, background: `${sc.color}20`, color: sc.color, whiteSpace: 'nowrap' }}>
+              <span style={{ padding: '4px 10px', borderRadius: '9999px', fontSize: '11px', fontWeight: 700, background: `${sc.color}20`, color: sc.color, whiteSpace: 'nowrap' }}>
                 {sc.label}
               </span>
             ) : (
-              <div style={{ position: 'relative' }}>
+              <div style={{ position: 'relative', flexShrink: 0 }}>
                 <select
                   value={localOrder.status || 'new'}
                   onChange={handleOrderStatusChange}
-                  style={{ appearance: 'none', padding: '5px 28px 5px 12px', borderRadius: '9999px', border: `1px solid ${sc.color}50`, background: `${sc.color}20`, color: sc.color, fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                  style={{ appearance: 'none', padding: '4px 22px 4px 10px', borderRadius: '9999px', border: `1px solid ${sc.color}50`, background: `${sc.color}20`, color: sc.color, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
                 >
                   {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                 </select>
-                <ChevronDown size={11} color={sc.color} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                <ChevronDown size={10} color={sc.color} style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
               </div>
+            )}
+
+            {/* Компактный бейдж — не наезжает на крестик */}
+            {canManageQuestionable && (
+              <label
+                title="Под вопросом"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: '26px', height: '26px', borderRadius: '9999px', flexShrink: 0,
+                  border: '1px solid rgba(239,68,68,0.45)',
+                  background: (localOrder as any).is_questionable ? '#EF4444' : 'transparent',
+                  color: (localOrder as any).is_questionable ? '#fff' : '#F87171',
+                  fontSize: '13px', fontWeight: 800, lineHeight: 1,
+                  cursor: questionableSaving ? 'wait' : 'pointer',
+                  opacity: questionableSaving ? 0.7 : 1,
+                  userSelect: 'none',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!(localOrder as any).is_questionable}
+                  disabled={questionableSaving}
+                  onChange={e => toggleQuestionable(e.target.checked)}
+                  style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }}
+                />
+                ?
+              </label>
             )}
           </div>
 
@@ -217,20 +323,35 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
             ) : <div style={{ maxHeight: '260px', overflowY: 'auto' }}>{currentMixers.map(mixer => {
               const onSite = formatOnSite(mixer);
               const hasDowntime = Number(mixer.downtimeMinutes) > 0;
+              const st = mixer.status || 'Загрузка';
+              const statusColor =
+                st === 'Загрузка' ? '#FACC15' :
+                st === 'В пути' ? '#3B82F6' :
+                st === 'На объекте' ? '#10B981' :
+                st === 'Разгружен' ? '#34D399' :
+                st === 'Проблема' ? '#EF4444' :
+                st === 'Возврат' ? '#94A3B8' : '#64748B';
               return (
-                <div key={mixer.id} style={{ background: '#334155', borderRadius: '12px', padding: '12px 14px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
+                <div key={mixer.id} style={{ background: '#334155', borderRadius: '12px', padding: '12px 14px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', borderLeft: `3px solid ${statusColor}` }}>
                   <div>
                     <div style={{ fontWeight: 700, fontSize: '14px', color: '#E2E8F0' }}>{mixer.mixerName || mixer.number || 'Миксер'}</div>
                     <div style={{ color: '#475569', fontSize: '12px', marginTop: '2px' }}>{mixer.time}</div>
                     {onSite && (
                       <div style={{ marginTop: '6px', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '9999px', background: hasDowntime ? '#F9731615' : '#33415515', color: hasDowntime ? '#F97316' : '#64748B', fontSize: '12px' }}>
-                        <Clock size={10} /> {onSite}{mixer.status === 'Разгружен' && hasDowntime ? ` (простой ${mixer.downtimeMinutes} мин)` : ''}
+                        <Clock size={10} /> {onSite}{st === 'Разгружен' && hasDowntime ? ` (простой ${mixer.downtimeMinutes} мин)` : ''}
                       </div>
                     )}
                   </div>
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: '16px', color: '#E2E8F0' }}>{Number(mixer.volume).toFixed(1)} м³</div>
-                    <div style={{ fontSize: '12px', color: '#10B981', marginTop: '2px' }}>{mixer.status || 'Загрузка'}</div>
+                    <div style={{
+                      marginTop: '4px', fontSize: '11px', fontWeight: 700, color: statusColor,
+                      display: 'inline-flex', alignItems: 'center', gap: '4px',
+                      padding: '2px 8px', borderRadius: '9999px',
+                      background: `${statusColor}18`, border: `1px solid ${statusColor}40`,
+                    }}>
+                      {st}
+                    </div>
                   </div>
                 </div>
               );
@@ -280,114 +401,15 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
             </a>
           </div>
 
-          {/* ── ИСТОРИЯ ───────────────────────────── */}
-          {history.length > 0 && (
-            <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
-              <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '14px' }}>
-                История изменений
-              </div>
-              <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
-                {history.map((entry: any, i: number) => {
-                  const d = new Date(entry.created_at);
-                  const dateStr = d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-                  const timeStr = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-                  const isLast  = i === history.length - 1;
-
-                  let action = (entry.action || '')
-                    .replace(/\bprocessing\b/g, 'В работе')
-                    .replace(/\bcompleted\b/g,  'Выполнена')
-                    .replace(/\bnew\b/g,         'Новая')
-                    .replace(/\bcancelled\b/g,   'Отменена');
-
-                  // Подбираем иконку и цвет по тексту события
-                  const isSystem  = (entry.user_name || '') === 'Система';
-                  const hasMixer  = action.includes('миксер') || action.includes('Миксер');
-                  const hasDone   = action.includes('Выполнена') || action.includes('Разгружен');
-                  const hasCancel = action.includes('Отменена');
-                  const hasVolume = action.includes('объём') || action.includes('объем');
-                  const hasAddr   = action.includes('адрес') || action.includes('Адрес');
-                  const hasProb   = action.includes('Проблема') || action.includes('проблем');
-
-                  let iconEl: React.ReactNode;
-                  let iconColor: string;
-
-                  if (isSystem) {
-                    iconEl = <Bot size={13} />;
-                    iconColor = '#A78BFA';
-                  } else if (hasProb) {
-                    iconEl = <AlertTriangle size={13} />;
-                    iconColor = '#EF4444';
-                  } else if (hasCancel) {
-                    iconEl = <XCircle size={13} />;
-                    iconColor = '#EF4444';
-                  } else if (hasDone) {
-                    iconEl = <PackageCheck size={13} />;
-                    iconColor = '#10B981';
-                  } else if (hasMixer) {
-                    iconEl = <Truck size={13} />;
-                    iconColor = '#60A5FA';
-                  } else if (hasVolume) {
-                    iconEl = <Weight size={13} />;
-                    iconColor = '#FACC15';
-                  } else if (hasAddr) {
-                    iconEl = <MapPin size={13} />;
-                    iconColor = '#FB923C';
-                  } else if (action.includes('статус')) {
-                    iconEl = <RefreshCw size={13} />;
-                    iconColor = '#60A5FA';
-                  } else {
-                    iconEl = <User size={13} />;
-                    iconColor = '#94A3B8';
-                  }
-
-                  return (
-                    <div key={i} style={{ display: 'flex', gap: '10px' }}>
-
-                      {/* Левая колонка: иконка + вертикальная линия */}
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '26px', flexShrink: 0 }}>
-                        <div style={{
-                          width: '26px', height: '26px', borderRadius: '50%',
-                          background: `${iconColor}18`,
-                          border: `1.5px solid ${iconColor}50`,
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          color: iconColor, flexShrink: 0, zIndex: 1,
-                        }}>
-                          {iconEl}
-                        </div>
-                        {!isLast && (
-                          <div style={{
-                            width: '1px', flex: 1, minHeight: '12px',
-                            background: '#334155', marginTop: '3px',
-                          }} />
-                        )}
-                      </div>
-
-                      {/* Правая колонка: автор + время + действие */}
-                      <div style={{ flex: 1, paddingBottom: isLast ? 0 : '14px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                          <span style={{ color: '#E2E8F0', fontSize: '13px', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {entry.user_name || 'Сотрудник'}
-                          </span>
-                          <span style={{
-                            color: '#94A3B8', fontSize: '11px', fontWeight: 600,
-                            flexShrink: 0, whiteSpace: 'nowrap',
-                            background: '#162032', padding: '2px 7px',
-                            borderRadius: '6px', border: '1px solid #334155',
-                          }}>
-                            {dateStr} · {timeStr}
-                          </span>
-                        </div>
-                        <div style={{ color: '#64748B', fontSize: '12px', lineHeight: 1.5 }}>
-                          {action}
-                        </div>
-                      </div>
-
-                    </div>
-                  );
-                })}
-              </div>
+          {/* ── ИСТОРИЯ (тот же таймлайн, что на десктопе) ── */}
+          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
+            <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
+              История изменений
             </div>
-          )}
+            <div style={{ maxHeight: '320px', overflowY: 'auto' }}>
+              <OrderHistoryTimeline entries={history} emptyText="История пока пуста" />
+            </div>
+          </div>
 
           {/* ── ЗАКРЫТЬ ───────────────────────────── */}
           <button

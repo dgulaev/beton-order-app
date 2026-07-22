@@ -373,22 +373,38 @@ const { user } = useUserRole();   // ← Берём роль из провайд
                   cursor: 'pointer'
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                   <div style={{ fontWeight: '700', fontSize: '18px' }}>
                     #{order.id} — {order.delivery_time || '—'}
                   </div>
-                  <div style={{ 
-                    padding: '6px 14px', 
-                    borderRadius: '9999px', 
-                    background: getStatusColor(order.status) + '20', 
-                    color: getStatusColor(order.status),
-                    fontSize: '14px',
-                    fontWeight: '600'
-                  }}>
-                    {order.status === 'new' && 'Новый'}
-                    {order.status === 'processing' && 'В работе'}
-                    {order.status === 'completed' && 'Выполнен'}
-                    {order.status === 'cancelled' && 'Отменён'}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                    {order.is_questionable && (
+                      <span
+                        title="Под вопросом"
+                        style={{
+                          height: '22px', padding: '0 8px', borderRadius: '9999px',
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                          background: '#EF4444', color: '#fff',
+                          fontSize: '12px', fontWeight: 800,
+                          boxShadow: '0 0 0 1px rgba(255,255,255,0.25), 0 0 8px rgba(239,68,68,0.45)',
+                        }}
+                      >
+                        ?
+                      </span>
+                    )}
+                    <div style={{ 
+                      padding: '6px 14px', 
+                      borderRadius: '9999px', 
+                      background: getStatusColor(order.status) + '20', 
+                      color: getStatusColor(order.status),
+                      fontSize: '14px',
+                      fontWeight: '600'
+                    }}>
+                      {order.status === 'new' && 'Новый'}
+                      {order.status === 'processing' && 'В работе'}
+                      {order.status === 'completed' && 'Выполнен'}
+                      {order.status === 'cancelled' && 'Отменён'}
+                    </div>
                   </div>
                 </div>
 

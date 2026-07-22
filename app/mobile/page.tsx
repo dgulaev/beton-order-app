@@ -130,22 +130,19 @@ export default function MobileDashboard() {
     };
   }, [selectedYearNum, selectedMonthNum, userId]);
 
-// 🔥 Active Mixers — единоразовая загрузка на выбранную дату.
-// Поллинг убран, так как real-time уже обеспечивает обновления
+// 🔥 Active Mixers — API отдаёт все активные рейсы; дату фильтруем локально
+// через selectedDateStr (не toISOString — иначе UTC съезжает на −1 день).
 useEffect(() => {
-  const dateStr = selectedDate.toISOString().split('T')[0];
-
-  fetch(`/api/adminCifra/active-mixers?date=${dateStr}`)
+  fetch('/api/adminCifra/active-mixers')
     .then((res) => {
       if (!res.ok) throw new Error(`Active mixers error: ${res.status}`);
       return res.json();
     })
-    .then((mixers) => setActiveMixers(mixers))
+    .then((mixers) => setActiveMixers(Array.isArray(mixers) ? mixers : []))
     .catch((err) => {
       console.error('Initial data fetch failed:', err);
-      // 🔥 Можно показать баннер "Нет связи с сервером"
     });
-}, [selectedDate]);
+}, []);
 
 // Мягкое восстановление данных при пробуждении вкладки (без перезагрузки) —
 // подтягиваем свежие заявки и активные миксеры. Сокет realtime поднимает layout.
@@ -156,10 +153,9 @@ useWakeRefresh(() => {
     .then((data) => { if (data) setAllOrders(data); })
     .catch(() => {});
 
-  const dateStr = selectedDate.toISOString().split('T')[0];
-  fetch(`/api/adminCifra/active-mixers?date=${dateStr}`)
+  fetch('/api/adminCifra/active-mixers')
     .then((res) => (res.ok ? res.json() : null))
-    .then((mixers) => { if (mixers) setActiveMixers(mixers); })
+    .then((mixers) => { if (Array.isArray(mixers)) setActiveMixers(mixers); })
     .catch(() => {});
 });
 
@@ -244,51 +240,67 @@ useEffect(() => {
       );
   }, [allOrders, selectedDateStr]);
 
-  // 🔥 Мемоизация миксеров (чтобы не пересчитывать при каждом рендере)
+  // Активные миксеры выбранного дня (по delivery_date заявки)
   const activeMixersForDate = useMemo(() => {
-    return activeMixers.filter(m => {
-      if (!m.delivery_date && !m.order_delivery_date) return true;
-      const mixerDate = (m.delivery_date || m.order_delivery_date || '').substring(0, 10);
+    return activeMixers.filter((m: any) => {
+      const mixerDate = String(m.delivery_date || m.order_delivery_date || '').substring(0, 10);
       return mixerDate === selectedDateStr;
     });
   }, [activeMixers, selectedDateStr]);
 
-  // ── Статистика «В рейсе сегодня» — всегда за СЕГОДНЯ (не зависит от выбранной даты) ──
-  const realTodayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  // Локальная «сегодня» — без toISOString (UTC+3 иначе даёт вчерашний день вечером)
+  const realTodayStr = useMemo(() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
+  }, [selectedDateStr]); // пересчёт при смене дня (и при полуночи после навигации)
 
-  const todayActiveTrips = useMemo(() =>
-    activeMixers.filter(m => (m.delivery_date || '').slice(0, 10) === realTodayStr),
-  [activeMixers, realTodayStr]);
+  const isSelectedToday = selectedDateStr === realTodayStr;
 
   // Дедупликация по номеру миксера (один миксер = один рейс в виджете)
-  const uniqueTodayMixers = useMemo(() =>
-    Array.from(new Map(todayActiveTrips.map((m: any) => [m.number, m])).values()),
-  [todayActiveTrips]);
+  const uniqueDayMixers = useMemo(() =>
+    Array.from(new Map(activeMixersForDate.map((m: any) => [m.number, m])).values()),
+  [activeMixersForDate]);
+
+  // «Разгружен» не приходит из active-mixers (там только живые рейсы) —
+  // считаем из назначений по заявкам выбранного дня.
+  const dayOrderIds = useMemo(
+    () => new Set(todayOrders.map((o: any) => String(o.id))),
+    [todayOrders]
+  );
+
+  const unloadedCount = useMemo(() =>
+    mixerAssignments.filter((m: any) =>
+      dayOrderIds.has(String(m.orderId ?? m.order_id)) && m.status === 'Разгружен'
+    ).length,
+  [mixerAssignments, dayOrderIds]);
 
   const mixerStatusCounts = useMemo(() => ({
-    loading:   uniqueTodayMixers.filter((m: any) => m.status === 'Загрузка').length,
-    inTransit: uniqueTodayMixers.filter((m: any) => m.status === 'В пути').length,
-    onSite:    uniqueTodayMixers.filter((m: any) => m.status === 'На объекте').length,
-    problem:   uniqueTodayMixers.filter((m: any) => m.status === 'Проблема').length,
-  }), [uniqueTodayMixers]);
+    loading:   uniqueDayMixers.filter((m: any) => m.status === 'Загрузка').length,
+    inTransit: uniqueDayMixers.filter((m: any) => m.status === 'В пути').length,
+    onSite:    uniqueDayMixers.filter((m: any) => m.status === 'На объекте').length,
+    unloaded:  unloadedCount,
+    problem:   uniqueDayMixers.filter((m: any) => m.status === 'Проблема').length,
+  }), [uniqueDayMixers, unloadedCount]);
 
-  const totalActiveMixers = uniqueTodayMixers.length;
+  const totalActiveMixers = uniqueDayMixers.length;
+  const hasDayMixerStats =
+    totalActiveMixers > 0 || mixerStatusCounts.unloaded > 0;
   const volumeInTransit = useMemo(() =>
-    todayActiveTrips.reduce((s: number, m: any) => s + Number(m.volume || 0), 0),
-  [todayActiveTrips]);
+    activeMixersForDate.reduce((s: number, m: any) => s + Number(m.volume || 0), 0),
+  [activeMixersForDate]);
 
   const problemMixers = useMemo(() =>
-    uniqueTodayMixers.filter((m: any) => m.status === 'Проблема'),
-  [uniqueTodayMixers]);
+    uniqueDayMixers.filter((m: any) => m.status === 'Проблема'),
+  [uniqueDayMixers]);
 
   const hasProblems = problemMixers.length > 0;
 
-  // Сегодняшний плановый объём (не отменённые)
-  const todayPlannedVolume = useMemo(() =>
-    allOrders
-      .filter((o: any) => (o.delivery_date || '').slice(0, 10) === realTodayStr && o.status !== 'cancelled')
+  // Плановый объём выбранного дня (не отменённые)
+  const dayPlannedVolume = useMemo(() =>
+    todayOrders
+      .filter((o: any) => o.status !== 'cancelled')
       .reduce((s: number, o: any) => s + Number(o.volume || 0), 0),
-  [allOrders, realTodayStr]);
+  [todayOrders]);
 
   // ── KPI: план/факт по объёму (отменённые не учитываются) ─────────────────────
   const kpiActiveOrders = useMemo(() =>
@@ -313,14 +325,15 @@ useEffect(() => {
   // ── KPI: задержки (упрощённая версия без road_time кэша) ──────────────────────
   const kpiDelayedOrders = useMemo(() => {
     const nowMins = new Date().getHours() * 60 + new Date().getMinutes();
-    const todayDateStr = new Date().toISOString().slice(0, 10);
     // Задержки считаем только за сегодня
-    if (selectedDateStr !== todayDateStr) return [];
+    if (!isSelectedToday) return [];
 
     return todayOrders
       .filter((o: any) => o.status === 'new' || o.status === 'processing')
       .filter((o: any) => {
-        const orderMixers = activeMixersForDate.filter((m: any) => String(m.orderId) === String(o.id));
+        const orderMixers = activeMixersForDate.filter((m: any) =>
+          String(m.orderId ?? m.order_id) === String(o.id)
+        );
         const hasMoving = orderMixers.some((m: any) => ['В пути', 'На объекте', 'Разгружен', 'Возврат'].includes(m.status));
         if (hasMoving) return false;
         const assignedVol = orderMixers.reduce((s: number, m: any) => s + Number(m.volume || 0), 0);
@@ -338,7 +351,7 @@ useEffect(() => {
       })
       .filter((o: any) => o.delayMinutes > 15)
       .sort((a: any, b: any) => b.delayMinutes - a.delayMinutes);
-  }, [todayOrders, activeMixersForDate, selectedDateStr]);
+  }, [todayOrders, activeMixersForDate, isSelectedToday]);
 
   // Map id → delayMinutes для O(1) поиска при рендере таймлайна
   const delayedMap = useMemo(
@@ -349,12 +362,12 @@ useEffect(() => {
   // Разбивка свои/наёмные по реестру миксеров
   const { ownActive, rentedActive } = useMemo(() => {
     let own = 0; let rented = 0;
-    uniqueTodayMixers.forEach((trip: any) => {
+    uniqueDayMixers.forEach((trip: any) => {
       const mx = allMixersList.find((m: any) => m.number === trip.number);
       if (mx?.type === 'own') own++; else rented++;
     });
     return { ownActive: own, rentedActive: rented };
-  }, [uniqueTodayMixers, allMixersList]);
+  }, [uniqueDayMixers, allMixersList]);
 
   // ==============================================
   // return (продолжение файла)
@@ -569,21 +582,28 @@ useEffect(() => {
             });
 
             // ── Логарифмическая шкала зазоров ────────────────
-            // gap = min(cardHeight + 4 + log(1 + dt/5)*10, MAX_GAP)
-            // Маленькие промежутки (~5мин) дают +7px сверх минимума,
-            // большие (1ч+) дают +25px — рост быстро замедляется.
-            const MAX_GAP    = 94;
-            const TOP_PAD    = 6;
+            // Высота карточки фиксирована: чипы миксеров в одну строку (+N),
+            // иначе flexWrap раздувал плашку и она наезжала на соседнюю снизу.
+            const CARD_H_PLAIN = 66;  // без миксеров
+            const CARD_H_MIXERS = 90; // с одной строкой чипов
+            const MAX_GAP = 98;
+            const TOP_PAD = 6;
+            const MAX_VISIBLE_MIXERS = 2; // на узкой плашке больше двух не влезает
+
+            const orderHasMixers = (o: any) =>
+              mixerAssignments.some((m: any) => String(m.orderId ?? m.order_id) === String(o.id));
+            const cardH = (o: any) => (orderHasMixers(o) ? CARD_H_MIXERS : CARD_H_PLAIN);
+            const groupMaxH = (g: { orders: any[] }) =>
+              Math.max(...g.orders.map(cardH), CARD_H_PLAIN);
 
             const gPos: number[] = [];
             groups.forEach((g, i) => {
               if (i === 0) { gPos.push(TOP_PAD); return; }
-              const prevMaxH = Math.max(...groups[i - 1].orders.map((o: any) =>
-                mixerAssignments.some((m: any) => String(m.order_id) === String(o.id)) ? 90 : 66
-              ));
+              const prevMaxH = groupMaxH(groups[i - 1]);
               const dt     = g.time - groups[i - 1].time;
               const logAdd = Math.log(1 + dt / 5) * 10;
-              const gap    = Math.min(prevMaxH + 4 + logAdd, MAX_GAP);
+              // Зазор не меньше высоты предыдущей карточки + 4px — иначе наезд
+              const gap    = Math.max(prevMaxH + 4, Math.min(prevMaxH + 4 + logAdd, MAX_GAP));
               gPos.push(gPos[i - 1] + gap);
             });
 
@@ -596,9 +616,7 @@ useEffect(() => {
               const afterIdx = groups.findIndex(g => g.time > nowMins);
               if (afterIdx === -1) {
                 // Позже всех заявок — фиксируем под последней карточкой
-                const lastGroupMaxH = Math.max(...groups[groups.length - 1].orders.map((o: any) =>
-                  mixerAssignments.some((m: any) => String(m.order_id) === String(o.id)) ? 90 : 66
-                ));
+                const lastGroupMaxH = groupMaxH(groups[groups.length - 1]);
                 nowVisualY = lastPos + lastGroupMaxH + 14;
               } else if (afterIdx === 0) {
                 // Раньше всех заявок
@@ -611,11 +629,7 @@ useEffect(() => {
             }
 
             // Высота последней группы карточек (нужна чтобы они не выходили за контейнер)
-            const lastGroupMaxH = groups.length > 0
-              ? Math.max(...groups[groups.length - 1].orders.map((o: any) =>
-                  mixerAssignments.some((m: any) => String(m.order_id) === String(o.id)) ? 90 : 66
-                ))
-              : 66;
+            const lastGroupMaxH = groups.length > 0 ? groupMaxH(groups[groups.length - 1]) : CARD_H_PLAIN;
 
             // totalHeight = позиция последней карточки + её высота + отступ
             // (иначе карточка вылезает за контейнер и перекрывает следующий блок)
@@ -687,7 +701,9 @@ useEffect(() => {
                     const isCompleted = order.status === 'completed';
                     const isCancelled = order.status === 'cancelled';
                     const isPast      = isCompleted || isCancelled;
-                    const orderMixers = mixerAssignments.filter((m: any) => String(m.order_id) === String(order.id));
+                    const orderMixers = mixerAssignments.filter((m: any) =>
+                      String(m.orderId ?? m.order_id) === String(order.id)
+                    );
 
                     // Задержка доставки
                     const delayMins   = delayedMap.get(String(order.id));
@@ -715,11 +731,16 @@ useEffect(() => {
                             background: isDelayed ? 'rgba(239,68,68,0.07)' : '#25334A',
                             borderRadius: '12px',
                             padding: '10px 12px',
-                            marginBottom: '4px',
+                            height: `${cardH(order)}px`,
+                            boxSizing: 'border-box',
+                            overflow: 'hidden',
                             cursor: 'pointer',
                             border: `1px solid ${isDelayed ? '#EF444440' : isCancelled ? '#334155' : color + '30'}`,
                             borderLeft: `3px solid ${isDelayed ? '#EF4444' : isCancelled ? '#334155' : color}`,
                             opacity: isPast ? 0.5 : 1,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'center',
                           }}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '3px', gap: '6px' }}>
@@ -736,6 +757,20 @@ useEffect(() => {
                                   {delayText}
                                 </span>
                               )}
+                              {(order as any).is_questionable && (
+                                <span
+                                  title="Под вопросом"
+                                  style={{
+                                    height: '16px', padding: '0 5px', borderRadius: '9999px',
+                                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                    background: '#EF4444', color: '#fff',
+                                    fontSize: '10px', fontWeight: 800, lineHeight: 1,
+                                    boxShadow: '0 0 0 1px rgba(255,255,255,0.25), 0 0 6px rgba(239,68,68,0.5)',
+                                  }}
+                                >
+                                  ?
+                                </span>
+                              )}
                               <span style={{ fontSize: '10px', fontWeight: 700, color: isCancelled ? '#64748B' : color }}>
                                 {STATUS_LABEL[order.status] || order.status}
                               </span>
@@ -748,27 +783,49 @@ useEffect(() => {
                             <span style={{ color: isCompleted ? '#10B981' : '#94A3B8', fontWeight: 600 }}>
                               {volume % 1 === 0 ? volume : volume.toFixed(1)} м³
                             </span>
-                            {order.grade && <><span>·</span><span>{order.grade}</span></>}
+                            {order.grade && <><span>·</span><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{order.grade}</span></>}
                           </div>
 
-                          {orderMixers.length > 0 && (
-                            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '6px' }}>
-                              {orderMixers.map((mx: any) => {
-                                const mc = MIXER_STATUS_COLOR[mx.status] || '#64748B';
-                                return (
-                                  <span key={mx.id} style={{
-                                    display: 'inline-flex', alignItems: 'center', gap: '3px',
-                                    padding: '2px 6px', borderRadius: '9999px',
-                                    background: `${mc}18`, border: `1px solid ${mc}40`,
-                                    fontSize: '10px', fontWeight: 600, color: mc,
-                                  }}>
-                                    <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: mc, flexShrink: 0 }} />
-                                    {mx.mixer_name}
+                          {orderMixers.length > 0 && (() => {
+                            const visible = orderMixers.slice(0, MAX_VISIBLE_MIXERS);
+                            const hidden = orderMixers.length - visible.length;
+                            return (
+                              <div style={{
+                                display: 'flex', gap: '4px', flexWrap: 'nowrap',
+                                marginTop: '6px', overflow: 'hidden', minWidth: 0,
+                              }}>
+                                {visible.map((mx: any) => {
+                                  const mc = MIXER_STATUS_COLOR[mx.status] || '#64748B';
+                                  const name = mx.mixerName || mx.mixer_name || mx.number || 'М';
+                                  return (
+                                    <span key={mx.id} style={{
+                                      display: 'inline-flex', alignItems: 'center', gap: '3px',
+                                      padding: '2px 6px', borderRadius: '9999px',
+                                      background: `${mc}18`, border: `1px solid ${mc}40`,
+                                      fontSize: '10px', fontWeight: 600, color: mc,
+                                      maxWidth: '72px', overflow: 'hidden', flexShrink: 1, minWidth: 0,
+                                    }}>
+                                      <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: mc, flexShrink: 0 }} />
+                                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                                    </span>
+                                  );
+                                })}
+                                {hidden > 0 && (
+                                  <span
+                                    title={`Ещё ${hidden} рейс(ов) — открой заявку`}
+                                    style={{
+                                      display: 'inline-flex', alignItems: 'center',
+                                      padding: '2px 6px', borderRadius: '9999px', flexShrink: 0,
+                                      background: '#334155', border: '1px solid #475569',
+                                      fontSize: '10px', fontWeight: 700, color: '#94A3B8',
+                                    }}
+                                  >
+                                    +{hidden}
                                   </span>
-                                );
-                              })}
-                            </div>
-                          )}
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     );
@@ -848,10 +905,12 @@ useEffect(() => {
                 boxShadow: '0 0 6px rgba(16,185,129,0.8)', flexShrink: 0,
                 animation: totalActiveMixers > 0 ? 'pulse 2s infinite' : 'none',
               }} />
-              <span style={{ fontSize: '16px', fontWeight: 700, color: '#E2E8F0' }}>Миксеры сегодня</span>
-              {totalActiveMixers > 0 && (
+              <span style={{ fontSize: '16px', fontWeight: 700, color: '#E2E8F0' }}>
+                {isSelectedToday ? 'Миксеры сегодня' : `Миксеры ${selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}`}
+              </span>
+              {hasDayMixerStats && (
                 <span style={{ padding: '1px 8px', borderRadius: '9999px', fontSize: '12px', fontWeight: 700, background: '#10B98120', color: '#10B981' }}>
-                  {totalActiveMixers}
+                  {totalActiveMixers + mixerStatusCounts.unloaded}
                 </span>
               )}
             </div>
@@ -864,9 +923,9 @@ useEffect(() => {
             </Link>
           </div>
 
-          {totalActiveMixers === 0 ? (
+          {!hasDayMixerStats ? (
             <div style={{ textAlign: 'center', padding: '16px 0', color: '#475569', fontSize: '14px' }}>
-              Нет активных рейсов сегодня
+              {isSelectedToday ? 'Нет рейсов сегодня' : 'Нет рейсов на этот день'}
             </div>
           ) : (
             <>
@@ -876,6 +935,7 @@ useEffect(() => {
                   { label: 'Загрузка',   count: mixerStatusCounts.loading,   color: '#FACC15' },
                   { label: 'В пути',     count: mixerStatusCounts.inTransit, color: '#3B82F6' },
                   { label: 'На объекте', count: mixerStatusCounts.onSite,    color: '#10B981' },
+                  { label: 'Разгружен',  count: mixerStatusCounts.unloaded,  color: '#34D399' },
                   { label: 'Проблема',   count: mixerStatusCounts.problem,   color: '#EF4444' },
                 ].filter(s => s.count > 0).map(s => (
                   <div key={s.label} style={{
@@ -908,18 +968,18 @@ useEffect(() => {
               </div>
 
               {/* Прогресс-бар: объём в движении / плановый объём сегодня */}
-              {todayPlannedVolume > 0 && (
+              {dayPlannedVolume > 0 && (
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#475569', marginBottom: '6px' }}>
-                    <span>Загрузка парка сегодня</span>
+                    <span>{isSelectedToday ? 'Загрузка парка сегодня' : 'Загрузка парка'}</span>
                     <span style={{ color: '#94A3B8', fontWeight: 600 }}>
-                      {volumeInTransit % 1 === 0 ? volumeInTransit : volumeInTransit.toFixed(1)} / {todayPlannedVolume % 1 === 0 ? todayPlannedVolume : todayPlannedVolume.toFixed(1)} м³
+                      {volumeInTransit % 1 === 0 ? volumeInTransit : volumeInTransit.toFixed(1)} / {dayPlannedVolume % 1 === 0 ? dayPlannedVolume : dayPlannedVolume.toFixed(1)} м³
                     </span>
                   </div>
                   <div style={{ height: '8px', borderRadius: '9999px', background: '#334155', overflow: 'hidden' }}>
                     <div style={{
                       height: '100%',
-                      width: `${Math.min(100, (volumeInTransit / todayPlannedVolume) * 100)}%`,
+                      width: `${Math.min(100, (volumeInTransit / dayPlannedVolume) * 100)}%`,
                       borderRadius: '9999px',
                       background: 'linear-gradient(90deg, #3B82F6, #10B981)',
                       transition: 'width 0.4s ease',
@@ -1064,7 +1124,9 @@ useEffect(() => {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px 10px', flexShrink: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10B981', boxShadow: '0 0 6px rgba(16,185,129,0.8)', animation: 'pulse 2s infinite' }} />
-                <span style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0' }}>В рейсе сегодня</span>
+                <span style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0' }}>
+                  {isSelectedToday ? 'В рейсе сегодня' : `В рейсе ${selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}`}
+                </span>
                 <span style={{ padding: '1px 8px', borderRadius: '9999px', fontSize: '12px', fontWeight: 700, background: '#10B98120', color: '#10B981' }}>
                   {totalActiveMixers}
                 </span>
@@ -1081,7 +1143,7 @@ useEffect(() => {
                 const STATUS_COLORS: Record<string, string> = {
                   'В пути': '#3B82F6', 'Загрузка': '#FACC15', 'На объекте': '#10B981', 'Проблема': '#EF4444',
                 };
-                const sorted = [...uniqueTodayMixers].sort((a: any, b: any) =>
+                const sorted = [...uniqueDayMixers].sort((a: any, b: any) =>
                   (STATUS_ORDER.indexOf(a.status) === -1 ? 99 : STATUS_ORDER.indexOf(a.status)) -
                   (STATUS_ORDER.indexOf(b.status) === -1 ? 99 : STATUS_ORDER.indexOf(b.status))
                 );

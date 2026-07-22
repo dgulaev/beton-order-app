@@ -5,6 +5,7 @@ import { Save, Trash2, Share2, Copy, X, User, Phone, Layers, Clock, Calendar, Ma
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
+import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 
 interface MobileOrderDetailModalProps {
   isOpen: boolean;
@@ -67,11 +68,18 @@ export default function MobileOrderDetailModal({
 }: MobileOrderDetailModalProps) {
   const [editedOrder, setEditedOrder] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [orderHistory, setOrderHistory] = useState<any[]>([]);
+  const [questionableSaving, setQuestionableSaving] = useState(false);
+  const questionableSavingRef = useRef(false);
 
   // Поиск клиента
   const [clientQuery, setClientQuery] = useState('');
   const [showClientDropdown, setShowClientDropdown] = useState(false);
   const clientDropdownRef = useRef<HTMLDivElement>(null);
+
+  const canManageQuestionable = ['admin', 'manager', 'dispatcher', 'logist'].includes(
+    (currentRole || '').toLowerCase().trim()
+  );
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -97,6 +105,17 @@ export default function MobileOrderDetailModal({
     setEditedOrder(order ? { ...order } : null);
   }, [order]);
 
+  useEffect(() => {
+    if (!isOpen || !order?.id) {
+      setOrderHistory([]);
+      return;
+    }
+    fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(data => setOrderHistory(Array.isArray(data) ? data : []))
+      .catch(() => setOrderHistory([]));
+  }, [isOpen, order?.id]);
+
   useBodyScrollLock(isOpen && !!editedOrder);
   if (!isOpen || !editedOrder) return null;
 
@@ -104,7 +123,48 @@ export default function MobileOrderDetailModal({
   const isFinal = editedOrder.status === 'completed' || editedOrder.status === 'cancelled';
   const canDelete = currentRole === 'admin';
 
-  const set = (field: string, value: any) => setEditedOrder((p: any) => ({ ...p, [field]: value }));
+  const set = (field: string, value: any) => {
+    setEditedOrder((p: any) => {
+      const next = { ...p, [field]: value };
+      // «В работе» на сервере автоснимает метку — сразу отражаем в UI
+      if (field === 'status' && value === 'processing' && p.status !== 'processing') {
+        next.is_questionable = false;
+      }
+      return next;
+    });
+  };
+
+  const toggleQuestionable = async (newValue: boolean) => {
+    if (questionableSavingRef.current || !editedOrder?.id) return;
+    questionableSavingRef.current = true;
+    setQuestionableSaving(true);
+    const prevValue = !!editedOrder.is_questionable;
+    setEditedOrder((p: any) => ({ ...p, is_questionable: newValue }));
+    try {
+      const res = await fetch('/api/adminCifra/orders/update', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editedOrder.id,
+          is_questionable: newValue,
+          userRole: currentRole,
+          userName: currentUserName,
+        }),
+      });
+      if (!res.ok) {
+        setEditedOrder((p: any) => ({ ...p, is_questionable: prevValue }));
+      } else {
+        if (onUpdate) onUpdate({ ...editedOrder, is_questionable: newValue });
+        const histRes = await fetch(`/api/adminCifra/order-history?orderId=${editedOrder.id}&_t=${Date.now()}`);
+        if (histRes.ok) setOrderHistory(await histRes.json());
+      }
+    } catch {
+      setEditedOrder((p: any) => ({ ...p, is_questionable: prevValue }));
+    } finally {
+      questionableSavingRef.current = false;
+      setQuestionableSaving(false);
+    }
+  };
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -115,7 +175,12 @@ export default function MobileOrderDetailModal({
         body: JSON.stringify({ ...editedOrder, userRole: currentRole, userName: currentUserName }),
       });
       if (res.ok) {
-        if (onUpdate) onUpdate(editedOrder);
+        // Сервер при «В работе» снимает метку — отдаём родителю актуальное состояние
+        const saved = {
+          ...editedOrder,
+          ...(editedOrder.status === 'processing' ? { is_questionable: false } : {}),
+        };
+        if (onUpdate) onUpdate(saved);
         onClose();
       } else {
         alert('Ошибка сохранения');
@@ -170,35 +235,35 @@ export default function MobileOrderDetailModal({
           position: 'sticky', top: 0, zIndex: 10,
           background: '#25334A',
           borderBottom: '1px solid #334155',
-          padding: '14px 16px',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
+          padding: '12px 14px',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
-            <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1, paddingRight: '4px' }}>
+            <span style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
               Заявка #{editedOrder.id}
             </span>
 
             {/* Статус — select для активных, пилюля для финальных */}
             {isFinal ? (
               <span style={{
-                padding: '5px 12px', borderRadius: '9999px', fontSize: '12px', fontWeight: 700,
+                padding: '4px 10px', borderRadius: '9999px', fontSize: '11px', fontWeight: 700,
                 background: `${sc.color}20`, color: sc.color, whiteSpace: 'nowrap',
               }}>
                 {sc.label}
               </span>
             ) : (
-              <div style={{ position: 'relative' }}>
+              <div style={{ position: 'relative', flexShrink: 0 }}>
                 <select
                   value={editedOrder.status || 'new'}
                   onChange={e => set('status', e.target.value)}
                   style={{
                     appearance: 'none',
-                    padding: '5px 28px 5px 12px',
+                    padding: '4px 22px 4px 10px',
                     borderRadius: '9999px',
                     border: `1px solid ${sc.color}50`,
                     background: `${sc.color}20`,
                     color: sc.color,
-                    fontSize: '12px', fontWeight: 700,
+                    fontSize: '11px', fontWeight: 700,
                     cursor: 'pointer',
                   }}
                 >
@@ -206,8 +271,35 @@ export default function MobileOrderDetailModal({
                     <option key={s.value} value={s.value}>{s.label}</option>
                   ))}
                 </select>
-                <ChevronDown size={11} color={sc.color} style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                <ChevronDown size={10} color={sc.color} style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
               </div>
+            )}
+
+            {/* Компактный бейдж — не наезжает на крестик */}
+            {canManageQuestionable && (
+              <label
+                title="Под вопросом"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: '26px', height: '26px', borderRadius: '9999px', flexShrink: 0,
+                  border: '1px solid rgba(239,68,68,0.45)',
+                  background: editedOrder.is_questionable ? '#EF4444' : 'transparent',
+                  color: editedOrder.is_questionable ? '#fff' : '#F87171',
+                  fontSize: '13px', fontWeight: 800, lineHeight: 1,
+                  cursor: questionableSaving ? 'wait' : 'pointer',
+                  opacity: questionableSaving ? 0.7 : 1,
+                  userSelect: 'none',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!editedOrder.is_questionable}
+                  disabled={questionableSaving}
+                  onChange={e => toggleQuestionable(e.target.checked)}
+                  style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }}
+                />
+                ?
+              </label>
             )}
           </div>
 
@@ -339,6 +431,16 @@ export default function MobileOrderDetailModal({
             <FieldBlock icon={<MessageSquare size={15} />} label="Комментарий">
               <textarea value={editedOrder.comment || ''} onChange={e => set('comment', e.target.value)} rows={3} style={{ ...INPUT, resize: 'vertical', lineHeight: 1.5 }} />
             </FieldBlock>
+          </div>
+
+          {/* ── ИСТОРИЯ ──────────────────────────────── */}
+          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
+            <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
+              История изменений
+            </div>
+            <div style={{ maxHeight: '320px', overflowY: 'auto' }}>
+              <OrderHistoryTimeline entries={orderHistory} emptyText="История пока пуста" />
+            </div>
           </div>
 
           {/* ── КНОПКИ ───────────────────────────────── */}
