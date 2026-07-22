@@ -565,34 +565,46 @@ export function useRealtimeOrderMixers(
     onUpdateRow?: (formattedRecord: any) => void;
   }
 ) {
-  const orders = options?.orders;
+  // Актуальный список заявок через ref — иначе onUpdate/onInsert замыкают
+  // устаревший `orders` с момента прошлого рендера колбэка.
+  const ordersRef = useRef(options?.orders);
+  ordersRef.current = options?.orders;
+  const activeOnly = options?.activeOnly;
+  const onInsertRow = options?.onInsertRow;
+  const onDeleteRow = options?.onDeleteRow;
+  const onUpdateRow = options?.onUpdateRow;
 
   const { status } = useRealtimeBroadcast({
     topic: 'order_mixers:all',
     enabled: options?.enabled,
     onStatusChange: options?.onStatusChange,
     onInsert: (newRecord) => {
-      const formatted = formatOrderMixer(newRecord, orders);
-      if (options?.activeOnly && !isActiveMixerStatus(formatted.status)) return;
+      const formatted = formatOrderMixer(newRecord, ordersRef.current);
+      if (activeOnly && !isActiveMixerStatus(formatted.status)) return;
 
       setMixers((prev) => {
         if (prev.some((m) => String(m.id) === String(formatted.id))) return prev;
         return [formatted, ...prev];
       });
 
-      options?.onInsertRow?.(newRecord);
+      onInsertRow?.(newRecord);
     },
     onUpdate: (newRecord) => {
-      const formatted = formatOrderMixer(newRecord, orders);
+      const formatted = formatOrderMixer(newRecord, ordersRef.current);
 
       setMixers((prev) => {
         const exists = prev.some((m) => String(m.id) === String(formatted.id));
 
-        if (options?.activeOnly) {
+        if (activeOnly) {
           if (!isActiveMixerStatus(formatted.status)) {
             return prev.filter((m) => String(m.id) !== String(formatted.id));
           }
           if (!exists) return [formatted, ...prev];
+        } else if (!exists) {
+          // Полный список назначений (KPI заявок / дашборд): UPDATE должен
+          // upsert'ить строку — иначе смена статуса рейса, которого ещё нет
+          // в локальном стейте (гонка с fetch), молча теряется.
+          return [formatted, ...prev];
         }
 
         return prev.map((m) => {
@@ -618,11 +630,11 @@ export function useRealtimeOrderMixers(
         });
       });
 
-      options?.onUpdateRow?.(formatted);
+      onUpdateRow?.(formatted);
     },
     onDelete: (oldRecord) => {
       setMixers((prev) => prev.filter((m) => String(m.id) !== String(oldRecord.id)));
-      options?.onDeleteRow?.(oldRecord);
+      onDeleteRow?.(oldRecord);
     },
   });
 

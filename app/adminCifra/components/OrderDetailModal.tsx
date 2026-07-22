@@ -5,6 +5,7 @@ import { ChevronDown } from 'lucide-react';
 import { Order } from '../hooks/useCalendarOrders';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
+import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
 import OrderRouteMap from './OrderRouteMap';
 
 interface OrderDetailModalProps {
@@ -65,10 +66,7 @@ const loadData = async () => {
 
     if (res.ok) {
       let data = await res.json();
-      const sorted = [...data].sort((a, b) => 
-        (a.time || '00:00').localeCompare(b.time || '00:00')
-      );
-      setMixerAssignments(sorted);
+      setMixerAssignments(sortMixersByLogisticsTime(data));
     }
 
     // История
@@ -774,7 +772,7 @@ const formatVolume = (value: number | string) => {
 <div>
   <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
     <span>Назначенные миксеры ({currentMixers.length})</span>
-    <span style={{ fontSize: '13px', color: '#64748B' }}>Изменяй время — список пересортируется</span>
+    <span style={{ fontSize: '13px', color: '#64748B' }}>Изменяй время — список пересортируется (с учётом суток)</span>
   </div>
   
   <div style={{ position: 'relative' }}>
@@ -792,8 +790,7 @@ const formatVolume = (value: number | string) => {
     gap: '4px'
   }}>
     {currentMixers.length > 0 ? (
-      [...currentMixers]
-        .sort((a, b) => (a.time || '00:00').localeCompare(b.time || '00:00'))
+      sortMixersByLogisticsTime(currentMixers)
         .map((mixer, index) => (
         <div 
           key={mixer.id || index}

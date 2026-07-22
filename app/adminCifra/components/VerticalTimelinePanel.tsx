@@ -2,6 +2,11 @@
 
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
+import {
+  findLogisticsDayStartMinutes,
+  logisticsOffsetMinutes,
+  sortMixersByLogisticsTime,
+} from '@/lib/mixerTimeSort';
 
 interface DelayInfo { id: string|number; delayMinutes: number; delayText: string; }
 
@@ -170,11 +175,12 @@ export default function VerticalTimelinePanel({
     const raw = (tripsByOrder[String(orderId)] || []).slice();
     if (!raw.length) return [];
 
-    // Sort by departure time (mixer.time field)
-    const sorted = raw.sort((a, b) => toMins(a.time || '00:00') - toMins(b.time || '00:00'));
-
-    // Natural X positions (departure time → pixel position on 0-24h axis)
-    const natX = sorted.map(t => (toMins(t.time || '00:00') / 1440) * CHIPS_W);
+    // Порядок и ось с учётом рейсов, ушедших на следующие сутки (00:00 после вечера)
+    const sorted = sortMixersByLogisticsTime(raw);
+    const dayStart = findLogisticsDayStartMinutes(sorted.map(t => t.time));
+    const natX = sorted.map(
+      t => (logisticsOffsetMinutes(t.time, dayStart) / 1440) * CHIPS_W
+    );
 
     // Resolve overlaps: nudge later chips right so they don't overlap
     const positions = [...natX];

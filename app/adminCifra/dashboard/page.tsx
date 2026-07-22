@@ -9,6 +9,7 @@ import NewOrderModal from '../components/NewOrderModal';
 import Image from 'next/image';
 import { Home, LayoutList, AlignJustify, X } from 'lucide-react';
 import VerticalTimelinePanel from '../components/VerticalTimelinePanel';
+import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
 
 export default function AdminCifraDashboard() {
 
@@ -40,6 +41,7 @@ export default function AdminCifraDashboard() {
   };
 
  const [notifications, setNotifications] = useState<any[]>([]);
+ const lastWithdrawalsLogCount = useRef<number | null>(null);
  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
  const [mixerAssignments, setMixerAssignments] = useState<any[]>([]); // для текущего заказа
  const [allMixers, setAllMixers] = useState<any[]>([]);
@@ -192,7 +194,15 @@ const fetchNotifications = async () => {
     const pending = (data.withdrawals || data || []).filter((w: any) => w.status !== 'completed');
     
     setNotifications(pending);
-    console.log(`🔔 Активных запросов на вывод: ${pending.length}`);
+    // Не broadcast: обычный GET /api/adminCifra/withdrawals при загрузке дашборда
+    // и по событию refreshNotifications. Лог — только при реальном изменении счёта.
+    if (
+      lastWithdrawalsLogCount.current !== pending.length &&
+      (pending.length > 0 || (lastWithdrawalsLogCount.current ?? 0) > 0)
+    ) {
+      console.log(`🔔 Активных запросов на вывод: ${pending.length}`);
+    }
+    lastWithdrawalsLogCount.current = pending.length;
   } catch (err: any) {
     console.warn('Ошибка загрузки уведомлений о выводах:', err.message || err);
     setNotifications([]); // ← важно, чтобы не ломало дашборд
@@ -1743,7 +1753,7 @@ const generateDailyReport = () => {
     report += `${index + 1}) Заявка #${group.orderId} — ${group.client || '—'}\n`;
     report += `   Время: ${group.deliveryTime || '—'} • ${totalVol} м³\n`;
 
-    group.mixers.forEach((mixer, i) => {
+    sortMixersByLogisticsTime(group.mixers).forEach((mixer, i) => {
       report += `   ${i+1}) ${mixer.number || mixer.mixer_name} — ${mixer.time || '—'} • ${mixer.volume} м³\n`;
     });
     report += `\n`;
@@ -2117,8 +2127,7 @@ const generateDailyReport = () => {
          {/* Строки миксеров внутри заказа */}
          <div style={{ padding: '8px' }}>
            {/* === ИСПРАВЛЕНИЕ: СОРТИРОВКА МИКСЕРОВ ПО ВРЕМЕНИ (самый ранний сверху) === */}
-           {[...group.mixers]
-             .sort((a, b) => (a.time || '00:00').localeCompare(b.time || '00:00'))
+           {sortMixersByLogisticsTime(group.mixers)
              .map((mixer: any, index: number) => (
                <div 
                  key={mixer.id}
@@ -2284,9 +2293,7 @@ const generateDailyReport = () => {
       autoReport += `${index + 1}) Заявка #${group.orderId} — ${group.client || '—'}\n`;
       autoReport += `   Бетон: ${concreteGrade} • Время: ${group.deliveryTime || '—'} • ${totalVol} м³\n`;
 
-      const sortedMixers = [...group.mixers].sort((a, b) => 
-        (a.time || '00:00').localeCompare(b.time || '00:00')
-      );
+      const sortedMixers = sortMixersByLogisticsTime(group.mixers);
 
       sortedMixers.forEach((mixer, i) => {
         autoReport += `   ${i+1}) ${mixer.number || mixer.mixer_name} — ${mixer.time || '—'} • ${mixer.volume} м³\n`;

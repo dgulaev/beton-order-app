@@ -6,6 +6,7 @@ import { Order } from '../../adminCifra/hooks/useCalendarOrders';
 import { useYandexRouteHref } from '@/lib/yandexRoute';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
+import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
 
 interface MobileOrderDetailModalProps {
   order: Order | null;
@@ -78,9 +79,9 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
 
   if (!order || !localOrder) return null;
 
-  const currentMixers = mixerAssignments
-    .filter(m => String(m.orderId ?? m.order_id) === String(order.id))
-    .sort((a, b) => (a.time || '00:00').localeCompare(b.time || '00:00'));
+  const currentMixers = sortMixersByLogisticsTime(
+    mixerAssignments.filter(m => String(m.orderId ?? m.order_id) === String(order.id))
+  );
 
   const assignedVolume = currentMixers.reduce((s, m) => s + Number(m.volume || 0), 0);
   const orderVolume = Number(order.volume || 0);

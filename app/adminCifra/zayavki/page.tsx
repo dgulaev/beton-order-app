@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
-import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
+import { useRealtimeOrders, useRealtimeOrderMixers } from '../../../hooks/useRealtimeOrders';
 import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
 import { Package, Save, Trash2, Send, Share2, Copy, X, AlertTriangle, CheckCircle2 } from 'lucide-react';
@@ -671,6 +671,8 @@ export default function ZayavkiPage() {
   const [newOrderInitialData, setNewOrderInitialData] = useState<any>(null);
   const [orderHistory, setOrderHistory] = useState<any[]>([]);
   const [orderMixers, setOrderMixers] = useState<any[]>([]);
+  // Рейсы всех заявок выбранного дня — для KPI (факт по разгруженным м³)
+  const [dayMixerAssignments, setDayMixerAssignments] = useState<any[]>([]);
   const [userFullName, setUserFullName] = useState<string>('');
   const [currentRole, setCurrentRole] = useState<string>('');
  
@@ -1033,6 +1035,21 @@ ${order.customer_type?.includes('Юридическое')
   // ==================== REALTIME (начальная загрузка + live-обновления) ====================
   const { status: ordersRealtimeStatus } = useRealtimeOrders(setAllOrders);
 
+  // Live-обновление рейсов для KPI-бара (фильтр по дню — в метриках)
+  useRealtimeOrderMixers(setDayMixerAssignments, { orders: allOrders });
+
+  // Локальные правки миксеров в открытой модалке сразу отражаем в KPI
+  // (не ждём round-trip broadcast). Пустой массив пропускаем — иначе при
+  // открытии модалки до ответа API затрём уже загруженные рейсы дня.
+  useEffect(() => {
+    if (!selectedOrder?.id || !orderMixers.length) return;
+    const oid = String(selectedOrder.id);
+    setDayMixerAssignments((prev) => {
+      const others = prev.filter((m) => String(m.orderId ?? m.order_id) !== oid);
+      return [...others, ...orderMixers];
+    });
+  }, [orderMixers, selectedOrder?.id]);
+
   // Заявку удалили (например, тестовую #604), пока её модалка была открыта —
   // realtime DELETE уже убрал заявку из allOrders, но selectedOrder — отдельный
   // стейт модалки, и без этой проверки она продолжала бы показывать
@@ -1147,19 +1164,123 @@ ${order.customer_type?.includes('Юридическое')
   // Исключаем отменённые заявки из всех расчётов
   const activeOrders = dayOrders.filter((o: Order) => o.status !== 'cancelled');
 
-  const totalVolume = activeOrders.reduce((sum: number, o: Order) => 
+  const dayOrderIds = useMemo(
+    () => new Set(dayOrders.map((o: Order) => String(o.id))),
+    [dayOrders]
+  );
+  const dayOrderIdsKey = useMemo(
+    () => dayOrders.map((o: Order) => o.id).join(','),
+    [dayOrders]
+  );
+
+  // Подгрузка рейсов дня для KPI (отдельно от orderMixers открытой модалки).
+  // Мержим с текущим стейтом: иначе поздний ответ fetch затирает свежий broadcast.
+  useEffect(() => {
+    let cancelled = false;
+    if (!dayOrderIdsKey) {
+      setDayMixerAssignments([]);
+      return;
+    }
+    const idSet = new Set(dayOrderIdsKey.split(',').map(String));
+    fetch(`/api/adminCifra/order-mixers?orderIds=${dayOrderIdsKey}`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (cancelled || !Array.isArray(data)) return;
+        setDayMixerAssignments((prev) => {
+          const byId = new Map<string, any>();
+          for (const m of data) byId.set(String(m.id), m);
+          for (const m of prev) {
+            const oid = String(m.orderId ?? m.order_id);
+            if (!idSet.has(oid)) continue;
+            const id = String(m.id);
+            const incoming = byId.get(id);
+            if (!incoming) {
+              byId.set(id, m);
+              continue;
+            }
+            const tPrev = new Date(m.updated_at || 0).getTime();
+            const tIn = new Date(incoming.updated_at || 0).getTime();
+            if (tPrev > tIn) byId.set(id, m);
+          }
+          return Array.from(byId.values());
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [dayOrderIdsKey]);
+
+  const dayMixerTrips = useMemo(
+    () => dayMixerAssignments.filter((m: any) =>
+      dayOrderIds.has(String(m.orderId ?? m.order_id))
+    ),
+    [dayMixerAssignments, dayOrderIds]
+  );
+
+  const planVolume = activeOrders.reduce((sum: number, o: Order) =>
     sum + (Number(o.volume) || 0), 0);
 
-  const completedVolume = activeOrders
-    .filter((o: Order) => o.status === 'completed')
-    .reduce((sum: number, o: Order) => 
-      sum + (Number(o.volume) || 0), 0);
+  const unloadedVolume = useMemo(
+    () => dayMixerTrips
+      .filter((m: any) => m.status === 'Разгружен')
+      .reduce((sum: number, m: any) => sum + Number(m.volume || 0), 0),
+    [dayMixerTrips]
+  );
 
-  const deliveriesCount = activeOrders.length;   // количество активных заявок
+  const unloadedByOrderId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of dayMixerTrips) {
+      if (m.status !== 'Разгружен') continue;
+      const oid = String(m.orderId ?? m.order_id);
+      map.set(oid, (map.get(oid) || 0) + Number(m.volume || 0));
+    }
+    return map;
+  }, [dayMixerTrips]);
 
-  const pprz = totalVolume > 0 
-    ? Math.round((completedVolume / totalVolume) * 100) 
+  const completionPct = planVolume > 0
+    ? Math.min(100, Math.round((unloadedVolume / planVolume) * 100))
     : 0;
+
+  const volumeByStatus = useMemo(() => {
+    const FLOW = [
+      { status: 'Загрузка', label: 'загрузка', color: '#FACC15', showCount: false },
+      { status: 'В пути', label: 'в пути', color: '#60A5FA', showCount: false },
+      { status: 'На объекте', label: 'на объекте', color: '#34D399', showCount: false },
+      { status: 'Разгружен', label: 'разгружено', color: '#10B981', showCount: true },
+    ] as const;
+    const vols: Record<string, number> = {};
+    const counts: Record<string, number> = {};
+    for (const m of dayMixerTrips) {
+      const s = String(m.status || '');
+      vols[s] = (vols[s] || 0) + Number(m.volume || 0);
+      counts[s] = (counts[s] || 0) + 1;
+    }
+    return FLOW
+      .map((cfg) => ({
+        ...cfg,
+        volume: vols[cfg.status] || 0,
+        count: counts[cfg.status] || 0,
+      }))
+      .filter((x) => x.volume > 0 || x.count > 0);
+  }, [dayMixerTrips]);
+
+  const orderStatusCounts = useMemo(() => ({
+    new: dayOrders.filter((o) => o.status === 'new').length,
+    processing: dayOrders.filter((o) => o.status === 'processing').length,
+    completed: dayOrders.filter((o) => o.status === 'completed').length,
+    cancelled: dayOrders.filter((o) => o.status === 'cancelled').length,
+    active: activeOrders.length,
+  }), [dayOrders, activeOrders.length]);
+
+  const fmtM3 = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1));
+  const completionColor =
+    completionPct >= 90 ? '#10B981' :
+    completionPct >= 50 ? '#FACC15' : '#E2E8F0';
+  const completionBarBg =
+    completionPct >= 90
+      ? 'linear-gradient(90deg, #10B981, #34D399)'
+      : completionPct >= 50
+        ? 'linear-gradient(90deg, #F59E0B, #FACC15)'
+        : 'linear-gradient(90deg, #3B82F6, #60A5FA)';
 
               // ==================== НЕДЕЛЯ (ПН - ВС) ====================
   const getWeekDays = () => {
@@ -1316,81 +1437,59 @@ ${order.customer_type?.includes('Юридическое')
     fetchWarehouse();
   }, []);
 
-         // ==================== РАСЧЁТ ЦЕМЕНТА ====================
-  // П5: useMemo — функция остаётся, но memoизированные значения ниже
-  const calculateCementNeeded = (onlyCompleted: boolean) => {
-    // Исключаем отменённые заявки из расчётов
-    let orders = dayOrders.filter((o: Order) => o.status !== 'cancelled');
+         // ==================== РАСЧЁТ ЦЕМЕНТА / ДОБАВОК ====================
+  // effectiveVolume: 'plan' — полный объём заявки; 'unloaded' — по разгруженным м³
+  // (для completed берём полный объём; иначе unloaded/plan × volume).
+  const getOrderEffectiveVolume = (order: any, mode: 'plan' | 'unloaded') => {
+    const planVol = Number(order.volume || 0);
+    if (planVol <= 0) return 0;
+    if (mode === 'plan') return planVol;
+    if (order.status === 'completed') return planVol;
+    const unloaded = unloadedByOrderId.get(String(order.id)) || 0;
+    return Math.min(planVol, unloaded);
+  };
 
-    if (onlyCompleted) {
-      orders = orders.filter((o: Order) => o.status === 'completed');
-    }
+  const findRecipeForOrder = (gradeRaw: string) => {
+    const grade = String(gradeRaw || '').trim();
+    if (!grade) return null;
+    let recipe = recipes.find((r: any) => r.code === grade);
+    if (!recipe) recipe = recipes.find((r: any) => r.code === grade.replace(/и$/, ''));
+    if (!recipe) recipe = recipes.find((r: any) => r.name?.includes(grade));
+    if (!recipe) recipe = recipes.find((r: any) => grade.includes(r.code));
+    if (!recipe) recipe = recipes.find((r: any) => r.name?.toLowerCase().includes(grade.toLowerCase()));
+    return recipe || null;
+  };
 
+  const calculateCementNeeded = (mode: 'plan' | 'unloaded') => {
     let totalKg = 0;
-
-    // console.log(`📊 Расчёт цемента. Всего активных заказов на день: ${orders.length}`);
-
-    orders.forEach((order: any, index: number) => {
-      const grade = String(order.grade || '').trim();
-      const volume = Number(order.volume || 0);
-
+    activeOrders.forEach((order: any) => {
+      const volume = getOrderEffectiveVolume(order, mode);
       if (volume <= 0) return;
-
-      // Расширенный поиск рецепта
-      let recipe = recipes.find(r => r.code === grade);
-      if (!recipe) recipe = recipes.find(r => r.code === grade.replace('и', ''));
-      if (!recipe) recipe = recipes.find(r => r.name?.includes(grade));
-
-    // Лог для определения правильности рецептов в заявках
-    // console.log(`   [${index}] Марка: "${grade}" → рецепт найден:`, recipe ? recipe.code : 'НЕ НАЙДЕН');
-
+      const recipe = findRecipeForOrder(order.grade);
       if (recipe && recipe.cement) {
         totalKg += volume * Number(recipe.cement);
       }
     });
-
-    const tons = (totalKg / 1000).toFixed(1);
-    // console.log(`✅ Итого цемента: ${tons} т`);
-    return tons;
+    return (totalKg / 1000).toFixed(1);
   };
 
-    // ==================== РАСЧЁТ ДОБАВОК (с поддержкой additive2 для растворов) ====================
-  const calculateAdditiveNeeded = (onlyCompleted: boolean = false) => {
-    let orders = dayOrders.filter((o: any) => o.status !== 'cancelled');
-    if (onlyCompleted) {
-      orders = orders.filter((o: any) => o.status === 'completed');
-    }
-
-    let totalKg = 0;
-
-    orders.forEach((order: any) => {
-      let grade = String(order.grade || '').trim();
-      const volume = Number(order.volume || 0);
-      if (volume <= 0 || !grade) return;
-
-      // Поиск рецепта
-      let recipe = recipes.find((r: any) => r.code === grade);
-      if (!recipe) recipe = recipes.find((r: any) => r.code === grade.replace(/и$/, ''));
-      if (!recipe) recipe = recipes.find((r: any) => grade.includes(r.code));
-      if (!recipe) recipe = recipes.find((r: any) => r.name?.toLowerCase().includes(grade.toLowerCase()));
-
-      if (!recipe) return;
-
-      let additiveValue = 0;
-
-      // Логика выбора колонки добавки
-      if (recipe.type === 'mortar' && recipe.additive2 !== null && recipe.additive2 !== undefined) {
-        additiveValue = Number(recipe.additive2);
-      } else if (recipe.additive !== null && recipe.additive !== undefined) {
-        additiveValue = Number(recipe.additive);
-      }
-
-      if (additiveValue > 0) {
-        totalKg += volume * additiveValue;
-      }
+  // Добавки раздельно: 1 = ПФМ, 2 = Линомикс (кг)
+  const calculateAdditiveByType = (mode: 'plan' | 'unloaded') => {
+    let pfmKg = 0;
+    let linomixKg = 0;
+    activeOrders.forEach((order: any) => {
+      const volume = getOrderEffectiveVolume(order, mode);
+      if (volume <= 0) return;
+      const dosage = getAdditiveDosage(findRecipeByGrade(recipes, order.grade));
+      if (!dosage) return;
+      const kg = volume * dosage.kgPerM3;
+      if (dosage.additiveId === 1) pfmKg += kg;
+      else linomixKg += kg;
     });
-
-    return totalKg.toFixed(1);   // в кг
+    return {
+      pfm: Math.round(pfmKg * 10) / 10,
+      linomix: Math.round(linomixKg * 10) / 10,
+    };
   };
 
   // П5: weekOrderCounts — подсчёт заявок для каждого дня недели
@@ -1428,11 +1527,23 @@ ${order.customer_type?.includes('Юридическое')
     });
   }, [allOrders, weekDays]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // П5: memoизированные значения для рендера (избегаем пересчёта при каждом ререндере)
-  const cementCompletedMemo  = useMemo(() => calculateCementNeeded(true),  [dayOrders, recipes]); // eslint-disable-line react-hooks/exhaustive-deps
-  const cementAllMemo        = useMemo(() => calculateCementNeeded(false), [dayOrders, recipes]); // eslint-disable-line react-hooks/exhaustive-deps
-  const additiveCompletedMemo = useMemo(() => calculateAdditiveNeeded(true),  [dayOrders, recipes]); // eslint-disable-line react-hooks/exhaustive-deps
-  const additiveAllMemo       = useMemo(() => calculateAdditiveNeeded(false), [dayOrders, recipes]); // eslint-disable-line react-hooks/exhaustive-deps
+  // П5: memoизированные значения для рендера (факт — от разгруженного объёма)
+  const cementCompletedMemo  = useMemo(() => calculateCementNeeded('unloaded'), [dayOrders, recipes, unloadedByOrderId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cementAllMemo        = useMemo(() => calculateCementNeeded('plan'),     [dayOrders, recipes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const additiveFactByType = useMemo(() => calculateAdditiveByType('unloaded'), [dayOrders, recipes, unloadedByOrderId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const additivePlanByType = useMemo(() => calculateAdditiveByType('plan'),     [dayOrders, recipes]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const cementPct = Number(cementAllMemo) > 0
+    ? Math.min(100, Math.round((Number(cementCompletedMemo) / Number(cementAllMemo)) * 100))
+    : 0;
+  const pfmPct = additivePlanByType.pfm > 0
+    ? Math.min(100, Math.round((additiveFactByType.pfm / additivePlanByType.pfm) * 100))
+    : 0;
+  const linomixPct = additivePlanByType.linomix > 0
+    ? Math.min(100, Math.round((additiveFactByType.linomix / additivePlanByType.linomix) * 100))
+    : 0;
+
+  const fmtKg = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1));
 
   // ==================== ПРОГНОЗ ДОБАВОК — скользящие 7 дней от selectedDate ====================
   // Не привязываемся к ПН-ВС: берём selectedDate + 6 следующих дней.
@@ -1536,57 +1647,185 @@ ${order.customer_type?.includes('Юридическое')
 
                               {/* ==================== KPI БАР ==================== */}
       <div style={{ 
-        padding: '14px 32px', 
+        padding: '12px 20px', 
         background: '#1E2937', 
         display: 'flex', 
-        gap: '60px', 
+        gap: '12px', 
         borderTop: '1px solid #334155',
         borderRadius: '0 0 20px 20px',
-        alignItems: 'center',
-        flexWrap: 'wrap',
+        alignItems: 'stretch',
+        flexWrap: 'nowrap',
         flexShrink: 0,
-        marginBottom: '16px'
+        marginBottom: '16px',
       }}>
         
-        {/* Выполнено сегодня */}
-        <div>
-          <div style={{ color: '#94A3B8', fontSize: '14px' }}>Выполнено сегодня</div>
-          <div style={{ fontSize: '32px', fontWeight: '700' }}>
-            {Math.round(completedVolume)} / <span style={{ opacity: 0.6, color: '#94A3B8' }}>{Math.round(totalVolume)}</span> м³
+        {/* Выполнение плана */}
+        <div style={{ flex: '1.2 1 0', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '6px', marginBottom: '6px' }}>
+            <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em' }}>Выполнение плана</div>
+            <div style={{ fontSize: '18px', fontWeight: 700, color: completionColor, flexShrink: 0 }}>{completionPct}%</div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', marginBottom: '8px' }}>
+            <span style={{ fontSize: '26px', fontWeight: 700, color: completionColor, lineHeight: 1 }}>
+              {fmtM3(unloadedVolume)}
+            </span>
+            <span style={{ fontSize: '14px', color: '#94A3B8', fontWeight: 600, whiteSpace: 'nowrap' }}>
+              / {fmtM3(planVolume)} м³
+            </span>
+          </div>
+          <div style={{ height: '10px', borderRadius: '9999px', background: '#334155', overflow: 'hidden', marginBottom: '8px' }}>
+            <div style={{
+              height: '100%',
+              width: `${completionPct}%`,
+              borderRadius: '9999px',
+              background: completionBarBg,
+              transition: 'width 0.4s ease',
+            }} />
+          </div>
+          {volumeByStatus.length > 0 ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+              {volumeByStatus.map((item) => (
+                <span
+                  key={item.status}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'baseline',
+                    gap: '3px',
+                    padding: '2px 7px',
+                    borderRadius: '9999px',
+                    background: `${item.color}22`,
+                    border: `1px solid ${item.color}55`,
+                    color: item.color,
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {item.showCount ? (
+                    <>
+                      <span style={{ fontWeight: 700 }}>{item.count}</span>
+                      <span style={{ opacity: 0.75 }}>·</span>
+                      <span style={{ fontWeight: 700 }}>{fmtM3(item.volume)} м³</span>
+                    </>
+                  ) : (
+                    <span style={{ fontWeight: 700 }}>{fmtM3(item.volume)} м³</span>
+                  )}
+                  <span style={{ opacity: 0.95, fontWeight: 600 }}>{item.label}</span>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: '12px', color: '#94A3B8', fontWeight: 500 }}>разгружено от плана дня</div>
+          )}
+        </div>
+
+        {/* Цемент */}
+        <div style={{ flex: '0.85 1 0', minWidth: 0 }}>
+          <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em', marginBottom: '6px' }}>Цемент</div>
+          <div style={{ fontSize: '22px', fontWeight: 700, color: '#60A5FA', lineHeight: 1.1, marginBottom: '8px', whiteSpace: 'nowrap' }}>
+            {cementCompletedMemo}
+            <span style={{ color: '#94A3B8', fontSize: '14px', fontWeight: 600 }}>
+              {' / '}{Number(cementAllMemo) % 1 === 0 ? Math.round(Number(cementAllMemo)) : Number(cementAllMemo).toFixed(1)} т
+            </span>
+          </div>
+          <div style={{ height: '10px', borderRadius: '9999px', background: '#334155', overflow: 'hidden', marginBottom: '8px' }}>
+            <div style={{
+              height: '100%',
+              width: `${cementPct}%`,
+              borderRadius: '9999px',
+              background: 'linear-gradient(90deg, #3B82F6, #60A5FA)',
+              transition: 'width 0.4s ease',
+            }} />
+          </div>
+          <div style={{ fontSize: '12px', color: '#94A3B8', fontWeight: 500 }}>от разгруженного объёма</div>
+        </div>
+
+        {/* ПФМ — отдельный блок */}
+        <div style={{ flex: '0.85 1 0', minWidth: 0 }}>
+          <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em', marginBottom: '6px' }}>
+            ПФМ
+            {weekAdditiveForecast?.pfm?.shortage && (
+              <span style={{ marginLeft: '6px', fontSize: '11px', color: '#F87171', fontWeight: 700 }}>нехватка</span>
+            )}
+          </div>
+          <div style={{ fontSize: '22px', fontWeight: 700, color: '#FACC15', lineHeight: 1.1, marginBottom: '8px', whiteSpace: 'nowrap' }}>
+            {fmtKg(additiveFactByType.pfm)}
+            <span style={{ color: '#94A3B8', fontSize: '14px', fontWeight: 600 }}>
+              {' / '}{fmtKg(additivePlanByType.pfm)} кг
+            </span>
+          </div>
+          <div style={{ height: '10px', borderRadius: '9999px', background: '#334155', overflow: 'hidden', marginBottom: '8px' }}>
+            <div style={{
+              height: '100%',
+              width: `${pfmPct}%`,
+              borderRadius: '9999px',
+              background: 'linear-gradient(90deg, #F59E0B, #FACC15)',
+              transition: 'width 0.4s ease',
+            }} />
+          </div>
+          <div style={{ fontSize: '13px', color: '#CBD5E1', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            склад {warehouseAdditives ? `${Math.round(warehouseAdditives.pfm)} л` : '—'}
           </div>
         </div>
 
-        {/* Понадобится цемента */}
-        <div>
-          <div style={{ color: '#94A3B8', fontSize: '14px' }}>Понадобится цемента</div>
-          <div style={{ fontSize: '28px', fontWeight: '700', color: '#60A5FA' }}>
-            {cementCompletedMemo} / 
-            <span style={{ opacity: 0.6, color: '#94A3B8' }}>
-              {Math.round(Number(cementAllMemo))}
-            </span> т
+        {/* Линомикс — отдельный блок */}
+        <div style={{ flex: '0.85 1 0', minWidth: 0 }}>
+          <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em', marginBottom: '6px' }}>
+            Линомикс
+            {weekAdditiveForecast?.linomix?.shortage && (
+              <span style={{ marginLeft: '6px', fontSize: '11px', color: '#F87171', fontWeight: 700 }}>нехватка</span>
+            )}
+          </div>
+          <div style={{ fontSize: '22px', fontWeight: 700, color: '#A78BFA', lineHeight: 1.1, marginBottom: '8px', whiteSpace: 'nowrap' }}>
+            {fmtKg(additiveFactByType.linomix)}
+            <span style={{ color: '#94A3B8', fontSize: '14px', fontWeight: 600 }}>
+              {' / '}{fmtKg(additivePlanByType.linomix)} кг
+            </span>
+          </div>
+          <div style={{ height: '10px', borderRadius: '9999px', background: '#334155', overflow: 'hidden', marginBottom: '8px' }}>
+            <div style={{
+              height: '100%',
+              width: `${linomixPct}%`,
+              borderRadius: '9999px',
+              background: 'linear-gradient(90deg, #8B5CF6, #A78BFA)',
+              transition: 'width 0.4s ease',
+            }} />
+          </div>
+          <div style={{ fontSize: '13px', color: '#CBD5E1', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            склад {warehouseAdditives ? `${Math.round(warehouseAdditives.linomix)} л` : '—'}
           </div>
         </div>
 
-        {/* Понадобится добавок */}
-        <div>
-          <div style={{ color: '#94A3B8', fontSize: '14px' }}>Понадобится добавок</div>
-          <div style={{ fontSize: '28px', fontWeight: '700', color: '#FACC15' }}>
-            {additiveCompletedMemo} / 
-            <span style={{ opacity: 0.6, color: '#94A3B8' }}>
-              {Math.round(Number(additiveAllMemo))}
-            </span> кг
+        {/* Заявки по статусам */}
+        <div style={{ flex: '0.9 1 0', minWidth: 0 }}>
+          <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em', marginBottom: '6px' }}>Заявки</div>
+          <div style={{ fontSize: '26px', fontWeight: 700, lineHeight: 1.1, marginBottom: '8px', whiteSpace: 'nowrap' }}>
+            {orderStatusCounts.active}
+            <span style={{ fontSize: '13px', color: '#94A3B8', fontWeight: 600, marginLeft: '5px' }}>
+              активных
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px' }}>
+              <span style={{ color: '#CBD5E1', fontWeight: 500 }}>Новые</span>
+              <strong style={{ color: '#FACC15' }}>{orderStatusCounts.new}</strong>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px' }}>
+              <span style={{ color: '#CBD5E1', fontWeight: 500 }}>В работе</span>
+              <strong style={{ color: '#60A5FA' }}>{orderStatusCounts.processing}</strong>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px' }}>
+              <span style={{ color: '#CBD5E1', fontWeight: 500 }}>Выполнены</span>
+              <strong style={{ color: '#10B981' }}>{orderStatusCounts.completed}</strong>
+            </div>
+            {orderStatusCounts.cancelled > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px' }}>
+                <span style={{ color: '#CBD5E1', fontWeight: 500 }}>Отменены</span>
+                <strong style={{ color: '#EF4444' }}>{orderStatusCounts.cancelled}</strong>
+              </div>
+            )}
           </div>
         </div>
-
-        {/* Доставок сегодня */}
-        <div>
-          <div style={{ color: '#94A3B8', fontSize: '14px' }}>Доставок сегодня</div>
-          <div style={{ fontSize: '32px', fontWeight: '700' }}>
-            {deliveriesCount}
-          </div>
-        </div>
-
-        {/* Пилюля нехватки добавок перенесена к кнопке Новая заявка */}
 
       </div>
 

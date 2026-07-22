@@ -93,7 +93,16 @@ function connect(topic: string): BroadcastEntry {
   if (existing) return existing;
 
   console.log(`🟡 [Broadcast] Подключаюсь к каналу → ${topic}`);
-  const channel = supabase.channel(topic);
+  // ⚠️ private: false обязателен: триггеры шлют realtime.send(..., false)
+  // (публичный broadcast). Если Realtime Authorization включён в проекте,
+  // канал по умолчанию private → join падает с CHANNEL_ERROR и SUBSCRIBED
+  // никогда не приходит.
+  const channel = supabase.channel(topic, {
+    config: {
+      private: false,
+      broadcast: { self: false, ack: false },
+    },
+  });
   const entry: BroadcastEntry = { channel, listeners: new Set(), status: 'CONNECTING' };
   registry.set(topic, entry);
 
@@ -107,7 +116,7 @@ function connect(topic: string): BroadcastEntry {
     .on('broadcast', { event: 'DELETE' }, (msg: any) => {
       dispatch(topic, 'delete', msg.payload?.record ?? msg.payload, msg.payload?.old);
     })
-    .subscribe((s) => {
+    .subscribe((s, err) => {
       const e = registry.get(topic);
       if (s === 'SUBSCRIBED') {
         console.log(`✅ [Broadcast] ПОДПИСКА АКТИВНА → ${topic}`);
@@ -119,7 +128,10 @@ function connect(topic: string): BroadcastEntry {
         firstErrorAt = null;
         notify(topic, 'SUBSCRIBED');
       } else if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') {
-        console.warn(`⚠️ [Broadcast] ОШИБКА ${s} → ${topic}`);
+        console.warn(
+          `⚠️ [Broadcast] ОШИБКА ${s} → ${topic}`,
+          err ? (err.message || err) : ''
+        );
         if (firstErrorAt === null) firstErrorAt = Date.now();
         // Не мигаем индикатором сразу — вдруг восстановится за пару секунд.
         if (e && !e.errorTimer) {
@@ -195,7 +207,9 @@ function reconnect(topic: string) {
   const entry = registry.get(topic);
   if (!entry) return;
   const state = (entry.channel as any)?.state;
-  if (state === 'joined') return; // уже здоров
+  // Не рвём канал, который уже joined или ещё joining — иначе keepalive
+  // убивает подписку до SUBSCRIBED и в логе вечный CHANNEL_ERROR без ✅.
+  if (state === 'joined' || state === 'joining') return;
 
   reconnectingTopics.add(topic);
   console.warn(`🔁 [Broadcast] Переподключение → ${topic} (состояние: ${state})`);
