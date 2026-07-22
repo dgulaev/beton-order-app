@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     // Получаем текущий статус заказа
     const { data: order, error: fetchError } = await supabase
       .from('orders')
-      .select('id, status')
+      .select('id, status, is_questionable')
       .eq('id', numericId)
       .single();
 
@@ -48,10 +48,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, message: 'Статус не изменился' });
     }
 
-    // Обновляем статус
+    const transitioningToProcessing = status === 'processing' && order.status !== 'processing';
+    const wasQuestionable =
+      order.is_questionable === true || order.is_questionable === 'true';
+
+    // Обновляем статус (+ автоснятие метки «Под вопросом» при уходе в работу)
     const { error: updateError } = await supabase
       .from('orders')
-      .update({ status, updated_at: new Date().toISOString() })
+      .update({
+        status,
+        updated_at: new Date().toISOString(),
+        ...(transitioningToProcessing && wasQuestionable ? { is_questionable: false } : {}),
+      })
       .eq('id', numericId);
 
     if (updateError) {
@@ -61,12 +69,26 @@ export async function POST(request: NextRequest) {
 
     // Записываем в историю
     const actor = userName || 'Диспетчер';
-    await supabase.from('order_history').insert({
+    const historyEntries: any[] = [{
       order_id: numericId,
       action: `Изменил статус заявки с "${STATUS_RU[order.status] || order.status}" на "${STATUS_RU[status] || status}"`,
       user_name: actor,
       user_role: userRole || null,
-    });
+    }];
+
+    if (transitioningToProcessing && wasQuestionable) {
+      historyEntries.push({
+        order_id: numericId,
+        action: 'Автоматически снял метку "Под вопросом" (статус «В работе»)',
+        user_name: 'Система',
+        user_role: 'system',
+        field_name: 'is_questionable',
+        old_value: 'true',
+        new_value: 'false',
+      });
+    }
+
+    await supabase.from('order_history').insert(historyEntries);
 
     return NextResponse.json({
       success: true,

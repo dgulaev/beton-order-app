@@ -248,69 +248,6 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     }
   };
 
-  // ==================== 4.1 УВЕДОМЛЕНИЕ ПО КЛИЕНТУ ====================
- // const showClientReminder = (client: any) => {
-   // const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
-   // const key = `client-reminder-${client.groupId || client.user_id}`;
-
-   // if (closed.includes(key)) return;
-
-   // const notif = document.createElement('div');
-  //  notif.style.cssText = `
-  //    position: fixed;
-   //   top: 90px;
-   //   right: 24px;
-   //   background: linear-gradient(135deg, #f59e0b, #fbbf24);
-  //    color: #0f172a;
-   //   padding: 18px 24px;
-   //  borderRadius: 16px;
-   //  z-index: 10000;
-    //  box-shadow: 0 20px 40px rgba(245, 158, 11, 0.4);
-    //  display: flex;
-    //  align-items: center;
-    //  gap: 16px;
-    //  min-width: 420px;
-   //  cursor: pointer;
-   // `;
-
-   // notif.innerHTML = `
-    //  <div style="font-size: 36px;">📞</div>
-    //  <div style="flex: 1;">
-     //   <div style="font-size: 17px; font-weight: 700;">Пора позвонить клиенту!</div>
-     //   <div style="font-size: 15px; margin-top: 4px;">
-     //     ${client.organization_name || client.full_name || 'Клиент'}
-    //    </div>
-    //    <div style="font-size: 14px; opacity: 0.9;">
-    //      Следующий контакт: ${new Date(client.next_contact).toLocaleDateString('ru-RU')}
-     //   </div>
-     // </div>
-     // <div style="font-size: 28px; cursor: pointer; padding: 4px 10px;" class="close-reminder">✕</div>
-    //`;
-//
-   // const closeBtn = notif.querySelector('.close-reminder') as HTMLElement;
-   // const closeNotification = () => {
-     // notif.remove();
-    //  const closedList = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
-    //  closedList.push(key);
-    //  localStorage.setItem('closedNotifications', JSON.stringify(closedList));
-   // };
-//
-   // if (closeBtn) {
-   //  closeBtn.addEventListener('click', (e) => {
-    //    e.stopPropagation();
-    //    closeNotification();
-    //  });
-  //  }
-
-   // notif.addEventListener('click', () => {
-   //   window.location.href = '/adminCifra/clients';
-   //   closeNotification();
-   // });
-//
-   // document.body.appendChild(notif);
-  //  playNotificationSound();
- // };
-
   // ==================== 4.1.1 КОНТЕЙНЕР ДЛЯ СТЕКА БАННЕРОВ (новые не перекрывают старые) ====================
   const getNotificationContainer = (): HTMLElement => {
     let container = document.getElementById('order-notifications-container');
@@ -679,7 +616,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const scale = getGlobalScale();
   // Страницы-"каркасы": без скролла страницы целиком, со своим внутренним
   // скроллом по зонам (как дашборд) — сейчас это дашборд, заявки, оператор БСУ и миксеры.
-  const isFrameLayout = pathname === '/adminCifra/dashboard' || pathname === '/adminCifra/zayavki' || pathname === '/adminCifra/operator' || pathname === '/adminCifra/mixers' || pathname === '/adminCifra/tasks';
+  const isFrameLayout = pathname === '/adminCifra/dashboard' || pathname === '/adminCifra/zayavki' || pathname === '/adminCifra/operator' || pathname === '/adminCifra/mixers' || pathname === '/adminCifra/tasks' || pathname === '/adminCifra/clients';
   const isDashboard = isFrameLayout;
   // Высота ДО применения transform: scale — после масштабирования визуально
   // она станет равна ровно viewportH (реальной высоте окна браузера).

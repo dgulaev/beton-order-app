@@ -5,19 +5,13 @@ import { Search, X, Phone, Users, Briefcase, ChevronDown, ChevronRight, Building
 import MobileExitButton from '../components/MobileExitButton';
 import MobileClientDetailModal from '../components/MobileClientDetailModal';
 import { useUserRole } from '../../providers/UserRoleProvider';
+import { formatPhoneDisplay } from '@/lib/phone';
 
 // ==================== ТИПЫ ====================
 
 type Tab = 'clients' | 'staff';
 
 // ==================== ХЕЛПЕРЫ ====================
-
-function formatPhone(raw: string | null | undefined): string {
-  if (!raw) return '';
-  const d = raw.replace(/\D/g, '');
-  if (d.length === 11) return `+7 (${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7,9)}-${d.slice(9,11)}`;
-  return raw;
-}
 
 function initials(name: string): string {
   return (name || '?').split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
@@ -116,7 +110,10 @@ export default function MobileClientsPage() {
     try {
       const params = new URLSearchParams({ page: String(page), limit: String(LIMIT) });
       if (q) params.set('search', q);
-      const res = await fetch(`/api/adminCifra/clients/grouped?${params}`);
+      const userId = localStorage.getItem('userId');
+      const res = await fetch(`/api/adminCifra/clients/grouped?${params}`, {
+        headers: userId ? { 'x-user-id': userId } : {},
+      });
       if (!res.ok) return;
       const data = await res.json();
       const items: any[] = data.clients || data.profiles || [];
@@ -309,7 +306,7 @@ export default function MobileClientsPage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', overflow: 'hidden' }}>
                       {phone && (
                         <span style={{ fontSize: '12px', color: '#475569', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
-                          {formatPhone(phone)}
+                          {formatPhoneDisplay(phone)}
                         </span>
                       )}
                       {ordersCount > 0 && (

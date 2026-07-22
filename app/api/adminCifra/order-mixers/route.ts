@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
     // ==================== ПРОВЕРКА ФИНАЛЬНОГО СТАТУСА ЗАЯВКИ ====================
     const { data: currentOrder, error: orderFetchError } = await supabase
       .from('orders')
-      .select('id, status, volume')
+      .select('id, status, volume, is_questionable')
       .eq('id', orderId)
       .single();
 
@@ -141,10 +141,16 @@ export async function POST(request: NextRequest) {
 
     if (currentOrder.status === 'new') {
       newOrderStatus = 'processing';
+      const wasQuestionable =
+        currentOrder.is_questionable === true || currentOrder.is_questionable === 'true';
 
+      // Вместе со статусом снимаем метку «Под вопросом» (если ещё стоит)
       const { error: statusUpdateError } = await supabase
         .from('orders')
-        .update({ status: newOrderStatus })
+        .update({
+          status: newOrderStatus,
+          ...(wasQuestionable ? { is_questionable: false } : {}),
+        })
         .eq('id', orderId);
 
       if (statusUpdateError) {
@@ -156,6 +162,17 @@ export async function POST(request: NextRequest) {
           user_name: 'Система',
           user_role: 'system'
         });
+        if (wasQuestionable) {
+          historyEntries.push({
+            order_id: orderId,
+            action: 'Автоматически снял метку "Под вопросом" (статус «В работе»)',
+            user_name: 'Система',
+            user_role: 'system',
+            field_name: 'is_questionable',
+            old_value: 'true',
+            new_value: 'false',
+          });
+        }
       }
     }
 

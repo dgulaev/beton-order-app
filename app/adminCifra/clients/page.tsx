@@ -1,19 +1,19 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import EfficiencyPage from '../efficiency/page';
+import { useState, useEffect, useRef } from 'react';
 import NewOrderModal from '../components/NewOrderModal';
 import OrderViewModal from '../components/OrderViewModal';
+import CallResultModal from '../components/CallResultModal';
 
-import { formatPhoneInput } from '@/lib/phone';
+import { formatPhoneDisplay, formatPhoneInput } from '@/lib/phone';
+import { adminCifraFetch } from '@/lib/adminCifraFetch';
 import { Users } from 'lucide-react';
 
-// ==================== 0.1 ГЛОБАЛЬНЫЕ ТИПЫ ДЛЯ WINDOW ===============
-declare global {
-  interface Window {
-    callClient: (clientId: number | string) => void;
-  }
-}
+type ClientsGridFit = { cols: number; rows: number; perPage: number };
+
+// Список: не больше столько строк на странице — быстрее грузится и не лагает
+const TABLE_MAX_ROWS = 22;
+const TABLE_ROW_GAP = 8;
 
 export default function ClientsPage() {
 
@@ -24,10 +24,19 @@ export default function ClientsPage() {
   const [ordersLoading, setOrdersLoading] = useState(false);
   
   const [searchTerm, setSearchTerm] = useState('');        
-  const [debouncedSearch, setDebouncedSearch] = useState(''); 
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  // Фильтр списка: all | legal | physical — живёт в state, не сбрасывается при пагинации
+  const [clientTypeFilter, setClientTypeFilter] = useState<'all' | 'legal' | 'physical'>('all');
   
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
   const [selectedProfile, setSelectedProfile] = useState<any>(null);
+  // Сетка/список: сколько элементов влезает в доступную область без скролла
+  const listAreaRef = useRef<HTMLDivElement>(null);
+  const [gridFit, setGridFit] = useState<ClientsGridFit>({ cols: 4, rows: 3, perPage: 12 });
+  // Список: компактные строки, лимит чтобы не тормозить на больших экранах
+  const [tablePerPage, setTablePerPage] = useState(12);
+  // Высота области списка в layout-пикселях (с учётом transform: scale админки)
+  const [listAreaH, setListAreaH] = useState(0);
   const [curators, setCurators] = useState<any[]>([]);
   const [isNewOrderModalOpen, setIsNewOrderModalOpen] = useState(false);
   const [clientVolumes, setClientVolumes] = useState<Record<number | string, number>>({});
@@ -37,6 +46,15 @@ export default function ClientsPage() {
   const [clientsToMerge, setClientsToMerge] = useState<any[]>([]);
   const [dadataSuggestions, setDadataSuggestions] = useState<any[]>([]);
   const [isLoadingDadata, setIsLoadingDadata] = useState(false);
+  // Подсказки ИНН в боковой карточке клиента (отдельно от модалок создания/редактирования)
+  const [sideInnSuggestions, setSideInnSuggestions] = useState<any[]>([]);
+  const [sideInnLoading, setSideInnLoading] = useState(false);
+  const [sideInnSaving, setSideInnSaving] = useState(false);
+  const [sideInnManual, setSideInnManual] = useState('');
+  // Безопасная смена типа клиента физ ↔ юр в боковой колонке
+  const [sideConvertToLegal, setSideConvertToLegal] = useState(false);
+  const [sideOrgManual, setSideOrgManual] = useState('');
+  const [sideTypeSaving, setSideTypeSaving] = useState(false);
   const [isNewClientModalOpen, setIsNewClientModalOpen] = useState(false);
   const [currentRole, setCurrentRole] = useState<string>('admin');
   const [userFullName, setUserFullName] = useState<string>('');
@@ -93,9 +111,6 @@ export default function ClientsPage() {
   // ==================== СОСТОЯНИЯ МОДАЛЬНОГО ОКНА ЗВОНКА ====================
   const [showCallModal, setShowCallModal] = useState(false);
   const [callModalClient, setCallModalClient] = useState<any>(null);
-  const [callResult, setCallResult] = useState<'positive' | 'neutral' | 'negative'>('positive');
-  const [callComment, setCallComment] = useState('');
-  const [savingCall, setSavingCall] = useState(false);
 
   // ==================== ПОИСК — ТОЛЬКО ПО КНОПКЕ ====================
   // debouncedSearch меняется только при явном нажатии кнопки «Найти» или Enter.
@@ -133,18 +148,88 @@ export default function ClientsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalClients, setTotalClients] = useState(0);
-  // В режиме списка строки выше карточек — показываем меньше на странице,
-  // чтобы всё влезало в рамку экрана без скролла (остальное — на след. странице).
-  const itemsPerPage = viewMode === 'table' ? 10 : 18;
+  // Сколько элементов на странице — из замера доступной области (см. useEffect ниже)
+  const itemsPerPage = viewMode === 'table' ? tablePerPage : gridFit.perPage;
 
-  const [activeTab, setActiveTab] = useState<'clients' | 'staff' | 'efficiency'>('clients');
+  const [activeTab, setActiveTab] = useState<'clients' | 'staff'>('clients');
+
+  // Сколько карточек/строк влезает. Считаем в visual-пикселях (getBoundingClientRect
+  // + window.innerHeight) — так корректно учитывается transform: scale админки.
+  // Карточки остаются натуральной высоты; лишнее не влезает — на след. страницу.
+  useEffect(() => {
+    const el = listAreaRef.current;
+    if (!el) return;
+
+    const GAP_LAYOUT = 12;
+    const MIN_CARD_W_LAYOUT = 260;
+    const FALLBACK_CARD_H_VISUAL = activeTab === 'staff' ? 150 : 155;
+    const TABLE_HEAD_H_VISUAL = 42;
+    const FALLBACK_ROW_H_VISUAL = 38; // компактная однострочная строка списка
+    const PAGINATION_RESERVE = 64; // visual px под кнопки страниц
+
+    const compute = () => {
+      const rect = el.getBoundingClientRect();
+      const layoutW = el.clientWidth;
+      if (layoutW < 80 || rect.width < 80) return;
+
+      const scale = layoutW > 0 ? rect.width / layoutW : 1;
+      const safeScale = scale > 0.1 ? scale : 1;
+      const visualAvail = Math.max(160, window.innerHeight - rect.top - PAGINATION_RESERVE);
+      const layoutH = Math.max(160, Math.floor(visualAvail / safeScale));
+      setListAreaH((prev) => (prev === layoutH ? prev : layoutH));
+
+      if (viewMode === 'cards') {
+        const gapVisual = GAP_LAYOUT * safeScale;
+        const cols = Math.max(1, Math.floor((layoutW + GAP_LAYOUT) / (MIN_CARD_W_LAYOUT + GAP_LAYOUT)));
+
+        const firstCard = el.querySelector('[data-client-card]') as HTMLElement | null;
+        const cardVisualH = firstCard
+          ? firstCard.getBoundingClientRect().height
+          : FALLBACK_CARD_H_VISUAL;
+        const safeCardH = cardVisualH > 40 ? cardVisualH : FALLBACK_CARD_H_VISUAL;
+
+        // +8px запас, чтобы нижний ряд не обрезался у пагинации
+        const rows = Math.max(1, Math.floor((visualAvail + gapVisual) / (safeCardH + gapVisual + 8)));
+        const perPage = cols * rows;
+        setGridFit((prev) =>
+          prev.cols === cols && prev.rows === rows && prev.perPage === perPage
+            ? prev
+            : { cols, rows, perPage }
+        );
+      } else {
+        // Список: фиксированная компактная высота строки (не ждём DOM) —
+        // быстрее и стабильнее на разных разрешениях. Потолок TABLE_MAX_ROWS.
+        const gapV = TABLE_ROW_GAP * safeScale;
+        const headV = TABLE_HEAD_H_VISUAL;
+        const rowV = FALLBACK_ROW_H_VISUAL;
+        const fit = Math.floor((visualAvail - headV + gapV) / (rowV + gapV));
+        const tableRows = Math.max(8, Math.min(TABLE_MAX_ROWS, fit));
+        setTablePerPage((prev) => (prev === tableRows ? prev : tableRows));
+      }
+    };
+
+    compute();
+    const t1 = setTimeout(compute, 60);
+    const t2 = setTimeout(compute, 300);
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    window.addEventListener('resize', compute);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', compute);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+    // loading: пока «Загрузка CRM…», listArea ещё не в DOM — ref=null.
+    // После загрузки нужно пересчитать cols/rows/perPage.
+  }, [viewMode, activeTab, loading]);
   
   // Новое состояние для формы создания клиента
   const [newClientForm, setNewClientForm] = useState({
     type: 'legal' as 'legal' | 'physical',
     full_name: '',
     organization_name: '',
-    phone: '',
+    phone: '+7',
     inn: '',
     address: '',
   });
@@ -188,27 +273,25 @@ useEffect(() => {
       if (debouncedSearch) {
         url += `&search=${encodeURIComponent(debouncedSearch)}`;
       }
+      if (clientTypeFilter && clientTypeFilter !== 'all') {
+        url += `&clientType=${encodeURIComponent(clientTypeFilter)}`;
+      }
 
-      const res = await fetch(url);
-      
+      // Список клиентов — только grouped. Стафф грузится отдельно через /staff/stats.
+      if (activeTab === 'staff') {
+        setLoading(false);
+        return;
+      }
+
+      const res = await adminCifraFetch(url);
+
       if (res.ok) {
         const data = await res.json();
-        
-        let result = data.clients || data.groups || data;
-
-        if (activeTab === 'staff') {
-          const staffRes = await fetch('/api/adminCifra/clients?all=true');
-          if (staffRes.ok) {
-            const allUsers = await staffRes.json();
-            result = allUsers
-              .filter((u: any) => ['admin', 'manager', 'dispatcher', 'operator', 'laborant'].includes((u.role || '').toLowerCase()))
-              .map((s: any) => ({ ...s, isStaff: true }));
-          }
-        }
-
-        setProfiles(result);
+        setProfiles(data.clients || data.groups || data);
         setTotalPages(data.totalPages || 1);
         setTotalClients(data.total || 0);
+      } else if (res.status === 403) {
+        console.error('❌ Нет доступа к списку клиентов');
       }
     } catch (err) {
       console.error('❌ Ошибка загрузки клиентов:', err);
@@ -217,15 +300,27 @@ useEffect(() => {
     }
   };
 
-  // Первая загрузка и смена страницы + поиск
+  // Первая загрузка и смена страницы + поиск + фильтр типа клиента
   useEffect(() => {
     fetchClientsPage(currentPage);
-  }, [currentPage, debouncedSearch, activeTab, itemsPerPage]);
+  }, [currentPage, debouncedSearch, activeTab, itemsPerPage, clientTypeFilter]);
 
   // При смене вида отображения (карточки/список) размер страницы меняется —
   // сбрасываем на первую страницу, чтобы не оказаться на "несуществующей" странице.
   useEffect(() => {
     setCurrentPage(1);
+  }, [viewMode]);
+
+  // Сразу при входе в «Список» считаем вместимость по окну — не ждём ResizeObserver,
+  // иначе один кадр остаётся старый tablePerPage (12) и страница «залипает».
+  useEffect(() => {
+    if (viewMode !== 'table') return;
+    const approxTop = 200; // шапка + поиск + табы (visual)
+    const visualAvail = Math.max(200, window.innerHeight - approxTop - 64);
+    const rowStep = 38 + TABLE_ROW_GAP; // высота строки + gap
+    const fit = Math.floor((visualAvail - 42) / rowStep);
+    const next = Math.max(8, Math.min(TABLE_MAX_ROWS, fit));
+    setTablePerPage((prev) => (prev === next ? prev : next));
   }, [viewMode]);
 
   // ==================== 2.0.1 ЗАГРУЗКА ДАННЫХ ДЛЯ ВКЛАДКИ СТАФФ ====================
@@ -359,6 +454,50 @@ useEffect(() => {
     return () => { cancelled = true; };
   }, [selectedProfile]);
 
+  // Подсказка ИНН из DaData — только для юрлиц (есть organization_name), не для физлиц
+  useEffect(() => {
+    if (!selectedProfile || selectedProfile.isStaff) return;
+
+    const inn = (selectedProfile.inn || selectedProfile.clients?.[0]?.inn || '').trim();
+    const orgName = (
+      selectedProfile.organization_name ||
+      selectedProfile.clients?.[0]?.organization_name ||
+      ''
+    ).trim();
+
+    setSideInnManual('');
+    setSideInnSuggestions([]);
+    setSideInnLoading(false);
+    setSideConvertToLegal(false);
+    setSideOrgManual('');
+
+    if (inn) return;
+    // Физлицо: нет названия организации — не предлагаем заполнить ИНН
+    if (!orgName || orgName.length < 3) return;
+
+    let cancelled = false;
+    setSideInnLoading(true);
+
+    (async () => {
+      try {
+        const res = await fetch('/api/dadata/party', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: orgName, mode: 'suggest' }),
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled) setSideInnSuggestions(data.suggestions || []);
+      } catch (err) {
+        console.error('Не удалось загрузить подсказки ИНН:', err);
+      } finally {
+        if (!cancelled) setSideInnLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [selectedProfile]);
+
   useEffect(() => {
     if (activeTab === 'staff') loadStaffList();
   }, [activeTab]);
@@ -477,7 +616,7 @@ const handleSelectProfile = async (profile: any) => {
     // подтягиваем через clients endpoint (service role, без RLS).
     if (mainClient?.user_id && !selected.curator_name) {
       try {
-        const res = await fetch(`/api/adminCifra/clients?userId=${mainClient.user_id}`);
+        const res = await adminCifraFetch(`/api/adminCifra/clients?userId=${mainClient.user_id}`);
         if (res.ok) {
           const clientData = await res.json();
           if (clientData?.created_by) {
@@ -507,38 +646,24 @@ const handleSelectProfile = async (profile: any) => {
   setSelectedProfile(selected);
 };
 
-  // ==================== 2.1 АВТООТКРЫТИЕ КЛИЕНТА ИЗ УВЕДОМЛЕНИЯ ====================
-useEffect(() => {
-  const params = new URLSearchParams(window.location.search);
-  const openClientId = params.get('openClient');
-  const testCall = params.get('testCall') === 'true';
+  // ==================== 2.1 АВТООТКРЫТИЕ КЛИЕНТА ИЗ URL (?openClient=) ====================
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const openClientId = params.get('openClient');
+    if (!openClientId || profiles.length === 0) return;
 
-  if (!openClientId) return;
+    const clientToOpen = profiles.find(
+      (p: any) =>
+        p.groupId === openClientId ||
+        String(p.user_id) === openClientId ||
+        String(p.id) === openClientId
+    );
 
-  // Ждём, пока profiles загрузятся
-  if (profiles.length === 0) return;
-
-  const clientToOpen = profiles.find((p: any) => 
-    p.groupId === openClientId || 
-    String(p.user_id) === openClientId || 
-    String(p.id) === openClientId
-  );
-
-  if (clientToOpen) {
-    console.log('🔗 Автооткрытие клиента:', clientToOpen.organization_name || clientToOpen.full_name);
-    
-    setSelectedProfile(clientToOpen);
-
-    // Показываем уведомление
-    if (testCall || (clientToOpen.next_contact && new Date(clientToOpen.next_contact) < new Date())) {
-      console.log('🔔 Показываем уведомление');
-      showClientReminder(clientToOpen, testCall);
+    if (clientToOpen) {
+      setSelectedProfile(clientToOpen);
+      window.history.replaceState({}, '', '/adminCifra/clients');
     }
-
-    // Очищаем URL
-    window.history.replaceState({}, '', '/adminCifra/clients');
-  }
-}, [profiles]);   // ← Важно: зависимость только от profiles
+  }, [profiles]);
 
         // ==================== 3. ЗАГРУЗКА ЗАКАЗОВ ВЫБРАННОГО ПОЛЬЗОВАТЕЛЯ ====================
   const loadUserOrders = async (userId: number | string | undefined) => {
@@ -626,15 +751,20 @@ const loadGroupOrders = async (group: any) => {
           const userId = c.user_id || c.id;
           if (!userId) continue;
 
-          const res = await fetch(`/api/adminCifra/clients?userId=${userId}`);
+          const res = await adminCifraFetch(`/api/adminCifra/clients?userId=${userId}`);
           if (res.ok) {
             const freshClient = await res.json();
             clientsToEdit.push({
               ...freshClient,
-              address: freshClient.address || c.address || ''
+              address: freshClient.address || c.address || '',
+              phone: freshClient.phone ? formatPhoneInput(freshClient.phone) : '+7',
             });
           } else {
-            clientsToEdit.push({ ...c, address: c.address || '' });
+            clientsToEdit.push({
+              ...c,
+              address: c.address || '',
+              phone: c.phone ? formatPhoneInput(c.phone) : '+7',
+            });
           }
         }
         console.log(`✏️ Загружена группа (${clientsToEdit.length} клиентов)`);
@@ -642,24 +772,44 @@ const loadGroupOrders = async (group: any) => {
         // Одиночный клиент
         const userId = item.user_id || item.id;
         if (userId) {
-          const res = await fetch(`/api/adminCifra/clients?userId=${userId}`);
+          const res = await adminCifraFetch(`/api/adminCifra/clients?userId=${userId}`);
           if (res.ok) {
             const fresh = await res.json();
-            clientsToEdit = [{ ...fresh, address: fresh.address || item.address || '' }];
+            clientsToEdit = [{
+              ...fresh,
+              address: fresh.address || item.address || '',
+              phone: fresh.phone ? formatPhoneInput(fresh.phone) : '+7',
+            }];
           } else {
-            clientsToEdit = [{ ...item, address: item.address || '' }];
+            clientsToEdit = [{
+              ...item,
+              address: item.address || '',
+              phone: item.phone ? formatPhoneInput(item.phone) : '+7',
+            }];
           }
         } else {
-          clientsToEdit = [{ ...item, address: item.address || '' }];
+          clientsToEdit = [{
+            ...item,
+            address: item.address || '',
+            phone: item.phone ? formatPhoneInput(item.phone) : '+7',
+          }];
         }
       }
     } catch (err) {
       console.error('Ошибка загрузки свежих данных:', err);
       // Fallback
       if (item.groupId && item.clients) {
-        clientsToEdit = item.clients.map((c: any) => ({ ...c, address: c.address || '' }));
+        clientsToEdit = item.clients.map((c: any) => ({
+          ...c,
+          address: c.address || '',
+          phone: c.phone ? formatPhoneInput(c.phone) : '+7',
+        }));
       } else {
-        clientsToEdit = [{ ...item, address: item.address || '' }];
+        clientsToEdit = [{
+          ...item,
+          address: item.address || '',
+          phone: item.phone ? formatPhoneInput(item.phone) : '+7',
+        }];
       }
     }
 
@@ -679,6 +829,9 @@ const loadGroupOrders = async (group: any) => {
     try {
       console.log('🚀 Начинаем сохранение группы. Количество клиентов:', editingClient.length);
 
+      let okCount = 0;
+      const failures: string[] = [];
+
       for (const [index, client] of editingClient.entries()) {
         const payload = {
           userId: client.user_id || client.id,
@@ -687,31 +840,277 @@ const loadGroupOrders = async (group: any) => {
           phone: client.phone || null,
           inn: client.inn || null,
           address: client.address || null,
+          client_status: client.client_status || null,
+          loyalty_score: client.loyalty_score ?? null,
         };
 
-        console.log(`📤 [${index + 1}/${editingClient.length}] Отправка для userId=${payload.userId}`, payload);
-
-        const res = await fetch('/api/adminCifra/clients/update', {
+        const res = await adminCifraFetch('/api/adminCifra/clients/update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
 
         if (res.ok) {
-          console.log(`✅ Успешно обновлён клиент ${payload.userId}`);
+          okCount += 1;
         } else {
           const err = await res.json().catch(() => ({}));
+          failures.push(`${payload.userId}: ${err.error || res.status}`);
           console.error(`❌ Ошибка при обновлении ${payload.userId}:`, err);
         }
       }
 
-      alert('✅ Все изменения успешно сохранены (включая адреса)');
-      setIsEditModalOpen(false);
-      setEditingClient(null);
-      window.location.reload();
+      if (failures.length === 0) {
+        alert(`✅ Сохранено: ${okCount} из ${editingClient.length}`);
+        setIsEditModalOpen(false);
+        setEditingClient(null);
+        window.location.reload();
+      } else {
+        alert(
+          `Сохранено ${okCount} из ${editingClient.length}. Ошибки:\n${failures.join('\n')}`
+        );
+      }
     } catch (err) {
       console.error('❌ Критическая ошибка сохранения:', err);
       alert('Ошибка при сохранении изменений');
+    }
+  };
+
+  const getSelectedClientIds = (): number[] => {
+    if (!selectedProfile) return [];
+    const ids: number[] = [];
+    if (Array.isArray(selectedProfile.clients) && selectedProfile.clients.length > 0) {
+      selectedProfile.clients.forEach((c: any) => {
+        const id = Number(c.user_id || c.id);
+        if (Number.isFinite(id)) ids.push(id);
+      });
+    } else {
+      const id = Number(selectedProfile.user_id || selectedProfile.id);
+      if (Number.isFinite(id)) ids.push(id);
+    }
+    return ids;
+  };
+
+  const patchSelectedProfileLocally = (patch: Record<string, unknown>) => {
+    if (!selectedProfile) return;
+    const updatedProfile = {
+      ...selectedProfile,
+      ...patch,
+      clients: selectedProfile.clients
+        ? selectedProfile.clients.map((c: any) => ({ ...c, ...patch }))
+        : selectedProfile.clients,
+    };
+    setSelectedProfile(updatedProfile);
+    setProfiles((prev) =>
+      prev.map((p) => {
+        const sameByGroup =
+          selectedProfile.groupId != null &&
+          p.groupId != null &&
+          p.groupId === selectedProfile.groupId;
+        const sameByUser =
+          selectedProfile.user_id != null &&
+          p.user_id != null &&
+          String(p.user_id) === String(selectedProfile.user_id);
+        return sameByGroup || sameByUser ? { ...p, ...updatedProfile } : p;
+      })
+    );
+  };
+
+  // Сохранить ИНН прямо из боковой карточки (на все контактные записи группы)
+  const saveInnFromSidePanel = async (inn: string, organizationName?: string) => {
+    if (!selectedProfile || selectedProfile.isStaff) return;
+    const cleanInn = String(inn || '').replace(/\D/g, '').slice(0, 12);
+    if (cleanInn.length !== 10 && cleanInn.length !== 12) {
+      alert('ИНН должен содержать 10 или 12 цифр');
+      return;
+    }
+
+    const clientIds = getSelectedClientIds();
+    if (clientIds.length === 0) {
+      alert('Не найден id клиента для сохранения ИНН');
+      return;
+    }
+
+    setSideInnSaving(true);
+    try {
+      const failures: string[] = [];
+      const orgName = (organizationName || selectedProfile.organization_name || '').trim();
+      for (const userId of clientIds) {
+        const payload: Record<string, unknown> = { userId, inn: cleanInn };
+        if (orgName) payload.organization_name = orgName;
+
+        const res = await adminCifraFetch('/api/adminCifra/clients/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          failures.push(`${userId}: ${err.error || res.status}`);
+        }
+      }
+
+      if (failures.length > 0) {
+        alert(`Не удалось сохранить ИНН:\n${failures.join('\n')}`);
+        return;
+      }
+
+      const newGroupId = `${cleanInn}_${orgName.toLowerCase().replace(/[^a-zа-я0-9]/g, '')}`;
+      patchSelectedProfileLocally({
+        inn: cleanInn,
+        groupId: newGroupId,
+        organization_name: orgName || selectedProfile.organization_name,
+      });
+      setSideInnSuggestions([]);
+      setSideInnManual('');
+      setSideConvertToLegal(false);
+      setSideOrgManual('');
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка при сохранении ИНН');
+    } finally {
+      setSideInnSaving(false);
+    }
+  };
+
+  // Физлицо → юрлицо: нужна организация (ИНН желателен)
+  const convertToLegal = async () => {
+    if (!selectedProfile || selectedProfile.isStaff) return;
+    const orgName = sideOrgManual.trim();
+    if (orgName.length < 2) {
+      alert('Укажите название организации');
+      return;
+    }
+    const cleanInn = sideInnManual.replace(/\D/g, '').slice(0, 12);
+    if (cleanInn && cleanInn.length !== 10 && cleanInn.length !== 12) {
+      alert('ИНН должен содержать 10 или 12 цифр, либо оставьте поле пустым');
+      return;
+    }
+
+    const clientIds = getSelectedClientIds();
+    if (clientIds.length === 0) {
+      alert('Не найден id клиента');
+      return;
+    }
+
+    setSideTypeSaving(true);
+    try {
+      const failures: string[] = [];
+      for (const userId of clientIds) {
+        const payload: Record<string, unknown> = {
+          userId,
+          organization_name: orgName,
+        };
+        if (cleanInn) payload.inn = cleanInn;
+
+        const res = await adminCifraFetch('/api/adminCifra/clients/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          failures.push(`${userId}: ${err.error || res.status}`);
+        }
+      }
+      if (failures.length > 0) {
+        alert(`Не удалось сменить тип:\n${failures.join('\n')}`);
+        return;
+      }
+
+      const primaryId = clientIds[0];
+      const newGroupId = cleanInn
+        ? `${cleanInn}_${orgName.toLowerCase().replace(/[^a-zа-я0-9]/g, '')}`
+        : `no-inn_${primaryId}`;
+
+      patchSelectedProfileLocally({
+        organization_name: orgName,
+        inn: cleanInn || null,
+        groupId: newGroupId,
+      });
+      setSideConvertToLegal(false);
+      setSideOrgManual('');
+      setSideInnManual('');
+      setSideInnSuggestions([]);
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка при смене типа на юрлицо');
+    } finally {
+      setSideTypeSaving(false);
+    }
+  };
+
+  // Юрлицо → физлицо: организация и ИНН очищаются, ФИО сохраняем/подставляем из названия
+  const convertToPhysical = async () => {
+    if (!selectedProfile || selectedProfile.isStaff) return;
+
+    const orgName = (
+      selectedProfile.organization_name ||
+      selectedProfile.clients?.[0]?.organization_name ||
+      ''
+    ).trim();
+    const currentInn = (selectedProfile.inn || selectedProfile.clients?.[0]?.inn || '').trim();
+    const currentFullName = (
+      selectedProfile.full_name ||
+      selectedProfile.clients?.[0]?.full_name ||
+      ''
+    ).trim();
+
+    const ok = confirm(
+      `Сделать клиента физическим лицом?\n\n` +
+        `Организация${orgName ? ` «${orgName}»` : ''} и ИНН${currentInn ? ` ${currentInn}` : ''} будут очищены.\n` +
+        `Телефон, заказы и история звонков сохранятся.`
+    );
+    if (!ok) return;
+
+    const clientIds = getSelectedClientIds();
+    if (clientIds.length === 0) {
+      alert('Не найден id клиента');
+      return;
+    }
+
+    // Если ФИО пустое — сохраняем название организации как ФИО, чтобы не потерять имя в карточке
+    const keepFullName = currentFullName || orgName || null;
+
+    setSideTypeSaving(true);
+    try {
+      const failures: string[] = [];
+      for (const userId of clientIds) {
+        const res = await adminCifraFetch('/api/adminCifra/clients/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            organization_name: null,
+            inn: null,
+            full_name: keepFullName,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          failures.push(`${userId}: ${err.error || res.status}`);
+        }
+      }
+      if (failures.length > 0) {
+        alert(`Не удалось сменить тип:\n${failures.join('\n')}`);
+        return;
+      }
+
+      const primaryId = clientIds[0];
+      patchSelectedProfileLocally({
+        organization_name: null,
+        inn: null,
+        full_name: keepFullName,
+        groupId: `no-inn_${primaryId}`,
+      });
+      setSideConvertToLegal(false);
+      setSideOrgManual('');
+      setSideInnManual('');
+      setSideInnSuggestions([]);
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка при смене типа на физлицо');
+    } finally {
+      setSideTypeSaving(false);
     }
   };
 
@@ -720,7 +1119,7 @@ const loadGroupOrders = async (group: any) => {
     if (!confirm('Вы уверены, что хотите удалить этого клиента?')) return;
 
     try {
-      const res = await fetch(`/api/adminCifra/clients/delete?userId=${clientId}`, {
+      const res = await adminCifraFetch(`/api/adminCifra/clients/delete?userId=${clientId}`, {
         method: 'DELETE',
       });
 
@@ -767,7 +1166,7 @@ const createNewClient = async () => {
       curator_name: userFullName || null
     };
 
-    const res = await fetch('/api/adminCifra/clients', {
+    const res = await adminCifraFetch('/api/adminCifra/clients', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -782,7 +1181,7 @@ const createNewClient = async () => {
         type: 'legal' as 'legal' | 'physical',
         full_name: '',
         organization_name: '',
-        phone: '',
+        phone: '+7',
         inn: '',
         address: '',
       });
@@ -801,7 +1200,7 @@ const createNewClient = async () => {
     // ==================== ПОИСК ДУБЛЕЙ (информационный) ====================
 const findDuplicates = async () => {
   try {
-    const res = await fetch('/api/adminCifra/clients/duplicates');
+    const res = await adminCifraFetch('/api/adminCifra/clients/duplicates');
     if (res.ok) {
       const data = await res.json();
       
@@ -822,25 +1221,44 @@ const findDuplicates = async () => {
 };
 
   const mergeClients = async (sourceId: number | string, targetId: number | string) => {
-    if (!confirm(`Объединить клиента ${sourceId} с клиентом ${targetId}?`)) return;
-
     try {
-      const res = await fetch('/api/adminCifra/clients/merge', {
+      const res = await adminCifraFetch('/api/adminCifra/clients/merge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          sourceUserId: sourceId, 
-          targetUserId: targetId 
+        body: JSON.stringify({
+          sourceUserId: sourceId,
+          targetUserId: targetId,
         }),
       });
 
-      if (res.ok) {
-        alert('Клиенты успешно объединены');
-        setShowMergeModal(false);
-        // Перезагружаем данные
-        window.location.reload();
-      } else {
-        alert('Ошибка при объединении клиентов');
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(`Ошибка при объединении: ${err.error || res.status}`);
+        return;
+      }
+
+      // Убираем влитую запись из модалки без перезагрузки страницы
+      const nextGroups = clientsToMerge
+        .map((group: any) => ({
+          ...group,
+          clients: (group.clients || []).filter(
+            (c: any) => String(c.user_id) !== String(sourceId)
+          ),
+        }))
+        .filter((group: any) => (group.clients || []).length > 1);
+
+      setClientsToMerge(nextGroups);
+      if (nextGroups.length === 0) setShowMergeModal(false);
+
+      // Обновляем список клиентов на фоне
+      fetchClientsPage(currentPage);
+
+      // Если в панели был исходный контакт — закрываем / сбрасываем
+      if (selectedProfile) {
+        const hitSource =
+          String(selectedProfile.user_id) === String(sourceId) ||
+          selectedProfile.clients?.some((c: any) => String(c.user_id) === String(sourceId));
+        if (hitSource) setSelectedProfile(null);
       }
     } catch (err) {
       console.error(err);
@@ -901,145 +1319,33 @@ const findDuplicates = async () => {
     }
   };
 
-  // ==================== 3.3 ПРИНУДИТЕЛЬНОЕ ОБНОВЛЕНИЕ И СОХРАНЕНИЕ next_contact ====================
-const refreshClientData = async () => {
-  if (!selectedProfile) {
-    alert('Сначала выберите клиента');
-    return;
-  }
-
-  const uid = selectedProfile.user_id || selectedProfile.id || selectedProfile.clients?.[0]?.user_id;
-  if (!uid) {
-    alert('Не удалось определить ID клиента');
-    return;
-  }
-
-  try {
-    // Пересчёт next_contact
-    let newNextContact = null;
-
-    if (userOrders && userOrders.length >= 2) {
-      const dates = userOrders
-        .map((o: any) => new Date(o.delivery_date || o.created_at))
-        .filter(d => d && !isNaN(d.getTime()))
-        .sort((a: Date, b: Date) => a.getTime() - b.getTime());
-
-      if (dates.length >= 2) {
-        let totalDays = 0;
-        for (let i = 1; i < dates.length; i++) {
-          totalDays += (dates[i].getTime() - dates[i-1].getTime()) / (1000 * 3600 * 24);
-        }
-        const avgInterval = totalDays / (dates.length - 1);
-        const daysToAdd = Math.max(14, Math.ceil(avgInterval * 1.25));
-        const lastOrder = dates[dates.length - 1];
-        const nextDate = new Date(lastOrder.getTime() + daysToAdd * 86400000);
-        newNextContact = nextDate.toISOString();
-      }
-    }
-
-    if (!newNextContact) {
-      const defaultNext = new Date();
-      defaultNext.setDate(defaultNext.getDate() + 30);
-      newNextContact = defaultNext.toISOString();
-    }
-
-    // Сохраняем в базу
-    await fetch('/api/adminCifra/clients/update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: uid,
-        next_contact: newNextContact
-      })
-    });
-
-    alert(`✅ Дата обновлена: ${new Date(newNextContact).toLocaleDateString('ru-RU')}`);
-
-    // Полная перезагрузка страницы — самое надёжное решение для групп
-    window.location.reload();
-
-  } catch (err: any) {
-    console.error(err);
-    alert('Ошибка сохранения');
-  }
-};
-
-      // ==================== 3.4 ТЕСТОВОЕ УВЕДОМЛЕНИЕ ====================
 // ==================== ОТКРЫТИЕ МОДАЛЬНОГО ОКНА ЗВОНКА ====================
 const openCallModal = (client: any) => {
   const mainClient = client?.clients?.[0] || client;
   setCallModalClient({
     ...mainClient,
-    // Обеспечиваем наличие phone для всей группы
     phone: mainClient.phone || client?.phones?.[0] || '',
     organization_name: client.organization_name || mainClient.organization_name || '',
     full_name: client.full_name || mainClient.full_name || '',
-    // Передаём всю группу для сохранения звонка по нужному user_id
     _group: client,
   });
-  setCallResult('positive');
-  setCallComment('');
   setShowCallModal(true);
 };
 
-// ==================== СОХРАНЕНИЕ РЕЗУЛЬТАТА ЗВОНКА ====================
-const saveCallResult = async () => {
-  if (!callModalClient) return;
-
-  setSavingCall(true);
-  try {
-    const clientId =
-      callModalClient.user_id ||
-      callModalClient.id ||
-      callModalClient._group?.clients?.[0]?.user_id;
-
-    const res = await fetch('/api/adminCifra/client-call', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: clientId, result: callResult, comment: callComment }),
-    });
-
-    if (!res.ok) throw new Error('Ошибка сервера');
-
-    setShowCallModal(false);
-    setCallComment('');
-    setCallResult('positive');
-
-    // Обновляем историю звонков в боковой панели без перезагрузки страницы
-    if (selectedProfile) {
-      if (selectedProfile.groupId) {
-        loadGroupOrders(selectedProfile);
-      } else {
-        const uid = selectedProfile.user_id || selectedProfile.id;
-        if (uid) loadUserOrders(uid);
-      }
+const handleCallSaved = () => {
+  setShowCallModal(false);
+  setCallModalClient(null);
+  if (selectedProfile) {
+    if (selectedProfile.groupId) {
+      loadGroupOrders(selectedProfile);
+    } else {
+      const uid = selectedProfile.user_id || selectedProfile.id;
+      if (uid) loadUserOrders(uid);
     }
-  } catch (err) {
-    console.error(err);
-    alert('Ошибка при сохранении результата звонка');
-  } finally {
-    setSavingCall(false);
   }
 };
 
-const testClientReminder = () => {
-  if (!selectedProfile) {
-    alert('Сначала выберите клиента');
-    return;
-  }
-
-  console.log('🧪 Тест уведомления для клиента:', selectedProfile.organization_name);
-
-  const testReminder = {
-    ...selectedProfile,
-    next_contact: new Date().toISOString(),
-    isOverdue: true
-  };
-
-  showClientReminder(testReminder, true);   // ← важно: true = тест
-};
-
-// ==================== 3.5 ОТКРЫТИЕ МОДАЛКИ РЕДАКТИРОВАНИЯ ЗАКАЗА ====================
+// ==================== ОТКРЫТИЕ МОДАЛКИ РЕДАКТИРОВАНИЯ ЗАКАЗА ====================
 const openOrderModal = (orderId: number | string) => {
   if (!orderId) return;
 
@@ -1216,82 +1522,6 @@ const filteredList = currentList.filter((item: any) => {
 const startIndex = (currentPage - 1) * itemsPerPage;
 const displayedClients = filteredList.slice(startIndex, startIndex + itemsPerPage);
 
-  // ==================== 4.1 ПОКАЗ УВЕДОМЛЕНИЯ О КЛИЕНТЕ ====================
-const showClientReminder = (client: any, isTest = false) => {
-  const closed = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
-  const key = `client-reminder-${client.groupId || client.user_id}`;
-
-  if (!isTest && closed.includes(key)) return;
-
-  const isOverdue = client.isOverdue || (client.next_contact && new Date(client.next_contact) < new Date());
-
-  const notif = document.createElement('div');
-  Object.assign(notif.style, {
-    position: 'fixed',
-    top: '90px',
-    right: '24px',
-    background: isOverdue ? 'linear-gradient(135deg, #ef4444, #f87171)' : 'linear-gradient(135deg, #f59e0b, #fbbf24)',
-    color: '#0f172a',
-    padding: '18px 24px',
-    borderRadius: '16px',
-    zIndex: '10000',
-    boxShadow: '0 20px 40px rgba(239, 68, 68, 0.4)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '16px',
-    minWidth: '420px',
-    cursor: 'pointer'
-  });
-
-  notif.innerHTML = `
-    <div style="font-size: 36px;">📞</div>
-    <div style="flex: 1;">
-      <div style="font-size: 17px; font-weight: 700;">
-        Пора позвонить клиенту!
-      </div>
-      <div style="font-size: 15px; margin-top: 4px;">
-        ${client.organization_name || client.full_name || 'Клиент'}
-      </div>
-      <div style="font-size: 14px; opacity: 0.9;">
-        Следующий контакт: ${new Date(client.next_contact).toLocaleDateString('ru-RU')}
-      </div>
-    </div>
-    <div style="font-size: 28px; cursor: pointer; padding: 4px 10px;" class="close-reminder">✕</div>
-  `;
-
-  const closeBtn = notif.querySelector('.close-reminder') as HTMLElement;
-
-  const closeNotification = () => {
-    notif.remove();
-    if (!isTest) {
-      const closedList = JSON.parse(localStorage.getItem('closedNotifications') || '[]');
-      closedList.push(key);
-      localStorage.setItem('closedNotifications', JSON.stringify(closedList));
-    }
-  };
-
-  closeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    closeNotification();
-  });
-
-  // Главное улучшение — открываем клиента
-  notif.addEventListener('click', () => {
-  closeNotification();
-  const groupId = client.groupId || client.user_id || client.id;
-  window.location.href = `/adminCifra/clients?openClient=${groupId}`;
-});
-
-  document.body.appendChild(notif);
-
-  // Звук
-  try {
-    const audio = new Audio('/sounds/new-order.mp3');
-    audio.volume = 0.6;
-    audio.play().catch(() => {});
-  } catch (e) {}
-};
-
           // ==================== 5. ЗАГРУЗКА ЗАКАЗОВ ПРИ ВЫБОРЕ КЛИЕНТА ====================
   useEffect(() => {
     if (selectedProfile) {
@@ -1337,29 +1567,6 @@ const showClientReminder = (client: any, isTest = false) => {
     : '—';
 
   if (loading) return <div style={{ padding: '120px', textAlign: 'center', color: '#94A3B8' }}>Загрузка CRM...</div>;
-
-  // ==================== 7. ГЛОБАЛЬНАЯ ФУНКЦИЯ ЗВОНКА ====================
-  // Вызывается из DOM-уведомлений (showClientReminder). Открывает карточку
-  // клиента через URL — модальное окно звонка откроется из боковой панели.
-window.callClient = (clientId: number | string) => {
-  if (!clientId) {
-    alert('❌ Не удалось определить ID клиента');
-    return;
-  }
-
-  const found = profiles.find((p: any) =>
-    p.groupId === String(clientId) ||
-    String(p.user_id) === String(clientId) ||
-    p.clients?.some((c: any) => String(c.user_id) === String(clientId))
-  );
-
-  if (found) {
-    openCallModal(found);
-  } else {
-    // Fallback — переходим на страницу клиента
-    window.location.href = `/adminCifra/clients?openClient=${clientId}`;
-  }
-};
 
 // ==================== ФУНКЦИЯ РЕДАКТИРОВАНИЯ СОТРУДНИКА ====================
 const editStaff = (staffMember: any) => {
@@ -1478,14 +1685,34 @@ const changeStaffPassword = async (staffMember: any) => {
 
 
   return (
-    <div style={{ background: '#0F172A', minHeight: '100%', color: '#fff', padding: '0 32px 12px', boxSizing: 'border-box' }}>
-      <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', marginTop: 0, marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+    <div style={{
+      background: '#0F172A',
+      flex: 1,
+      height: '100%',
+      minHeight: 0,
+      color: '#fff',
+      boxSizing: 'border-box',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+    }}>
+      <h1 style={{
+        fontSize: '26px',
+        fontWeight: 700,
+        color: '#fff',
+        marginTop: 0,
+        marginBottom: '10px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        flexShrink: 0,
+      }}>
         <Users size={26} color="#94A3B8" />
         Клиенты CRM
       </h1>
 
       {/* ====================== ВЕРХНЯЯ ПАНЕЛЬ УПРАВЛЕНИЯ ====================== */}
-<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexShrink: 0 }}>
 
   {/* Левая группа — Табы + Кнопки действий */}
 <div style={{ display: 'flex', gap: '8px' }}>
@@ -1585,7 +1812,10 @@ const changeStaffPassword = async (staffMember: any) => {
   {/* Кнопка Новый клиент / Новый сотрудник — меняется в зависимости от вкладки */}
   {activeTab === 'clients' && (
     <button 
-      onClick={() => setIsNewClientModalOpen(true)}
+      onClick={() => {
+        setNewClientForm((prev) => ({ ...prev, phone: prev.phone || '+7' }));
+        setIsNewClientModalOpen(true);
+      }}
       style={{
         padding: '12px 24px',
         background: 'transparent',
@@ -1628,43 +1858,6 @@ const changeStaffPassword = async (staffMember: any) => {
       Новый сотрудник
     </button>
   )}
-
-  {/* ==================== Кнопка Эффективность (отключена) ==================== */}
-{/* 
-  <button 
-    onClick={() => setActiveTab('efficiency')}
-    style={{
-      padding: '12px 24px',
-      background: 'transparent',
-      border: 'none',
-      color: activeTab === 'efficiency' ? '#10B981' : '#A78BFA',
-      fontSize: '17px',
-      fontWeight: '600',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px',
-      position: 'relative',
-      transition: 'color 0.25s ease',
-      cursor: 'pointer',
-    }}
-  >
-    <span style={{ fontSize: '22px', opacity: activeTab === 'efficiency' ? 0.9 : 0.7 }}>📊</span>
-    Эффективность
-    {activeTab === 'efficiency' && (
-      <div style={{
-        position: 'absolute',
-        bottom: '3px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        width: '5px',
-        height: '5px',
-        backgroundColor: '#10B981',
-        borderRadius: '50%',
-        boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
-      }} />
-    )}
-  </button>
-*/}
 
 </div>
   
@@ -1745,7 +1938,7 @@ const changeStaffPassword = async (staffMember: any) => {
 
 {/* ==================== ПОЛЕ ПОИСКА — ТОЛЬКО ПО КНОПКЕ ==================== */}
 {activeTab === 'clients' && (
-  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', marginBottom: '12px' }}>
+  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', marginBottom: '12px', flexShrink: 0 }}>
     <input
       type="text"
       placeholder="Поиск по имени, организации, телефону, ИНН..."
@@ -1804,19 +1997,37 @@ const changeStaffPassword = async (staffMember: any) => {
 
    {/* ==================== 8. ОТОБРАЖЕНИЕ (КАРТОЧКИ + ТАБЛИЦА) ==================== */}
 {(activeTab === 'clients' || activeTab === 'staff') && (
-  <>
+  <div
+    ref={listAreaRef}
+    style={{
+      flex: 1,
+      minHeight: 0,
+      height: listAreaH > 0 ? listAreaH : undefined,
+      maxHeight: listAreaH > 0 ? listAreaH : undefined,
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
+    }}
+  >
     {viewMode === 'cards' ? (
       /* ==================== КАРТОЧКИ ==================== */
+      /* Без 1fr-рядов: карточки натуральной высоты, число на странице
+         подгоняется под экран — иначе 2–3 ряда растягиваются в «столбы». */
       <div style={{ 
         display: 'grid', 
-        gridTemplateColumns: 'repeat(6, 1fr)', 
-        gap: '12px'
+        gridTemplateColumns: `repeat(${Math.max(gridFit.cols, 1)}, minmax(0, 1fr))`,
+        gap: '12px',
+        alignContent: 'start',
+        width: '100%',
+        overflow: 'hidden',
+        boxSizing: 'border-box',
       }}>
         {activeTab === 'staff' ? (
           // ==================== КАРТОЧКИ СОТРУДНИКОВ (НОВАЯ ЛОГИКА) ====================
           staffProfiles.map((person: any) => (
             <div
               key={person.user_id}
+              data-client-card
               onClick={() => handleSelectProfile(person)}
               style={{ 
                 background: '#1E2937', 
@@ -1824,10 +2035,10 @@ const changeStaffPassword = async (staffMember: any) => {
                 padding: '16px',
                 cursor: 'pointer',
                 border: selectedProfile?.user_id === person.user_id ? '2px solid #10B981' : '1px solid #334155',
-                minHeight: '158px',
+                minHeight: '150px',
                 display: 'flex',
                 flexDirection: 'column',
-                justifyContent: 'space-between'
+                justifyContent: 'space-between',
               }}
             >
               {/* Верхняя часть */}
@@ -1869,7 +2080,8 @@ const changeStaffPassword = async (staffMember: any) => {
 
               return (
                 <div 
-                  key={client.groupId || client.user_id || client.id} 
+                  key={client.groupId || client.user_id || client.id}
+                  data-client-card
                   onClick={() => handleSelectProfile(client)}
                   style={{ 
                     background: '#1E2937', 
@@ -1883,26 +2095,38 @@ const changeStaffPassword = async (staffMember: any) => {
                     minHeight: '126px',
                     display: 'flex',
                     flexDirection: 'column',
-                    justifyContent: 'space-between'
                   }}
                 >
                   {/* Верхняя часть — Имя и телефон */}
                   <div>
-                    <div style={{ fontSize: '17px', fontWeight: '700', marginBottom: '4px', lineHeight: 1.3 }}>
+                    <div style={{
+                      fontSize: '16px',
+                      fontWeight: '700',
+                      marginBottom: '4px',
+                      lineHeight: 1.25,
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical' as const,
+                      overflow: 'hidden',
+                    }}>
                       {client.organization_name || client.full_name || client.name || 'Без названия'}
                     </div>
-                    <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '12px' }}>
-                      {client.phones ? client.phones.join(' • ') : client.phone || '—'}
+                    <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '8px' }}>
+                      {client.phones?.length
+                        ? client.phones.map((p: string) => formatPhoneDisplay(p)).join(' • ')
+                        : formatPhoneDisplay(client.phone)}
                     </div>
 
                     {!client.isStaff && client.curator_name && (
                       <div style={{ 
-                        fontSize: '13.5px', 
+                        fontSize: '12.5px', 
                         color: '#94A3B8', 
-                        padding: '6px 10px',
+                        padding: '5px 8px',
                         background: '#334155',
                         borderRadius: '8px',
-                        marginBottom: '12px'
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
                       }}>
                         👤 Куратор: <span style={{ color: '#60A5FA', fontWeight: '600' }}>{client.curator_name}</span>
                       </div>
@@ -1910,19 +2134,19 @@ const changeStaffPassword = async (staffMember: any) => {
                   </div>
 
                   {/* Нижняя часть для клиентов */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '10px' }}>
                     <div>
-                      <div style={{ color: '#60A5FA', fontSize: '26px', fontWeight: '700', lineHeight: 1 }}>
+                      <div style={{ color: '#60A5FA', fontSize: '22px', fontWeight: '700', lineHeight: 1 }}>
                         {vol.toFixed(1)}
                       </div>
-                      <div style={{ color: '#94A3B8', fontSize: '13px' }}>м³ заказано</div>
+                      <div style={{ color: '#94A3B8', fontSize: '12px' }}>м³ заказано</div>
                     </div>
 
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '24px', fontWeight: '700', color: '#94A3B8' }}>
+                      <div style={{ fontSize: '20px', fontWeight: '700', color: '#94A3B8' }}>
                         {ordersCount}
                       </div>
-                      <div style={{ color: '#94A3B8', fontSize: '13px' }}>заказов</div>
+                      <div style={{ color: '#94A3B8', fontSize: '12px' }}>заказов</div>
                     </div>
                   </div>
                 </div>
@@ -1932,7 +2156,13 @@ const changeStaffPassword = async (staffMember: any) => {
       </div>
         ) : (
       /* ==================== РЕЖИМ ТАБЛИЦЫ ==================== */
-      <div style={{ background: '#1E2937', borderRadius: '16px', overflow: 'hidden' }}>
+      <div style={{
+        height: '100%',
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}>
 
         {/* Шапка таблицы */}
       {activeTab === 'staff' ? (
@@ -1941,12 +2171,14 @@ const changeStaffPassword = async (staffMember: any) => {
     gridTemplateColumns: currentUserRole === 'admin' 
       ? '2.8fr 160px 1.6fr 1.1fr 130px' 
       : '2.8fr 1.6fr 1.1fr 130px',
-    padding: '18px 28px',
+    padding: '10px 16px',
     background: '#25334A',
-    borderBottom: '2px solid #334155',
-    fontSize: '15px',
+    borderRadius: '12px',
+    fontSize: '13px',
     fontWeight: '600',
-    color: '#94A3B8'
+    color: '#94A3B8',
+    flexShrink: 0,
+    marginBottom: TABLE_ROW_GAP,
   }}>
     <div>Сотрудник</div>
     {currentUserRole === 'admin' && <div style={{ textAlign: 'center' }}>Пароль</div>}
@@ -1958,55 +2190,97 @@ const changeStaffPassword = async (staffMember: any) => {
 
           <div style={{
             display: 'grid',
-            gridTemplateColumns: '2fr 1fr 140px 140px 120px',
-            padding: '18px 28px',
+            gridTemplateColumns: 'minmax(160px, 2fr) 110px 120px 100px 90px 110px 70px',
+            padding: '8px 16px',
             background: '#25334A',
-            borderBottom: '2px solid #334155',
-            fontSize: '15px',
+            borderRadius: '12px',
+            fontSize: '13px',
             fontWeight: '600',
-            color: '#94A3B8'
+            color: '#94A3B8',
+            flexShrink: 0,
+            marginBottom: TABLE_ROW_GAP,
+            alignItems: 'center',
+            gap: 8,
           }}>
-            <div>Клиент / Организация</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+              <span style={{ whiteSpace: 'nowrap' }}>Клиент / Организация</span>
+              <select
+                value={clientTypeFilter}
+                onChange={(e) => {
+                  const v = e.target.value as 'all' | 'legal' | 'physical';
+                  setClientTypeFilter(v);
+                  setCurrentPage(1);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  padding: '4px 8px',
+                  borderRadius: 8,
+                  border: '1px solid #475569',
+                  background: '#1E2937',
+                  color: '#E2E8F0',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  outline: 'none',
+                  maxWidth: 120,
+                }}
+              >
+                <option value="all">Все</option>
+                <option value="physical">Физлицо</option>
+                <option value="legal">Юрлицо</option>
+              </select>
+            </div>
             <div>ИНН</div>
+            <div>Куратор</div>
             <div>Статус</div>
-            <div>Объём бетона</div>
-            <div>Заказы</div>
+            <div>Объём</div>
+            <div title="Средний / последний объём заявки">Ср. / посл.</div>
+            <div style={{ textAlign: 'center' }}>Заявки</div>
           </div>
         )}
 
-        {/* Строки таблицы */}
+        {/* Строки — компактные, с gap, число под экран (макс. TABLE_MAX_ROWS) */}
+        <div style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: TABLE_ROW_GAP,
+        }}>
         {(activeTab === 'staff' ? staffProfiles : clients).map((item: any) => {
           if (activeTab === 'staff') {
   return (
     <div
       key={item.user_id}
+      data-client-row
       onClick={() => handleSelectProfile(item)}
       style={{
         display: 'grid',
         gridTemplateColumns: currentUserRole === 'admin' 
           ? '2.8fr 160px 1.6fr 1.1fr 130px' 
           : '2.8fr 1.6fr 1.1fr 130px',
-        padding: '16px 28px',
-        borderBottom: '1px solid #334155',
+        padding: '6px 14px',
+        borderRadius: '10px',
+        background: item.role === 'guest' ? '#1F2A38' : '#1E2937',
+        border: '1px solid #334155',
         cursor: 'pointer',
         alignItems: 'center',
         opacity: item.role === 'guest' ? 0.92 : 1,
-        background: item.role === 'guest' ? '#1F2A38' : 'transparent'
+        flexShrink: 0,
       }}
       onMouseOver={(e) => {
-        e.currentTarget.style.background = item.role === 'guest' ? '#334155' : '#25334A';
+        e.currentTarget.style.background = '#25334A';
       }}
       onMouseOut={(e) => {
-        e.currentTarget.style.background = item.role === 'guest' ? '#1F2A38' : 'transparent';
+        e.currentTarget.style.background = item.role === 'guest' ? '#1F2A38' : '#1E2937';
       }}
     >
       {/* 1. Сотрудник */}
-      <div>
-        <div style={{ fontWeight: '600', fontSize: '17px' }}>{item.full_name}</div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.full_name}</div>
         {item.role === 'guest' && (
-          <div style={{ fontSize: '13px', color: '#94A3B8', marginTop: '2px' }}>
-            Демо-доступ
-          </div>
+          <div style={{ fontSize: '11px', color: '#94A3B8' }}>Демо-доступ</div>
         )}
       </div>
 
@@ -2019,14 +2293,14 @@ const changeStaffPassword = async (staffMember: any) => {
               changeStaffPassword(item);
             }}
             style={{
-              padding: '8px 16px',
+              padding: '4px 10px',
               backgroundColor: 'rgba(139, 92, 246, 0.15)',
               color: '#A78BFA',
               border: '1px solid rgba(139, 92, 246, 0.3)',
               borderRadius: '8px',
-              fontSize: '14px',
+              fontSize: '12px',
               cursor: 'pointer',
-              fontWeight: '500'
+              fontWeight: 500,
             }}
           >
             Сменить пароль
@@ -2035,14 +2309,14 @@ const changeStaffPassword = async (staffMember: any) => {
       )}
 
       {/* 3. Телефон */}
-      <div style={{ color: '#94A3B8' }}>{item.phone || '—'}</div>
+      <div style={{ color: '#94A3B8', fontSize: '13px' }}>{formatPhoneDisplay(item.phone)}</div>
 
       {/* 4. Роль */}
       <div style={{ textAlign: 'center' }}>
         <span style={{ 
-          padding: '5px 14px', 
+          padding: '3px 10px', 
           borderRadius: '9999px', 
-          fontSize: '13px', 
+          fontSize: '12px', 
           background: item.role === 'admin'
             ? 'rgba(124, 58, 237, 0.18)'
             : item.role === 'guest'
@@ -2053,7 +2327,7 @@ const changeStaffPassword = async (staffMember: any) => {
             : '#94A3B8',
           border: `1px solid ${item.role === 'admin' ? 'rgba(167,139,250,0.25)' : 'rgba(100,116,139,0.2)'}`,
           display: 'inline-block',
-          fontWeight: '500',
+          fontWeight: 500,
         }}>
           {item.role === 'admin' ? 'Администратор' : 
            item.role === 'dispatcher' ? 'Диспетчер' : 
@@ -2068,13 +2342,14 @@ const changeStaffPassword = async (staffMember: any) => {
         <button 
           onClick={(e) => { e.stopPropagation(); editStaff(item); }}
           style={{ 
-            padding: '8px 18px', 
+            padding: '4px 12px', 
             background: 'rgba(96, 165, 250, 0.12)',
             border: '1px solid rgba(96, 165, 250, 0.3)',
             borderRadius: '8px', 
             color: '#60A5FA', 
             cursor: 'pointer',
-            fontWeight: '500',
+            fontWeight: 500,
+            fontSize: '12px',
           }}
         >
           Изменить
@@ -2085,56 +2360,107 @@ const changeStaffPassword = async (staffMember: any) => {
           } else {
             const vol = item.total_volume || item.totalVolume || 0;
             const ordersCount = item.total_orders || item.totalOrders || 0;
+            const avgVol = Number(item.avg_volume ?? (ordersCount > 0 ? vol / ordersCount : 0));
+            const lastVol = Number(item.last_volume ?? 0);
             let statusText = '❄️ Холодный';
             let statusColor = '#64748B';
             if (vol >= 30 || ordersCount >= 5) { statusText = '🔥 Горячий'; statusColor = '#EF4444'; }
             else if (vol >= 8 || ordersCount >= 2) { statusText = '🌡️ Тёплый'; statusColor = '#F59E0B'; }
 
+            const phoneLine = item.phones?.length
+              ? item.phones.map((p: string) => formatPhoneDisplay(p)).join(' • ')
+              : formatPhoneDisplay(item.phone);
+
             return (
               <div
                 key={item.groupId || item.user_id}
+                data-client-row
                 onClick={() => setSelectedProfile(item)}
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '2fr 1fr 140px 140px 120px',
-                  padding: '14px 28px',
-                  borderBottom: '1px solid #334155',
+                  gridTemplateColumns: 'minmax(160px, 2fr) 110px 120px 100px 90px 110px 70px',
+                  padding: '6px 14px',
+                  borderRadius: '10px',
+                  background: '#1E2937',
+                  border: '1px solid #334155',
                   cursor: 'pointer',
-                  alignItems: 'center'
+                  alignItems: 'center',
+                  flexShrink: 0,
+                  minHeight: 0,
+                  gap: 8,
                 }}
-                onMouseOver={(e) => e.currentTarget.style.background = '#25334A'}
-                onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                onMouseOver={(e) => { e.currentTarget.style.background = '#25334A'; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = '#1E2937'; }}
               >
-                <div>
-                  <div style={{ fontWeight: '600', fontSize: '17px' }}>{item.organization_name || item.full_name || 'Без названия'}</div>
-                  <div style={{ color: '#94A3B8', fontSize: '14px' }}>{item.phones ? item.phones.join(' • ') : item.phone || '—'}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{
+                    fontWeight: 600,
+                    fontSize: '14px',
+                    lineHeight: 1.2,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}>
+                    {item.organization_name || item.full_name || 'Без названия'}
+                    {phoneLine ? (
+                      <span style={{ color: '#94A3B8', fontWeight: 400, fontSize: '12px' }}>
+                        {' · '}{phoneLine}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
-                <div style={{ color: '#94A3B8' }}>{item.inn || '—'}</div>
-                <div style={{ color: statusColor, fontWeight: '600' }}>{statusText}</div>
-                <div style={{ fontSize: '18px', fontWeight: '700', color: '#60A5FA' }}>{vol.toFixed(1)} м³</div>
-                <div style={{ color: '#94A3B8', fontWeight: '500' }}>{ordersCount} шт.</div>
+                <div style={{ color: '#94A3B8', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {item.inn || '—'}
+                </div>
+                <div style={{
+                  color: item.curator_name ? '#60A5FA' : '#64748B',
+                  fontSize: '13px',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}>
+                  {item.curator_name || '—'}
+                </div>
+                <div style={{ color: statusColor, fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap' }}>{statusText}</div>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: '#60A5FA', whiteSpace: 'nowrap' }}>{Number(vol).toFixed(1)}</div>
+                <div
+                  style={{ fontSize: '13px', color: '#CBD5E1', whiteSpace: 'nowrap' }}
+                  title="Средний / последний объём, м³"
+                >
+                  {ordersCount > 0 ? (
+                    <>
+                      <span style={{ color: '#94A3B8' }}>{avgVol.toFixed(1)}</span>
+                      <span style={{ color: '#64748B' }}> / </span>
+                      <span style={{ color: '#E2E8F0', fontWeight: 600 }}>{lastVol.toFixed(1)}</span>
+                    </>
+                  ) : '—'}
+                </div>
+                <div style={{ color: '#94A3B8', fontWeight: 500, fontSize: '13px', whiteSpace: 'nowrap', textAlign: 'center' }}>{ordersCount}</div>
               </div>
             );
           }
         })}
+        </div>
       </div>
     )}
-  </>
+  </div>
 )}
 
-{/* ==================== ПАГИНАЦИЯ (только для клиентов) ==================== */}
-{totalPages > 1 && activeTab === 'clients' && (
+{/* ==================== ПАГИНАЦИЯ — всегда резервируем место, чтобы сетка не прыгала ==================== */}
+{activeTab === 'clients' && (
   <div style={{ 
     display: 'flex', 
     justifyContent: 'center', 
     alignItems: 'center', 
-    gap: '16px', 
-    marginTop: '16px' 
+    gap: '16px',
+    flexShrink: 0,
+    height: 56,
+    visibility: totalPages > 1 ? 'visible' : 'hidden',
   }}>
     <button 
       onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
       disabled={currentPage === 1}
-      style={{ padding: '12px 24px', background: currentPage === 1 ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
+      style={{ padding: '10px 22px', background: currentPage === 1 ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
     >
       ← Назад
     </button>
@@ -2146,15 +2472,12 @@ const changeStaffPassword = async (staffMember: any) => {
     <button 
       onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
       disabled={currentPage === totalPages}
-      style={{ padding: '12px 24px', background: currentPage === totalPages ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === totalPages ? 'not-allowed' : 'pointer' }}
+      style={{ padding: '10px 22px', background: currentPage === totalPages ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === totalPages ? 'not-allowed' : 'pointer' }}
     >
       Вперед →
     </button>
   </div>
 )}
-
-     {/* ==================== ВКЛАДКА ЭФФЕКТИВНОСТЬ ================================ */}
-             {activeTab === 'efficiency' && <EfficiencyPage />}
 
      {/* ==================== 9. БОКОВАЯ ПАНЕЛЬ ==================== */}
 {selectedProfile && (
@@ -2480,7 +2803,7 @@ const changeStaffPassword = async (staffMember: any) => {
             <div style={{ fontWeight: '600' }}>
               {client.organization_name || client.full_name || 'Без названия'}
             </div>
-            <div style={{ color: '#94A3B8', fontSize: '14px' }}>{client.phone}</div>
+            <div style={{ color: '#94A3B8', fontSize: '14px' }}>{formatPhoneDisplay(client.phone)}</div>
           </div>
           <div style={{ color: '#60A5FA', fontWeight: '700', textAlign: 'right' }}>
             {(client.total_volume || 0)} м³
@@ -2537,9 +2860,306 @@ const changeStaffPassword = async (staffMember: any) => {
 
       {selectedProfile.phones && selectedProfile.phones.length > 0 && (
         <p style={{ color: '#94A3B8', fontSize: '18px', marginTop: '4px' }}>
-          📞 {selectedProfile.phones.filter(Boolean).join(' • ')}
+          📞 {selectedProfile.phones.filter(Boolean).map((p: string) => formatPhoneDisplay(p)).join(' • ')}
         </p>
       )}
+
+      {/* Тип клиента + безопасная смена физ ↔ юр */}
+      {(() => {
+        const profileInn = (selectedProfile.inn || selectedProfile.clients?.[0]?.inn || '').trim();
+        const orgName = (
+          selectedProfile.organization_name ||
+          selectedProfile.clients?.[0]?.organization_name ||
+          ''
+        ).trim();
+        const isLegal = !!(orgName || profileInn);
+        const busy = sideInnSaving || sideTypeSaving;
+
+        return (
+          <div style={{ marginTop: '16px' }}>
+            <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
+              Тип клиента
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  if (!isLegal) {
+                    setSideConvertToLegal(false);
+                    return;
+                  }
+                  convertToPhysical();
+                }}
+                style={{
+                  flex: 1,
+                  padding: '10px 12px',
+                  borderRadius: '10px',
+                  border: !isLegal ? '1px solid #3B82F6' : '1px solid #334155',
+                  background: !isLegal ? 'rgba(59,130,246,0.2)' : '#25334A',
+                  color: !isLegal ? '#93C5FD' : '#94A3B8',
+                  fontWeight: 600,
+                  fontSize: '14px',
+                  cursor: busy ? 'default' : 'pointer',
+                }}
+              >
+                Физлицо
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  if (isLegal) {
+                    setSideConvertToLegal(false);
+                    return;
+                  }
+                  setSideConvertToLegal(true);
+                  setSideOrgManual(orgName || '');
+                  setSideInnManual(profileInn || '');
+                }}
+                style={{
+                  flex: 1,
+                  padding: '10px 12px',
+                  borderRadius: '10px',
+                  border: isLegal ? '1px solid #10B981' : '1px solid #334155',
+                  background: isLegal ? 'rgba(16,185,129,0.2)' : '#25334A',
+                  color: isLegal ? '#6EE7B7' : '#94A3B8',
+                  fontWeight: 600,
+                  fontSize: '14px',
+                  cursor: busy ? 'default' : 'pointer',
+                }}
+              >
+                Юрлицо
+              </button>
+            </div>
+
+            {/* Форма: физ → юр */}
+            {sideConvertToLegal && !isLegal && (
+              <div style={{
+                marginTop: '12px',
+                padding: '16px',
+                background: '#25334A',
+                borderRadius: '14px',
+                border: '1px solid #334155',
+              }}>
+                <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '12px' }}>
+                  Укажите организацию (и ИНН, если есть). Телефон и заказы сохранятся.
+                </div>
+                <input
+                  type="text"
+                  placeholder="Название организации *"
+                  value={sideOrgManual}
+                  disabled={busy}
+                  onChange={(e) => setSideOrgManual(e.target.value)}
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '12px 14px',
+                    marginBottom: '10px',
+                    background: '#1E2937',
+                    border: '1px solid #334155',
+                    borderRadius: '10px',
+                    color: '#fff',
+                    fontSize: '15px',
+                  }}
+                />
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="ИНН (необязательно)"
+                  value={sideInnManual}
+                  disabled={busy}
+                  onChange={(e) => setSideInnManual(e.target.value.replace(/\D/g, '').slice(0, 12))}
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '12px 14px',
+                    marginBottom: '12px',
+                    background: '#1E2937',
+                    border: '1px solid #334155',
+                    borderRadius: '10px',
+                    color: '#fff',
+                    fontSize: '15px',
+                  }}
+                />
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setSideConvertToLegal(false);
+                      setSideOrgManual('');
+                      setSideInnManual('');
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '12px',
+                      background: '#334155',
+                      color: '#E2E8F0',
+                      border: 'none',
+                      borderRadius: '10px',
+                      fontWeight: 600,
+                      cursor: busy ? 'default' : 'pointer',
+                    }}
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || sideOrgManual.trim().length < 2}
+                    onClick={() => convertToLegal()}
+                    style={{
+                      flex: 1,
+                      padding: '12px',
+                      background: busy || sideOrgManual.trim().length < 2 ? '#334155' : '#10B981',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '10px',
+                      fontWeight: 600,
+                      cursor: busy || sideOrgManual.trim().length < 2 ? 'default' : 'pointer',
+                    }}
+                  >
+                    {sideTypeSaving ? 'Сохранение…' : 'Сделать юрлицом'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ИНН: показать если есть; предложить заполнить — только текущим юрлицам */}
+            {profileInn ? (
+              <p style={{ color: '#CBD5E1', fontSize: '16px', marginTop: '12px' }}>
+                ИНН {profileInn}
+              </p>
+            ) : isLegal ? (
+              <div style={{
+                marginTop: '12px',
+                padding: '16px',
+                background: '#25334A',
+                borderRadius: '14px',
+                border: '1px solid #334155',
+              }}>
+                <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '10px' }}>
+                  ИНН не заполнен
+                </div>
+
+                {sideInnLoading && (
+                  <div style={{ color: '#64748B', fontSize: '14px', marginBottom: '12px' }}>
+                    Ищем организацию в DaData…
+                  </div>
+                )}
+
+                {!sideInnLoading && sideInnSuggestions.length > 0 && (
+                  <div style={{ marginBottom: '14px' }}>
+                    <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '8px' }}>
+                      Предложено из DaData
+                    </div>
+                    {sideInnSuggestions.map((suggestion: any, index: number) => {
+                      const suggestedInn = suggestion?.data?.inn;
+                      if (!suggestedInn) return null;
+                      const name =
+                        suggestion.value ||
+                        suggestion.data?.name?.short_with_opf ||
+                        suggestion.data?.name?.full_with_opf ||
+                        'Организация';
+                      return (
+                        <div
+                          key={`${suggestedInn}-${index}`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '12px',
+                            padding: '12px',
+                            marginBottom: '8px',
+                            background: '#1E2937',
+                            borderRadius: '10px',
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: '15px' }}>{name}</div>
+                            <div style={{ color: '#94A3B8', fontSize: '13px', marginTop: '4px' }}>
+                              ИНН {suggestedInn}
+                              {suggestion.data?.address?.value
+                                ? ` • ${suggestion.data.address.value}`
+                                : ''}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => saveInnFromSidePanel(suggestedInn, name)}
+                            style={{
+                              flexShrink: 0,
+                              padding: '10px 14px',
+                              background: busy ? '#334155' : '#10B981',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '10px',
+                              fontWeight: 600,
+                              cursor: busy ? 'default' : 'pointer',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            Добавить
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {!sideInnLoading && sideInnSuggestions.length === 0 && (
+                  <div style={{ color: '#64748B', fontSize: '13px', marginBottom: '12px' }}>
+                    Подсказок не найдено — можно ввести ИНН вручную
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="ИНН вручную"
+                    value={sideInnManual}
+                    disabled={busy}
+                    onChange={(e) => setSideInnManual(e.target.value.replace(/\D/g, '').slice(0, 12))}
+                    style={{
+                      flex: 1,
+                      padding: '12px 14px',
+                      background: '#1E2937',
+                      border: '1px solid #334155',
+                      borderRadius: '10px',
+                      color: '#fff',
+                      fontSize: '15px',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={busy || (sideInnManual.length !== 10 && sideInnManual.length !== 12)}
+                    onClick={() => saveInnFromSidePanel(sideInnManual)}
+                    style={{
+                      padding: '12px 16px',
+                      background:
+                        busy || (sideInnManual.length !== 10 && sideInnManual.length !== 12)
+                          ? '#334155'
+                          : '#3B82F6',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '10px',
+                      fontWeight: 600,
+                      cursor:
+                        busy || (sideInnManual.length !== 10 && sideInnManual.length !== 12)
+                          ? 'default'
+                          : 'pointer',
+                    }}
+                  >
+                    Сохранить
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        );
+      })()}
 
       {/* === КУРАТОР === */}
       {selectedProfile.curator_name && (
@@ -2597,7 +3217,7 @@ const changeStaffPassword = async (staffMember: any) => {
         }
 
         try {
-          const response = await fetch('/api/adminCifra/clients/update-curator', {
+          const response = await adminCifraFetch('/api/adminCifra/clients/update-curator', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2763,75 +3383,27 @@ const changeStaffPassword = async (staffMember: any) => {
   </div>
 </div>
 
-{/* 9.5 Контакты и Прогноз (умный расчёт next_contact для групп) */}
-<div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
-  
-  {/* Последний контакт */}
-  <div style={{ background: '#25334A', padding: '16px', borderRadius: '14px' }}>
-    <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>
-      Последний контакт
-    </div>
-    <div style={{ fontSize: '19px', fontWeight: '600' }}>
-      {selectedProfile.last_contact 
-        ? new Date(selectedProfile.last_contact).toLocaleDateString('ru-RU', { 
-            day: 'numeric', month: 'long', year: 'numeric' 
-          })
-        : (userOrders.length > 0 
-            ? new Date(Math.max(...userOrders.map((o: any) => 
-                new Date(o.delivery_date || o.created_at).getTime()
-              ))).toLocaleDateString('ru-RU', { 
-                day: 'numeric', month: 'long', year: 'numeric' 
-              })
-            : '—')}
-    </div>
+{/* 9.5 Последний контакт */}
+<div style={{ background: '#25334A', padding: '16px', borderRadius: '14px', marginBottom: '24px' }}>
+  <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>
+    Последний контакт
   </div>
-
-  {/* Следующий контакт — умный расчёт */}
-  <div style={{ background: '#25334A', padding: '16px', borderRadius: '14px' }}>
-    <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>
-      Следующий контакт
-    </div>
-    <div style={{ fontSize: '19px', fontWeight: '600', color: '#F59E0B' }}>
-      {(() => {
-        // 1. Если есть сохранённый next_contact
-        if (selectedProfile.next_contact) {
-          return new Date(selectedProfile.next_contact).toLocaleDateString('ru-RU', { 
-            day: 'numeric', month: 'long', year: 'numeric' 
-          });
-        }
-
-        // 2. Если есть predicted_next_order
-        if (selectedProfile.predicted_next_order) {
-          return new Date(selectedProfile.predicted_next_order).toLocaleDateString('ru-RU', { 
-            day: 'numeric', month: 'long', year: 'numeric' 
-          });
-        }
-
-        // 3. Умный расчёт по истории заказов (для групп)
-        if (userOrders && userOrders.length >= 2) {
-          const dates = userOrders
-            .map((o: any) => new Date(o.delivery_date || o.created_at))
-            .filter(d => d && !isNaN(d.getTime()))
-            .sort((a: Date, b: Date) => a.getTime() - b.getTime());
-
-          if (dates.length >= 2) {
-            let totalDays = 0;
-            for (let i = 1; i < dates.length; i++) {
-              totalDays += (dates[i].getTime() - dates[i-1].getTime()) / (1000 * 3600 * 24);
-            }
-            const avgInterval = totalDays / (dates.length - 1);
-            const lastOrder = dates[dates.length - 1];
-            const nextDate = new Date(lastOrder.getTime() + avgInterval * 1.25 * 86400000); // +25% буфер
-            
-            return nextDate.toLocaleDateString('ru-RU', { 
-              day: 'numeric', month: 'long', year: 'numeric' 
-            });
-          }
-        }
-
-        return 'Недостаточно данных';
-      })()}
-    </div>
+  <div style={{ fontSize: '19px', fontWeight: '600' }}>
+    {selectedProfile.last_contact
+      ? new Date(selectedProfile.last_contact).toLocaleDateString('ru-RU', {
+          day: 'numeric', month: 'long', year: 'numeric',
+        })
+      : userOrders.length > 0
+        ? new Date(
+            Math.max(
+              ...userOrders.map((o: any) =>
+                new Date(o.delivery_date || o.created_at).getTime()
+              )
+            )
+          ).toLocaleDateString('ru-RU', {
+            day: 'numeric', month: 'long', year: 'numeric',
+          })
+        : '—'}
   </div>
 </div>
 
@@ -3092,9 +3664,17 @@ const changeStaffPassword = async (staffMember: any) => {
             {/* Телефон и Адрес */}
             <div>
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Телефон</label>
-              <input value={client.phone || ''} onChange={(e) => {
-                const newClients = [...editingClient]; newClients[index].phone = e.target.value; setEditingClient(newClients);
-              }} style={{ width: '90%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+              <input
+                type="tel"
+                placeholder="+7 (___) ___-__-__"
+                value={client.phone || ''}
+                onChange={(e) => {
+                  const newClients = [...editingClient];
+                  newClients[index].phone = formatPhoneInput(e.target.value);
+                  setEditingClient(newClients);
+                }}
+                style={{ width: '90%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }}
+              />
             </div>
 
             <div>
@@ -3120,28 +3700,6 @@ const changeStaffPassword = async (staffMember: any) => {
                 <option value="warm">🔥 Тёплый</option>
                 <option value="hot">🔥 Горячий</option>
               </select>
-            </div>
-
-            <div>
-              <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Последний контакт</label>
-              <input type="date" value={client.last_contact ? client.last_contact.split('T')[0] : ''} 
-                onChange={(e) => {
-                  const newClients = [...editingClient];
-                  newClients[index].last_contact = e.target.value ? e.target.value + 'T00:00:00Z' : null;
-                  setEditingClient(newClients);
-                }}
-                style={{ width: '90%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Следующий контакт</label>
-              <input type="date" value={client.next_contact ? client.next_contact.split('T')[0] : ''} 
-                onChange={(e) => {
-                  const newClients = [...editingClient];
-                  newClients[index].next_contact = e.target.value ? e.target.value + 'T00:00:00Z' : null;
-                  setEditingClient(newClients);
-                }}
-                style={{ width: '92%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
             </div>
 
             <div>
@@ -3356,13 +3914,13 @@ const changeStaffPassword = async (staffMember: any) => {
     currentUserName={userFullName || 'Сотрудник'}
 
     onSuccess={() => {
-      // Модалка сама показывает алерт об успехе и закрывается через onClose —
-      // здесь только сбрасываем локальное состояние страницы и обновляем историю заказов клиента.
       setIsNewOrderModalOpen(false);
       setNewOrderData(null);
       setSelectedOrder(null);
 
-      if (selectedProfile) {
+      if (selectedProfile?.groupId) {
+        loadGroupOrders(selectedProfile);
+      } else if (selectedProfile) {
         const uid = selectedProfile.user_id || selectedProfile.id || selectedProfile?.clients?.[0]?.user_id;
         if (uid) loadUserOrders(uid);
       }
@@ -3384,10 +3942,13 @@ const changeStaffPassword = async (staffMember: any) => {
     }}>
       <h2 style={{ marginBottom: '12px' }}>Группы дублей</h2>
       <p style={{ color: '#94A3B8', marginBottom: '24px' }}>
-        Клиенты уже автоматически группируются по ИНН (юрлица) и ФИО (физлица).
+        Дубли по одному ИНН. Первая запись — целевая: остальные можно влить в неё
+        (заказы переносятся, исходная запись удаляется).
       </p>
 
-      {clientsToMerge.map((group: any, idx: number) => (
+      {clientsToMerge.map((group: any, idx: number) => {
+        const target = group.clients?.[0];
+        return (
         <div key={idx} style={{ 
           marginBottom: '24px', 
           background: '#25334A', 
@@ -3404,13 +3965,41 @@ const changeStaffPassword = async (staffMember: any) => {
           {group.clients.map((c: any, i: number) => (
             <div key={i} style={{ 
               padding: '10px 0', 
-              borderBottom: i < group.clients.length - 1 ? '1px solid #334155' : 'none'
+              borderBottom: i < group.clients.length - 1 ? '1px solid #334155' : 'none',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 12,
             }}>
-              {c.organization_name || c.full_name} — {c.phone || '—'}
+              <div>
+                {c.organization_name || c.full_name} — {formatPhoneDisplay(c.phone)}
+                {i === 0 && (
+                  <span style={{ marginLeft: 8, color: '#10B981', fontSize: 13 }}>целевая</span>
+                )}
+              </div>
+              {i > 0 && target?.user_id && (
+                <button
+                  type="button"
+                  onClick={() => mergeClients(c.user_id, target.user_id)}
+                  style={{
+                    padding: '8px 14px',
+                    background: '#F59E0B',
+                    border: 'none',
+                    borderRadius: 10,
+                    color: '#0f172a',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                  }}
+                >
+                  Влить в целевую
+                </button>
+              )}
             </div>
           ))}
         </div>
-      ))}
+        );
+      })}
 
       <button 
         onClick={() => setShowMergeModal(false)}
@@ -3548,10 +4137,11 @@ const changeStaffPassword = async (staffMember: any) => {
           />
         )}
 
-        <input 
-          placeholder="Телефон *" 
-          value={newClientForm.phone} 
-          onChange={(e) => setNewClientForm({...newClientForm, phone: e.target.value})}
+        <input
+          type="tel"
+          placeholder="+7 (___) ___-__-__"
+          value={newClientForm.phone}
+          onChange={(e) => setNewClientForm({ ...newClientForm, phone: formatPhoneInput(e.target.value) })}
           style={{ padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff' }}
         />
 
@@ -3596,145 +4186,16 @@ const changeStaffPassword = async (staffMember: any) => {
 
 
 
-{/* ==================== МОДАЛЬНОЕ ОКНО ЗВОНКА ==================== */}
 {showCallModal && callModalClient && (
-  <div
-    style={{
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(0,0,0,0.75)',
-      zIndex: 10001,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
+  <CallResultModal
+    client={callModalClient}
+    onClose={() => {
+      setShowCallModal(false);
+      setCallModalClient(null);
     }}
-    onClick={() => setShowCallModal(false)}
-  >
-    <div
-      style={{
-        background: '#1E2937',
-        borderRadius: '20px',
-        padding: '32px',
-        width: '480px',
-        maxWidth: '90vw',
-        boxShadow: '0 30px 80px rgba(0,0,0,0.7)',
-      }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      {/* Заголовок */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <h3 style={{ margin: 0, fontSize: '22px' }}>📞 Звонок клиенту</h3>
-        <button
-          onClick={() => setShowCallModal(false)}
-          style={{ background: 'none', border: 'none', color: '#94A3B8', fontSize: '32px', cursor: 'pointer', lineHeight: 1 }}
-        >
-          ×
-        </button>
-      </div>
-
-      {/* Имя клиента */}
-      <div style={{ fontSize: '18px', fontWeight: '700', marginBottom: '6px' }}>
-        {callModalClient.organization_name || callModalClient.full_name || 'Клиент'}
-      </div>
-
-      {/* Кнопка звонка */}
-      <a
-        href={`tel:${callModalClient.phone}`}
-        style={{
-          display: 'block',
-          padding: '14px',
-          background: '#10B981',
-          color: 'white',
-          borderRadius: '12px',
-          textAlign: 'center',
-          fontSize: '18px',
-          fontWeight: '700',
-          textDecoration: 'none',
-          marginBottom: '24px',
-          marginTop: '8px',
-        }}
-      >
-        📞 Позвонить: {callModalClient.phone || '—'}
-      </a>
-
-      {/* Результат звонка */}
-      <div style={{ marginBottom: '16px' }}>
-        <div style={{ color: '#94A3B8', marginBottom: '10px', fontSize: '14px', fontWeight: '600' }}>
-          Результат звонка:
-        </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          {(['positive', 'neutral', 'negative'] as const).map((r) => (
-            <button
-              key={r}
-              onClick={() => setCallResult(r)}
-              style={{
-                flex: 1,
-                padding: '10px 6px',
-                border: '2px solid',
-                borderColor: callResult === r
-                  ? (r === 'positive' ? '#10B981' : r === 'negative' ? '#EF4444' : '#F59E0B')
-                  : 'transparent',
-                borderRadius: '10px',
-                cursor: 'pointer',
-                fontWeight: '600',
-                background: callResult === r
-                  ? (r === 'positive' ? '#10B98120' : r === 'negative' ? '#EF444420' : '#F59E0B20')
-                  : '#334155',
-                color: callResult === r
-                  ? (r === 'positive' ? '#10B981' : r === 'negative' ? '#EF4444' : '#F59E0B')
-                  : '#94A3B8',
-                fontSize: '13px',
-                transition: 'all 0.15s',
-              }}
-            >
-              {r === 'positive' ? '✅ Положительный' : r === 'negative' ? '❌ Отрицательный' : '⚪ Нейтральный'}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Комментарий */}
-      <textarea
-        value={callComment}
-        onChange={(e) => setCallComment(e.target.value)}
-        placeholder="Комментарий к звонку (необязательно)..."
-        style={{
-          width: '100%',
-          padding: '12px 14px',
-          background: '#334155',
-          border: 'none',
-          borderRadius: '10px',
-          color: 'white',
-          fontSize: '15px',
-          resize: 'vertical',
-          minHeight: '80px',
-          boxSizing: 'border-box',
-          marginBottom: '16px',
-          outline: 'none',
-        }}
-      />
-
-      {/* Сохранить */}
-      <button
-        onClick={saveCallResult}
-        disabled={savingCall}
-        style={{
-          width: '100%',
-          padding: '14px',
-          background: savingCall ? '#334155' : '#3B82F6',
-          color: 'white',
-          border: 'none',
-          borderRadius: '12px',
-          fontSize: '16px',
-          fontWeight: '700',
-          cursor: savingCall ? 'not-allowed' : 'pointer',
-          transition: 'background 0.15s',
-        }}
-      >
-        {savingCall ? 'Сохранение...' : '💾 Сохранить результат'}
-      </button>
-    </div>
-  </div>
+    onSaved={handleCallSaved}
+    variant="desktop"
+  />
 )}
 
     </div>

@@ -484,10 +484,25 @@ export default function VerticalTimelinePanel({
                             <span style={{ fontWeight:600 }}>{(order as any).grade||'—'} · {vol} м³</span>
                             <span style={{
                               marginLeft:'auto', flexShrink:0,
+                              display:'inline-flex', alignItems:'center', gap:'4px',
                               fontSize:'10px', fontWeight:600,
                               color: tc, background:'rgba(0,0,0,0.18)',
                               padding:'1px 6px', borderRadius:'999px',
-                            }}>{sLabel}</span>
+                            }}>
+                              {sLabel}
+                              {(order as any).is_questionable && (
+                                <span
+                                  title="Под вопросом"
+                                  style={{
+                                    height:'14px', padding:'0 5px', borderRadius:'999px',
+                                    display:'inline-flex', alignItems:'center', justifyContent:'center',
+                                    background:'#EF4444', color:'#fff',
+                                    fontSize:'10px', fontWeight:800, lineHeight:1,
+                                    boxShadow:'0 0 0 1px rgba(255,255,255,0.3), 0 0 6px rgba(239,68,68,0.5)',
+                                  }}
+                                >?</span>
+                              )}
+                            </span>
                           </div>
                         </>);
                       })()}

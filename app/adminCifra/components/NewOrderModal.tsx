@@ -6,6 +6,7 @@ import OrderRouteMap from './OrderRouteMap';
 import ModalActionButton from './ModalActionButton';
 import { useMapRouteLinks, useDeliveryCoords } from '@/lib/yandexRoute';
 import { calculateDeliveryCost, fetchDeliverySettings, DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
+import { formatPhoneInput } from '@/lib/phone';
 
 interface NewOrderModalProps {
   isOpen: boolean;                    // ← обязательно
@@ -79,7 +80,7 @@ export default function NewOrderModal({
         customerType: initialData.customerType || 'physical',
         organizationName: initialData.organizationName || initialData.organization_name || '',
         fullName: initialData.fullName || initialData.full_name || '',
-        phone: initialData.phone || '',
+        phone: initialData.phone ? formatPhoneInput(initialData.phone) : '+7',
         inn: initialData.inn || '',
         comment: initialData.comment || '',
       });
@@ -139,7 +140,7 @@ export default function NewOrderModal({
     customerType: 'legal' as 'physical' | 'legal',   // ← Изменено с 'physical' на 'legal'
     organizationName: '',
     fullName: '',
-    phone: '',
+    phone: '+7',
     inn: '',
     comment: '',
   });
@@ -189,7 +190,10 @@ export default function NewOrderModal({
   // ==================== 7. ОБРАБОТЧИКИ ====================
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
-    setForm(prev => ({ ...prev, [name]: value }));
+    setForm(prev => ({
+      ...prev,
+      [name]: name === 'phone' ? formatPhoneInput(value) : value,
+    }));
   };
 
   // ==================== 8. АВТОЗАПОЛНЕНИЕ ПО ИНН ====================

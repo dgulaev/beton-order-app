@@ -83,6 +83,8 @@ const loadData = async () => {
 
   // ==================== 1. ЛОКАЛЬНОЕ СОСТОЯНИЕ ЗАКАЗА ====================
   const [localOrder, setLocalOrder] = useState(order);
+  const questionableSavingRef = useRef(false);
+  const [questionableSaving, setQuestionableSaving] = useState(false);
 
   // Синхронизация при смене заказа
   useEffect(() => {
@@ -476,11 +478,20 @@ const formatVolume = (value: number | string) => {
                     if (newStatus === localOrder.status) return;
 
                     const oldStatus = localOrder.status;
+                    const oldQuestionable = !!(localOrder as any).is_questionable;
+                    // «В работе» на сервере автоснимает метку — сразу отражаем в UI
+                    const clearQuestionable = newStatus === 'processing' && oldStatus !== 'processing';
 
                     // Локальное обновление
-                    setLocalOrder(prev => ({ ...prev, status: newStatus }));
+                    setLocalOrder(prev => ({
+                      ...prev,
+                      status: newStatus,
+                      ...(clearQuestionable ? { is_questionable: false } : {}),
+                    } as any));
                     setAllOrders(prev => prev.map(o =>
-                      o.id === order.id ? { ...o, status: newStatus } : o
+                      o.id === order.id
+                        ? ({ ...o, status: newStatus, ...(clearQuestionable ? { is_questionable: false } : {}) } as any)
+                        : o
                     ));
 
                     try {
@@ -506,18 +517,30 @@ const formatVolume = (value: number | string) => {
                         }
                       } else {
                         // Откат
-                        setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+                        setLocalOrder(prev => ({
+                          ...prev,
+                          status: oldStatus,
+                          is_questionable: oldQuestionable,
+                        } as any));
                         setAllOrders(prev => prev.map(o =>
-                          o.id === order.id ? { ...o, status: oldStatus } : o
+                          o.id === order.id
+                            ? ({ ...o, status: oldStatus, is_questionable: oldQuestionable } as any)
+                            : o
                         ));
                         alert('Ошибка сохранения: ' + (data.message || ''));
                       }
                     } catch (err) {
                       console.error(err);
                       // Откат
-                      setLocalOrder(prev => ({ ...prev, status: oldStatus }));
+                      setLocalOrder(prev => ({
+                        ...prev,
+                        status: oldStatus,
+                        is_questionable: oldQuestionable,
+                      } as any));
                       setAllOrders(prev => prev.map(o =>
-                        o.id === order.id ? { ...o, status: oldStatus } : o
+                        o.id === order.id
+                          ? ({ ...o, status: oldStatus, is_questionable: oldQuestionable } as any)
+                          : o
                       ));
                       alert('Не удалось связаться с сервером');
                     }
@@ -556,6 +579,80 @@ const formatVolume = (value: number | string) => {
                   }}
                 />
                 </div>
+              )}
+
+              {/* Метка «Под вопросом» — тот же toggle, что в модалке Заявок; CAS на сервере + lock здесь */}
+              {['admin', 'manager', 'dispatcher', 'logist'].includes(getCurrentRole()) && (
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '7px 14px',
+                    borderRadius: '9999px',
+                    border: '1px solid rgba(239, 68, 68, 0.35)',
+                    background: (localOrder as any).is_questionable ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
+                    fontSize: '13px',
+                    cursor: questionableSaving ? 'wait' : 'pointer',
+                    userSelect: 'none',
+                    opacity: questionableSaving ? 0.7 : 1,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!(localOrder as any).is_questionable}
+                    disabled={questionableSaving}
+                    onChange={async (e) => {
+                      if (questionableSavingRef.current) return;
+                      questionableSavingRef.current = true;
+                      setQuestionableSaving(true);
+
+                      const newValue = e.target.checked;
+                      const prevValue = !!(localOrder as any).is_questionable;
+
+                      setLocalOrder(prev => ({ ...prev, is_questionable: newValue } as any));
+                      setAllOrders(prev => prev.map(o =>
+                        o.id === order.id ? { ...o, is_questionable: newValue } as any : o
+                      ));
+                      if (typeof setSelectedOrder === 'function') {
+                        setSelectedOrder(prev => prev ? ({ ...prev, is_questionable: newValue } as any) : prev);
+                      }
+
+                      try {
+                        const res = await fetch('/api/adminCifra/orders/update', {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            id: order.id,
+                            is_questionable: newValue,
+                            userName: getCurrentUserName(),
+                            userRole: getCurrentRole(),
+                          }),
+                        });
+                        if (!res.ok) {
+                          setLocalOrder(prev => ({ ...prev, is_questionable: prevValue } as any));
+                          setAllOrders(prev => prev.map(o =>
+                            o.id === order.id ? { ...o, is_questionable: prevValue } as any : o
+                          ));
+                        } else if (typeof setHistory === 'function') {
+                          const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
+                          if (histRes.ok) setHistory(await histRes.json());
+                        }
+                      } catch {
+                        setLocalOrder(prev => ({ ...prev, is_questionable: prevValue } as any));
+                        setAllOrders(prev => prev.map(o =>
+                          o.id === order.id ? { ...o, is_questionable: prevValue } as any : o
+                        ));
+                      } finally {
+                        questionableSavingRef.current = false;
+                        setQuestionableSaving(false);
+                      }
+                    }}
+                    style={{ width: '14px', height: '14px', accentColor: '#EF4444' }}
+                  />
+                  <span style={{ color: '#F87171', fontWeight: 600 }}>Под вопросом</span>
+                </label>
               )}
             </div>
 
@@ -1058,11 +1155,30 @@ const formatVolume = (value: number | string) => {
         return updated.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
       });
 
-      // === 4. Если сервер перевёл заявку в "В работе" — обновляем локальный список заказов ===
+      // === 4. Если сервер перевёл заявку в "В работе" — обновляем локальный список
+      // заказов и снимаем метку «Под вопросом» (то же делает API).
       if (result.newOrderStatus) {
+        const clearQ = result.newOrderStatus === 'processing';
+        setLocalOrder(prev => ({
+          ...prev,
+          status: result.newOrderStatus,
+          ...(clearQ ? { is_questionable: false } : {}),
+        } as any));
         setAllOrders(prev => prev.map(o =>
-          o.id === order.id ? { ...o, status: result.newOrderStatus } : o
+          o.id === order.id
+            ? ({ ...o, status: result.newOrderStatus, ...(clearQ ? { is_questionable: false } : {}) } as any)
+            : o
         ));
+        if (typeof setSelectedOrder === 'function') {
+          setSelectedOrder(prev => prev && String(prev.id) === String(order.id)
+            ? ({ ...prev, status: result.newOrderStatus, ...(clearQ ? { is_questionable: false } : {}) } as any)
+            : prev
+          );
+        }
+        if (typeof setHistory === 'function') {
+          const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
+          if (histRes.ok) setHistory(await histRes.json());
+        }
       }
 
       // === 5. Обновляем историю сразу ===

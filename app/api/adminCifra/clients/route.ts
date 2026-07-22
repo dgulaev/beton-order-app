@@ -1,14 +1,14 @@
 // app/api/adminCifra/clients/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
+import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { toStoredPhone } from '@/lib/phone';
 
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireAdminCifraStaff(request);
+    if (auth.error) return auth.error;
+
     const { searchParams } = new URL(request.url);
     const userId = searchParams.get('userId');
     const all = searchParams.get('all'); // Новый параметр: если true — возвращаем всех (включая стафф)
@@ -138,22 +138,40 @@ export async function GET(request: NextRequest) {
 // ==================== POST — СОЗДАНИЕ НОВОГО КЛИЕНТА ====================
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireAdminCifraStaff(request);
+    if (auth.error) return auth.error;
+
     const payload = await request.json();
 
-    // Генерируем user_id
+    const storedPhone = toStoredPhone(payload.phone);
+    if (!storedPhone) {
+      return NextResponse.json(
+        { error: 'Укажите корректный телефон (+7…)' },
+        { status: 400 }
+      );
+    }
+
     const userId = Date.now();
+    const createdBy = payload.created_by != null
+      ? Number(payload.created_by)
+      : auth.user.user_id;
+    const curatorId = payload.curator_id != null
+      ? Number(payload.curator_id)
+      : createdBy;
 
     const newClient = {
       user_id: userId,
       role: 'client',
-      phone: payload.phone,
+      phone: storedPhone,
       full_name: payload.full_name || null,
       organization_name: payload.organization_name || null,
       inn: payload.inn || null,
       address: payload.address || null,
-      balance: payload.balance || 0,
-      referral_code: payload.referral_code || 'R' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-      created_by: payload.created_by || null,
+      balance: 0,
+      referral_code: 'R' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+      created_by: Number.isFinite(createdBy) ? createdBy : auth.user.user_id,
+      curator_id: Number.isFinite(curatorId) ? curatorId : auth.user.user_id,
+      curator_name: payload.curator_name || auth.user.full_name || null,
       created_at: new Date().toISOString(),
     };
 

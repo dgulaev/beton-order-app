@@ -81,7 +81,7 @@ export async function PUT(request: NextRequest) {
     const fieldsToTrack = [
       'grade', 'volume', 'delivery_date', 'delivery_time',
       'address', 'phone', 'organization_name', 'full_name',
-      'inn', 'comment', 'status', 'is_questionable', 'logistics_ready', 'user_id'
+      'inn', 'comment', 'status', 'logistics_ready', 'user_id'
     ];
 
     const fieldNames: Record<string, string> = {
@@ -109,6 +109,27 @@ export async function PUT(request: NextRequest) {
       cancelled: 'Отменена'
     };
 
+    // Метку «Под вопросом» обновляем отдельно через compare-and-swap:
+    // несколько параллельных PUT (баг чекбокса / двойной клик) иначе все читают
+    // старое false и пишут в историю по 3–4 одинаковые записи за одну секунду.
+    // CAS одинаково защищает и постановку (false→true), и снятие (true→false).
+    let hasQuestionableUpdate = updateData.is_questionable !== undefined;
+    let desiredQuestionable: boolean | null = hasQuestionableUpdate
+      ? (updateData.is_questionable === true || updateData.is_questionable === 'true')
+      : null;
+    if (hasQuestionableUpdate) {
+      delete updateData.is_questionable;
+    }
+
+    // Переход в «В работе» всегда снимает метку. Явная установка true в том же
+    // запросе игнорируется — побеждает бизнес-правило автоснятия.
+    const transitioningToProcessing =
+      updateData.status === 'processing' && currentOrder.status !== 'processing';
+    if (transitioningToProcessing && desiredQuestionable === true) {
+      hasQuestionableUpdate = false;
+      desiredQuestionable = null;
+    }
+
     for (const field of fieldsToTrack) {
       const oldValue = currentOrder[field];
       const newValue = updateData[field];
@@ -121,10 +142,7 @@ export async function PUT(request: NextRequest) {
       if (oldStr !== newStr) {
         let actionText = `Изменил ${fieldNames[field] || field}`;
 
-        if (field === 'is_questionable') {
-          actionText = newValue ? 'Поставил метку "Под вопросом"' : 'Снял метку "Под вопросом"';
-        } 
-        else if (field === 'status') {
+        if (field === 'status') {
           const oldStatusName = statusNames[oldStr] || oldStr;
           const newStatusName = statusNames[newStr] || newStr;
           actionText = `Изменил статус заявки с "${oldStatusName}" на "${newStatusName}"`;
@@ -151,7 +169,91 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    // Сохраняем историю
+    // ==================== 4. ОБНОВЛЕНИЕ ЗАЯВКИ ====================
+    // Сначала CAS для метки — побеждает только первый запрос, остальные
+    // видят, что значение уже сменилось, и не пишут дубль в историю.
+    if (hasQuestionableUpdate && desiredQuestionable !== null) {
+      const oldQuestionable =
+        currentOrder.is_questionable === true || currentOrder.is_questionable === 'true';
+
+      if (oldQuestionable !== desiredQuestionable) {
+        let casQuery = supabase
+          .from('orders')
+          .update({ is_questionable: desiredQuestionable })
+          .eq('id', id);
+
+        // Старое значение: true → фильтр eq true; false/null → or(false, null)
+        if (oldQuestionable) {
+          casQuery = casQuery.eq('is_questionable', true);
+        } else {
+          casQuery = casQuery.or('is_questionable.eq.false,is_questionable.is.null');
+        }
+
+        const { data: casRows, error: casError } = await casQuery.select('id');
+
+        if (casError) {
+          console.error('CAS is_questionable error:', casError);
+          return NextResponse.json({ success: false, message: casError.message }, { status: 500 });
+        }
+
+        if (casRows && casRows.length > 0) {
+          changes.push({
+            order_id: id,
+            action: desiredQuestionable
+              ? 'Поставил метку "Под вопросом"'
+              : 'Снял метку "Под вопросом"',
+            user_name: finalUserName,
+            user_role: finalUserRole,
+            field_name: 'is_questionable',
+            old_value: oldQuestionable ? 'true' : 'false',
+            new_value: desiredQuestionable ? 'true' : 'false',
+          });
+        }
+      }
+    }
+
+    // Автоснятие метки при переводе заявки в «В работе» (если менеджер
+    // не снял её вручную в этом же запросе — тогда CAS выше уже отработал,
+    // и повторный UPDATE затронет 0 строк → дубля в истории не будет).
+    if (transitioningToProcessing) {
+      const { data: autoClearRows, error: autoClearError } = await supabase
+        .from('orders')
+        .update({ is_questionable: false })
+        .eq('id', id)
+        .eq('is_questionable', true)
+        .select('id');
+
+      if (autoClearError) {
+        console.error('Auto-clear is_questionable error:', autoClearError);
+        return NextResponse.json({ success: false, message: autoClearError.message }, { status: 500 });
+      }
+
+      if (autoClearRows && autoClearRows.length > 0) {
+        changes.push({
+          order_id: id,
+          action: 'Автоматически снял метку "Под вопросом" (статус «В работе»)',
+          user_name: 'Система',
+          user_role: 'system',
+          field_name: 'is_questionable',
+          old_value: 'true',
+          new_value: 'false',
+        });
+      }
+    }
+
+    if (Object.keys(updateData).length > 0) {
+      const { error: updateError } = await supabase
+        .from('orders')
+        .update(updateData)
+        .eq('id', id);
+
+      if (updateError) {
+        console.error('Update error:', updateError);
+        return NextResponse.json({ success: false, message: updateError.message }, { status: 500 });
+      }
+    }
+
+    // Сохраняем историю после успешного UPDATE — только реально применённые изменения
     if (changes.length > 0) {
       const { error: historyError } = await supabase
         .from('order_history')
@@ -162,17 +264,6 @@ export async function PUT(request: NextRequest) {
       } else {
         console.log(`📜 Записано ${changes.length} изменений в историю`);
       }
-    }
-
-    // ==================== 4. ОБНОВЛЕНИЕ ЗАЯВКИ ====================
-    const { error: updateError } = await supabase
-      .from('orders')
-      .update(updateData)
-      .eq('id', id);
-
-    if (updateError) {
-      console.error('Update error:', updateError);
-      return NextResponse.json({ success: false, message: updateError.message }, { status: 500 });
     }
 
    // console.log(`✅ Заявка #${id} успешно обновлена. Новый статус: ${updateData.status || currentOrder.status}`);

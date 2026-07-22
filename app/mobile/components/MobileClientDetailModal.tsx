@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { X, Phone, Plus, Package } from 'lucide-react';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import MobileNewOrderModal from './MobileNewOrderModal';
+import CallResultModal from '@/app/adminCifra/components/CallResultModal';
+import { formatPhoneDisplay } from '@/lib/phone';
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
@@ -25,15 +27,6 @@ function statusColor(status: string): string {
     case 'cancelled': return '#EF4444';
     default: return '#94A3B8';
   }
-}
-
-function formatPhone(raw: string | null | undefined): string {
-  if (!raw) return '—';
-  const digits = raw.replace(/\D/g, '');
-  if (digits.length === 11) {
-    return `+7 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9, 11)}`;
-  }
-  return raw;
 }
 
 function formatDate(iso: string | null | undefined): string {
@@ -61,6 +54,7 @@ export default function MobileClientDetailModal({
   const [orders, setOrders] = useState<any[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [showNewOrder, setShowNewOrder] = useState(false);
+  const [showCallModal, setShowCallModal] = useState(false);
 
   useBodyScrollLock(!!profile);
 
@@ -152,18 +146,19 @@ export default function MobileClientDetailModal({
           {/* Кнопки действий */}
           <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
             {phone && (
-              <a
-                href={`tel:${phone}`}
+              <button
+                type="button"
+                onClick={() => setShowCallModal(true)}
                 style={{
                   flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
                   padding: '14px', background: 'transparent', border: '1px solid #10B98140',
                   borderRadius: '14px', color: '#10B981', fontSize: '15px', fontWeight: '600',
-                  textDecoration: 'none',
+                  cursor: 'pointer',
                 }}
               >
                 <Phone size={16} />
-                {formatPhone(phone)}
-              </a>
+                {formatPhoneDisplay(phone)}
+              </button>
             )}
             <button
               onClick={() => setShowNewOrder(true)}
@@ -261,6 +256,21 @@ export default function MobileClientDetailModal({
           currentRole={currentRole}
           currentUserName={currentUserName}
           initialData={newOrderData}
+        />
+      )}
+
+      {showCallModal && (
+        <CallResultModal
+          variant="mobile"
+          client={{
+            ...(profile.clients?.[0] || profile),
+            phone,
+            organization_name: profile.organization_name || profile.clients?.[0]?.organization_name,
+            full_name: profile.full_name || profile.clients?.[0]?.full_name,
+            _group: profile,
+          }}
+          onClose={() => setShowCallModal(false)}
+          onSaved={() => setShowCallModal(false)}
         />
       )}
     </>

@@ -10,6 +10,7 @@ import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 import OrderRouteMap from '@/app/adminCifra/components/OrderRouteMap';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
 import { findRecipeByGrade, getAdditiveDosage, ADDITIVE_NAMES } from '@/lib/recipeAdditives';
+import { formatPhoneDisplay, formatPhoneInput } from '@/lib/phone';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
@@ -693,6 +694,9 @@ export default function ZayavkiPage() {
   const [mixerListHasMore, setMixerListHasMore] = useState(false);
   const historyRef = useRef<HTMLDivElement>(null);
   const [historyHasMore, setHistoryHasMore] = useState(false);
+  // Защита от гонки: один клик по «Под вопросом» иначе шлёт 3–4 параллельных PUT
+  const questionableSavingRef = useRef(false);
+  const [questionableSaving, setQuestionableSaving] = useState(false);
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const [commentHasMore, setCommentHasMore] = useState(false);
 
@@ -1276,7 +1280,10 @@ ${order.customer_type?.includes('Юридическое')
 
   // ==================== ЗАГРУЗКА КЛИЕНТОВ ДЛЯ ПОИСКА ====================
   useEffect(() => {
-    fetch('/api/adminCifra/clients')
+    const userId = localStorage.getItem('userId');
+    fetch('/api/adminCifra/clients', {
+      headers: userId ? { 'x-user-id': userId } : {},
+    })
       .then(r => r.ok ? r.json() : [])
       .then(data => setAllClients(Array.isArray(data) ? data : []))
       .catch(() => {});
@@ -2224,10 +2231,10 @@ ${order.customer_type?.includes('Юридическое')
               {selectedOrder.status === 'cancelled' && '🔴 Отменена'}
             </div>
 
-            {/* Чекбокс "Под вопросом" — тот же элегантный стиль, лёгкая подсветка фона когда отмечен */}
+            {/* Чекбокс "Под вопросом" — тот же элегантный стиль, лёгкая подсветка фона когда отмечен.
+                Без htmlFor: input внутри label — htmlFor давал двойную активацию в части браузеров. */}
             {hasManagerPermissions(currentRole) && (
               <label
-                htmlFor="isQuestionable"
                 style={{ 
                   display: 'flex', 
                   alignItems: 'center', 
@@ -2237,39 +2244,57 @@ ${order.customer_type?.includes('Юридическое')
                   border: '1px solid rgba(239, 68, 68, 0.3)',
                   background: selectedOrder?.is_questionable ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
                   fontSize: '13px',
-                  cursor: 'pointer',
+                  cursor: questionableSaving ? 'wait' : 'pointer',
                   userSelect: 'none',
+                  opacity: questionableSaving ? 0.7 : 1,
                 }}
               >
                 <input 
                   type="checkbox" 
-                  id="isQuestionable"
-                  checked={selectedOrder?.is_questionable || false}
+                  checked={!!selectedOrder?.is_questionable}
+                  disabled={questionableSaving}
                   onChange={async (e) => {
+                    if (questionableSavingRef.current || !selectedOrder?.id) return;
+                    questionableSavingRef.current = true;
+                    setQuestionableSaving(true);
+
                     const newValue = e.target.checked;
-                    
-                    const res = await fetch('/api/adminCifra/orders/update', {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        id: selectedOrder.id,
-                        is_questionable: newValue,
-                        userRole: currentRole || 'admin',
-                        userName: userFullName || 'Сотрудник',
-                      })
-                    });
+                    const prevValue = !!selectedOrder.is_questionable;
 
-                    if (res.ok) {
-                      setSelectedOrder((prev: any) => ({
-                        ...prev,
-                        is_questionable: newValue
-                      }));
+                    // Оптимистично сразу — иначе controlled checkbox «отскакивает» и ловит повторные onChange
+                    setSelectedOrder((prev: any) => ({ ...prev, is_questionable: newValue }));
+                    setAllOrders((prev: any[]) => prev.map((o: any) =>
+                      o.id === selectedOrder.id ? { ...o, is_questionable: newValue } : o
+                    ));
 
-                      setAllOrders((prev: any[]) => prev.map((o: any) => 
-                        o.id === selectedOrder.id 
-                          ? { ...o, is_questionable: newValue } 
-                          : o
+                    try {
+                      const res = await fetch('/api/adminCifra/orders/update', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          id: selectedOrder.id,
+                          is_questionable: newValue,
+                          userRole: currentRole || 'admin',
+                          userName: userFullName || 'Сотрудник',
+                        })
+                      });
+
+                      if (!res.ok) {
+                        setSelectedOrder((prev: any) => ({ ...prev, is_questionable: prevValue }));
+                        setAllOrders((prev: any[]) => prev.map((o: any) =>
+                          o.id === selectedOrder.id ? { ...o, is_questionable: prevValue } : o
+                        ));
+                      } else if (typeof loadOrderHistory === 'function') {
+                        loadOrderHistory(selectedOrder.id);
+                      }
+                    } catch {
+                      setSelectedOrder((prev: any) => ({ ...prev, is_questionable: prevValue }));
+                      setAllOrders((prev: any[]) => prev.map((o: any) =>
+                        o.id === selectedOrder.id ? { ...o, is_questionable: prevValue } : o
                       ));
+                    } finally {
+                      questionableSavingRef.current = false;
+                      setQuestionableSaving(false);
                     }
                   }}
                   style={{ width: '14px', height: '14px', accentColor: '#EF4444' }}
@@ -2346,7 +2371,9 @@ ${order.customer_type?.includes('Юридическое')
                               {isLegal ? '🏢 ' : '👤 '}{displayName}
                             </span>
                             <span style={{ fontSize: '11px', color: '#64748B' }}>
-                              {[c.phone, c.inn ? `ИНН ${c.inn}` : null].filter(Boolean).join(' · ')}
+                              {[c.phone ? formatPhoneDisplay(c.phone) : null, c.inn ? `ИНН ${c.inn}` : null]
+                                .filter(Boolean)
+                                .join(' · ')}
                             </span>
                           </div>
                         );
@@ -2368,9 +2395,10 @@ ${order.customer_type?.includes('Юридическое')
               )}
 
               <div style={{ color: '#94A3B8' }}>Телефон</div>
-              <input 
-                value={selectedOrder.phone || ''} 
-                onChange={(e) => setSelectedOrder({ ...selectedOrder, phone: e.target.value })}
+              <input
+                type="tel"
+                value={selectedOrder.phone ? formatPhoneInput(selectedOrder.phone) : ''}
+                onChange={(e) => setSelectedOrder({ ...selectedOrder, phone: formatPhoneInput(e.target.value) })}
                 style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
               />
 
@@ -2439,7 +2467,17 @@ ${order.customer_type?.includes('Юридическое')
                   // Можно менять
                   <select 
                     value={selectedOrder.status || 'new'} 
-                    onChange={(e) => setSelectedOrder({ ...selectedOrder, status: e.target.value })}
+                    onChange={(e) => {
+                      const newStatus = e.target.value;
+                      // Локально сразу снимаем метку — на сервере то же при Save / смене статуса
+                      setSelectedOrder({
+                        ...selectedOrder,
+                        status: newStatus,
+                        ...(newStatus === 'processing' && selectedOrder.status !== 'processing'
+                          ? { is_questionable: false }
+                          : {}),
+                      });
+                    }}
                     style={{ 
                       background: '#334155', 
                       border: 'none', 

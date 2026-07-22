@@ -42,7 +42,10 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   }, []);
 
   useEffect(() => {
-    fetch('/api/adminCifra/clients')
+    const userId = localStorage.getItem('userId');
+    fetch('/api/adminCifra/clients', {
+      headers: userId ? { 'x-user-id': userId } : {},
+    })
       .then(r => r.ok ? r.json() : [])
       .then(data => setAllClients(Array.isArray(data) ? data : []))
       .catch(() => {});

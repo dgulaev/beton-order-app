@@ -1650,6 +1650,32 @@ const generateDailyReport = () => {
         } : {}),
       }}>
         {statusText}
+        {/* Метка «Под вопросом» — заметный бейдж на пилюле */}
+        {(order as any).is_questionable && (
+          <span
+            title="Под вопросом"
+            style={{
+              marginLeft: '7px',
+              flexShrink: 0,
+              height: '18px',
+              padding: '0 7px',
+              borderRadius: '9999px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '3px',
+              background: '#EF4444',
+              color: '#fff',
+              fontSize: '10px',
+              fontWeight: 800,
+              letterSpacing: '0.02em',
+              lineHeight: 1,
+              boxShadow: '0 0 0 1px rgba(255,255,255,0.25), 0 0 8px rgba(239,68,68,0.55)',
+            }}
+          >
+            ?
+          </span>
+        )}
         {/* Процент отгрузки — только для "В работе", прижат к правому краю
             плашки (marginLeft: auto). Если плашка узкая (маленький объём/
             короткая продолжительность), бейдж просто уедет за overflow:hidden
@@ -1672,7 +1698,7 @@ const generateDailyReport = () => {
         )}
         {isOverflow && (
           <span style={{
-            marginLeft: order.status === 'processing' ? 0 : 'auto', marginRight: '6px', flexShrink: 0,
+            marginLeft: order.status === 'processing' || (order as any).is_questionable ? 0 : 'auto', marginRight: '6px', flexShrink: 0,
             color: '#FDE68A',
             fontSize: '11px', fontWeight: '700',
             letterSpacing: '0.02em',

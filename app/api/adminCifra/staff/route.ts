@@ -25,11 +25,12 @@ export async function GET() {
     // Для каждого сотрудника считаем статистику
     const staffWithStats = await Promise.all(
       staffList.map(async (staff: any) => {
-        // Клиенты, привязанные к этому сотруднику
+        // Клиенты на кураторстве (как в /staff/stats и карточке стаффа)
         const { data: clients, error: clientsError } = await supabase
           .from('users')
           .select('user_id')
-          .eq('assigned_to', staff.user_id);
+          .eq('curator_id', staff.user_id)
+          .eq('role', 'client');
 
         if (clientsError) {
           console.error('Clients error for', staff.user_id, clientsError);

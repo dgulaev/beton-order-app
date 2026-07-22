@@ -55,3 +55,23 @@ export function formatPhoneInput(value: string): string {
 
   return formatted;
 }
+
+/**
+ * Единый вид для показа в карточках/списках: "+7 900 365-00-44".
+ * Кривые записи вроде "+8900…" тоже приводятся к +7.
+ * Если цифр слишком мало — возвращаем исходную строку (или "—").
+ */
+export function formatPhoneDisplay(raw: string | null | undefined): string {
+  if (!raw) return '—';
+  const norm = normalizePhone(raw);
+  if (!norm) return '—';
+  if (norm.length < 10) return String(raw).trim() || '—';
+  return formatPhoneInput(norm);
+}
+
+/** Для записи в БД: "+79003650044". Пустой / мусор → null. */
+export function toStoredPhone(raw: string | null | undefined): string | null {
+  const norm = normalizePhone(raw);
+  if (!norm || norm.length < 11) return null;
+  return '+' + norm;
+}

@@ -1,6 +1,7 @@
 // app/api/order/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { normalizePhone, toStoredPhone } from '@/lib/phone';
 
 const BOT_TOKEN = process.env.MAX_BOT_TOKEN;
 const CHAT_ID = process.env.MANAGER_CHAT_ID;
@@ -53,19 +54,14 @@ if (isFromAdmin) {
     return NextResponse.json({ success: false, message: 'Телефон обязателен при создании заявки из админки' }, { status: 400 });
   }
 
-  // Нормализация телефона
-  const phoneNormalized = phoneRaw.replace(/\D/g, '');
-  let phoneWithPlus = '';
-  
-  if (phoneNormalized.length === 11 && phoneNormalized.startsWith('7')) {
-    phoneWithPlus = '+' + phoneNormalized;
-  } else if (phoneNormalized.length === 10) {
-    phoneWithPlus = '+7' + phoneNormalized;
-  } else if (phoneNormalized.length === 11) {
-    phoneWithPlus = '+' + phoneNormalized;
-  } else {
-    phoneWithPlus = phoneRaw;
+  const phoneWithPlus = toStoredPhone(phoneRaw);
+  if (!phoneWithPlus) {
+    return NextResponse.json(
+      { success: false, message: 'Некорректный телефон (нужен полный номер РФ)' },
+      { status: 400 }
+    );
   }
+  const phoneNormalized = normalizePhone(phoneRaw);
 
   const supabase = getSupabaseClient();
 
@@ -160,62 +156,11 @@ const now = new Date().toISOString();
 
 console.log(`🔄 [3.1] Обновление контактов для userId: ${finalUserId}`);
 
-// Обновляем last_contact
+// Обновляем last_contact (для карточки клиента)
 await supabase
   .from('users')
   .update({ last_contact: now })
   .eq('user_id', finalUserId);
-
-// ==================== УЛУЧШЕННЫЙ РАСЧЁТ next_contact ====================
-const { data: orders } = await supabase
-  .from('orders')
-  .select('delivery_date, created_at')
-  .eq('user_id', finalUserId)
-  .order('delivery_date', { ascending: true });
-
-let nextContact = null;
-
-if (orders && orders.length >= 2) {
-  const dates = orders
-    .map((o: any) => new Date(o.delivery_date || o.created_at))
-    .filter(d => d && !isNaN(d.getTime()))
-    .sort((a: Date, b: Date) => a.getTime() - b.getTime());
-
-  if (dates.length >= 2) {
-    let totalDays = 0;
-    for (let i = 1; i < dates.length; i++) {
-      totalDays += (dates[i].getTime() - dates[i-1].getTime()) / (1000 * 3600 * 24);
-    }
-    const avgInterval = totalDays / (dates.length - 1);
-    
-    // Улучшенная логика:
-    // Минимум 14 дней, максимум 60 дней, +20% буфер
-    let daysToAdd = Math.ceil(avgInterval * 1.2);
-    daysToAdd = Math.max(14, Math.min(60, daysToAdd));
-
-    const lastOrder = dates[dates.length - 1];
-    const nextDate = new Date(lastOrder.getTime() + daysToAdd * 86400000);
-    
-    nextContact = nextDate.toISOString();
-    
-    console.log(`📅 Рассчитан next_contact: ${nextDate.toLocaleDateString('ru-RU')} (+${daysToAdd} дней)`);
-  }
-}
-
-// Fallback — минимум через 25 дней
-if (!nextContact) {
-  const defaultNext = new Date();
-  defaultNext.setDate(defaultNext.getDate() + 25);
-  nextContact = defaultNext.toISOString();
-  console.log(`📅 Fallback next_contact (+25 дней)`);
-}
-
-await supabase
-  .from('users')
-  .update({ next_contact: nextContact })
-  .eq('user_id', finalUserId);
-
-console.log(`✅ next_contact сохранён: ${nextContact}`);
 
     // ================================================
     // 4. НОРМАЛИЗАЦИЯ ПОЛЕЙ
@@ -237,6 +182,8 @@ console.log(`✅ next_contact сохранён: ${nextContact}`);
     if (!grade || !volume || !finalDeliveryDate || !finalDeliveryTime || !address || !phone) {
       return NextResponse.json({ success: false, message: 'Не все обязательные поля заполнены' }, { status: 400 });
     }
+
+    const orderPhone = toStoredPhone(phone) || String(phone).trim();
 
     // ================================================
     // 6. ПРОВЕРКА КОНФЛИКТОВ ПО ВРЕМЕНИ
@@ -300,7 +247,7 @@ console.log(`✅ next_contact сохранён: ${nextContact}`);
         full_name: finalFullName || null,
         organization_name: finalOrganizationName || null,
         inn: inn || null,
-        phone,
+        phone: orderPhone,
         comment: comment || null,
         concrete_cost: concreteCost || 0,
         delivery_cost: deliveryCost || 0,
