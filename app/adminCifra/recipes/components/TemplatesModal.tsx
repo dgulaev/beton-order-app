@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { COLORS, overlayStyle, modalStyle, ghostButton, primaryButton } from '../labStyles';
+import { useEscapeClose } from '../labUtils';
 
 interface Props {
   onClose: () => void;
@@ -12,6 +13,7 @@ interface Props {
 export default function TemplatesModal({ onClose, onApply }: Props) {
   const [templates, setTemplates] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  useEscapeClose(onClose);
 
   const load = async () => {
     setLoading(true);
@@ -47,7 +49,7 @@ export default function TemplatesModal({ onClose, onApply }: Props) {
           <p style={{ color: COLORS.muted }}>Загрузка...</p>
         ) : templates.length === 0 ? (
           <p style={{ color: COLORS.muted }}>
-            Шаблонов пока нет. Откройте рецептуру и нажмите «Сохранить как шаблон».
+            Шаблонов пока нет. Откройте рецептуру и нажмите «Как шаблон».
           </p>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>

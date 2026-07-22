@@ -3,6 +3,7 @@
 // (автозаполнение из заказа + рецептуры + испытаний + реквизитов лаборатории).
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { findRecipeByGrade } from '@/lib/recipeAdditives';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -12,19 +13,16 @@ const supabase = createClient(
 // Сборка черновика паспорта по заказу — данные тянутся из orders, recipes,
 // concrete_tests, lab_settings и справочника accredited_grades.
 async function buildAutofill(orderId: number, docKind: string) {
-  const [{ data: order }, { data: settings }] = await Promise.all([
+  const [{ data: order }, { data: settings }, { data: allRecipes }] = await Promise.all([
     supabase.from('orders').select('*').eq('id', orderId).maybeSingle(),
     supabase.from('lab_settings').select('*').eq('id', 1).maybeSingle(),
+    supabase.from('recipes').select('*'),
   ]);
 
   const grade = order?.grade || '';
 
-  // Рецептура по коду марки (та же логика связки, что и в заказах).
-  let recipe: any = null;
-  if (grade) {
-    const { data: recipes } = await supabase.from('recipes').select('*').eq('code', grade).limit(1);
-    recipe = recipes?.[0] || null;
-  }
+  // Рецептура по марке — та же гибкая логика, что в заявках/отчётах.
+  const recipe = grade ? findRecipeByGrade(allRecipes || [], grade) : null;
 
   // Аккредитованная марка по совпадению marka (напр. "М400").
   let accredited: any = null;
@@ -118,8 +116,31 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { data, error } = await supabase.from('concrete_passports').insert([body]).select().single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  // Разрешаем только известные колонки — лишние поля из клиента не ломают insert.
+  const row = {
+    passport_no: body.passport_no ?? null,
+    doc_kind: body.doc_kind === 'mortar' ? 'mortar' : 'concrete',
+    order_id: body.order_id != null && body.order_id !== '' ? Number(body.order_id) : null,
+    spec_id: body.spec_id != null && body.spec_id !== '' ? Number(body.spec_id) : null,
+    payload: body.payload ?? null,
+    created_by: body.created_by != null && body.created_by !== '' ? Number(body.created_by) : null,
+    created_by_name: body.created_by_name ?? null,
+  };
+  const { data, error } = await supabase.from('concrete_passports').insert([row]).select().single();
+  if (error) {
+    const msg = error.message || 'insert failed';
+    // Старый unique на order_id блокирует второй паспорт на заявку.
+    if (msg.includes('uniq_concrete_passports_order')) {
+      return NextResponse.json(
+        {
+          error:
+            'В базе стоит ограничение «один паспорт на заявку». Выполни scripts/drop-uniq-concrete-passports-order.sql в Supabase SQL Editor.',
+        },
+        { status: 500 }
+      );
+    }
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
   return NextResponse.json(data);
 }
 

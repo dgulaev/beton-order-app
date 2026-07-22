@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, type CSSProperties } from 'react';
 import { COLORS, inputStyle as sharedInput, ghostButton, primaryButton, pillStyle } from './labStyles';
 import SpecificationsTab from './components/SpecificationsTab';
 import TestsTab from './components/TestsTab';
@@ -10,6 +10,7 @@ import TemplatesModal from './components/TemplatesModal';
 import { useAutoRows, useAutoGrid, LabPagination } from './pagination';
 import { useRealtimeOrders, useOrderChangeNotifications } from '../../../hooks/useRealtimeOrders';
 import { FlaskConical } from 'lucide-react';
+import { useEscapeClose } from './labUtils';
 
 type LabTab = 'orders' | 'specifications' | 'recipes' | 'tests';
 
@@ -38,6 +39,10 @@ export default function LaboratoryPage() {
   // Сводка испытаний: orderId → { '7': result, '28': result }
   const [testSummary, setTestSummary] = useState<Map<string, Record<string, string>>>(new Map());
   const loadedMonthsRef = useRef<Set<string>>(new Set());
+  const loadingMonthsRef = useRef<Set<string>>(new Set());
+  const [testsFocusOrderId, setTestsFocusOrderId] = useState<number | null>(null);
+  const [testsFocusDays, setTestsFocusDays] = useState<'7' | '28' | null>(null);
+  const [savingRecipe, setSavingRecipe] = useState(false);
 
   const mergeOrders = (prev: any[], incoming: any[]) => {
     const map = new Map(prev.map((o) => [String(o.id), o]));
@@ -47,20 +52,23 @@ export default function LaboratoryPage() {
 
   // Ленивая помесячная загрузка заявок: грузим только тот месяц, который нужен
   // текущему виду недели. Уже загруженные месяцы не запрашиваем повторно.
+  // В loadedMonths добавляем только после успешного ответа — иначе месяц «залипает» пустым.
   const ensureMonth = useCallback(async (year: number, month: number) => {
     const key = `${year}-${month}`;
-    if (loadedMonthsRef.current.has(key)) return;
-    loadedMonthsRef.current.add(key);
+    if (loadedMonthsRef.current.has(key) || loadingMonthsRef.current.has(key)) return;
+    loadingMonthsRef.current.add(key);
     setMonthLoading(true);
     try {
       const res = await fetch(`/api/adminCifra/orders?year=${year}&month=${month}`);
       if (res.ok) {
         const data = await res.json();
         setOrders((prev) => mergeOrders(prev, data));
+        loadedMonthsRef.current.add(key);
       }
     } catch (e) {
       console.error(e);
     } finally {
+      loadingMonthsRef.current.delete(key);
       setMonthLoading(false);
     }
   }, []);
@@ -91,12 +99,14 @@ export default function LaboratoryPage() {
 
         if (testsRes.ok) {
           const tests: any[] = await testsRes.json();
+          // API отдаёт sample_date DESC — берём первую (свежую) запись на тип.
           const map = new Map<string, Record<string, string>>();
           tests.forEach((t) => {
             if (t.order_id == null) return;
             const key = String(t.order_id);
             const cur = map.get(key) || {};
-            cur[String(t.test_type)] = t.result || 'pending';
+            const tt = String(t.test_type);
+            if (cur[tt] == null) cur[tt] = t.result || 'pending';
             map.set(key, cur);
           });
           setTestSummary(map);
@@ -147,6 +157,27 @@ export default function LaboratoryPage() {
         next.set(String(orderId), list);
         return next;
       });
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  // Обновить бейджи 7/28 на заявках после правок в журнале испытаний
+  const refreshTestSummary = useCallback(async () => {
+    try {
+      const res = await fetch('/api/adminCifra/concrete-tests');
+      if (!res.ok) return;
+      const tests: any[] = await res.json();
+      const map = new Map<string, Record<string, string>>();
+      tests.forEach((t) => {
+        if (t.order_id == null) return;
+        const key = String(t.order_id);
+        const cur = map.get(key) || {};
+        const tt = String(t.test_type);
+        if (cur[tt] == null) cur[tt] = t.result || 'pending';
+        map.set(key, cur);
+      });
+      setTestSummary(map);
     } catch (e) {
       console.error(e);
     }
@@ -226,6 +257,8 @@ export default function LaboratoryPage() {
 
   // ==================== СОХРАНЕНИЕ РЕЦЕПТА ====================
   const saveRecipe = async (recipe: any) => {
+    if (savingRecipe) return;
+    setSavingRecipe(true);
     const user = getCurrentUser();
     const method = recipe.id ? 'PUT' : 'POST';
     const url = recipe.id ? `/api/adminCifra/recipes/${recipe.id}` : '/api/adminCifra/recipes';
@@ -251,6 +284,8 @@ export default function LaboratoryPage() {
     } catch (e) {
       console.error(e);
       alert('Ошибка соединения с сервером');
+    } finally {
+      setSavingRecipe(false);
     }
   };
 
@@ -354,7 +389,8 @@ export default function LaboratoryPage() {
         </div>
       </div>
 
-      {tab === 'orders' && (
+      {/* Keep-alive вкладок: не размонтируем, чтобы не сбрасывать день/фильтры */}
+      <div style={{ display: tab === 'orders' ? 'block' : 'none' }}>
         <OrdersTab
           orders={orders}
           loading={ordersLoading}
@@ -366,11 +402,27 @@ export default function LaboratoryPage() {
           onAcknowledge={acknowledgeOrder}
           onAcknowledgeAll={acknowledgeAllOrders}
           onPassportSaved={markPassportSaved}
-          onOpenTests={() => setTab('tests')}
+          onOpenTests={(orderId, days) => {
+            setTestsFocusOrderId(orderId ?? null);
+            setTestsFocusDays(days ?? null);
+            setTab('tests');
+          }}
         />
-      )}
-      {tab === 'specifications' && <SpecificationsTab />}
-      {tab === 'tests' && <TestsTab />}
+      </div>
+      <div style={{ display: tab === 'specifications' ? 'block' : 'none' }}>
+        <SpecificationsTab onPassportSaved={markPassportSaved} />
+      </div>
+      <div style={{ display: tab === 'tests' ? 'block' : 'none' }}>
+        <TestsTab
+          focusOrderId={testsFocusOrderId}
+          focusDays={testsFocusDays}
+          onFocusConsumed={() => {
+            setTestsFocusOrderId(null);
+            setTestsFocusDays(null);
+          }}
+          onTestsChanged={refreshTestSummary}
+        />
+      </div>
 
       {/* ==================== ВКЛАДКА РЕЦЕПТУРЫ ==================== */}
       {tab === 'recipes' && (
@@ -499,13 +551,60 @@ export default function LaboratoryPage() {
 
       {/* ==================== МОДАЛКА РЕДАКТИРОВАНИЯ РЕЦЕПТА ==================== */}
       {editingRecipe && (
+        <RecipeEditModal
+          editingRecipe={editingRecipe}
+          setEditingRecipe={setEditingRecipe}
+          changeNote={changeNote}
+          setChangeNote={setChangeNote}
+          inputStyle={inputStyle}
+          savingRecipe={savingRecipe}
+          onSave={() => saveRecipe(editingRecipe)}
+          onSaveAsTemplate={saveAsTemplate}
+          onOpenTemplates={() => setShowTemplates(true)}
+        />
+      )}
+
+      {versionsFor && <RecipeVersionsModal recipe={versionsFor} onClose={() => setVersionsFor(null)} />}
+      {showTemplates && (
+        <TemplatesModal
+          onClose={() => setShowTemplates(false)}
+          onApply={editingRecipe ? applyTemplate : undefined}
+        />
+      )}
+    </div>
+  );
+}
+
+function RecipeEditModal({
+  editingRecipe,
+  setEditingRecipe,
+  changeNote,
+  setChangeNote,
+  inputStyle,
+  savingRecipe,
+  onSave,
+  onSaveAsTemplate,
+  onOpenTemplates,
+}: {
+  editingRecipe: any;
+  setEditingRecipe: (v: any) => void;
+  changeNote: string;
+  setChangeNote: (v: string) => void;
+  inputStyle: CSSProperties;
+  savingRecipe: boolean;
+  onSave: () => void;
+  onSaveAsTemplate: () => void;
+  onOpenTemplates: () => void;
+}) {
+  useEscapeClose(() => setEditingRecipe(null));
+  return (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.95)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setEditingRecipe(null)}>
           <div className="scroll-hidden" style={{ background: COLORS.card, padding: '28px', borderRadius: '20px', width: '100%', maxWidth: '560px', maxHeight: '90vh', overflowY: 'auto', boxSizing: 'border-box' }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h2 style={{ fontSize: '22px', margin: 0 }}>
                 {editingRecipe.id ? 'Редактирование' : 'Новый'} — {editingRecipe.item_type === 'fbs' ? 'ФБС' : 'Рецепт'}
               </h2>
-              <button onClick={() => setShowTemplates(true)} style={{ ...ghostButton, padding: '6px 12px' }}>Применить шаблон</button>
+              <button onClick={onOpenTemplates} style={{ ...ghostButton, padding: '6px 12px' }}>Применить шаблон</button>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
@@ -626,21 +725,17 @@ export default function LaboratoryPage() {
             )}
 
             <div style={{ marginTop: '28px', display: 'flex', gap: '12px' }}>
-              <button onClick={() => saveRecipe(editingRecipe)} style={{ ...primaryButton(), flex: 1, justifyContent: 'center', padding: '14px' }}>Сохранить</button>
-              <button onClick={saveAsTemplate} style={{ ...ghostButton, padding: '14px 18px' }}>Как шаблон</button>
+              <button
+                onClick={onSave}
+                disabled={savingRecipe}
+                style={{ ...primaryButton(), flex: 1, justifyContent: 'center', padding: '14px', opacity: savingRecipe ? 0.6 : 1, cursor: savingRecipe ? 'default' : 'pointer' }}
+              >
+                {savingRecipe ? 'Сохранение...' : 'Сохранить'}
+              </button>
+              <button onClick={onSaveAsTemplate} style={{ ...ghostButton, padding: '14px 18px' }}>Как шаблон</button>
               <button onClick={() => setEditingRecipe(null)} style={{ ...ghostButton, padding: '14px 18px' }}>Отмена</button>
             </div>
           </div>
         </div>
-      )}
-
-      {versionsFor && <RecipeVersionsModal recipe={versionsFor} onClose={() => setVersionsFor(null)} />}
-      {showTemplates && (
-        <TemplatesModal
-          onClose={() => setShowTemplates(false)}
-          onApply={editingRecipe ? applyTemplate : undefined}
-        />
-      )}
-    </div>
   );
 }

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { COLORS, overlayStyle, modalStyle, inputStyle, labelStyle, ghostButton, primaryButton } from '../labStyles';
 import { SCALE, num, ru, ruInt, computeSeries, type Specimen } from '../protocolCalc';
+import { useEscapeClose } from '../labUtils';
 
 interface Props {
   test: any;              // строка concrete_tests, к которой формируем протокол
@@ -29,6 +30,7 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
   const age: '7' | '28' = String(test?.test_type) === '28' ? '28' : '7';
   const [saving, setSaving] = useState(false);
   const [prot, setProt] = useState<any>(null);
+  useEscapeClose(onClose);
 
   useEffect(() => {
     let cancelled = false;

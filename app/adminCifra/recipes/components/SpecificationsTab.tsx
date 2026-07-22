@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { COLORS, inputStyle, labelStyle, cardStyle, ghostButton, primaryButton, overlayStyle, modalStyle, pillStyle } from '../labStyles';
 import PassportModal from './PassportModal';
 import { useAutoRows, LabPagination } from '../pagination';
+import { useEscapeClose } from '../labUtils';
 
 type FilterKey = 'all' | 'active' | 'no_recipes' | 'no_products';
 
@@ -29,12 +30,17 @@ const emptySpec = () => ({
   recipe_links: [] as any[],
 });
 
-export default function SpecificationsTab() {
+interface Props {
+  onPassportSaved?: (orderId: number | null) => void;
+}
+
+export default function SpecificationsTab({ onPassportSaved }: Props) {
   const [specs, setSpecs] = useState<any[]>([]);
   const [recipes, setRecipes] = useState<any[]>([]);
   const [plants, setPlants] = useState<any[]>([]);
   const [accredited, setAccredited] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState<FilterKey>('all');
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState('');
@@ -47,6 +53,8 @@ export default function SpecificationsTab() {
   // объект — найден, false — не найден.
   const [orderLookup, setOrderLookup] = useState<any>(null);
   const [orderChecking, setOrderChecking] = useState(false);
+
+  useEscapeClose(() => setEditing(null), editing != null);
 
   const recipeById = useMemo(() => {
     const m: Record<string, any> = {};
@@ -87,11 +95,16 @@ export default function SpecificationsTab() {
   }, []);
 
   useEffect(() => {
-    load();
+    const t = setTimeout(() => {
+      load();
+    }, search.trim() ? 300 : 0);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter]);
+  }, [filter, search]);
 
   const save = async () => {
+    if (saving) return;
+    setSaving(true);
     const method = editing.id ? 'PUT' : 'POST';
     // specification_recipes — вложенная связь, пересобирается через recipe_links.
     // accredited_marking сохраняем в БД, чтобы марка не терялась при повторном
@@ -99,16 +112,20 @@ export default function SpecificationsTab() {
     const { specification_recipes, ...clean } = editing;
     void specification_recipes;
     const payload = { ...clean, order_id: editing.order_id ? Number(editing.order_id) : null };
-    const res = await fetch('/api/adminCifra/specifications', {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (res.ok) {
-      setEditing(null);
-      load();
-    } else {
-      alert('Ошибка сохранения спецификации');
+    try {
+      const res = await fetch('/api/adminCifra/specifications', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setEditing(null);
+        load();
+      } else {
+        alert('Ошибка сохранения спецификации');
+      }
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -219,7 +236,6 @@ export default function SpecificationsTab() {
           placeholder="Поиск по коду, марке, продукции..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && load()}
           style={{ ...inputStyle, width: '320px' }}
         />
         {FILTERS.map((f) => (
@@ -420,6 +436,20 @@ export default function SpecificationsTab() {
               {(editing.recipe_links || []).map((link: any, idx: number) => (
                 <div key={idx} style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                   <select
+                    value={link.plant_id ?? ''}
+                    onChange={(e) => {
+                      const links = [...editing.recipe_links];
+                      links[idx] = { ...link, plant_id: e.target.value ? Number(e.target.value) : null };
+                      setEditing({ ...editing, recipe_links: links });
+                    }}
+                    style={{ ...inputStyle, flex: '0 0 160px' }}
+                  >
+                    <option value="">Завод...</option>
+                    {plants.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name || p.title || p.code || `Завод #${p.id}`}</option>
+                    ))}
+                  </select>
+                  <select
                     value={link.recipe_id ?? ''}
                     onChange={(e) => {
                       const links = [...editing.recipe_links];
@@ -445,7 +475,9 @@ export default function SpecificationsTab() {
 
             <div style={{ marginTop: '24px', display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
               <button onClick={() => setEditing(null)} style={ghostButton}>Отмена</button>
-              <button onClick={save} style={primaryButton()}>Сохранить</button>
+              <button onClick={save} disabled={saving} style={{ ...primaryButton(), opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}>
+                {saving ? 'Сохранение...' : 'Сохранить'}
+              </button>
             </div>
           </div>
         </div>
@@ -456,6 +488,7 @@ export default function SpecificationsTab() {
           orderId={passportFor.order_id ?? null}
           specId={passportFor.id ?? null}
           onClose={() => setPassportFor(null)}
+          onSaved={onPassportSaved}
         />
       )}
     </div>

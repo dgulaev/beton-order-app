@@ -26,7 +26,11 @@ export async function GET(request: NextRequest) {
   if (filter === 'active') {
     list = list.filter((s) => s.status === 'active');
   } else if (filter === 'no_recipes') {
-    list = list.filter((s) => !s.specification_recipes || s.specification_recipes.length === 0);
+    // Считаем «без рецепта» и строки со связью, но без выбранного recipe_id.
+    list = list.filter((s) => {
+      const links = s.specification_recipes || [];
+      return links.length === 0 || links.every((l: any) => !l.recipe_id);
+    });
   } else if (filter === 'no_products') {
     list = list.filter((s) => !s.product_name || String(s.product_name).trim() === '');
   }

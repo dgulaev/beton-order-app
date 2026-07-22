@@ -211,7 +211,12 @@ create table if not exists public.concrete_passports (
   created_at  timestamptz not null default now()
 );
 
-comment on table public.concrete_passports is 'Паспорта качества бетона/раствора для печати.';
+comment on table public.concrete_passports is 'Паспорта качества бетона/раствора для печати. Несколько паспортов на одну заявку (order_id) разрешены.';
+
+-- ВАЖНО: не вешать UNIQUE на order_id — на одну заявку бывает несколько паспортов (по рейсам).
+-- Если в БД остался uniq_concrete_passports_order — см. scripts/drop-uniq-concrete-passports-order.sql
+alter table public.concrete_passports drop constraint if exists uniq_concrete_passports_order;
+drop index if exists public.uniq_concrete_passports_order;
 
 create index if not exists idx_concrete_passports_order_id on public.concrete_passports (order_id);
 

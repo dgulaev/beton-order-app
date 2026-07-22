@@ -5,8 +5,16 @@ import { COLORS, inputStyle, labelStyle, cardStyle, ghostButton, primaryButton, 
 import ProtocolModal from './ProtocolModal';
 import { SCALE, num, ru, ruInt, computeSeries, type Specimen } from '../protocolCalc';
 import { useAutoRows, LabPagination } from '../pagination';
+import { localDateStr, useEscapeClose } from '../labUtils';
 
 type JournalKey = '7' | '28';
+
+interface Props {
+  focusOrderId?: number | null;
+  focusDays?: '7' | '28' | null;
+  onFocusConsumed?: () => void;
+  onTestsChanged?: () => void;
+}
 
 const orderLabel = (o: any): string =>
   `#${o.id} · ${o.delivery_date || '—'} · ${o.grade || '—'}` +
@@ -22,7 +30,7 @@ const defaultSpecimens = (): Specimen[] => [
 const emptyTest = (testType: JournalKey) => ({
   batch_no: '',
   recipe_code: '',
-  sample_date: new Date().toISOString().split('T')[0],
+  sample_date: localDateStr(),
   test_type: testType,
   order_id: null as number | null,
   required_strength: 0,
@@ -35,23 +43,29 @@ const emptyTest = (testType: JournalKey) => ({
 
 // Журнал испытаний партий: два отдельных журнала — 7 суток (промежуточный
 // контроль) и 28 суток (проектный/итоговый контроль прочности).
-export default function TestsTab() {
+export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onTestsChanged }: Props) {
   const [tests, setTests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
   const [protocolTest, setProtocolTest] = useState<any>(null);
   const [journal, setJournal] = useState<JournalKey>('7');
   const [orders, setOrders] = useState<any[]>([]);
   const [orderSearch, setOrderSearch] = useState('');
+  const [orderFilter, setOrderFilter] = useState('');
   const [dateFilter, setDateFilter] = useState('');
   const [page, setPage] = useState(1);
   const listRef = useRef<HTMLDivElement>(null);
-  const { perPage, rowH } = useAutoRows(listRef, { deps: [journal, tests.length, dateFilter] });
+  const { perPage, rowH } = useAutoRows(listRef, { deps: [journal, tests.length, dateFilter, orderFilter] });
   const loadedOrderMonths = useRef<Set<string>>(new Set());
+  const loadingOrderMonths = useRef<Set<string>>(new Set());
+
+  useEscapeClose(() => setEditing(null), editing != null);
 
   const journalTests = tests
     .filter((t) => String(t.test_type) === journal)
-    .filter((t) => !dateFilter || String(t.sample_date) === dateFilter);
+    .filter((t) => !dateFilter || String(t.sample_date).slice(0, 10) === dateFilter)
+    .filter((t) => !orderFilter || String(t.order_id) === orderFilter);
   const count7 = tests.filter((t) => String(t.test_type) === '7').length;
   const count28 = tests.filter((t) => String(t.test_type) === '28').length;
 
@@ -62,7 +76,16 @@ export default function TestsTab() {
   // Сброс на первую страницу при смене журнала / фильтра даты.
   useEffect(() => {
     setPage(1);
-  }, [journal, dateFilter]);
+  }, [journal, dateFilter, orderFilter]);
+
+  // Переход с бейджа 7/28 на заявках — фильтр к нужному испытанию.
+  useEffect(() => {
+    if (focusOrderId == null) return;
+    if (focusDays === '7' || focusDays === '28') setJournal(focusDays);
+    setOrderFilter(String(focusOrderId));
+    setOrderSearch(String(focusOrderId));
+    onFocusConsumed?.();
+  }, [focusOrderId, focusDays, onFocusConsumed]);
 
   const load = async () => {
     setLoading(true);
@@ -85,13 +108,13 @@ export default function TestsTab() {
   // выбранной даты образцов.
   const ensureOrdersMonth = async (dateStr?: string) => {
     if (!dateStr) return;
-    const d = new Date(dateStr);
-    if (Number.isNaN(d.getTime())) return;
-    const year = d.getFullYear();
-    const month = d.getMonth() + 1;
+    const parts = String(dateStr).slice(0, 10).split('-').map(Number);
+    if (parts.length < 2 || !parts[0] || !parts[1]) return;
+    const year = parts[0];
+    const month = parts[1];
     const key = `${year}-${month}`;
-    if (loadedOrderMonths.current.has(key)) return;
-    loadedOrderMonths.current.add(key);
+    if (loadedOrderMonths.current.has(key) || loadingOrderMonths.current.has(key)) return;
+    loadingOrderMonths.current.add(key);
     try {
       const res = await fetch(`/api/adminCifra/orders?year=${year}&month=${month}`);
       if (res.ok) {
@@ -101,9 +124,12 @@ export default function TestsTab() {
           (data || []).forEach((o: any) => map.set(String(o.id), o));
           return Array.from(map.values());
         });
+        loadedOrderMonths.current.add(key);
       }
     } catch (e) {
       console.error(e);
+    } finally {
+      loadingOrderMonths.current.delete(key);
     }
   };
 
@@ -173,12 +199,18 @@ export default function TestsTab() {
   };
 
   // Данные серии кубиков (масса/нагрузка) храним в editing.protocol.
-  const prot =
+  const protRaw =
     editing?.protocol && typeof editing.protocol === 'object'
       ? editing.protocol
       : { cube_size: 100, specimens: defaultSpecimens() };
+  const prot = {
+    ...protRaw,
+    cube_size: Number(protRaw.cube_size) || 100,
+    specimens: Array.isArray(protRaw.specimens) ? protRaw.specimens : defaultSpecimens(),
+  };
   const calc = editing ? computeSeries(prot.specimens, prot.cube_size, editing.required_strength) : null;
   const hasSeries = !!calc && calc.rows.some((r) => r.strength > 0);
+  const cubeCm = Math.round(prot.cube_size / 10);
 
   const updSpecimens = (specimens: Specimen[]) => setEditing({ ...editing, protocol: { ...prot, specimens } });
   const setSpec = (idx: number, key: keyof Specimen, val: string) =>
@@ -188,12 +220,15 @@ export default function TestsTab() {
   const setCubeSize = (v: string) => setEditing({ ...editing, protocol: { ...prot, cube_size: Number(v) } });
 
   const save = async () => {
+    if (saving) return;
+    setSaving(true);
     const method = editing.id ? 'PUT' : 'POST';
     const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
 
     // Прочность считаем из серии кубиков; результат для 28 сут выставляем
     // автоматически, если оператор не переопределил его вручную.
-    const series = computeSeries(prot.specimens, prot.cube_size, editing.required_strength);
+    const specimens = Array.isArray(prot.specimens) ? prot.specimens : defaultSpecimens();
+    const series = computeSeries(specimens, prot.cube_size || 100, editing.required_strength);
     const seriesFilled = series.rows.some((r) => r.strength > 0);
     const actual = seriesFilled ? Number(series.avgStrength.toFixed(2)) : editing.actual_strength_mpa || 0;
     let result = editing.result || 'pending';
@@ -201,26 +236,32 @@ export default function TestsTab() {
       result = series.pass ? 'pass' : 'fail';
     }
 
-    const merged = { ...editing, actual_strength_mpa: actual, result, protocol: prot };
+    const merged = { ...editing, actual_strength_mpa: actual, result, protocol: { ...prot, specimens } };
     const body = merged.id ? merged : { ...merged, created_by: userId ? Number(userId) : null };
-    const res = await fetch('/api/adminCifra/concrete-tests', {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (res.ok) {
-      setEditing(null);
-      load();
-    } else {
-      const txt = await res.text().catch(() => '');
-      alert(`Ошибка сохранения испытания${txt ? `:\n${txt}` : ''}`);
+    try {
+      const res = await fetch('/api/adminCifra/concrete-tests', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        setEditing(null);
+        await load();
+        onTestsChanged?.();
+      } else {
+        const txt = await res.text().catch(() => '');
+        alert(`Ошибка сохранения испытания${txt ? `:\n${txt}` : ''}`);
+      }
+    } finally {
+      setSaving(false);
     }
   };
 
   const remove = async (id: number) => {
     if (!confirm('Удалить запись испытания?')) return;
     await fetch(`/api/adminCifra/concrete-tests?id=${id}`, { method: 'DELETE' });
-    load();
+    await load();
+    onTestsChanged?.();
   };
 
   const resultPill = (r: string) => {
@@ -269,12 +310,18 @@ export default function TestsTab() {
             <span style={pillStyle('rgba(148,163,184,0.15)', journal === j.key ? COLORS.accent : COLORS.muted)}>{j.count}</span>
           </button>
         ))}
-        {/* Фильтр по дате образцов */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
+        {/* Фильтры: заказ + дата образцов */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto', flexWrap: 'wrap' }}>
+          {orderFilter && (
+            <>
+              <span style={{ ...pillStyle('rgba(96,165,250,0.15)', COLORS.blue) }}>Заказ №{orderFilter}</span>
+              <button onClick={() => { setOrderFilter(''); setOrderSearch(''); }} style={{ ...ghostButton, padding: '8px 12px' }}>Сброс заказа</button>
+            </>
+          )}
           <span style={{ color: COLORS.muted, fontSize: '13px' }}>Дата образцов:</span>
           <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} style={{ ...inputStyle, width: 'auto', padding: '8px 10px' }} />
           {dateFilter && (
-            <button onClick={() => setDateFilter('')} style={{ ...ghostButton, padding: '8px 12px' }}>Сброс</button>
+            <button onClick={() => setDateFilter('')} style={{ ...ghostButton, padding: '8px 12px' }}>Сброс даты</button>
           )}
         </div>
       </div>
@@ -423,7 +470,7 @@ export default function TestsTab() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <h3 style={{ color: '#fff', fontSize: '15px', margin: 0 }}>
                   Кубики серии
-                  <span style={{ color: COLORS.muted, fontSize: '13px', fontWeight: 400 }}> · 10×10×10 см</span>
+                  <span style={{ color: COLORS.muted, fontSize: '13px', fontWeight: 400 }}> · {cubeCm}×{cubeCm}×{cubeCm} см</span>
                 </h3>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                   <select value={prot.cube_size} onChange={(e) => setCubeSize(e.target.value)} style={{ ...inputStyle, width: 'auto', padding: '6px 10px' }}>
@@ -472,7 +519,9 @@ export default function TestsTab() {
             </p>
             <div style={{ marginTop: '24px', display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
               <button onClick={() => setEditing(null)} style={ghostButton}>Отмена</button>
-              <button onClick={save} style={primaryButton()}>Сохранить</button>
+              <button onClick={save} disabled={saving} style={{ ...primaryButton(), opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}>
+                {saving ? 'Сохранение...' : 'Сохранить'}
+              </button>
             </div>
           </div>
         </div>
@@ -485,6 +534,7 @@ export default function TestsTab() {
           onSaved={() => {
             setProtocolTest(null);
             load();
+            onTestsChanged?.();
           }}
         />
       )}

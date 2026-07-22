@@ -1,77 +1,180 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { COLORS, inputStyle, ghostButton, primaryButton, pillStyle } from '../labStyles';
 import PassportModal from './PassportModal';
 
 // ==================== Дропдаун списка паспортов ====================
+// Рендерим через portal + position:fixed: иначе меню режется overflow:hidden
+// у списка заявок, а transform:scale в layout.tsx ломает absolute внутри карточки.
 function PassportDropdown({
   passports,
   onOpen,
   onNew,
+  onDelete,
   onClose,
+  anchorEl,
 }: {
   passports: any[];
   onOpen: (rec: any) => void;
   onNew: () => void;
+  onDelete: (rec: any) => Promise<void> | void;
   onClose: () => void;
+  anchorEl: HTMLElement | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number; openUp: boolean } | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    if (!anchorEl) return;
+    const place = () => {
+      const rect = anchorEl.getBoundingClientRect();
+      const menuW = 280;
+      const approxH = 48 + Math.max(passports.length, 0) * 44;
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const openUp = spaceBelow < approxH + 12 && rect.top > spaceBelow;
+      const left = Math.min(
+        Math.max(8, rect.right - menuW),
+        window.innerWidth - menuW - 8
+      );
+      setCoords({
+        top: openUp ? rect.top - 4 : rect.bottom + 4,
+        left,
+        openUp,
+      });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [anchorEl, passports.length]);
+
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      const t = e.target as Node;
+      if (ref.current?.contains(t)) return;
+      // Клик по кнопке «Паспорта» обрабатывает сам toggle — не закрываем здесь
+      if (anchorEl?.contains(t)) return;
+      onClose();
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, [onClose]);
+  }, [onClose, anchorEl]);
 
-  return (
+  if (!coords || typeof document === 'undefined') return null;
+
+  return createPortal(
     <div
       ref={ref}
       style={{
-        position: 'absolute',
-        right: 0,
-        top: '100%',
-        marginTop: '4px',
-        zIndex: 100,
+        position: 'fixed',
+        top: coords.openUp ? undefined : coords.top,
+        bottom: coords.openUp ? window.innerHeight - coords.top : undefined,
+        left: coords.left,
+        zIndex: 10000,
         background: '#1E2937',
         border: '1px solid #334155',
         borderRadius: '12px',
-        minWidth: '220px',
+        width: '280px',
         boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
         overflow: 'hidden',
       }}
     >
+      <div style={{ padding: '8px 14px 4px', color: COLORS.muted, fontSize: '12px' }}>
+        Клик — открыть / изменить
+      </div>
       {passports.map((p, i) => {
-        const batchNo = p.payload?.batch_no || p.passport_no || `#${p.id}`;
-        const mixer = p.payload?.mixer_number ? ` · ${p.payload.mixer_number}` : '';
-        const vol = p.payload?.volume ? ` · ${p.payload.volume} м³` : '';
+        // payload иногда приходит объектом, иногда строкой — не падаем, если поля нет
+        let payload: any = p?.payload;
+        if (typeof payload === 'string') {
+          try { payload = JSON.parse(payload); } catch { payload = null; }
+        }
+        if (!payload || typeof payload !== 'object') payload = {};
+
+        const batchNo = payload.batch_no || p.passport_no || `#${p.id}`;
+        const mixerRaw = payload.mixer_number ?? payload.mixer_name ?? '';
+        const mixerLabel = String(mixerRaw).trim();
+        const volRaw = payload.volume;
+        const volLabel = volRaw != null && volRaw !== '' && !Number.isNaN(Number(volRaw))
+          ? `${volRaw} м³`
+          : '';
+
         return (
-          <button
+          <div
             key={p.id}
-            onMouseDown={() => onOpen(p)}
             style={{
-              display: 'block',
-              width: '100%',
-              textAlign: 'left',
-              padding: '10px 16px',
-              background: 'transparent',
-              border: 'none',
+              display: 'flex',
+              alignItems: 'stretch',
               borderBottom: i < passports.length - 1 ? '1px solid #334155' : 'none',
-              color: '#E2E8F0',
-              fontSize: '13.5px',
-              cursor: 'pointer',
             }}
-            onMouseEnter={e => (e.currentTarget.style.background = '#2A3852')}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
           >
-            <span style={{ fontWeight: 700, color: COLORS.blue }}>{batchNo}</span>
-            <span style={{ color: COLORS.muted }}>{mixer}{vol}</span>
-          </button>
+            <button
+              onMouseDown={(e) => { e.preventDefault(); onOpen(p); }}
+              title="Открыть для редактирования"
+              style={{
+                flex: 1,
+                textAlign: 'left',
+                padding: '10px 12px 10px 16px',
+                background: 'transparent',
+                border: 'none',
+                color: '#E2E8F0',
+                fontSize: '13.5px',
+                cursor: 'pointer',
+                minWidth: 0,
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#2A3852')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              <div style={{ fontWeight: 700, color: COLORS.blue }}>{batchNo}</div>
+              {(mixerLabel || volLabel) && (
+                <div style={{ color: COLORS.muted, fontSize: '12px', marginTop: '2px' }}>
+                  {mixerLabel ? `миксер ${mixerLabel}` : ''}
+                  {mixerLabel && volLabel ? ' · ' : ''}
+                  {volLabel}
+                </div>
+              )}
+            </button>
+            <button
+              onMouseDown={async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (deletingId != null) return;
+                if (!confirm(`Удалить паспорт ${batchNo}?`)) return;
+                setDeletingId(p.id);
+                try {
+                  await onDelete(p);
+                } finally {
+                  setDeletingId(null);
+                }
+              }}
+              title="Удалить паспорт"
+              disabled={deletingId === p.id}
+              style={{
+                flexShrink: 0,
+                width: '40px',
+                background: 'transparent',
+                border: 'none',
+                borderLeft: '1px solid #334155',
+                color: COLORS.danger,
+                fontSize: '16px',
+                cursor: 'pointer',
+                opacity: deletingId === p.id ? 0.5 : 1,
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(248,113,113,0.12)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              ✕
+            </button>
+          </div>
         );
       })}
       <button
-        onMouseDown={onNew}
+        onMouseDown={(e) => { e.preventDefault(); onNew(); }}
         style={{
           display: 'block',
           width: '100%',
@@ -90,7 +193,8 @@ function PassportDropdown({
       >
         + Новый паспорт
       </button>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -113,8 +217,8 @@ interface Props {
   onAcknowledgeAll: () => void;
   /** паспорт по заказу сохранён — отметить заказ как «с паспортом» */
   onPassportSaved: (orderId: number | null) => void;
-  /** перейти на вкладку «Испытания» */
-  onOpenTests?: () => void;
+  /** перейти на вкладку «Испытания» (опционально с фильтром по заказу и возрасту) */
+  onOpenTests?: (orderId?: number, days?: '7' | '28') => void;
 }
 
 const STATUS_META: Record<string, { label: string; bg: string; color: string }> = {
@@ -126,7 +230,7 @@ const STATUS_META: Record<string, { label: string; bg: string; color: string }> 
 
 const STATUS_FILTERS: { key: StatusKey; label: string }[] = [
   { key: 'all', label: 'Все' },
-  { key: 'new', label: 'Новые' },
+  { key: 'new', label: 'Статус: новые' },
   { key: 'processing', label: 'В работе' },
   { key: 'completed', label: 'Выполнены' },
   { key: 'cancelled', label: 'Отменены' },
@@ -209,6 +313,8 @@ export default function OrdersTab({
   const [isNewPassport, setIsNewPassport] = useState(false);
   // passportDropdownFor — orderId, для которого открыт дропдаун
   const [passportDropdownFor, setPassportDropdownFor] = useState<string | null>(null);
+  // Кнопки «Паспорта» — якоря для portal-дропдауна (fixed по getBoundingClientRect)
+  const passportBtnRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
   const selectedStr = localDateStr(selectedDate);
   const todayStr = localDateStr(new Date());
@@ -309,17 +415,8 @@ export default function OrdersTab({
     };
   }, [orders, weekDays, passportsByOrder]);
 
-  // Открыть последний паспорт заявки (или новый если их нет)
-  const openPassport = (order: any) => {
-    onAcknowledge(String(order.id));
-    const passports = passportsByOrder.get(String(order.id)) || [];
-    setPassportOrder(order);
-    setPassportRecord(passports.length > 0 ? passports[0] : null);
-    setIsNewPassport(false);
-    setPassportDropdownFor(null);
-  };
-
-  // Открыть конкретный паспорт из дропдауна
+  // Открыть конкретный паспорт из дропдауна.
+  // key у PassportModal форсирует remount при смене записи / режима new.
   const openExistingPassport = (order: any, rec: any) => {
     setPassportOrder(order);
     setPassportRecord(rec);
@@ -327,13 +424,28 @@ export default function OrdersTab({
     setPassportDropdownFor(null);
   };
 
-  // Создать новый паспорт для заявки
+  // Создать новый паспорт для заявки (всегда INSERT, см. isNewPassport в модалке).
   const createNewPassport = (order: any) => {
     onAcknowledge(String(order.id));
     setPassportOrder(order);
     setPassportRecord(null);
     setIsNewPassport(true);
     setPassportDropdownFor(null);
+  };
+
+  // Удалить паспорт из дропдауна без открытия модалки.
+  const deletePassport = async (order: any, rec: any) => {
+    try {
+      const res = await fetch(`/api/adminCifra/concrete-passports?id=${rec.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || `HTTP ${res.status}`);
+      }
+      setPassportDropdownFor(null);
+      onPassportSaved(Number(order.id));
+    } catch (e: any) {
+      alert(`Ошибка удаления паспорта${e?.message ? `: ${e.message}` : ''}`);
+    }
   };
 
   const goWeek = (delta: number) => {
@@ -526,7 +638,13 @@ export default function OrdersTab({
               Заявки на {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
               {monthLoading && <span style={{ color: COLORS.muted, fontSize: '13px' }}>загрузка…</span>}
               {newOrderIds.size > 0 && (
-                <span style={{ ...pillStyle('rgba(74,222,128,0.15)', COLORS.accent) }} className="lab-new-dot">{newOrderIds.size} новых</span>
+                <span
+                  style={{ ...pillStyle('rgba(74,222,128,0.15)', COLORS.accent) }}
+                  className="lab-new-dot"
+                  title="Непросмотренные заявки (realtime), не путать с фильтром «Статус: новые»"
+                >
+                  {newOrderIds.size} непросмотренных
+                </span>
               )}
             </h3>
             <div style={{ display: 'flex', alignItems: 'center', gap: '18px', color: COLORS.muted, fontSize: '14px' }}>
@@ -566,10 +684,10 @@ export default function OrdersTab({
               ))}
             </div>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
-              <button onClick={() => setViewMode('list')} style={{ padding: '8px 14px', background: 'transparent', border: 'none', color: viewMode === 'list' ? '#10B981' : '#64748B', fontSize: '15px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button onClick={() => { setViewMode('list'); setPassportDropdownFor(null); }} style={{ padding: '8px 14px', background: 'transparent', border: 'none', color: viewMode === 'list' ? '#10B981' : '#64748B', fontSize: '15px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ fontSize: '20px', lineHeight: 1 }}>≡</span> Список
               </button>
-              <button onClick={() => setViewMode('grid')} style={{ padding: '8px 14px', background: 'transparent', border: 'none', color: viewMode === 'grid' ? '#10B981' : '#64748B', fontSize: '15px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button onClick={() => { setViewMode('grid'); setPassportDropdownFor(null); }} style={{ padding: '8px 14px', background: 'transparent', border: 'none', color: viewMode === 'grid' ? '#10B981' : '#64748B', fontSize: '15px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ fontSize: '18px' }}>▦</span> Плитка
               </button>
             </div>
@@ -621,18 +739,22 @@ export default function OrdersTab({
                     {/* Бейджи испытаний */}
                     {tests && (tests['7'] || tests['28']) && (
                       <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
-                        {tests['7']  && <TestBadge days="7"  result={tests['7']}  onClick={onOpenTests} />}
-                        {tests['28'] && <TestBadge days="28" result={tests['28']} onClick={onOpenTests} />}
+                        {tests['7']  && <TestBadge days="7"  result={tests['7']}  onClick={() => onOpenTests?.(Number(o.id), '7')} />}
+                        {tests['28'] && <TestBadge days="28" result={tests['28']} onClick={() => onOpenTests?.(Number(o.id), '28')} />}
                       </div>
                     )}
                     <div className="lab-clamp1" style={{ fontSize: '12.5px', color: '#CBD5E1', marginBottom: '12px' }} title={o.address || ''}>{o.address || '—'}</div>
-                    <div style={{ display: 'flex', gap: '8px', marginTop: 'auto', position: 'relative' }}>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: 'auto' }}>
                       {pCount === 0 ? (
                         <button onClick={() => createNewPassport(o)} style={{ ...primaryButton(), flex: 1, justifyContent: 'center', padding: '9px 14px', fontSize: '13.5px' }}>
                           Оформить паспорт
                         </button>
                       ) : (
                         <button
+                          ref={(el) => {
+                            if (el) passportBtnRefs.current.set(oid, el);
+                            else passportBtnRefs.current.delete(oid);
+                          }}
                           onClick={() => setPassportDropdownFor(prev => prev === oid ? null : oid)}
                           style={{ ...primaryButton(), flex: 1, justifyContent: 'center', padding: '9px 14px', fontSize: '13.5px' }}
                         >
@@ -643,8 +765,10 @@ export default function OrdersTab({
                       {passportDropdownFor === oid && (
                         <PassportDropdown
                           passports={passports}
+                          anchorEl={passportBtnRefs.current.get(oid) ?? null}
                           onOpen={(rec) => openExistingPassport(o, rec)}
                           onNew={() => createNewPassport(o)}
+                          onDelete={(rec) => deletePassport(o, rec)}
                           onClose={() => setPassportDropdownFor(null)}
                         />
                       )}
@@ -687,18 +811,22 @@ export default function OrdersTab({
                     {/* Бейджи испытаний в строке */}
                     {tests && (
                       <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }}>
-                        {tests['7']  && <TestBadge days="7"  result={tests['7']}  onClick={onOpenTests} />}
-                        {tests['28'] && <TestBadge days="28" result={tests['28']} onClick={onOpenTests} />}
+                        {tests['7']  && <TestBadge days="7"  result={tests['7']}  onClick={() => onOpenTests?.(Number(o.id), '7')} />}
+                        {tests['28'] && <TestBadge days="28" result={tests['28']} onClick={() => onOpenTests?.(Number(o.id), '28')} />}
                       </div>
                     )}
                     <span style={{ ...pillStyle(sm.bg, sm.color), padding: '4px 12px', fontSize: '12.5px', flexShrink: 0 }}>{sm.label}</span>
-                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                    <div style={{ flexShrink: 0 }}>
                       {pCount === 0 ? (
                         <button onClick={() => createNewPassport(o)} style={{ ...primaryButton(), padding: '8px 16px', fontSize: '13.5px' }}>
                           Оформить паспорт
                         </button>
                       ) : (
                         <button
+                          ref={(el) => {
+                            if (el) passportBtnRefs.current.set(oid, el);
+                            else passportBtnRefs.current.delete(oid);
+                          }}
                           onClick={() => setPassportDropdownFor(prev => prev === oid ? null : oid)}
                           style={{ ...primaryButton(), padding: '8px 16px', fontSize: '13.5px' }}
                         >
@@ -708,8 +836,10 @@ export default function OrdersTab({
                       {passportDropdownFor === oid && (
                         <PassportDropdown
                           passports={passports}
+                          anchorEl={passportBtnRefs.current.get(oid) ?? null}
                           onOpen={(rec) => openExistingPassport(o, rec)}
                           onNew={() => createNewPassport(o)}
+                          onDelete={(rec) => deletePassport(o, rec)}
                           onClose={() => setPassportDropdownFor(null)}
                         />
                       )}
@@ -724,6 +854,7 @@ export default function OrdersTab({
 
       {passportOrder && (
         <PassportModal
+          key={`passport-${passportOrder.id}-${isNewPassport ? 'new' : passportRecord?.id ?? 'edit'}-${(passportsByOrder.get(String(passportOrder.id)) || []).length}`}
           orderId={Number(passportOrder.id)}
           existingRecord={passportRecord}
           isNewPassport={isNewPassport}

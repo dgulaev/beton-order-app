@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { COLORS, overlayStyle, modalStyle, ghostButton } from '../labStyles';
+import { useEscapeClose } from '../labUtils';
 
 interface Props {
   recipe: any;
@@ -12,6 +13,7 @@ interface Props {
 export default function RecipeVersionsModal({ recipe, onClose }: Props) {
   const [versions, setVersions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  useEscapeClose(onClose);
 
   useEffect(() => {
     (async () => {

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { COLORS, overlayStyle, modalStyle, inputStyle, labelStyle, ghostButton, primaryButton } from '../labStyles';
+import { useEscapeClose } from '../labUtils';
 
 interface Props {
   orderId?: number | null;
@@ -54,11 +55,10 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
           draft.designation = composeDesignation(draft);
           draft.issue_date = new Date().toLocaleDateString('ru-RU');
           if (!draft.decl_reg_date) draft.decl_reg_date = kind === 'mortar' ? '' : '18.12.2023';
-          // Авто-суффикс: если уже есть паспорта у этой заявки → добавляем /N+1
-          if (passportCount > 0 && draft.batch_no) {
-            // Убираем старый суффикс если вдруг есть, ставим новый
-            const base = String(draft.batch_no).replace(/\/\d+$/, '');
-            draft.batch_no = `${base}/${passportCount + 1}`;
+          // Авто-суффикс: если уже есть паспорта → /N+1 (база = batch_no / mix_no / №заказа)
+          if (passportCount > 0) {
+            const raw = String(draft.batch_no || draft.mix_no || orderId || 'п').replace(/\/\d+$/, '');
+            draft.batch_no = `${raw || 'п'}/${passportCount + 1}`;
           }
           setData(draft);
         }
@@ -109,6 +109,9 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
       }
 
       if (isNewPassport) {
+        // Явно сбрасываем id — иначе при переиспользовании модалки
+        // второй паспорт может уйти в PUT и «перезаписать» первый.
+        setRecordId(null);
         await loadAutofill(initialDocKind);
         return;
       }
@@ -151,42 +154,73 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Переключение Бетон/Раствор пересобирает черновик под нужный вид.
-  // recordId сохраняется — сохранение всё равно обновит ту же запись.
-  const changeKind = (kind: 'concrete' | 'mortar') => {
+  useEscapeClose(onClose);
+
+  // Переключение Бетон/Раствор:
+  // — для уже сохранённого паспорта только меняем вид/ГОСТ/декларацию (без autofill),
+  //   чтобы не затереть данные и не перезаписать «чужой» черновик;
+  // — для нового — пересобираем autofill, recordId остаётся null.
+  const changeKind = async (kind: 'concrete' | 'mortar') => {
     if (kind === docKind) return;
     setDocKind(kind);
-    loadAutofill(kind);
+    if (recordId != null) {
+      try {
+        const res = await fetch('/api/adminCifra/lab-settings');
+        const s = res.ok ? await res.json() : {};
+        setData((prev) => {
+          const next: PassportData = {
+            ...prev,
+            doc_kind: kind,
+            gost: kind === 'mortar' ? s.gost_mortar : s.gost_concrete,
+            declaration_no: kind === 'mortar' ? s.declaration_mortar : s.declaration_concrete,
+            fsa_url: kind === 'mortar' ? s.fsa_url_mortar : s.fsa_url_concrete,
+            max_aggregate: kind === 'mortar' ? '' : (prev.max_aggregate || '20мм'),
+          };
+          next.designation = composeDesignation(next);
+          return next;
+        });
+      } catch (e) {
+        console.error(e);
+        setData((prev) => ({ ...prev, doc_kind: kind }));
+      }
+      return;
+    }
+    await loadAutofill(kind);
   };
 
   const set = (key: string, value: any) => setData((prev) => ({ ...prev, [key]: value }));
 
   const savePassport = async () => {
+    if (saving) return;
     setSaving(true);
     try {
       const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
-      const isUpdate = recordId != null;
+      // Новый паспорт всегда INSERT, даже если recordId случайно остался от прошлой сессии.
+      const isUpdate = !isNewPassport && recordId != null;
       const res = await fetch('/api/adminCifra/concrete-passports', {
         method: isUpdate ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...(isUpdate ? { id: recordId } : { created_by: userId ? Number(userId) : null }),
-          passport_no: data.batch_no || null,
+          passport_no: data.batch_no ? String(data.batch_no) : null,
           doc_kind: docKind,
           order_id: orderId ?? null,
           spec_id: specId ?? null,
           payload: data,
         }),
       });
-      if (!res.ok) throw new Error('save failed');
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody?.error || `HTTP ${res.status}`);
+      }
       const saved = await res.json();
       if (!isUpdate && saved?.id) setRecordId(saved.id);
       // Сообщаем родителю (список заявок сразу пометит заказ «с паспортом»)
       // и закрываем модалку — кнопка тут же становится «Паспорт».
       onSaved?.(orderId ?? null);
       onClose();
-    } catch (e) {
-      alert('Ошибка сохранения');
+    } catch (e: any) {
+      alert(`Ошибка сохранения паспорта${e?.message ? `: ${e.message}` : ''}`);
       setSaving(false);
     }
   };
@@ -205,7 +239,8 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
     // Словоформы по виду документа (родительный падеж «смеси»).
     const mix = isMortar ? 'растворной' : 'бетонной';       // ... смеси
     const material = isMortar ? 'раствора' : 'бетона';       // ... прочность раствора/бетона
-    const unit = isMortar ? 'кгс/см²' : 'МПа';
+    // Данные прочности приходят из испытаний в МПа — единицу не подменяем.
+    const unit = 'МПа';
     const title = isMortar
       ? 'ДОКУМЕНТ О КАЧЕСТВЕ РАСТВОРНОЙ СМЕСИ'
       : 'ДОКУМЕНТ О КАЧЕСТВЕ БЕТОННОЙ СМЕСИ';
@@ -225,7 +260,11 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
       `<tr><td class="l">${label}</td><td class="v">${esc(value)}</td></tr>`;
 
     // Составная строка прочности: 28 сут (проектный возраст) + промежуточный возраст.
-    const strength28 = [esc(data.strength_class || data.grade), data.actual_strength_28 ? `${esc(data.actual_strength_28)} ${unit}` : '']
+    const strength28 = [
+      esc(data.strength_class || data.grade),
+      data.required_strength_28 ? `треб. ${esc(data.required_strength_28)} ${unit}` : '',
+      data.actual_strength_28 ? `факт. ${esc(data.actual_strength_28)} ${unit}` : '',
+    ]
       .filter(Boolean)
       .join('&nbsp;&nbsp;&nbsp;');
     const strength7 = data.actual_strength_7 ? `${esc(data.actual_strength_7)} ${unit}` : `&nbsp;`;
@@ -394,7 +433,7 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
       <div style={modalStyle(720)} onClick={(e) => e.stopPropagation()} className="scroll-hidden">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <h2 style={{ fontSize: '20px', color: '#fff', margin: 0 }}>
-            {recordId ? `Паспорт качества` : 'Новый паспорт качества'}
+            {recordId ? 'Редактирование паспорта' : 'Новый паспорт качества'}
             {data.batch_no && <span style={{ color: COLORS.muted, fontSize: '15px', marginLeft: '10px' }}>#{data.batch_no}</span>}
             {data.mixer_number && <span style={{ color: COLORS.blue, fontSize: '14px', marginLeft: '8px' }}>· {data.mixer_number}</span>}
           </h2>
@@ -431,9 +470,26 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
                       return;
                     }
                     const trip = orderMixers.find((m: any) => String(m.mixer_name || m.number || '') === val);
-                    set('mixer_number', val);
-                    if (trip?.volume) set('volume', trip.volume);
-                    if (trip?.time) set('shipment_date', String(trip.time).slice(0, 5));
+                    setData((prev) => {
+                      const time = trip?.time ? String(trip.time).slice(0, 5) : '';
+                      const prevShip = String(prev.shipment_date || '');
+                      const dateMatch = prevShip.match(/^(\d{4}-\d{2}-\d{2}|\d{2}\.\d{2}\.\d{4})/);
+                      const datePart = dateMatch?.[1] || '';
+                      let shipment_date = prevShip;
+                      if (time) {
+                        shipment_date = datePart
+                          ? `${datePart} ${time}`
+                          : (prevShip && !/^\d{1,2}:\d{2}/.test(prevShip.trim())
+                            ? `${prevShip} ${time}`
+                            : time);
+                      }
+                      return {
+                        ...prev,
+                        mixer_number: val,
+                        volume: trip?.volume ?? prev.volume,
+                        shipment_date,
+                      };
+                    });
                   }}
                   style={{ ...inputStyle, cursor: 'pointer' }}
                 >
@@ -463,7 +519,8 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
               {docKind !== 'mortar' && field('Крупность заполнителя', 'max_aggregate')}
               {field('Сохраняемость', 'keeping_min')}
               {field('Добавка, кг/м³', 'additive')}
-              {field('Требуемая прочность 28 сут', 'actual_strength_28', 'number')}
+              {field('Требуемая прочность 28 сут', 'required_strength_28', 'number')}
+              {field('Фактическая прочность 28 сут', 'actual_strength_28', 'number')}
               {field('Прочность 7 сут', 'actual_strength_7', 'number')}
               {field('Дата выдачи', 'issue_date')}
               {field('Нач. лаборатории', 'lab_head_name')}
@@ -476,14 +533,31 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '14px' }}>
               {field('Дата регистрации декларации', 'decl_reg_date')}
-              {field('Номер партии (для заголовка)', 'batch_no')}
             </div>
 
             <div style={{ marginTop: '12px', color: COLORS.muted, fontSize: '13px' }}>
               Декларация: {data.declaration_no || '—'} · {data.gost || '—'} · QR: {data.fsa_url ? 'есть' : 'нет ссылки'}
             </div>
 
-            <div style={{ marginTop: '24px', display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+            <div style={{ marginTop: '24px', display: 'flex', gap: '12px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              {recordId != null && (
+                <button
+                  onClick={async () => {
+                    if (!confirm('Удалить этот паспорт?')) return;
+                    try {
+                      const res = await fetch(`/api/adminCifra/concrete-passports?id=${recordId}`, { method: 'DELETE' });
+                      if (!res.ok) throw new Error('delete failed');
+                      onSaved?.(orderId ?? null);
+                      onClose();
+                    } catch {
+                      alert('Ошибка удаления паспорта');
+                    }
+                  }}
+                  style={{ ...ghostButton, color: COLORS.danger, marginRight: 'auto' }}
+                >
+                  Удалить паспорт
+                </button>
+              )}
               <button
                 onClick={onClose}
                 style={{
@@ -504,7 +578,7 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
                   cursor: saving ? 'default' : 'pointer',
                 }}
               >
-                {saving ? 'Сохранение...' : 'Сохранить'}
+                {saving ? 'Сохранение...' : (recordId ? 'Сохранить изменения' : 'Сохранить')}
               </button>
               <button onClick={printPassport} style={primaryButton()}>Печать</button>
             </div>
