@@ -7,6 +7,7 @@ import TestsTab from './components/TestsTab';
 import OrdersTab from './components/OrdersTab';
 import RecipeVersionsModal from './components/RecipeVersionsModal';
 import TemplatesModal from './components/TemplatesModal';
+import LabSettingsModal from './components/LabSettingsModal';
 import { useAutoRows, useAutoGrid, LabPagination } from './pagination';
 import { useRealtimeOrders, useOrderChangeNotifications } from '../../../hooks/useRealtimeOrders';
 import { FlaskConical } from 'lucide-react';
@@ -43,6 +44,7 @@ export default function LaboratoryPage() {
   const [testsFocusOrderId, setTestsFocusOrderId] = useState<number | null>(null);
   const [testsFocusDays, setTestsFocusDays] = useState<'7' | '28' | null>(null);
   const [savingRecipe, setSavingRecipe] = useState(false);
+  const [showLabSettings, setShowLabSettings] = useState(false);
 
   const mergeOrders = (prev: any[], incoming: any[]) => {
     const map = new Map(prev.map((o) => [String(o.id), o]));
@@ -377,10 +379,20 @@ export default function LaboratoryPage() {
           }
           .lab-tab-badge { animation: labTabBadgePulse 1.4s infinite; }
         `}</style>
-        <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', margin: '0 0 12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <FlaskConical size={26} color="#94A3B8" />
-          Лаборатория
-        </h1>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+          <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <FlaskConical size={26} color="#94A3B8" />
+            Лаборатория
+          </h1>
+          <button
+            type="button"
+            onClick={() => setShowLabSettings(true)}
+            style={ghostButton}
+            title="Свидетельство, декларации и QR Росаккредитации"
+          >
+            Реквизиты
+          </button>
+        </div>
         <div style={{ display: 'flex', gap: '28px', borderBottom: `1px solid ${COLORS.border}` }}>
           {tabBtn('orders', 'Заявки', newOrderIds.size)}
           {tabBtn('specifications', 'Спецификации')}
@@ -571,6 +583,7 @@ export default function LaboratoryPage() {
           onApply={editingRecipe ? applyTemplate : undefined}
         />
       )}
+      {showLabSettings && <LabSettingsModal onClose={() => setShowLabSettings(false)} />}
     </div>
   );
 }

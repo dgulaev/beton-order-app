@@ -260,10 +260,14 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
       `<tr><td class="l">${label}</td><td class="v">${esc(value)}</td></tr>`;
 
     // Составная строка прочности: 28 сут (проектный возраст) + промежуточный возраст.
+    // Слева в таблице уже подпись «требуемая прочность…» — в значении префиксы не нужны.
     const strength28 = [
       esc(data.strength_class || data.grade),
-      data.required_strength_28 ? `треб. ${esc(data.required_strength_28)} ${unit}` : '',
-      data.actual_strength_28 ? `факт. ${esc(data.actual_strength_28)} ${unit}` : '',
+      data.required_strength_28 != null && data.required_strength_28 !== ''
+        ? `${esc(data.required_strength_28)} ${unit}`
+        : data.actual_strength_28 != null && data.actual_strength_28 !== ''
+          ? `${esc(data.actual_strength_28)} ${unit}`
+          : '',
     ]
       .filter(Boolean)
       .join('&nbsp;&nbsp;&nbsp;');
@@ -297,30 +301,82 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
     const html = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Паспорт ${esc(data.batch_no)}</title>
 <style>
   * { box-sizing: border-box; }
-  body { font-family: 'Times New Roman', serif; color: #000; margin: 20px 24px; font-size: 12.5px; }
-  .topbar { display: flex; justify-content: space-between; font-size: 10.5px; color: #333; margin-bottom: 8px; }
-  .head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+  html, body { height: 100%; }
+  body {
+    font-family: 'Times New Roman', serif;
+    color: #000;
+    margin: 0;
+    font-size: 12.5px;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+  }
+  .page {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 18px 22px 16px;
+    min-height: 100%;
+  }
+  .topbar { display: flex; justify-content: space-between; font-size: 10.5px; color: #333; margin-bottom: 8px; flex-shrink: 0; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; flex-shrink: 0; }
   .org { font-size: 12px; line-height: 1.45; }
-  .org b { font-size: 27px; }
-  .decl { margin-top: 8px; font-size: 11.5px; }
+  .org b { font-size: 26px; }
+  .decl { margin-top: 8px; font-size: 11.5px; line-height: 1.4; }
   .qr { text-align: center; font-size: 10px; }
-  .qr img { width: 118px; height: 118px; display: block; }
-  h1 { text-align: center; font-size: 14px; font-weight: bold; margin: 14px 0 2px; }
-  .sub { text-align: center; font-size: 13px; font-weight: bold; margin-bottom: 12px; }
-  table { width: 100%; border-collapse: collapse; }
-  td { border: 1px solid #000; padding: 4px 8px; vertical-align: top; line-height: 1.35; }
-  td.l { width: 60%; }
+  .qr img { width: 112px; height: 112px; display: block; }
+  h1 { text-align: center; font-size: 14.5px; font-weight: bold; margin: 12px 0 3px; flex-shrink: 0; }
+  .sub { text-align: center; font-size: 13px; font-weight: bold; margin-bottom: 10px; flex-shrink: 0; }
+  /* Чуть выше исходного, но без растягивания на весь лист */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    flex: 0 0 auto;
+    margin: 0;
+  }
+  td {
+    border: 1px solid #000;
+    padding: 5.5px 9px;
+    vertical-align: middle;
+    line-height: 1.38;
+  }
+  td.l { width: 58%; }
   td.v { font-weight: bold; }
   td.v .dim { font-weight: normal; font-size: 10.5px; font-style: italic; }
-  .note { margin-top: 14px; font-size: 11px; font-style: italic; text-align: justify; }
-  .sign { margin-top: 26px; font-size: 12.5px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .note {
+    margin-top: 12px;
+    font-size: 11px;
+    font-style: italic;
+    text-align: justify;
+    line-height: 1.4;
+    flex-shrink: 0;
+  }
+  /* Место под подпись и круглую печать организации */
+  .sign {
+    margin-top: 28px;
+    min-height: 72px;
+    font-size: 12.5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-shrink: 0;
+  }
   .sign-right { text-align: right; }
   .sign-line { white-space: nowrap; }
   .sign .cap { display: block; font-size: 10px; color: #000; margin-top: 2px; }
   /* margin:0 у @page убирает браузерные колонтитулы (дата, заголовок, URL сайта) */
   @page { size: A4; margin: 0; }
-  @media print { body { margin: 10mm 12mm; } }
+  @media print {
+    html, body { height: 297mm; }
+    .page {
+      min-height: 297mm;
+      padding: 11mm 13mm 14mm;
+    }
+    td { padding: 5.5px 9px; }
+    .sign { margin-top: 32px; min-height: 80px; }
+  }
 </style></head><body>
+  <div class="page">
   ${topbar}
   <div class="head">
     <div class="org">
@@ -364,6 +420,7 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
       <div class="sign-line">_______________ / ${esc(data.lab_head_name)}</div>
       <span class="cap">подпись, фамилия, инициалы</span>
     </div>
+  </div>
   </div>
 </body></html>`;
 

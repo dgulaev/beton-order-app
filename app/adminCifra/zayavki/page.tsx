@@ -38,6 +38,624 @@ function ScrollMoreHint({ visible, background = 'rgba(37,51,74,0.95)' }: { visib
   );
 }
 
+type WeekChartDay = {
+  plan: number;
+  shipped: number;
+  prevPlan: number;
+  orders: number;
+  shippedOrders: number;
+};
+
+function localDayKey(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** SVG-график недели. compact — одна линия плана; expanded — все серии в модалке. */
+function WeekVolumeChartSvg({
+  days,
+  series,
+  selectedDateStr,
+  onSelectDay,
+  hover,
+  setHover,
+  variant,
+  idPrefix,
+}: {
+  days: Date[];
+  series: WeekChartDay[];
+  selectedDateStr: string;
+  onSelectDay: (d: Date) => void;
+  hover: number | null;
+  setHover: (i: number | null) => void;
+  variant: 'compact' | 'expanded';
+  idPrefix: string;
+}) {
+  const expanded = variant === 'expanded';
+  const W = expanded ? 720 : 300;
+  const H = expanded ? 260 : 108;
+  const padL = expanded ? 28 : 10;
+  const padR = expanded ? 20 : 10;
+  const padT = expanded ? 28 : 18;
+  const padB = expanded ? 28 : 18;
+  const chartH = H - padT - padB;
+  const n = Math.max(days.length, 1);
+  const step = n > 1 ? (W - padL - padR) / (n - 1) : 0;
+  const barW = Math.min(expanded ? 28 : 12, Math.max(6, step * 0.38));
+
+  const plans = series.map((s) => s.plan);
+  const shipped = series.map((s) => s.shipped);
+  const prevPlans = series.map((s) => s.prevPlan);
+  // В превью шкала только по плану; в модалке — по всем сериям.
+  const maxV = expanded
+    ? Math.max(...plans, ...shipped, ...prevPlans, 0)
+    : Math.max(...plans, 0);
+  const avgPlan = plans.length ? plans.reduce((a, b) => a + b, 0) / plans.length : 0;
+  const scaleMax = maxV > 0 ? maxV : 1;
+
+  const yOf = (v: number) => padT + chartH - (v / scaleMax) * chartH;
+  const xOf = (i: number) => padL + i * step;
+  const isPeak = (v: number, i: number) => {
+    if (v <= 0 || maxV <= 0) return false;
+    const left = plans[i - 1] ?? 0;
+    const right = plans[i + 1] ?? 0;
+    return maxV >= avgPlan * 1.35 && v >= maxV * 0.92 && v >= left && v >= right;
+  };
+  const poly = (vals: number[]) => vals.map((v, i) => `${xOf(i)},${yOf(v)}`).join(' ');
+  const gridYs = (expanded ? [0, 0.25, 0.5, 0.75, 1] : [0, 0.5, 1]).map((t) => padT + chartH * (1 - t));
+  const fillId = `${idPrefix}-fill`;
+  const glowId = `${idPrefix}-glow`;
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      width="100%"
+      height="100%"
+      preserveAspectRatio="xMidYMid meet"
+      style={{ display: 'block' }}
+      role="img"
+      aria-label={expanded ? 'Объём: план, отгрузка и прошлая неделя' : 'Объём по дням недели'}
+      onMouseLeave={() => setHover(null)}
+    >
+      <defs>
+        <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#60A5FA" stopOpacity={expanded ? 0.22 : 0.28} />
+          <stop offset="100%" stopColor="#60A5FA" stopOpacity="0.02" />
+        </linearGradient>
+        <filter id={glowId} x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="1.4" result="b" />
+          <feMerge>
+            <feMergeNode in="b" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+
+      {gridYs.map((y, i) => (
+        <line key={i} x1={padL} y1={y} x2={W - padR} y2={y} stroke="#334155" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+      ))}
+
+      {expanded && maxV > 0 && gridYs.map((y, i) => {
+        const val = Math.round(scaleMax * (1 - i / (gridYs.length - 1)));
+        return (
+          <text key={`yl-${i}`} x={padL - 6} y={y + 3} textAnchor="end" fill="#475569" fontSize="10">
+            {val}
+          </text>
+        );
+      })}
+
+      {/* Мини-бары и доп. линии — только в модалке */}
+      {expanded && plans.map((v, i) => {
+        if (v <= 0) return null;
+        const x = xOf(i);
+        const y = yOf(v);
+        return (
+          <rect
+            key={`bar-${i}`}
+            x={x - barW / 2}
+            y={y}
+            width={barW}
+            height={Math.max(0, padT + chartH - y)}
+            rx={2}
+            fill={isPeak(v, i) ? 'rgba(16,185,129,0.22)' : 'rgba(96,165,250,0.16)'}
+          />
+        );
+      })}
+
+      {expanded && (
+        <polyline
+          points={poly(prevPlans)}
+          fill="none"
+          stroke="#94A3B8"
+          strokeWidth={2}
+          strokeDasharray="5 4"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          opacity={0.8}
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+
+      {plans.some((v) => v > 0) && (
+        <path
+          d={`M ${xOf(0)},${padT + chartH} L ${plans.map((v, i) => `${xOf(i)},${yOf(v)}`).join(' L ')} L ${xOf(n - 1)},${padT + chartH} Z`}
+          fill={`url(#${fillId})`}
+        />
+      )}
+      <polyline
+        points={poly(plans)}
+        fill="none"
+        stroke="#60A5FA"
+        strokeWidth={expanded ? 2.75 : 2.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+
+      {expanded && (
+        <polyline
+          points={poly(shipped)}
+          fill="none"
+          stroke="#10B981"
+          strokeWidth={2.75}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      )}
+
+      {days.map((day, i) => {
+        const dateStr = localDayKey(day);
+        const selected = dateStr === selectedDateStr;
+        const peak = isPeak(plans[i], i);
+        const x = xOf(i);
+        const yPlan = yOf(plans[i]);
+        const yShip = yOf(shipped[i]);
+        const dayShort = day.toLocaleDateString('ru-RU', { weekday: 'short' });
+        const active = hover === i || selected;
+        // В превью подписи только у пиков и выбранного дня
+        const showLabel = expanded ? true : (peak || selected);
+
+        return (
+          <g
+            key={dateStr}
+            style={{ cursor: 'pointer' }}
+            onClick={() => onSelectDay(day)}
+            onMouseEnter={() => setHover(i)}
+          >
+            <rect
+              x={Math.max(0, x - (step || 28) / 2)}
+              y={0}
+              width={Math.max(step || 28, 24)}
+              height={H}
+              fill={hover === i ? 'rgba(96,165,250,0.07)' : 'transparent'}
+            />
+            {selected && (
+              <line
+                x1={x} y1={padT} x2={x} y2={padT + chartH}
+                stroke="#3B82F6" strokeWidth="1.25" strokeDasharray="3 3" opacity={0.5}
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+            <circle
+              cx={x} cy={yPlan}
+              r={peak ? (expanded ? 6 : 5.5) : active ? 4 : 3.5}
+              fill={peak ? '#10B981' : '#60A5FA'}
+              stroke={peak ? '#34D399' : active ? '#fff' : 'none'}
+              strokeWidth={peak || active ? 1.5 : 0}
+              filter={peak ? `url(#${glowId})` : undefined}
+              vectorEffect="non-scaling-stroke"
+            />
+            {expanded && shipped[i] > 0 && (
+              <circle
+                cx={x} cy={yShip} r={3.5}
+                fill="#10B981" stroke="#064E3B" strokeWidth="0.8"
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+            {showLabel && (
+              <text
+                x={x} y={Math.max(expanded ? 14 : 11, yPlan - (expanded ? 10 : 9))}
+                textAnchor="middle"
+                fill={peak ? '#34D399' : '#E2E8F0'}
+                fontSize={expanded ? 12 : 10.5}
+                fontWeight={700}
+              >
+                {Math.round(plans[i])}
+              </text>
+            )}
+            <text
+              x={x} y={H - (expanded ? 8 : 5)}
+              textAnchor="middle"
+              fill={selected || hover === i ? '#60A5FA' : '#64748B'}
+              fontSize={expanded ? 12 : 10.5}
+              fontWeight={selected || hover === i ? 700 : 500}
+            >
+              {expanded
+                ? day.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric' })
+                : dayShort}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function WeekChartLegend() {
+  return (
+    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '11px', color: '#64748B' }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+        <span style={{ width: 14, height: 2, background: '#60A5FA', borderRadius: 2, display: 'inline-block' }} />
+        План
+      </span>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+        <span style={{ width: 14, height: 2, background: '#10B981', borderRadius: 2, display: 'inline-block' }} />
+        Отгружено
+      </span>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+        <span style={{ width: 14, height: 0, borderTop: '2px dashed #94A3B8', display: 'inline-block' }} />
+        Прошлая неделя
+      </span>
+    </div>
+  );
+}
+
+/** Превью в боковой колонке + модалка с детальным графиком. */
+function WeekVolumeChart({
+  days,
+  series,
+  selectedDateStr,
+  onSelectDay,
+  onShiftWeek,
+}: {
+  days: Date[];
+  series: WeekChartDay[];
+  selectedDateStr: string;
+  onSelectDay: (d: Date) => void;
+  /** ±1 — сдвиг на неделю (синхронно с боковой колонкой) */
+  onShiftWeek: (delta: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [hover, setHover] = useState<number | null>(null);
+  const [modalHover, setModalHover] = useState<number | null>(null);
+
+  const totalPlan = Math.round(series.reduce((s, d) => s + d.plan, 0));
+  const totalShipped = Math.round(series.reduce((s, d) => s + d.shipped, 0));
+  const totalOrders = series.reduce((s, d) => s + d.orders, 0);
+  const totalPrev = Math.round(series.reduce((s, d) => s + d.prevPlan, 0));
+  const deltaPrev = totalPlan - totalPrev;
+
+  const focusIdx = modalHover ?? days.findIndex((d) => localDayKey(d) === selectedDateStr);
+  const focus = focusIdx >= 0 ? series[focusIdx] : null;
+  const focusDay = focusIdx >= 0 ? days[focusIdx] : null;
+
+  const shiftWeek = (delta: number) => {
+    setModalHover(null);
+    onShiftWeek(delta);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        shiftWeek(-1);
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        shiftWeek(1);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, onShiftWeek]);
+
+  return (
+    <>
+      {/* ===== Компактное превью ===== */}
+      <div
+        style={{
+          background: '#1E2937',
+          borderRadius: '14px',
+          padding: '8px 10px 6px',
+          marginTop: '8px',
+          marginBottom: '4px',
+          width: '100%',
+          boxSizing: 'border-box',
+          flexShrink: 0,
+          height: '148px',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
+          <div style={{ color: '#94A3B8', fontSize: '12px', fontWeight: 600 }}>Объём по дням</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ color: '#64748B', fontSize: '11px' }}>
+              Σ <span style={{ color: '#CBD5E1', fontWeight: 600 }}>{totalPlan}</span> м³
+            </div>
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              title="Открыть подробный график"
+              style={{
+                padding: '3px 9px',
+                background: 'rgba(96,165,250,0.12)',
+                border: '1px solid rgba(96,165,250,0.35)',
+                borderRadius: '8px',
+                color: '#93C5FD',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Отобразить
+            </button>
+          </div>
+        </div>
+
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <WeekVolumeChartSvg
+            days={days}
+            series={series}
+            selectedDateStr={selectedDateStr}
+            onSelectDay={onSelectDay}
+            hover={hover}
+            setHover={setHover}
+            variant="compact"
+            idPrefix="week-compact"
+          />
+        </div>
+      </div>
+
+      {/* ===== Модалка с полным графиком ===== */}
+      {open && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.82)',
+            zIndex: 10050,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px 24px',
+          }}
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="scroll-hidden"
+            style={{
+              background: '#1E2937',
+              borderRadius: '20px',
+              width: '100%',
+              maxWidth: '1080px',
+              // На 1920 места хватает — почти во весь экран, без внутреннего скролла
+              height: 'min(920px, 96vh)',
+              maxHeight: '96vh',
+              overflow: 'hidden',
+              border: '1px solid #334155',
+              boxShadow: '0 24px 64px rgba(0,0,0,0.45)',
+              padding: '18px 22px 14px',
+              boxSizing: 'border-box',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '10px', flexShrink: 0 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <h2 style={{ margin: 0, fontSize: '20px', color: '#fff', fontWeight: 700 }}>Объём по дням недели</h2>
+                {/* Пагинация по неделям */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={() => shiftWeek(-1)}
+                    title="Предыдущая неделя"
+                    style={{
+                      background: '#334155',
+                      border: 'none',
+                      color: '#E2E8F0',
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      cursor: 'pointer',
+                      fontSize: 20,
+                      lineHeight: 1,
+                      flexShrink: 0,
+                    }}
+                  >
+                    ←
+                  </button>
+                  <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
+                    <div style={{ color: '#E2E8F0', fontSize: '15px', fontWeight: 600 }}>
+                      {days[0]?.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}
+                      {' — '}
+                      {days[6]?.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
+                    </div>
+                    <div style={{ color: '#64748B', fontSize: '12px', marginTop: 2 }}>
+                      стрелки ← → на клавиатуре
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => shiftWeek(1)}
+                    title="Следующая неделя"
+                    style={{
+                      background: '#334155',
+                      border: 'none',
+                      color: '#E2E8F0',
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      cursor: 'pointer',
+                      fontSize: 20,
+                      lineHeight: 1,
+                      flexShrink: 0,
+                    }}
+                  >
+                    →
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                style={{
+                  background: '#334155',
+                  border: 'none',
+                  color: '#E2E8F0',
+                  width: 36,
+                  height: 36,
+                  borderRadius: 10,
+                  cursor: 'pointer',
+                  fontSize: 18,
+                  flexShrink: 0,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Сводка недели */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '10px', flexShrink: 0 }}>
+              {[
+                { label: 'Заявки', value: String(totalOrders), color: '#E2E8F0' },
+                { label: 'План', value: `${totalPlan} м³`, color: '#93C5FD' },
+                { label: 'Отгружено', value: `${totalShipped} м³`, color: '#34D399' },
+                {
+                  label: 'к прошлой нед.',
+                  value: `${deltaPrev > 0 ? '+' : ''}${deltaPrev} м³`,
+                  color: deltaPrev > 0 ? '#34D399' : deltaPrev < 0 ? '#F87171' : '#94A3B8',
+                },
+              ].map((c) => (
+                <div key={c.label} style={{ background: '#0F172A', borderRadius: 12, padding: '8px 12px', border: '1px solid #334155' }}>
+                  <div style={{ color: '#64748B', fontSize: 12, marginBottom: 2 }}>{c.label}</div>
+                  <div style={{ color: c.color, fontSize: 17, fontWeight: 700 }}>{c.value}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ marginBottom: '6px', flexShrink: 0 }}>
+              <WeekChartLegend />
+            </div>
+
+            <div style={{ flex: '1 1 300px', minHeight: 260, maxHeight: 340, background: '#0F172A', borderRadius: 14, padding: '8px 4px 4px', border: '1px solid #334155' }}>
+              <WeekVolumeChartSvg
+                days={days}
+                series={series}
+                selectedDateStr={selectedDateStr}
+                onSelectDay={onSelectDay}
+                hover={modalHover}
+                setHover={setModalHover}
+                variant="expanded"
+                idPrefix="week-modal"
+              />
+            </div>
+
+            {/* Детали дня — под графиком, не перекрывает */}
+            <div
+              style={{
+                marginTop: 10,
+                background: '#0F172A',
+                borderRadius: 12,
+                padding: '10px 14px',
+                border: '1px solid #334155',
+                flexShrink: 0,
+              }}
+            >
+              {focus && focusDay ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '1.4fr repeat(4, 1fr)', gap: 10, alignItems: 'center' }}>
+                  <div>
+                    <div style={{ color: '#64748B', fontSize: 12 }}>День</div>
+                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>
+                      {focusDay.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ color: '#64748B', fontSize: 12 }}>Заявки</div>
+                    <div style={{ color: '#E2E8F0', fontWeight: 700, fontSize: 16 }}>
+                      {focus.orders}
+                      {focus.shippedOrders > 0 && (
+                        <span style={{ color: '#64748B', fontWeight: 500, fontSize: 12 }}> · отгр. {focus.shippedOrders}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ color: '#64748B', fontSize: 12 }}>План</div>
+                    <div style={{ color: '#93C5FD', fontWeight: 700, fontSize: 16 }}>{Math.round(focus.plan)} м³</div>
+                  </div>
+                  <div>
+                    <div style={{ color: '#64748B', fontSize: 12 }}>Отгружено</div>
+                    <div style={{ color: '#34D399', fontWeight: 700, fontSize: 16 }}>{Math.round(focus.shipped)} м³</div>
+                  </div>
+                  <div>
+                    <div style={{ color: '#64748B', fontSize: 12 }}>Прошл. нед.</div>
+                    <div style={{ color: '#CBD5E1', fontWeight: 700, fontSize: 16 }}>{Math.round(focus.prevPlan)} м³</div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ color: '#64748B', fontSize: 13 }}>Наведи на день или выбери его на графике</div>
+              )}
+            </div>
+
+            {/* Таблица по дням */}
+            <div style={{ marginTop: 10, flexShrink: 0 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ color: '#64748B', textAlign: 'left' }}>
+                    <th style={{ padding: '6px 10px', fontWeight: 600 }}>День</th>
+                    <th style={{ padding: '6px 10px', fontWeight: 600 }}>Заявки</th>
+                    <th style={{ padding: '6px 10px', fontWeight: 600 }}>План, м³</th>
+                    <th style={{ padding: '6px 10px', fontWeight: 600 }}>Отгр., м³</th>
+                    <th style={{ padding: '6px 10px', fontWeight: 600 }}>Прошл., м³</th>
+                    <th style={{ padding: '6px 10px', fontWeight: 600 }}>Δ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {days.map((day, i) => {
+                    const s = series[i];
+                    const key = localDayKey(day);
+                    const active = key === selectedDateStr || modalHover === i;
+                    const dlt = Math.round(s.plan - s.prevPlan);
+                    return (
+                      <tr
+                        key={key}
+                        onClick={() => onSelectDay(day)}
+                        onMouseEnter={() => setModalHover(i)}
+                        style={{
+                          background: active ? 'rgba(59,130,246,0.12)' : 'transparent',
+                          cursor: 'pointer',
+                          borderTop: '1px solid #334155',
+                          color: '#E2E8F0',
+                        }}
+                      >
+                        <td style={{ padding: '7px 10px', fontWeight: 600 }}>
+                          {day.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short' })}
+                        </td>
+                        <td style={{ padding: '7px 10px' }}>{s.orders}</td>
+                        <td style={{ padding: '7px 10px', color: '#93C5FD' }}>{Math.round(s.plan)}</td>
+                        <td style={{ padding: '7px 10px', color: '#34D399' }}>{Math.round(s.shipped)}</td>
+                        <td style={{ padding: '7px 10px', color: '#94A3B8' }}>{Math.round(s.prevPlan)}</td>
+                        <td style={{ padding: '7px 10px', color: dlt > 0 ? '#34D399' : dlt < 0 ? '#F87171' : '#64748B', fontWeight: 600 }}>
+                          {dlt > 0 ? `+${dlt}` : dlt}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function ZayavkiPage() {
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
@@ -424,21 +1042,57 @@ ${order.customer_type?.includes('Юридическое')
     }
   }, [allOrders, selectedOrder?.id]);
 
-  // Загружаем заказы только за выбранный месяц вместо всей истории.
-  // При смене месяца (selectedDate) делаем новый запрос.
+  // Загружаем заказы за выбранный месяц + соседние, если неделя/прошлая неделя
+  // захватывает границу месяца (нужно для графика «Прошл.» и списка ПН–ВС).
   const selYear = selectedDate.getFullYear();
   const selMonth = selectedDate.getMonth() + 1;
+  const weekAnchorKey = useMemo(() => {
+    const day = selectedDate.getDay();
+    const monday = new Date(selectedDate);
+    monday.setDate(selectedDate.getDate() - day + (day === 0 ? -6 : 1));
+    return `${monday.getFullYear()}-${monday.getMonth() + 1}-${monday.getDate()}`;
+  }, [selectedDate]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetch(`/api/adminCifra/orders?year=${selYear}&month=${selMonth}`)
-      .then(r => r.ok ? r.json() : [])
-      .then((data: any[]) => { if (!cancelled) setAllOrders(data); })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setLoading(false); });
+
+    const [my, mm, md] = weekAnchorKey.split('-').map(Number);
+    const monday = new Date(my, mm - 1, md);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    const prevMonday = new Date(monday);
+    prevMonday.setDate(monday.getDate() - 7);
+
+    const monthKeys = new Set<string>([
+      `${selYear}-${selMonth}`,
+      `${monday.getFullYear()}-${monday.getMonth() + 1}`,
+      `${sunday.getFullYear()}-${sunday.getMonth() + 1}`,
+      `${prevMonday.getFullYear()}-${prevMonday.getMonth() + 1}`,
+    ]);
+
+    Promise.all(
+      [...monthKeys].map((key) => {
+        const [y, m] = key.split('-');
+        return fetch(`/api/adminCifra/orders?year=${y}&month=${m}`)
+          .then((r) => (r.ok ? r.json() : []))
+          .catch(() => []);
+      })
+    )
+      .then((chunks: any[][]) => {
+        if (cancelled) return;
+        const map = new Map<string, any>();
+        chunks.flat().forEach((o) => {
+          if (o?.id != null) map.set(String(o.id), o);
+        });
+        setAllOrders(Array.from(map.values()));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
     return () => { cancelled = true; };
-  }, [selYear, selMonth]);
+  }, [selYear, selMonth, weekAnchorKey]);
 
   // ==================== 1. РАБОТА С ДАТАМИ (ИСПРАВЛЕНО) ====================
   // Новая функция — надёжно получает дату в локальном часовом поясе
@@ -736,6 +1390,36 @@ ${order.customer_type?.includes('Юридическое')
   const weekOrderCounts = useMemo(() =>
     weekDays.map((d: Date) => getOrdersCountForDate(d))
   , [allOrders, weekDays]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Серии для бокового графика: план / отгрузка / прошлая неделя + счётчики заявок
+  const weekChartSeries = useMemo((): WeekChartDay[] => {
+    const orderDateStr = (o: any) => {
+      if (!o?.delivery_date) return '';
+      return typeof o.delivery_date === 'string'
+        ? o.delivery_date.substring(0, 10)
+        : getLocalDateString(new Date(o.delivery_date));
+    };
+
+    return weekDays.map((d: Date) => {
+      const dateStr = getLocalDateString(d);
+      const prev = new Date(d);
+      prev.setDate(prev.getDate() - 7);
+      const prevStr = getLocalDateString(prev);
+
+      const dayActive = allOrders.filter((o) => orderDateStr(o) === dateStr && o.status !== 'cancelled');
+      const prevActive = allOrders.filter((o) => orderDateStr(o) === prevStr && o.status !== 'cancelled');
+
+      return {
+        plan: dayActive.reduce((s, o) => s + Number(o.volume || 0), 0),
+        shipped: dayActive
+          .filter((o) => o.status === 'completed')
+          .reduce((s, o) => s + Number(o.volume || 0), 0),
+        prevPlan: prevActive.reduce((s, o) => s + Number(o.volume || 0), 0),
+        orders: dayActive.length,
+        shippedOrders: dayActive.filter((o) => o.status === 'completed').length,
+      };
+    });
+  }, [allOrders, weekDays]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // П5: memoизированные значения для рендера (избегаем пересчёта при каждом ререндере)
   const cementCompletedMemo  = useMemo(() => calculateCementNeeded(true),  [dayOrders, recipes]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1081,115 +1765,19 @@ ${order.customer_type?.includes('Юридическое')
 </div>
 
 {/* ==================== ГРАФИК ЗА НЕДЕЛЮ ==================== */}
-<div style={{ 
-  background: '#1E2937', 
-  borderRadius: '16px', 
-  padding: '12px 20px',
-  marginTop: '10px',
-  marginBottom: '5px',
-  height: '165px',
-  flexShrink: 0,
-  position: 'relative'
-}}>
-  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '6px', fontWeight: '600' }}>
-    Объём по дням недели (м³)
-  </div>
-
-  <svg width="100%" height="105" viewBox="0 0 280 110" style={{ overflow: 'visible' }}>
-    {/* Сетка */}
-    {[0, 30, 60, 90, 120].map(y => (
-      <line key={y} x1="0" y1={y} x2="280" y2={y} stroke="#334155" strokeWidth="1" />
-    ))}
-
-    {/* Линия графика */}
-    <polyline
-      points={weekDays.map((d, i) => {
-        const dateStr = d.toISOString().split('T')[0];
-        const dailyVolume = allOrders
-          .filter(o => {
-            if (!o?.delivery_date) return false;
-            const orderDate = typeof o.delivery_date === 'string' 
-              ? o.delivery_date.substring(0, 10) 
-              : new Date(o.delivery_date).toISOString().split('T')[0];
-            return orderDate === dateStr && o.status !== 'cancelled';
-          })
-          .reduce((sum, o) => sum + Number(o.volume || 0), 0);
-
-        const maxVolume = Math.max(...weekDays.map(dd => {
-          const ds = dd.toISOString().split('T')[0];
-          return allOrders
-            .filter(o => {
-              const od = typeof o.delivery_date === 'string' ? o.delivery_date.substring(0,10) : new Date(o.delivery_date).toISOString().split('T')[0];
-              return od === ds && o.status !== 'cancelled';
-            })
-            .reduce((s, o) => s + Number(o.volume || 0), 0);
-        })) || 100;
-
-        const x = 20 + i * 40;
-        const y = 100 - (dailyVolume / (maxVolume || 1)) * 80;
-        return `${x},${y}`;
-      }).join(' ')}
-      fill="none"
-      stroke="#60A5FA"
-      strokeWidth="3"
-      strokeLinejoin="round"
-      strokeLinecap="round"
-    />
-
-    {/* Точки на графике */}
-    {weekDays.map((d, i) => {
-      const dateStr = d.toISOString().split('T')[0];
-      const dailyVolume = allOrders
-        .filter(o => {
-          if (!o?.delivery_date) return false;
-          const orderDate = typeof o.delivery_date === 'string' 
-            ? o.delivery_date.substring(0, 10) 
-            : new Date(o.delivery_date).toISOString().split('T')[0];
-          return orderDate === dateStr && o.status !== 'cancelled';
-        })
-        .reduce((sum, o) => sum + Number(o.volume || 0), 0);
-
-      const maxVolume = Math.max(...weekDays.map(dd => {
-        const ds = dd.toISOString().split('T')[0];
-        return allOrders
-          .filter(o => {
-            const od = typeof o.delivery_date === 'string' ? o.delivery_date.substring(0,10) : new Date(o.delivery_date).toISOString().split('T')[0];
-            return od === ds && o.status !== 'cancelled';
-          })
-          .reduce((s, o) => s + Number(o.volume || 0), 0);
-      })) || 100;
-
-      const x = 20 + i * 40;
-      const y = 100 - (dailyVolume / (maxVolume || 1)) * 80;
-
-      return (
-        <g key={i}>
-          <circle cx={x} cy={y} r="4" fill="#60A5FA" />
-          <text x={x} y={y - 12} textAnchor="middle" fill="#94A3B8" fontSize="11">
-            {Math.round(dailyVolume)}
-          </text>
-        </g>
-      );
-    })}
-
-    {/* Подписи дней */}
-    {weekDays.map((d, i) => {
-      const x = 20 + i * 40;
-      return (
-        <text 
-          key={i} 
-          x={x} 
-          y="118" 
-          textAnchor="middle" 
-          fill="#64748B" 
-          fontSize="11"
-        >
-          {d.toLocaleDateString('ru-RU', { weekday: 'short' })}
-        </text>
-      );
-    })}
-  </svg>
-</div>
+            <WeekVolumeChart
+              days={weekDays}
+              series={weekChartSeries}
+              selectedDateStr={selectedDateStr}
+              onSelectDay={setSelectedDate}
+              onShiftWeek={(delta) => {
+                setSelectedDate((prev) => {
+                  const next = new Date(prev);
+                  next.setDate(next.getDate() + delta * 7);
+                  return next;
+                });
+              }}
+            />
 
                                     {/* ==================== РАЗДЕЛИТЕЛЬ + СВОДКА ЗА НЕДЕЛЮ ==================== */}
             <div style={{ marginTop: '8px', paddingTop: '10px', borderTop: '1px solid #334155', flexShrink: 0 }}>
