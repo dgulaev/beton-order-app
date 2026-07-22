@@ -9,6 +9,8 @@ import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
 import { DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
 import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
+import { useRealtimeOrderMixers } from '@/hooks/useRealtimeOrders';
+import { useWakeRefresh } from '@/hooks/useWakeReload';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -348,6 +350,16 @@ export default function MobileMixersPage() {
 
   useEffect(() => { fetchMixers(); }, [fetchMixers]);
 
+  // Live-обновление активных рейсов (Загрузка → В пути → …) по broadcast
+  useRealtimeOrderMixers(setActiveTrips, { activeOnly: true });
+
+  useWakeRefresh(() => {
+    fetch('/api/adminCifra/active-mixers')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((trips) => { if (Array.isArray(trips)) setActiveTrips(trips); })
+      .catch(() => {});
+  });
+
   // ── Open sheet ──────────────────────────────────────────────────────────────
   const openAdd = () => {
     setSelected(null);
@@ -441,7 +453,9 @@ export default function MobileMixersPage() {
   // ── Активные рейсы сегодня — данные из order_mixers ─────────────────────────
   // activeTrips: [{ number, status, volume, time, ... }] из /api/adminCifra/active-mixers
   // Для каждого рейса находим карточку миксера чтобы показать имя водителя
-  const todayStr = new Date().toISOString().slice(0, 10);
+  // Локальная «сегодня» — без toISOString (UTC иначе съезжает на соседний день).
+  const _now = new Date();
+  const todayStr = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-${String(_now.getDate()).padStart(2, '0')}`;
   const todayActiveTrips = activeTrips.filter((t: any) => {
     const d = t.deliveryDate || t.delivery_date || '';
     return String(d).slice(0, 10) === todayStr;

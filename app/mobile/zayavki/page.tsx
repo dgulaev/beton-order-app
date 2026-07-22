@@ -6,6 +6,8 @@ import MobileOrderDetailModal from '../components/MobileOrderDetailModal';
 import MobileExitButton from '../components/MobileExitButton';
 import { Plus, MapPin, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { useUserRole } from '../../providers/UserRoleProvider';
+import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
+import { useWakeRefresh } from '@/hooks/useWakeReload';
 
 export default function MobileZayavkiPage() {
 const { user } = useUserRole();   // ← Берём роль из провайдера
@@ -16,6 +18,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
   const [newOrderInitialData, setNewOrderInitialData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [initialOrdersLoaded, setInitialOrdersLoaded] = useState(false);
 
   // ==================== 2. ДАТА ====================
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -57,6 +60,9 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   // подвисаний мобильной версии). Перезагружаем при переходе в другой месяц.
   const selectedYearNum = selectedDate.getFullYear();
   const selectedMonthNum = selectedDate.getMonth() + 1;
+  const monthStart = `${selectedYearNum}-${String(selectedMonthNum).padStart(2, '0')}-01`;
+  const daysInMonth = new Date(selectedYearNum, selectedMonthNum, 0).getDate();
+  const monthEnd = `${selectedYearNum}-${String(selectedMonthNum).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -74,13 +80,49 @@ const { user } = useUserRole();   // ← Берём роль из провайд
         console.error('Ошибка загрузки заявок:', err);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setInitialOrdersLoaded(true);
+        }
       });
 
     return () => {
       cancelled = true;
     };
   }, [selectedYearNum, selectedMonthNum]);
+
+  // Live-обновление списка заявок (как на десктопе /adminCifra/zayavki)
+  useRealtimeOrders(setAllOrders, {
+    clientFilter: (o: any) => {
+      const d = String(o.delivery_date || '').slice(0, 10);
+      return d >= monthStart && d <= monthEnd;
+    },
+    enabled: initialOrdersLoaded,
+  });
+
+  useWakeRefresh(() => {
+    fetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`, { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (Array.isArray(data)) setAllOrders(data); })
+      .catch(() => {});
+  });
+
+  // Синхронизация открытой модалки с realtime-обновлениями allOrders
+  useEffect(() => {
+    if (!selectedOrder?.id) return;
+    const fresh = allOrders.find((o) => String(o.id) === String(selectedOrder.id));
+    if (
+      fresh &&
+      (fresh.status !== selectedOrder.status ||
+        fresh.logistics_ready !== selectedOrder.logistics_ready ||
+        !!fresh.is_questionable !== !!selectedOrder.is_questionable)
+    ) {
+      setSelectedOrder((prev: any) => (prev ? { ...prev, ...fresh } : prev));
+    }
+    if (!fresh && allOrders.length > 0) {
+      setSelectedOrder(null);
+    }
+  }, [allOrders, selectedOrder?.id]);
 
   // ==================== 5. ФИЛЬТР ЗАКАЗОВ НА ВЫБРАННЫЙ ДЕНЬ ====================
   const selectedYear = selectedDate.getFullYear();

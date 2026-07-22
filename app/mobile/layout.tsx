@@ -23,6 +23,7 @@ import {
 } from './driver/driverClient';
 import DriverDashboard from './driver/components/DriverDashboard';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
 import './globals.css';
 import { hardResetBroadcastSocket, useGlobalBroadcastStatus, reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
 
@@ -114,6 +115,9 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   // ответа) — актуальность (в т.ч. force-logout) провайдер всё равно
   // перепроверяет в фоне и сам разлогинит при необходимости (см. fetchRole).
   const isStaffLoggedIn = !!user;
+
+  // Пишем heartbeat в active_sessions — иначе «Кто в онлайн» не видит мобильную сессию
+  useStaffHeartbeat(isStaffLoggedIn && user?.role !== 'guest');
 
   // ==================== 2. СЕССИЯ ВОДИТЕЛЯ ====================
   // /mobile/driver остаётся рабочей ссылкой (редиректим на /mobile, см. её page.tsx),

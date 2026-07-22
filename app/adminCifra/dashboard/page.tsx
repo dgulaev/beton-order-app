@@ -7,7 +7,7 @@ import { useRealtimeOrders, useRealtimeOrderMixers, formatOrderMixer } from '../
 import OrderDetailModal from '../components/OrderDetailModal';
 import NewOrderModal from '../components/NewOrderModal';
 import Image from 'next/image';
-import { Home, LayoutList, AlignJustify } from 'lucide-react';
+import { Home, LayoutList, AlignJustify, X } from 'lucide-react';
 import VerticalTimelinePanel from '../components/VerticalTimelinePanel';
 
 export default function AdminCifraDashboard() {
@@ -46,6 +46,8 @@ export default function AdminCifraDashboard() {
  const [activeMixers, setActiveMixers] = useState<any[]>([]);
  const [currentHourPercent, setCurrentHourPercent] = useState(42);
  const [showCalendar, setShowCalendar] = useState(false);
+ const [showPlanModal, setShowPlanModal] = useState(false);
+ const [showDelaysModal, setShowDelaysModal] = useState(false);
  // Быстрое создание заявки на конкретную дату (ПКМ / долгое нажатие на день в календаре)
  const [showQuickNewOrder, setShowQuickNewOrder] = useState(false);
  const [quickNewOrderDate, setQuickNewOrderDate] = useState<string | undefined>(undefined);
@@ -459,6 +461,9 @@ const delayedOrders = selectedDateStr !== today ? [] : todayOrders
     return true;
   })
   .map((order: Order) => {
+    const orderMixers = activeMixers.filter(
+      (m: any) => String(m.orderId) === String(order.id)
+    );
     const [h, m] = (order.delivery_time || '00:00').split(':').map(Number);
     const plannedStart = h * 60 + m;
     const volume = Number(order.volume || 0);
@@ -466,23 +471,58 @@ const delayedOrders = selectedDateStr !== today ? [] : todayOrders
     const loadingTime = volume * 2;
     // Время в пути: из кэша road_time_min, иначе fallback 30 мин
     const travelTime = roadTimes[String(order.id)] ?? (order as any).road_time_min ?? 30;
+    const travelTimeIsEstimate = !(String(order.id) in roadTimes) && !(order as any).road_time_min;
 
-    // Ожидаемое время отправки = delivery_time − время_в_пути − загрузка
-    // То есть: чтобы доставить в 09:00, нужно выехать в 08:30 (если ехать 30 мин),
-    // а значит начать грузить в 08:10 (если 10 м³ = 20 мин).
-    // Если сейчас ещё нет миксеров, а это время уже прошло — задержка.
-    const expectedDeparture = plannedStart - travelTime - loadingTime;
-    const delayMinutes = Math.round(Math.max(0, currentMinutes - expectedDeparture));
+    // Ожидаемое время начала загрузки = delivery_time − путь − загрузка
+    // Чтобы доставить в 09:00 при 30 мин пути и 20 мин загрузки — грузить с 08:10.
+    const expectedLoadStart = plannedStart - travelTime - loadingTime;
+    const delayMinutes = Math.round(Math.max(0, currentMinutes - expectedLoadStart));
+    const assignedVol = orderMixers.reduce((sum: number, m: any) => sum + Number(m.volume || 0), 0);
+    const loadingMixers = orderMixers.filter((mx: any) => mx.status === 'Загрузка').length;
 
-    return { 
-      ...order, 
+    const reasons: string[] = [];
+    if (orderMixers.length === 0) {
+      reasons.push('Миксеры на заявку ещё не назначены');
+    } else if (assignedVol < volume) {
+      reasons.push(`Назначено только ${assignedVol % 1 === 0 ? assignedVol : assignedVol.toFixed(1)} из ${volume % 1 === 0 ? volume : volume.toFixed(1)} м³`);
+    }
+    if (loadingMixers > 0 && assignedVol < volume) {
+      reasons.push(`${loadingMixers} миксер(а) в статусе «Загрузка», но объём ещё не закрыт`);
+    }
+    if (orderMixers.length > 0 && !orderMixers.some((mx: any) => ACTIVE_MIXER_STATUSES.includes(mx.status))) {
+      reasons.push('Нет миксеров в движении (в пути / на объекте)');
+    }
+    if (reasons.length === 0) {
+      reasons.push('Отстаём от расчётного времени начала загрузки');
+    }
+
+    return {
+      ...order,
       delayMinutes,
       travelTime,
-      delayText: delayMinutes > 0 ? `+${delayMinutes} мин` : '' 
+      travelTimeIsEstimate,
+      loadingTime,
+      expectedLoadStart,
+      plannedStart,
+      assignedVol,
+      mixerCount: orderMixers.length,
+      reasons,
+      delayText: delayMinutes > 0 ? `+${delayMinutes} мин` : '',
     };
   })
   .filter(order => order.delayMinutes > 15)
   .sort((a, b) => b.delayMinutes - a.delayMinutes);
+
+const fmtClockMins = (mins: number) => {
+  const normalized = ((Math.round(mins) % 1440) + 1440) % 1440;
+  const hh = Math.floor(normalized / 60);
+  const mm = normalized % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+};
+const fmtDelayMins = (mins: number) =>
+  mins >= 60
+    ? `${Math.floor(mins / 60)}ч ${mins % 60}м`
+    : `${mins} мин`;
 
   // ==================== 11. МИКСЕРЫ ЗА ДЕНЬ =========================================
   const activeMixersToday = activeMixers.filter((mixer: any) => {
@@ -521,21 +561,135 @@ const delayedOrders = selectedDateStr !== today ? [] : todayOrders
   }, [todayOrders, activeMixersToday]);
 
 // ==================== 13. ДИНАМИЧЕСКИЕ KPI ==============================================
-const planToday = todayOrders.reduce((sum, o) => sum + Number(o.volume || 0), 0);
 const newOrders = todayOrders.filter(o => o.status === 'new').length;
 const inWorkOrders = todayOrders.filter(o => o.status === 'processing').length;
 const activeOrdersCount = newOrders + inWorkOrders;
 
-const completedVolume = todayOrders
-  .filter(o => o.status === 'completed')
-  .reduce((sum, o) => sum + Number(o.volume || 0), 0);
-
 const totalToday = todayOrders.length;
 const completedOrders = todayOrders.filter(o => o.status === 'completed').length;
 
-const completionPercent = planToday > 0 
-  ? Math.round((completedVolume / planToday) * 100) 
+// План дня — без отменённых
+const planToday = todayOrders
+  .filter(o => o.status !== 'cancelled')
+  .reduce((sum, o) => sum + Number(o.volume || 0), 0);
+
+const todayOrderIds = useMemo(
+  () => new Set(todayOrders.map(o => String(o.id))),
+  [todayOrders]
+);
+
+// Выполнение плана = разгруженные м³ / план (не только закрытые заявки —
+// иначе днём карточка почти всегда 0%, пока заявки не переведут в «Выполнена»).
+const unloadedVolume = useMemo(
+  () => mixerAssignments
+    .filter((m: any) =>
+      todayOrderIds.has(String(m.orderId ?? m.order_id)) && m.status === 'Разгружен'
+    )
+    .reduce((sum: number, m: any) => sum + Number(m.volume || 0), 0),
+  [mixerAssignments, todayOrderIds]
+);
+
+// Суммы по статусам рейсов всех заявок дня (из полных назначений, не только «живых»)
+const dayMixerTrips = useMemo(
+  () => mixerAssignments.filter((m: any) =>
+    todayOrderIds.has(String(m.orderId ?? m.order_id))
+  ),
+  [mixerAssignments, todayOrderIds]
+);
+
+const volumeByStatus = useMemo(() => {
+  const FLOW = [
+    { status: 'Загрузка', label: 'загрузка', color: '#FACC15', showCount: false },
+    { status: 'В пути', label: 'в пути', color: '#60A5FA', showCount: false },
+    { status: 'На объекте', label: 'на объекте', color: '#34D399', showCount: false },
+    { status: 'Разгружен', label: 'разгружено', color: '#10B981', showCount: true },
+  ] as const;
+  const vols: Record<string, number> = {};
+  const counts: Record<string, number> = {};
+  for (const m of dayMixerTrips) {
+    const s = String(m.status || '');
+    vols[s] = (vols[s] || 0) + Number(m.volume || 0);
+    counts[s] = (counts[s] || 0) + 1;
+  }
+  return FLOW
+    .map((cfg) => ({
+      ...cfg,
+      volume: vols[cfg.status] || 0,
+      count: counts[cfg.status] || 0,
+    }))
+    .filter((x) => x.volume > 0 || x.count > 0);
+}, [dayMixerTrips]);
+
+const factVolume = unloadedVolume;
+const completionPercent = planToday > 0
+  ? Math.min(100, Math.round((factVolume / planToday) * 100))
   : 0;
+const remainingVolume = Math.max(0, planToday - factVolume);
+const coveredVolume = useMemo(
+  () => dayMixerTrips.reduce((s: number, m: any) => s + Number(m.volume || 0), 0),
+  [dayMixerTrips]
+);
+const completedOrdersVolume = useMemo(
+  () => todayOrders
+    .filter((o) => o.status === 'completed')
+    .reduce((s, o) => s + Number(o.volume || 0), 0),
+  [todayOrders]
+);
+const planOrdersCount = todayOrders.filter((o) => o.status !== 'cancelled').length;
+
+// Детализация по заявкам дня — для модалки выполнения плана
+const planOrdersDetail = useMemo(() => {
+  return todayOrders
+    .filter((o) => o.status !== 'cancelled')
+    .map((o) => {
+      const trips = dayMixerTrips.filter(
+        (m: any) => String(m.orderId ?? m.order_id) === String(o.id)
+      );
+      const planVol = Number(o.volume || 0);
+      const byStatus = {
+        loading: 0,
+        inTransit: 0,
+        onSite: 0,
+        unloaded: 0,
+      };
+      let unloadedCount = 0;
+      for (const m of trips) {
+        const v = Number(m.volume || 0);
+        if (m.status === 'Загрузка') byStatus.loading += v;
+        else if (m.status === 'В пути') byStatus.inTransit += v;
+        else if (m.status === 'На объекте') byStatus.onSite += v;
+        else if (m.status === 'Разгружен') {
+          byStatus.unloaded += v;
+          unloadedCount += 1;
+        }
+      }
+      const pct = planVol > 0
+        ? Math.min(100, Math.round((byStatus.unloaded / planVol) * 100))
+        : 0;
+      return {
+        id: o.id,
+        client: (o as any).organization_name || (o as any).full_name || '—',
+        time: o.delivery_time || '—',
+        status: o.status,
+        planVol,
+        unloadedCount,
+        ...byStatus,
+        pct,
+      };
+    })
+    .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+}, [todayOrders, dayMixerTrips]);
+
+const fmtM3 = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1));
+const completionColor =
+  completionPercent >= 90 ? '#10B981' :
+  completionPercent >= 50 ? '#FACC15' : '#94A3B8';
+const completionBarBg =
+  completionPercent >= 90
+    ? 'linear-gradient(90deg, #10B981, #34D399)'
+    : completionPercent >= 50
+      ? 'linear-gradient(90deg, #F59E0B, #FACC15)'
+      : 'linear-gradient(90deg, #3B82F6, #60A5FA)';
 
   // ==================== 14. ЗАГРУЗКА USER ID / ROLE / CURRENT USER ====================
   useEffect(() => {
@@ -1017,53 +1171,119 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
 </div>
 
   {/* ==================== 36. ВЫПОЛНЕНИЕ ПЛАНА ==================== */}
-<div style={{ 
+<div
+  onClick={() => setShowPlanModal(true)}
+  style={{ 
   background: '#1E2937', 
   borderRadius: '18px', 
   padding: '16px 20px', 
-  flex: 1 
-}}>
-  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-    Выполнение плана
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'space-between',
+  cursor: 'pointer',
+  transition: 'background 0.2s',
+}}
+  onMouseEnter={(e) => { e.currentTarget.style.background = '#25334A'; }}
+  onMouseLeave={(e) => { e.currentTarget.style.background = '#1E2937'; }}
+>
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+    <div style={{ color: '#94A3B8', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      Выполнение плана
+    </div>
+    <span style={{ color: '#475569', fontSize: '12px' }}>подробнее →</span>
   </div>
 
-  <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginBottom: '2px', flexWrap: 'wrap' }}>
-    <span style={{ fontSize: '48px', fontWeight: '700', lineHeight: 1 }}>
-      {Math.round(completedVolume)}
-    </span>
-    <span style={{ fontSize: '22px', color: '#64748B' }}>/ {Math.round(planToday)} м³</span>
-  </div>
-
-  <div style={{ height: '1px', background: '#334155', margin: '10px 0' }} />
-
-  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-    <div style={{ 
-      fontSize: '26px', 
-      fontWeight: '700',
-      color: completionPercent >= 90 ? '#10B981' : 
-             completionPercent >= 70 ? '#FACC15' : '#EF4444'
-    }}>
+  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', minWidth: 0 }}>
+      <span style={{ fontSize: '40px', fontWeight: '700', lineHeight: 1, color: completionColor }}>
+        {fmtM3(factVolume)}
+      </span>
+      <span style={{ fontSize: '18px', color: '#64748B', whiteSpace: 'nowrap' }}>
+        / {fmtM3(planToday)} м³
+      </span>
+    </div>
+    <span style={{ fontSize: '28px', fontWeight: '700', lineHeight: 1, color: completionColor, flexShrink: 0 }}>
       {completionPercent}%
-    </div>
-    <div style={{ color: '#64748B', fontSize: '13px', textAlign: 'right' }}>
-      {completedOrders} из {totalToday}<br/>заявок
-    </div>
+    </span>
   </div>
+
+  <div style={{ height: '8px', borderRadius: '9999px', background: '#334155', overflow: 'hidden', marginBottom: '10px' }}>
+    <div style={{
+      height: '100%',
+      width: `${completionPercent}%`,
+      borderRadius: '9999px',
+      background: completionBarBg,
+      transition: 'width 0.4s ease',
+    }} />
+  </div>
+
+  {volumeByStatus.length > 0 ? (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+      {volumeByStatus.map((item) => (
+        <span
+          key={item.status}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'baseline',
+            gap: '4px',
+            padding: '3px 9px',
+            borderRadius: '9999px',
+            background: `${item.color}18`,
+            border: `1px solid ${item.color}40`,
+            color: item.color,
+            fontSize: '12px',
+            fontWeight: 600,
+            lineHeight: 1.3,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {item.showCount ? (
+            <>
+              <span style={{ fontWeight: 700 }}>{item.count}</span>
+              <span style={{ opacity: 0.75 }}>·</span>
+              <span style={{ fontWeight: 700 }}>{fmtM3(item.volume)} м³</span>
+            </>
+          ) : (
+            <span style={{ fontWeight: 700 }}>{fmtM3(item.volume)} м³</span>
+          )}
+          <span style={{ opacity: 0.9, fontWeight: 500 }}>{item.label}</span>
+        </span>
+      ))}
+    </div>
+  ) : (
+    <div style={{ color: '#64748B', fontSize: '13px' }}>нет рейсов за день</div>
+  )}
+  {completedOrders > 0 && (
+    <div style={{ color: '#64748B', fontSize: '12px', marginTop: '8px' }}>
+      {completedOrders} заявки закрыты
+    </div>
+  )}
 </div>
 
    {/* ==================== 37. ЗАДЕРЖКИ ОТГРУЗОК ==================== */}
 {/* Логика: заявки new/processing, у которых НЕТ миксеров в движении (В пути/На объекте/
     Разгружен/Возврат) и НЕ покрыт весь объём назначенными миксерами, при этом
-    прошло > 15 мин от (delivery_time + время загрузки 2мин×м³). */}
-<div style={{ 
+    прошло > 15 мин от расчётного старта загрузки. */}
+<div
+  onClick={() => setShowDelaysModal(true)}
+  style={{ 
   background: '#1E2937', 
   borderRadius: '18px', 
   padding: '16px 20px', 
   display: 'flex',
-  flexDirection: 'column'
-}}>
-  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-    Задержки отгрузок
+  flexDirection: 'column',
+  cursor: 'pointer',
+  transition: 'background 0.2s',
+}}
+  onMouseEnter={(e) => { e.currentTarget.style.background = '#25334A'; }}
+  onMouseLeave={(e) => { e.currentTarget.style.background = '#1E2937'; }}
+>
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+    <div style={{ color: '#94A3B8', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      Задержки отгрузок
+    </div>
+    <span style={{ color: '#475569', fontSize: '12px' }}>подробнее →</span>
   </div>
 
   {delayedOrders.length > 0 ? (
@@ -1102,9 +1322,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
               flexShrink: 0,
               marginLeft: '6px',
             }}>
-              +{order.delayMinutes >= 60 
-                ? `${Math.floor(order.delayMinutes/60)}ч ${order.delayMinutes%60}м`
-                : `${order.delayMinutes} мин`}
+              +{fmtDelayMins(order.delayMinutes)}
             </span>
           </div>
         ))}
@@ -1156,18 +1374,27 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   <div style={{ height: '1px', background: '#334155', margin: '10px 0' }} />
 
   <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '13px' }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-      <span style={{ color: '#94A3B8' }}>🟡 Загрузка</span>
-      <strong style={{ color: '#FACC15' }}>{activeMixersToday.filter(m => m.status === 'Загрузка').length}</strong>
-    </div>
-    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-      <span style={{ color: '#94A3B8' }}>→ В пути</span>
-      <strong style={{ color: '#60A5FA' }}>{activeMixersToday.filter(m => m.status === 'В пути').length}</strong>
-    </div>
-    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-      <span style={{ color: '#94A3B8' }}>📍 На объекте</span>
-      <strong style={{ color: '#10B981' }}>{activeMixersToday.filter(m => m.status === 'На объекте').length}</strong>
-    </div>
+    {([
+      { status: 'Загрузка', label: '🟡 Загрузка', color: '#FACC15', showCount: false },
+      { status: 'В пути', label: '→ В пути', color: '#60A5FA', showCount: false },
+      { status: 'На объекте', label: '📍 На объекте', color: '#34D399', showCount: false },
+      { status: 'Разгружен', label: '✓ Разгружено', color: '#10B981', showCount: true },
+    ] as const).map((row) => {
+      const trips = dayMixerTrips.filter((m: any) => m.status === row.status);
+      const vol = trips.reduce((s: number, m: any) => s + Number(m.volume || 0), 0);
+      const cnt = trips.length;
+      if (vol <= 0 && cnt <= 0) return null;
+      return (
+        <div key={row.status} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+          <span style={{ color: '#94A3B8' }}>{row.label}</span>
+          <strong style={{ color: row.color, whiteSpace: 'nowrap' }}>
+            {row.showCount
+              ? `${cnt} · ${fmtM3(vol)} м³`
+              : `${fmtM3(vol)} м³`}
+          </strong>
+        </div>
+      );
+    })}
   </div>
 </div>      </div>
       {/* ==================== 38. ТАЙМЛАЙН (УЛУЧШЕННЫЙ — В СТИЛЕ ЦИФРА.AI) ==================== */}
@@ -1471,20 +1698,6 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   const overflowLabel = overflowMinutes >= 60
     ? `+${Math.floor(overflowMinutes / 60)}ч ${overflowMinutes % 60 > 0 ? `${overflowMinutes % 60}м` : ''} завтра`
     : `+${overflowMinutes}м завтра`;
-
-  // ==================== 40. ДИНАМИЧЕСКИЙ ПЛАН НА ДЕНЬ ====================
-const planToday = todayOrders.reduce((sum, o) => sum + Number(o.volume || 0), 0);
-
-const completedVolume = todayOrders
-  .filter(o => o.status === 'completed')
-  .reduce((sum, o) => sum + Number(o.volume || 0), 0);
-
-const completedOrders = todayOrders.filter(o => o.status === 'completed').length;
-const totalToday = todayOrders.length;
-
-const completionPercent = planToday > 0 
-  ? Math.round((completedVolume / planToday) * 100) 
-  : 0;
 
      // ==================== 41. СТАТУС ЗАКАЗА ====================
     const statusColor = 
@@ -2193,6 +2406,613 @@ const generateDailyReport = () => {
     setSelectedOrder={setSelectedOrder}
   />
 )}
+
+      {/* ==================== МОДАЛКА: ВЫПОЛНЕНИЕ ПЛАНА ==================== */}
+      {showPlanModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.75)',
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+          }}
+          onClick={() => setShowPlanModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(920px, 100%)',
+              maxHeight: 'min(860px, calc(100vh - 48px))',
+              background: '#1E2937',
+              borderRadius: '20px',
+              border: '1px solid #334155',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              boxShadow: '0 24px 64px rgba(0,0,0,0.45)',
+            }}
+          >
+            {/* Header */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '18px 24px',
+              borderBottom: '1px solid #334155',
+              flexShrink: 0,
+            }}>
+              <div>
+                <div style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>
+                  Выполнение плана
+                </div>
+                <div style={{ fontSize: '13px', color: '#64748B', marginTop: '2px' }}>
+                  {selectedDate.toLocaleDateString('ru-RU', {
+                    weekday: 'long',
+                    day: 'numeric',
+                    month: 'long',
+                  })}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPlanModal(false)}
+                style={{
+                  background: '#334155',
+                  border: 'none',
+                  borderRadius: '10px',
+                  width: '36px',
+                  height: '36px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <X size={18} color="#94A3B8" />
+              </button>
+            </div>
+
+            <div className="scroll-hidden" style={{ overflowY: 'auto', padding: '22px 24px 28px' }}>
+              {/* Сводка % */}
+              <div style={{
+                textAlign: 'center',
+                paddingBottom: '20px',
+                marginBottom: '20px',
+                borderBottom: '1px solid #334155',
+              }}>
+                <div style={{
+                  fontSize: '64px',
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  color: completionColor,
+                }}>
+                  {completionPercent}%
+                </div>
+                <div style={{ color: '#64748B', fontSize: '14px', marginTop: '6px' }}>
+                  разгружено от плана дня · {fmtM3(factVolume)} / {fmtM3(planToday)} м³
+                </div>
+                {planToday > 0 && (
+                  <div style={{
+                    margin: '16px auto 0',
+                    maxWidth: '420px',
+                    height: '10px',
+                    borderRadius: '9999px',
+                    background: '#334155',
+                    overflow: 'hidden',
+                  }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${completionPercent}%`,
+                      borderRadius: '9999px',
+                      background: completionBarBg,
+                      transition: 'width 0.4s ease',
+                    }} />
+                  </div>
+                )}
+              </div>
+
+              {/* Метрики дня */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                gap: '10px',
+                marginBottom: '22px',
+              }}>
+                {[
+                  { label: 'План на день', value: `${fmtM3(planToday)} м³`, color: '#E2E8F0' },
+                  { label: 'Осталось разгрузить', value: `${fmtM3(remainingVolume)} м³`, color: '#94A3B8' },
+                  { label: 'Покрыто рейсами', value: `${fmtM3(coveredVolume)} м³`, color: '#94A3B8' },
+                  ...volumeByStatus.map((item) => ({
+                    label: item.status === 'Разгружен' ? 'Разгружено' : item.status,
+                    value: item.showCount
+                      ? `${item.count} · ${fmtM3(item.volume)} м³`
+                      : `${fmtM3(item.volume)} м³`,
+                    color: item.color,
+                  })),
+                  {
+                    label: 'Заявки закрыты',
+                    value: `${completedOrders} из ${planOrdersCount}`,
+                    color: '#10B981',
+                  },
+                  {
+                    label: 'Объём закрытых заявок',
+                    value: `${fmtM3(completedOrdersVolume)} м³`,
+                    color: '#64748B',
+                  },
+                ].map((row) => (
+                  <div
+                    key={row.label}
+                    style={{
+                      padding: '12px 14px',
+                      background: '#0F172A',
+                      borderRadius: '12px',
+                      border: '1px solid #334155',
+                    }}
+                  >
+                    <div style={{ color: '#64748B', fontSize: '12px', marginBottom: '4px' }}>
+                      {row.label}
+                    </div>
+                    <div style={{ fontSize: '20px', fontWeight: 700, color: row.color }}>
+                      {row.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Разбивка по заявкам */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: '12px',
+              }}>
+                <div style={{ fontSize: '15px', fontWeight: 700, color: '#E2E8F0' }}>
+                  По заявкам
+                </div>
+                <div style={{ fontSize: '12px', color: '#64748B' }}>
+                  {planOrdersDetail.length} заявок
+                </div>
+              </div>
+
+              {planOrdersDetail.length === 0 ? (
+                <div style={{
+                  padding: '28px',
+                  textAlign: 'center',
+                  color: '#64748B',
+                  background: '#0F172A',
+                  borderRadius: '12px',
+                  border: '1px solid #334155',
+                }}>
+                  Нет заявок на этот день
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {planOrdersDetail.map((row) => {
+                    const statusCfg = getStatusConfig(row.status);
+                    return (
+                      <button
+                        key={row.id}
+                        type="button"
+                        onClick={() => {
+                          const order = todayOrders.find((o) => String(o.id) === String(row.id));
+                          if (order) {
+                            setSelectedOrder(order);
+                            setShowPlanModal(false);
+                          }
+                        }}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '12px 14px',
+                          background: '#0F172A',
+                          borderRadius: '12px',
+                          border: '1px solid #334155',
+                          cursor: 'pointer',
+                          color: 'inherit',
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#475569'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#334155'; }}
+                      >
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          justifyContent: 'space-between',
+                          gap: '12px',
+                          marginBottom: '8px',
+                        }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{
+                              fontSize: '14px',
+                              fontWeight: 600,
+                              color: '#E2E8F0',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}>
+                              #{row.id} · {row.time} · {row.client}
+                            </div>
+                          </div>
+                          <span style={{
+                            flexShrink: 0,
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            padding: '2px 8px',
+                            borderRadius: '9999px',
+                            color: statusCfg.color,
+                            background: statusCfg.bg,
+                          }}>
+                            {statusCfg.label}
+                          </span>
+                        </div>
+
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '10px',
+                          marginBottom: '6px',
+                        }}>
+                          <span style={{ fontSize: '13px', color: '#94A3B8' }}>
+                            <span style={{ color: '#10B981', fontWeight: 700 }}>
+                              {fmtM3(row.unloaded)}
+                            </span>
+                            {' / '}{fmtM3(row.planVol)} м³
+                            {row.unloadedCount > 0 ? (
+                              <span style={{ color: '#94A3B8' }}>
+                                {' '}· {row.unloadedCount} разгружен
+                              </span>
+                            ) : null}
+                          </span>
+                          <span style={{
+                            fontSize: '13px',
+                            fontWeight: 700,
+                            color: row.pct >= 90 ? '#10B981' : row.pct >= 50 ? '#FACC15' : '#94A3B8',
+                          }}>
+                            {row.pct}%
+                          </span>
+                        </div>
+
+                        <div style={{
+                          height: '6px',
+                          borderRadius: '9999px',
+                          background: '#1E2937',
+                          overflow: 'hidden',
+                          marginBottom: (row.loading + row.inTransit + row.onSite) > 0 ? '8px' : 0,
+                        }}>
+                          <div style={{
+                            height: '100%',
+                            width: `${row.pct}%`,
+                            borderRadius: '9999px',
+                            background: row.pct >= 90
+                              ? '#10B981'
+                              : row.pct >= 50
+                                ? '#FACC15'
+                                : '#3B82F6',
+                          }} />
+                        </div>
+
+                        {(row.loading + row.inTransit + row.onSite) > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                            {row.loading > 0 && (
+                              <span style={{ fontSize: '11px', color: '#FACC15', fontWeight: 600 }}>
+                                {fmtM3(row.loading)} м³ загрузка
+                              </span>
+                            )}
+                            {row.inTransit > 0 && (
+                              <span style={{ fontSize: '11px', color: '#60A5FA', fontWeight: 600 }}>
+                                {fmtM3(row.inTransit)} м³ в пути
+                              </span>
+                            )}
+                            {row.onSite > 0 && (
+                              <span style={{ fontSize: '11px', color: '#34D399', fontWeight: 600 }}>
+                                {fmtM3(row.onSite)} м³ на объекте
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== МОДАЛКА: ЗАДЕРЖКИ ОТГРУЗОК ==================== */}
+      {showDelaysModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.75)',
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+          }}
+          onClick={() => setShowDelaysModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(860px, 100%)',
+              maxHeight: 'min(860px, calc(100vh - 48px))',
+              background: '#1E2937',
+              borderRadius: '20px',
+              border: '1px solid #334155',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              boxShadow: '0 24px 64px rgba(0,0,0,0.45)',
+            }}
+          >
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '18px 24px',
+              borderBottom: '1px solid #334155',
+              flexShrink: 0,
+            }}>
+              <div>
+                <div style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>
+                  Задержки отгрузок
+                </div>
+                <div style={{ fontSize: '13px', color: '#64748B', marginTop: '2px' }}>
+                  {selectedDateStr !== today
+                    ? 'Задержки считаются только за сегодняшний день'
+                    : `Сейчас ${fmtClockMins(currentMinutes)} · порог опоздания > 15 мин`}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDelaysModal(false)}
+                style={{
+                  background: '#334155',
+                  border: 'none',
+                  borderRadius: '10px',
+                  width: '36px',
+                  height: '36px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <X size={18} color="#94A3B8" />
+              </button>
+            </div>
+
+            <div className="scroll-hidden" style={{ overflowY: 'auto', padding: '20px 24px 28px' }}>
+              {/* Как считаем */}
+              <div style={{
+                padding: '14px 16px',
+                background: '#0F172A',
+                borderRadius: '12px',
+                border: '1px solid #334155',
+                marginBottom: '18px',
+                fontSize: '13px',
+                color: '#94A3B8',
+                lineHeight: 1.55,
+              }}>
+                <div style={{ color: '#E2E8F0', fontWeight: 600, marginBottom: '6px' }}>
+                  Как считаем задержку
+                </div>
+                Заявка попадает сюда, если статус «Новая» или «В работе», нет миксеров
+                в движении, объём ещё не полностью назначен, и с расчётного времени
+                начала загрузки прошло больше 15 минут.
+                <br />
+                Расчёт старта: время доставки − путь − загрузка (~2 мин/м³).
+              </div>
+
+              {delayedOrders.length === 0 ? (
+                <div style={{
+                  padding: '36px 20px',
+                  textAlign: 'center',
+                  background: '#0F172A',
+                  borderRadius: '14px',
+                  border: '1px solid #334155',
+                }}>
+                  <div style={{ fontSize: '36px', marginBottom: '8px' }}>✓</div>
+                  <div style={{ fontSize: '16px', fontWeight: 600, color: '#10B981', marginBottom: '4px' }}>
+                    Все по графику
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#64748B' }}>
+                    {selectedDateStr !== today
+                      ? 'На выбранный день задержки не отслеживаются'
+                      : 'Сейчас нет заявок с опозданием больше 15 минут'}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                    marginBottom: '2px',
+                  }}>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: '#E2E8F0' }}>
+                      Проблемные заявки
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#F87171', fontWeight: 600 }}>
+                      {delayedOrders.length}{' '}
+                      {delayedOrders.length === 1 ? 'заявка' : delayedOrders.length <= 4 ? 'заявки' : 'заявок'}
+                    </div>
+                  </div>
+
+                  {delayedOrders.map((order: any) => {
+                    const client = order.organization_name || order.full_name || '—';
+                    const statusCfg = getStatusConfig(order.status);
+                    const severity = order.delayMinutes > 60 ? '#EF4444' : '#F59E0B';
+                    return (
+                      <button
+                        key={order.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedOrder(order);
+                          setShowDelaysModal(false);
+                        }}
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '14px 16px',
+                          background: '#0F172A',
+                          borderRadius: '14px',
+                          border: `1px solid ${severity}40`,
+                          cursor: 'pointer',
+                          color: 'inherit',
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.borderColor = severity; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.borderColor = `${severity}40`; }}
+                      >
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          justifyContent: 'space-between',
+                          gap: '12px',
+                          marginBottom: '10px',
+                        }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{
+                              fontSize: '15px',
+                              fontWeight: 700,
+                              color: '#E2E8F0',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}>
+                              #{order.id} · {order.delivery_time || '—'} · {client}
+                            </div>
+                            <div style={{ marginTop: '4px' }}>
+                              <span style={{
+                                fontSize: '11px',
+                                fontWeight: 600,
+                                padding: '2px 8px',
+                                borderRadius: '9999px',
+                                color: statusCfg.color,
+                                background: statusCfg.bg,
+                              }}>
+                                {statusCfg.label}
+                              </span>
+                            </div>
+                          </div>
+                          <div style={{
+                            flexShrink: 0,
+                            textAlign: 'right',
+                          }}>
+                            <div style={{
+                              fontSize: '22px',
+                              fontWeight: 700,
+                              color: severity,
+                              lineHeight: 1,
+                            }}>
+                              +{fmtDelayMins(order.delayMinutes)}
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#64748B', marginTop: '3px' }}>
+                              опоздание
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Таймлайн расчёта */}
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(3, 1fr)',
+                          gap: '8px',
+                          marginBottom: '12px',
+                        }}>
+                          <div style={{
+                            padding: '8px 10px',
+                            background: '#1E2937',
+                            borderRadius: '10px',
+                          }}>
+                            <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '2px' }}>
+                              Начать грузить
+                            </div>
+                            <div style={{ fontSize: '15px', fontWeight: 700, color: '#FCA5A5' }}>
+                              {fmtClockMins(order.expectedLoadStart)}
+                            </div>
+                          </div>
+                          <div style={{
+                            padding: '8px 10px',
+                            background: '#1E2937',
+                            borderRadius: '10px',
+                          }}>
+                            <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '2px' }}>
+                              Доставка
+                            </div>
+                            <div style={{ fontSize: '15px', fontWeight: 700, color: '#E2E8F0' }}>
+                              {fmtClockMins(order.plannedStart)}
+                            </div>
+                          </div>
+                          <div style={{
+                            padding: '8px 10px',
+                            background: '#1E2937',
+                            borderRadius: '10px',
+                          }}>
+                            <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '2px' }}>
+                              Путь / загрузка
+                            </div>
+                            <div style={{ fontSize: '13px', fontWeight: 600, color: '#94A3B8' }}>
+                              {order.travelTime}м{order.travelTimeIsEstimate ? '*' : ''}
+                              {' · '}{order.loadingTime}м
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{
+                          fontSize: '12px',
+                          color: '#64748B',
+                          marginBottom: '8px',
+                        }}>
+                          Назначено{' '}
+                          <span style={{ color: '#E2E8F0', fontWeight: 600 }}>
+                            {fmtM3(Number(order.assignedVol || 0))}
+                          </span>
+                          {' / '}{fmtM3(Number(order.volume || 0))} м³
+                          {' · '}миксеров: {order.mixerCount}
+                          {order.travelTimeIsEstimate ? (
+                            <span style={{ color: '#475569' }}> · *путь ≈ оценка 30 мин</span>
+                          ) : null}
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          {(order.reasons || []).map((reason: string) => (
+                            <div
+                              key={reason}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: '8px',
+                                fontSize: '13px',
+                                color: '#FCA5A5',
+                                lineHeight: 1.35,
+                              }}
+                            >
+                              <span style={{ color: severity, flexShrink: 0, marginTop: '1px' }}>●</span>
+                              <span>{reason}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Модалка календаря */}
       {showCalendar && (

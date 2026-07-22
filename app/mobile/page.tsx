@@ -9,7 +9,11 @@ import Link from 'next/link';
 
 // 🔥 Подключаем хуки авторизации и real-time
 import { useUserRole } from '../providers/UserRoleProvider';
-import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
+import {
+  useRealtimeOrders,
+  useRealtimeOrderMixers,
+  formatOrderMixer,
+} from '@/hooks/useRealtimeOrders';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
@@ -97,6 +101,48 @@ export default function MobileDashboard() {
     }
   );
 
+  // 🔥 Live-обновление миксеров по broadcast (order_mixers:all).
+  // Раньше activeMixers/mixerAssignments грузились только fetch'ем при открытии
+  // страницы — смена «Загрузка» → «В пути» на десктопе не доходила до мобилки,
+  // пока не разбудят вкладку (useWakeRefresh).
+  const mixersRealtimeEnabled = Boolean(userId) && initialOrdersLoaded;
+
+  useRealtimeOrderMixers(setActiveMixers, {
+    activeOnly: true,
+    orders: allOrders,
+    enabled: mixersRealtimeEnabled,
+  });
+
+  useRealtimeOrderMixers(setMixerAssignments, {
+    orders: allOrders,
+    enabled: mixersRealtimeEnabled,
+  });
+
+  // Подтягиваем delivery_date/клиента в миксеры, когда подгрузились/обновились заявки
+  useEffect(() => {
+    if (!allOrders.length) return;
+    setActiveMixers((prev) => prev.map((m) => formatOrderMixer(m, allOrders)));
+    setMixerAssignments((prev) => prev.map((m) => formatOrderMixer(m, allOrders)));
+  }, [allOrders]);
+
+  // Синхронизация открытой модалки с realtime-обновлениями allOrders
+  // (статус/логистика/«под вопросом» меняются с сервера или с другого экрана).
+  useEffect(() => {
+    if (!selectedOrder?.id) return;
+    const fresh = allOrders.find((o) => String(o.id) === String(selectedOrder.id));
+    if (
+      fresh &&
+      (fresh.status !== selectedOrder.status ||
+        (fresh as any).logistics_ready !== (selectedOrder as any).logistics_ready ||
+        !!(fresh as any).is_questionable !== !!(selectedOrder as any).is_questionable)
+    ) {
+      setSelectedOrder((prev: any) => (prev ? { ...prev, ...fresh } : prev));
+    }
+    if (!fresh && allOrders.length > 0) {
+      setSelectedOrder(null);
+    }
+  }, [allOrders, selectedOrder?.id]);
+
   // 🔥 Реалтайм присылает ТОЛЬКО будущие изменения (INSERT/UPDATE/DELETE),
   // он никогда не отдаёт уже существующие строки. Без этого fetch страница
   // при открытии/смене даты будет пустой, пока кто-то не изменит заказ.
@@ -143,21 +189,6 @@ useEffect(() => {
       console.error('Initial data fetch failed:', err);
     });
 }, []);
-
-// Мягкое восстановление данных при пробуждении вкладки (без перезагрузки) —
-// подтягиваем свежие заявки и активные миксеры. Сокет realtime поднимает layout.
-useWakeRefresh(() => {
-  if (!userId) return;
-  fetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`)
-    .then((res) => (res.ok ? res.json() : null))
-    .then((data) => { if (data) setAllOrders(data); })
-    .catch(() => {});
-
-  fetch('/api/adminCifra/active-mixers')
-    .then((res) => (res.ok ? res.json() : null))
-    .then((mixers) => { if (Array.isArray(mixers)) setActiveMixers(mixers); })
-    .catch(() => {});
-});
 
 // Список всех миксеров — нужен для определения типа (свой/наёмный) в виджете
 useEffect(() => {
@@ -206,6 +237,28 @@ useEffect(() => {
     cancelled = true;
   };
 }, [orderIdsKey]);
+
+// Мягкое восстановление данных при пробуждении вкладки (без перезагрузки) —
+// подтягиваем свежие заявки и миксеры. Сокет realtime поднимает layout.
+useWakeRefresh(() => {
+  if (!userId) return;
+  fetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`)
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => { if (data) setAllOrders(data); })
+    .catch(() => {});
+
+  fetch('/api/adminCifra/active-mixers')
+    .then((res) => (res.ok ? res.json() : null))
+    .then((mixers) => { if (Array.isArray(mixers)) setActiveMixers(mixers); })
+    .catch(() => {});
+
+  if (orderIdsKey) {
+    fetch(`/api/adminCifra/order-mixers?orderIds=${orderIdsKey}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((assignments) => { if (Array.isArray(assignments)) setMixerAssignments(assignments); })
+      .catch(() => {});
+  }
+});
 
 
   // ==================== 6. РАСЧЁТЫ И ФИЛЬТРЫ ====================
@@ -285,9 +338,57 @@ useEffect(() => {
   const totalActiveMixers = uniqueDayMixers.length;
   const hasDayMixerStats =
     totalActiveMixers > 0 || mixerStatusCounts.unloaded > 0;
-  const volumeInTransit = useMemo(() =>
-    activeMixersForDate.reduce((s: number, m: any) => s + Number(m.volume || 0), 0),
-  [activeMixersForDate]);
+
+  // Все назначения миксеров на заявки выбранного дня (включая «Разгружен»)
+  const dayAssignments = useMemo(
+    () => mixerAssignments.filter((m: any) =>
+      dayOrderIds.has(String(m.orderId ?? m.order_id))
+    ),
+    [mixerAssignments, dayOrderIds]
+  );
+
+  // Покрытый объём = сумма объёмов всех рейсов дня (загрузка/в пути/на объекте/разгружен…)
+  const coveredVolume = useMemo(
+    () => dayAssignments.reduce((s: number, m: any) => s + Number(m.volume || 0), 0),
+    [dayAssignments]
+  );
+
+  const unloadedVolume = useMemo(
+    () => dayAssignments
+      .filter((m: any) => m.status === 'Разгружен')
+      .reduce((s: number, m: any) => s + Number(m.volume || 0), 0),
+    [dayAssignments]
+  );
+
+  // Только живые рейсы (без разгруженных) — для подписи «в движении»
+  const volumeInMotion = useMemo(
+    () => activeMixersForDate.reduce((s: number, m: any) => s + Number(m.volume || 0), 0),
+    [activeMixersForDate]
+  );
+
+  // Суммы по статусам рейсов всех заявок дня (включая разгруженные)
+  const volumeByStatus = useMemo(() => {
+    const FLOW = [
+      { status: 'Загрузка', label: 'загрузка', color: '#FACC15', showCount: false },
+      { status: 'В пути', label: 'в пути', color: '#60A5FA', showCount: false },
+      { status: 'На объекте', label: 'на объекте', color: '#34D399', showCount: false },
+      { status: 'Разгружен', label: 'разгружено', color: '#10B981', showCount: true },
+    ] as const;
+    const vols: Record<string, number> = {};
+    const counts: Record<string, number> = {};
+    for (const m of dayAssignments) {
+      const s = String(m.status || '');
+      vols[s] = (vols[s] || 0) + Number(m.volume || 0);
+      counts[s] = (counts[s] || 0) + 1;
+    }
+    return FLOW
+      .map((cfg) => ({
+        ...cfg,
+        volume: vols[cfg.status] || 0,
+        count: counts[cfg.status] || 0,
+      }))
+      .filter((x) => x.volume > 0 || x.count > 0);
+  }, [dayAssignments]);
 
   const problemMixers = useMemo(() =>
     uniqueDayMixers.filter((m: any) => m.status === 'Проблема'),
@@ -302,6 +403,12 @@ useEffect(() => {
       .reduce((s: number, o: any) => s + Number(o.volume || 0), 0),
   [todayOrders]);
 
+  const coveragePct = dayPlannedVolume > 0
+    ? Math.min(100, Math.round((coveredVolume / dayPlannedVolume) * 100))
+    : 0;
+
+  const fmtM3 = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1));
+
   // ── KPI: план/факт по объёму (отменённые не учитываются) ─────────────────────
   const kpiActiveOrders = useMemo(() =>
     todayOrders.filter((o: any) => o.status !== 'cancelled'),
@@ -311,6 +418,7 @@ useEffect(() => {
     kpiActiveOrders.reduce((s: number, o: any) => s + Number(o.volume || 0), 0),
   [kpiActiveOrders]);
 
+  // Объём закрытых заявок (статус completed) — для справки в шторке
   const kpiCompletedVolume = useMemo(() =>
     kpiActiveOrders.filter((o: any) => o.status === 'completed')
                .reduce((s: number, o: any) => s + Number(o.volume || 0), 0),
@@ -320,7 +428,14 @@ useEffect(() => {
   const kpiNewOrders        = useMemo(() => kpiActiveOrders.filter((o: any) => o.status === 'new').length, [kpiActiveOrders]);
   const kpiInWorkOrders     = useMemo(() => kpiActiveOrders.filter((o: any) => o.status === 'processing').length, [kpiActiveOrders]);
   const kpiCancelledOrders  = useMemo(() => todayOrders.filter((o: any) => o.status === 'cancelled').length, [todayOrders]);
-  const kpiCompletionPct    = kpiPlanToday > 0 ? Math.round((kpiCompletedVolume / kpiPlanToday) * 100) : 0;
+
+  // Выполнение плана = разгруженные м³ / план дня (а не только закрытые заявки —
+  // иначе днём карточка почти всегда 0%, пока заявки не переведут в «Выполнена»).
+  const kpiFactVolume = unloadedVolume;
+  const kpiCompletionPct = kpiPlanToday > 0
+    ? Math.min(100, Math.round((kpiFactVolume / kpiPlanToday) * 100))
+    : 0;
+  const kpiRemainingVolume = Math.max(0, kpiPlanToday - kpiFactVolume);
 
   // ── KPI: задержки (упрощённая версия без road_time кэша) ──────────────────────
   const kpiDelayedOrders = useMemo(() => {
@@ -456,20 +571,98 @@ useEffect(() => {
             </div>
           </div>
 
-          {/* Выполнение плана */}
+          {/* Выполнение плана — факт по разгруженным м³ + прогресс-бар */}
           <div
             onClick={() => setShowPlanSheet(true)}
-            style={{ background: '#25334A', borderRadius: '16px', padding: '18px', textAlign: 'center', cursor: 'pointer' }}
+            style={{
+              background: '#25334A',
+              borderRadius: '16px',
+              padding: '14px 16px',
+              cursor: 'pointer',
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              minHeight: '148px',
+            }}
           >
-            <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '4px' }}>Выполнение</div>
-            <div style={{ fontSize: '48px', fontWeight: 700, color: '#10B981', lineHeight: 1, marginBottom: '10px' }}>
-              {kpiCompletionPct}%
+            <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '8px' }}>
+              Выполнение плана
             </div>
-            {/* Факт / план без подписей */}
-            <div style={{ fontSize: '15px', fontWeight: 700, color: '#64748B' }}>
-              <span style={{ color: '#E2E8F0' }}>{Math.round(kpiCompletedVolume)}</span>
-              <span style={{ color: '#475569' }}> / {Math.round(kpiPlanToday)}</span>
-              <span style={{ color: '#64748B', fontSize: '12px', fontWeight: 400 }}> м³</span>
+
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', minWidth: 0 }}>
+                <span style={{
+                  fontSize: '28px', fontWeight: 700, lineHeight: 1,
+                  color: kpiCompletionPct >= 90 ? '#10B981' : kpiCompletionPct >= 50 ? '#FACC15' : '#E2E8F0',
+                }}>
+                  {fmtM3(kpiFactVolume)}
+                </span>
+                <span style={{ fontSize: '13px', color: '#64748B', whiteSpace: 'nowrap' }}>
+                  / {fmtM3(kpiPlanToday)} м³
+                </span>
+              </div>
+              <span style={{
+                fontSize: '22px', fontWeight: 700, lineHeight: 1, flexShrink: 0,
+                color: kpiCompletionPct >= 90 ? '#10B981' : kpiCompletionPct >= 50 ? '#FACC15' : '#94A3B8',
+              }}>
+                {kpiCompletionPct}%
+              </span>
+            </div>
+
+            <div style={{ height: '8px', borderRadius: '9999px', background: '#334155', overflow: 'hidden', marginBottom: '8px' }}>
+              <div style={{
+                height: '100%',
+                width: `${kpiCompletionPct}%`,
+                borderRadius: '9999px',
+                background: kpiCompletionPct >= 90
+                  ? 'linear-gradient(90deg, #10B981, #34D399)'
+                  : kpiCompletionPct >= 50
+                    ? 'linear-gradient(90deg, #F59E0B, #FACC15)'
+                    : 'linear-gradient(90deg, #3B82F6, #60A5FA)',
+                transition: 'width 0.4s ease',
+              }} />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {volumeByStatus.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                  {volumeByStatus.map((item) => (
+                    <span
+                      key={item.status}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'baseline',
+                        gap: '3px',
+                        padding: '2px 7px',
+                        borderRadius: '9999px',
+                        background: `${item.color}18`,
+                        border: `1px solid ${item.color}40`,
+                        color: item.color,
+                        fontSize: '10px',
+                        fontWeight: 600,
+                        lineHeight: 1.3,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {item.showCount ? (
+                        <>
+                          <span style={{ fontWeight: 700 }}>{item.count}</span>
+                          <span style={{ opacity: 0.75 }}>·</span>
+                          <span style={{ fontWeight: 700 }}>{fmtM3(item.volume)} м³</span>
+                        </>
+                      ) : (
+                        <span style={{ fontWeight: 700 }}>{fmtM3(item.volume)} м³</span>
+                      )}
+                      <span style={{ opacity: 0.9, fontWeight: 500 }}>{item.label}</span>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {kpiCompletedOrders > 0 && (
+                <div style={{ fontSize: '11px', color: '#64748B', lineHeight: 1.35 }}>
+                  {kpiCompletedOrders} заявки закрыты
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -929,37 +1122,47 @@ useEffect(() => {
             </div>
           ) : (
             <>
-              {/* Статусные плашки */}
+              {/* Статусные плашки: объёмы по рейсам дня; у «Разгружено» — ещё и число миксеров */}
               <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '14px' }}>
-                {[
-                  { label: 'Загрузка',   count: mixerStatusCounts.loading,   color: '#FACC15' },
-                  { label: 'В пути',     count: mixerStatusCounts.inTransit, color: '#3B82F6' },
-                  { label: 'На объекте', count: mixerStatusCounts.onSite,    color: '#10B981' },
-                  { label: 'Разгружен',  count: mixerStatusCounts.unloaded,  color: '#34D399' },
-                  { label: 'Проблема',   count: mixerStatusCounts.problem,   color: '#EF4444' },
-                ].filter(s => s.count > 0).map(s => (
-                  <div key={s.label} style={{
+                {volumeByStatus.map((s) => (
+                  <div key={s.status} style={{
                     display: 'flex', alignItems: 'center', gap: '6px',
                     padding: '6px 12px', borderRadius: '10px',
                     background: `${s.color}12`, border: `1px solid ${s.color}30`,
                   }}>
-                    <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: s.color, boxShadow: s.label !== 'Проблема' ? `0 0 5px ${s.color}` : undefined, flexShrink: 0 }} />
-                    <span style={{ fontSize: '15px', fontWeight: 700, color: s.color }}>{s.count}</span>
-                    <span style={{ fontSize: '13px', color: '#94A3B8' }}>{s.label}</span>
+                    <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: s.color, boxShadow: `0 0 5px ${s.color}`, flexShrink: 0 }} />
+                    {s.showCount ? (
+                      <span style={{ fontSize: '14px', fontWeight: 700, color: s.color }}>
+                        {s.count} · {fmtM3(s.volume)} м³
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: '14px', fontWeight: 700, color: s.color }}>
+                        {fmtM3(s.volume)} м³
+                      </span>
+                    )}
+                    <span style={{ fontSize: '13px', color: '#94A3B8' }}>{s.status === 'Разгружен' ? 'Разгружено' : s.status}</span>
                   </div>
                 ))}
               </div>
 
-              {/* Объём в пути + свои/наёмные */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
-                  <span style={{ fontSize: '28px', fontWeight: 700, color: '#E2E8F0', lineHeight: 1 }}>
-                    {volumeInTransit % 1 === 0 ? volumeInTransit : volumeInTransit.toFixed(1)}
-                  </span>
-                  <span style={{ fontSize: '14px', color: '#64748B' }}>м³ в движении</span>
+              {/* Покрытый объём (все рейсы дня, включая разгруженные) + свои/наёмные */}
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '12px', gap: '10px' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
+                    <span style={{ fontSize: '28px', fontWeight: 700, color: '#E2E8F0', lineHeight: 1 }}>
+                      {fmtM3(coveredVolume)}
+                    </span>
+                    <span style={{ fontSize: '14px', color: '#64748B' }}>м³ покрыто</span>
+                  </div>
+                  <div style={{ marginTop: '4px', fontSize: '12px', color: '#64748B', lineHeight: 1.35 }}>
+                    {[
+                      unloadedVolume > 0 ? `${fmtM3(unloadedVolume)} разгружено` : null,
+                      volumeInMotion > 0 ? `${fmtM3(volumeInMotion)} в движении` : null,
+                    ].filter(Boolean).join(' · ') || 'рейсы ещё не назначены'}
+                  </div>
                 </div>
                 {(ownActive > 0 || rentedActive > 0) && (
-                  <div style={{ fontSize: '15px', fontWeight: 600, color: '#64748B', textAlign: 'right' }}>
+                  <div style={{ fontSize: '15px', fontWeight: 600, color: '#64748B', textAlign: 'right', flexShrink: 0 }}>
                     {ownActive > 0 && <span style={{ color: '#10B981' }}>{ownActive} св.</span>}
                     {ownActive > 0 && rentedActive > 0 && <span style={{ color: '#475569' }}> · </span>}
                     {rentedActive > 0 && <span style={{ color: '#FACC15' }}>{rentedActive} наём.</span>}
@@ -967,21 +1170,23 @@ useEffect(() => {
                 )}
               </div>
 
-              {/* Прогресс-бар: объём в движении / плановый объём сегодня */}
+              {/* Прогресс: покрытый объём рейсами / план заявок на день */}
               {dayPlannedVolume > 0 && (
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#475569', marginBottom: '6px' }}>
-                    <span>{isSelectedToday ? 'Загрузка парка сегодня' : 'Загрузка парка'}</span>
-                    <span style={{ color: '#94A3B8', fontWeight: 600 }}>
-                      {volumeInTransit % 1 === 0 ? volumeInTransit : volumeInTransit.toFixed(1)} / {dayPlannedVolume % 1 === 0 ? dayPlannedVolume : dayPlannedVolume.toFixed(1)} м³
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#475569', marginBottom: '6px', gap: '8px' }}>
+                    <span>Покрытие плана{isSelectedToday ? ' сегодня' : ''}</span>
+                    <span style={{ color: '#94A3B8', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      {fmtM3(coveredVolume)} / {fmtM3(dayPlannedVolume)} м³ · {coveragePct}%
                     </span>
                   </div>
                   <div style={{ height: '8px', borderRadius: '9999px', background: '#334155', overflow: 'hidden' }}>
                     <div style={{
                       height: '100%',
-                      width: `${Math.min(100, (volumeInTransit / dayPlannedVolume) * 100)}%`,
+                      width: `${coveragePct}%`,
                       borderRadius: '9999px',
-                      background: 'linear-gradient(90deg, #3B82F6, #10B981)',
+                      background: coveragePct >= 100
+                        ? 'linear-gradient(90deg, #10B981, #34D399)'
+                        : 'linear-gradient(90deg, #3B82F6, #10B981)',
                       transition: 'width 0.4s ease',
                     }} />
                   </div>
@@ -1064,41 +1269,51 @@ useEffect(() => {
                 <X size={20} color="#64748B" />
               </button>
             </div>
-            <div style={{ padding: '0 20px 28px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {/* Процент */}
-              <div style={{ textAlign: 'center', paddingBottom: '16px', borderBottom: '1px solid #334155' }}>
+            <div style={{ padding: '0 20px 28px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div style={{ textAlign: 'center', paddingBottom: '14px', borderBottom: '1px solid #334155' }}>
                 <div style={{
-                  fontSize: '64px', fontWeight: 700, lineHeight: 1,
-                  color: kpiCompletionPct >= 90 ? '#10B981' : kpiCompletionPct >= 60 ? '#FACC15' : '#EF4444',
+                  fontSize: '56px', fontWeight: 700, lineHeight: 1,
+                  color: kpiCompletionPct >= 90 ? '#10B981' : kpiCompletionPct >= 50 ? '#FACC15' : '#60A5FA',
                 }}>{kpiCompletionPct}%</div>
-                <div style={{ color: '#64748B', fontSize: '14px', marginTop: '6px' }}>выполнение плана</div>
-              </div>
-              {/* Объём */}
-              {[
-                { label: 'Выполнено',    value: `${Math.round(kpiCompletedVolume)} м³`, color: '#10B981' },
-                { label: 'Запланировано', value: `${Math.round(kpiPlanToday)} м³`,       color: '#E2E8F0' },
-                { label: 'Осталось',     value: `${Math.max(0, Math.round(kpiPlanToday - kpiCompletedVolume))} м³`, color: '#64748B' },
-                { label: 'Заявок выполнено', value: `${kpiCompletedOrders} из ${todayOrders.length}`, color: '#60A5FA' },
-              ].map(row => (
-                <div key={row.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: '#1E2D40', borderRadius: '12px' }}>
-                  <span style={{ color: '#94A3B8', fontSize: '15px' }}>{row.label}</span>
-                  <span style={{ fontSize: '18px', fontWeight: 700, color: row.color }}>{row.value}</span>
+                <div style={{ color: '#64748B', fontSize: '13px', marginTop: '6px' }}>
+                  разгружено от плана дня
                 </div>
-              ))}
-              {/* Прогресс-бар */}
-              {kpiPlanToday > 0 && (
-                <div>
-                  <div style={{ height: '10px', borderRadius: '9999px', background: '#334155', overflow: 'hidden' }}>
+                {kpiPlanToday > 0 && (
+                  <div style={{ marginTop: '14px', height: '10px', borderRadius: '9999px', background: '#334155', overflow: 'hidden' }}>
                     <div style={{
                       height: '100%',
-                      width: `${Math.min(100, kpiCompletionPct)}%`,
+                      width: `${kpiCompletionPct}%`,
                       borderRadius: '9999px',
-                      background: kpiCompletionPct >= 90 ? '#10B981' : kpiCompletionPct >= 60 ? '#FACC15' : '#EF4444',
+                      background: kpiCompletionPct >= 90
+                        ? 'linear-gradient(90deg, #10B981, #34D399)'
+                        : kpiCompletionPct >= 50
+                          ? 'linear-gradient(90deg, #F59E0B, #FACC15)'
+                          : 'linear-gradient(90deg, #3B82F6, #60A5FA)',
                       transition: 'width 0.4s ease',
                     }} />
                   </div>
+                )}
+              </div>
+
+              {[
+                { label: 'План на день', value: `${fmtM3(kpiPlanToday)} м³`, color: '#E2E8F0' },
+                { label: 'Осталось разгрузить', value: `${fmtM3(kpiRemainingVolume)} м³`, color: '#64748B' },
+                ...volumeByStatus.map((item) => ({
+                  label: item.status === 'Разгружен' ? 'Разгружено' : item.status,
+                  value: item.showCount
+                    ? `${item.count} · ${fmtM3(item.volume)} м³`
+                    : `${fmtM3(item.volume)} м³`,
+                  color: item.color,
+                })),
+                { label: 'Покрыто рейсами', value: `${fmtM3(coveredVolume)} м³`, color: '#94A3B8' },
+                { label: 'Заявки закрыты', value: `${kpiCompletedOrders} из ${kpiActiveOrders.length}`, color: '#10B981' },
+                { label: 'Объём закрытых заявок', value: `${fmtM3(kpiCompletedVolume)} м³`, color: '#64748B' },
+              ].map(row => (
+                <div key={row.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: '#1E2D40', borderRadius: '12px', gap: '10px' }}>
+                  <span style={{ color: '#94A3B8', fontSize: '14px' }}>{row.label}</span>
+                  <span style={{ fontSize: '16px', fontWeight: 700, color: row.color, whiteSpace: 'nowrap' }}>{row.value}</span>
                 </div>
-              )}
+              ))}
             </div>
           </div>
         </>

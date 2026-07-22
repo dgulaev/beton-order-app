@@ -9,6 +9,7 @@ import { useUserRole } from '../providers/UserRoleProvider';
 import { useOrderChangeNotifications } from '@/hooks/useRealtimeOrders';
 import { reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
 import { useWakeReload } from '@/hooks/useWakeReload';
+import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
 import { formatPhoneInput } from '@/lib/phone';
 
 // ==================== PERSISTENTНЫЕ УВЕДОМЛЕНИЯ (localStorage) ====================
@@ -401,29 +402,9 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     createToastRef.current?.(id, emoji, title, message);
   };
 
-  // ==================== 4.3 HEARTBEAT — ОБНОВЛЕНИЕ АКТИВНОСТИ (каждые 5 минут) ====================
-  useEffect(() => {
-    const savedUserId = localStorage.getItem('userId');
-    if (!savedUserId || userRole === 'guest') return;
-
-    const sendHeartbeat = async () => {
-      try {
-        const res = await fetch('/api/adminCifra/heartbeat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: parseInt(savedUserId) })
-        });
-      } catch (e) {
-        console.warn('Heartbeat failed:', e);
-      }
-    };
-
-    sendHeartbeat();
-
-    const interval = setInterval(sendHeartbeat, 10 * 60 * 1000);
-
-    return () => clearInterval(interval);
-  }, [userRole]);
+  // ==================== 4.3 HEARTBEAT — активность для «Кто в онлайн» ====================
+  // Тот же хук, что в /mobile — иначе с телефона сотрудник не виден в онлайн.
+  useStaffHeartbeat(!!userRole && userRole !== 'guest');
 
   // ==================== 4.4 ПРИСВОЕНИЕ ФУНКЦИЙ В WINDOW ====================
   useEffect(() => {
