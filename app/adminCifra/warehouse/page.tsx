@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Image from 'next/image';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import { useUserRole } from '@/app/providers/UserRoleProvider';
@@ -20,9 +20,16 @@ import {
   CARD_BORDER,
   CARD_VOLUME,
   CARD_VOLUME_SOFT,
+  modalCloseButtonStyle,
+  modalFieldStyle,
+  volumeModalStyle,
 } from '../cardStyles';
-import ModalSelect from '../components/ModalSelect';
-import { appConfirm } from '../components/appDialog';
+import { appConfirm, appPrompt } from '../components/appDialog';
+import { FileText, GripVertical, Plus, Trash2, X } from 'lucide-react';
+import FbsPassportModal from './FbsPassportModal';
+
+/** Служебная строка в fbs_blocks: в code хранится JSON-массив имён (порядок карточки). */
+const FBS_ORDER_META_NAME = '__fbs_display_order__';
 
 interface WarehousePageProps {
   recipes?: any[];
@@ -32,19 +39,37 @@ interface WarehousePageProps {
 
 export default function WarehousePage({ recipes = [], actorName = null }: WarehousePageProps) {
   const { user } = useUserRole();
-  // Приоритет: имя со смены (проп) → ФИО из роли → username → заглушка.
-  const currentActorName =
-    (actorName && String(actorName).trim()) ||
-    user?.full_name ||
-    user?.username ||
-    'Сотрудник';
+  // Общая учётка «operator» (Семён/Максим): в историю пишем имя со смены.
+  // Все остальные роли (admin/manager/dispatcher/…) — всегда своё ФИО из логина,
+  // даже если склад открыт со страницы оператора и там выбрана чужая смена.
+  const loggedInName = String(user?.full_name || user?.username || '').trim();
+  const shiftName = String(actorName || '').trim();
+  const isSharedOperatorAccount = user?.role === 'operator';
+  const currentActorName = isSharedOperatorAccount
+    ? (shiftName || loggedInName || 'Оператор')
+    : (loggedInName || shiftName || 'Сотрудник');
 
     // ==================== 1. СОСТОЯНИЕ ====================
   const [silos, setSilos] = useState<any[]>([]);
   const [additives, setAdditives] = useState<any[]>([]);
   const [fbsBlocks, setFbsBlocks] = useState<any[]>([]);        // текущие остатки на складе
   const [availableFBS, setAvailableFBS] = useState<any[]>([]); // все доступные типы ФБС из рецептов
-  const [selectedFBSId, setSelectedFBSId] = useState<number | null>(null);
+  const availableFBSRef = useRef<any[]>([]);
+  availableFBSRef.current = availableFBS;
+  const [showNewFbsModal, setShowNewFbsModal] = useState(false);
+  const [newFbsForm, setNewFbsForm] = useState({ name: '', length_cm: 240, width_cm: 30, height_cm: 60 });
+  const [savingNewFbs, setSavingNewFbs] = useState(false);
+  const [fbsDragFrom, setFbsDragFrom] = useState<number | null>(null);
+  /** Индекс «щели» для вставки: 0 = перед первой, length = после последней. */
+  const [fbsDropSlot, setFbsDropSlot] = useState<number | null>(null);
+  const fbsDropSlotRef = useRef<number | null>(null);
+  const [fbsPassports, setFbsPassports] = useState<any[]>([]);
+  const [fbsPassportSearch, setFbsPassportSearch] = useState('');
+  const [fbsPassportQuery, setFbsPassportQuery] = useState('');
+  const [fbsPassportModal, setFbsPassportModal] = useState<{ open: boolean; record: any | null }>({
+    open: false,
+    record: null,
+  });
   const [todayConsumption, setTodayConsumption] = useState({ 
     cement: 0, 
     pfm: 0, 
@@ -58,8 +83,28 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
 
   const isProcessingRef = useRef(false);
 
+  /** Сохранить порядок строк ФБС в БД через API (service role). */
+  const persistFbsOrder = useCallback(async (ordered: any[]) => {
+    const names = ordered
+      .map((b) => String(b?.name || '').trim())
+      .filter((n) => n && n !== FBS_ORDER_META_NAME);
+    try {
+      const res = await fetch('/api/adminCifra/warehouse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fbsOrder: names }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error('Ошибка сохранения порядка ФБС:', res.status, text);
+      }
+    } catch (err) {
+      console.error('Ошибка сохранения порядка ФБС:', err);
+    }
+  }, []);
+
    // ==================== ЗАГРУЗКА ФБС ====================
-  const loadFBS = async () => {
+  const loadFBS = useCallback(async (recipesOverride?: any[]) => {
     try {
       console.log('🔍 Запрос к таблице fbs_blocks...');
 
@@ -79,10 +124,31 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
         console.warn('⚠️ Таблица fbs_blocks пустая или нет прав на чтение');
       }
 
-      const merged = availableFBS.map((recipe: any) => {
-        const existing = dbBlocks?.find((b: any) => 
-          b.name === recipe.name || 
-          String(b.name).trim() === String(recipe.name || recipe.code).trim()
+      // Порядок: JSON в unit (новый формат) или в code с префиксом __order__: (старый).
+      let orderNames: string[] = [];
+      const orderRow = dbBlocks?.find((b: any) => b.name === FBS_ORDER_META_NAME);
+      if (orderRow) {
+        try {
+          const fromUnit = String(orderRow.unit || '');
+          const fromCode = String(orderRow.code || '').replace(/^__order__:/, '');
+          const raw = fromUnit.startsWith('[') ? fromUnit : fromCode;
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) orderNames = parsed.map((x) => String(x));
+        } catch {
+          orderNames = [];
+        }
+      }
+
+      // recipesOverride — свежий список после создания вида (иначе замыкание
+      // может ещё не видеть setAvailableFBS и новый тип «пропадёт» из UI).
+      const source = recipesOverride ?? availableFBSRef.current;
+
+      const merged = source.map((recipe: any) => {
+        const existing = dbBlocks?.find((b: any) =>
+          b.name !== FBS_ORDER_META_NAME && (
+            b.name === recipe.name ||
+            String(b.name).trim() === String(recipe.name || recipe.code).trim()
+          )
         );
 
         const currentValue = existing ? Number(existing.current || 0) : 0;
@@ -90,19 +156,44 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
         return {
           ...recipe,
           id: existing?.id || recipe.id,
+          recipe_id: recipe.id,
+          fbs_block_id: existing?.id ?? null,
           name: recipe.name || recipe.code,
           current: currentValue
         };
       });
 
+      merged.sort((a: any, b: any) => {
+        const ia = orderNames.indexOf(String(a.name));
+        const ib = orderNames.indexOf(String(b.name));
+        if (ia === -1 && ib === -1) {
+          return String(a.name || '').localeCompare(String(b.name || ''), 'ru');
+        }
+        if (ia === -1) return 1;
+        if (ib === -1) return -1;
+        return ia - ib;
+      });
+
       console.log(`📦 ФИНАЛЬНЫЙ МЕРДЖ:`, 
-        merged.map(m => `${m.name} → ${m.current} шт`));
+        merged.map((m: any) => `${m.name} → ${m.current} шт`));
 
       setFbsBlocks(merged);
     } catch (err) {
       console.error('💥 Критическая ошибка loadFBS:', err);
     }
-  };
+  }, []);
+
+  const loadFbsPassports = useCallback(async () => {
+    try {
+      const res = await fetch('/api/adminCifra/fbs-passports', { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        setFbsPassports(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки паспортов ФБС:', err);
+    }
+  }, []);
 
    // ==================== 2. ЗАГРУЗКА ДАННЫХ ====================
 const loadWarehouse = async () => {
@@ -118,6 +209,7 @@ const loadWarehouse = async () => {
       }),
       fetch('/api/adminCifra/lab-settings', { cache: 'no-store' }),
     ]);
+    void loadFbsPassports();
 
     if (warehouseRes.ok) {
       const data = await warehouseRes.json();
@@ -343,7 +435,7 @@ const loadTodayConsumption = async () => {
     if (availableFBS.length > 0) {
       loadFBS();
     }
-  }, [availableFBS]);   // ← срабатывает каждый раз, когда availableFBS меняется
+  }, [availableFBS, loadFBS]);
 
   // ==================== 3. СОХРАНЕНИЕ В БАЗУ ====================
 const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsToSave?: any[]) => {
@@ -363,11 +455,13 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
         current: Number(add.current || 0),
         max: Number(add.max || 9000)        // ← ДОБАВИЛИ max!
       })),
-      fbs: currentFBS.map((block: any) => ({
-        id: Number(block.id),
-        name: block.name || block.code || '',
-        current: Number(block.current || 0)
-      }))
+      fbs: currentFBS
+        .filter((block: any) => String(block.name || '') !== FBS_ORDER_META_NAME)
+        .map((block: any) => ({
+          id: Number(block.id),
+          name: block.name || block.code || '',
+          current: Number(block.current || 0)
+        }))
     };
 
     // console.log('📤 Отправляем в warehouse (additives с max):', payload.additives);
@@ -792,55 +886,172 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
   };
 
  // ==================== 6.2 РАБОТА С БЛОКАМИ ФБС ====================
-  const handleAddFBS = () => {
-  if (!selectedFBSId) return alert('Выберите тип блока ФБС');
-
-  const qty = parseInt(prompt('Сколько блоков внести?') || '0');
-  if (!qty || qty <= 0) return;
-
-  setFbsBlocks(prev => {
-    let updated = [...prev];
-
-    const existingIndex = updated.findIndex(b => b.id === selectedFBSId);
-
-    if (existingIndex !== -1) {
-      const oldCurrent = Number(updated[existingIndex].current || 0);
-      const newCurrent = oldCurrent + qty;
-      const name = updated[existingIndex].name || 'ФБС';
-      updated[existingIndex] = { ...updated[existingIndex], current: newCurrent };
-      addToHistory('+ Внесено', name, qty, oldCurrent, newCurrent, 'шт');
-    } else {
-      // Если блока ещё нет в fbsBlocks — добавляем
-      const recipe = availableFBS.find(r => r.id === selectedFBSId);
-      if (recipe) {
-        updated.push({
-          ...recipe,
-          id: recipe.id,
-          name: recipe.name,
-          current: qty
-        });
-        addToHistory('+ Внесено', recipe.name, qty, 0, qty, 'шт');
-      }
+  /** Создать новый вид ФБС: запись в recipes + остаток 0 в fbs_blocks. */
+  const handleCreateFBSType = async () => {
+    const name = newFbsForm.name.trim();
+    const length_cm = Number(newFbsForm.length_cm) || 0;
+    const width_cm = Number(newFbsForm.width_cm) || 0;
+    const height_cm = Number(newFbsForm.height_cm) || 0;
+    if (!name) return alert('Укажи название вида ФБС');
+    if (length_cm <= 0 || width_cm <= 0 || height_cm <= 0) {
+      return alert('Укажи размеры блока (см)');
+    }
+    if (availableFBS.some((r: any) => String(r.name || '').trim().toLowerCase() === name.toLowerCase())) {
+      return alert('Такой вид ФБС уже есть');
     }
 
-    saveToDatabase(undefined, undefined, updated);
-    return updated;
-  });
-};
+    // Код вида: 240×30×60 → 24-3-6 (как в каталоге лаборатории).
+    const code =
+      `${Math.round(length_cm / 10)}-${Math.round(width_cm / 10)}-${Math.round(height_cm / 10)}`;
 
-  const handleSubtractFBS = (id: number) => {
-    const qty = parseInt(prompt('Сколько блоков списать?') || '0');
+    setSavingNewFbs(true);
+    try {
+      const res = await fetch('/api/adminCifra/recipes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          name,
+          price: 0,
+          length_cm,
+          width_cm,
+          height_cm,
+          unit: 'шт',
+          item_type: 'fbs',
+          is_active: true,
+        }),
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        alert(`Не удалось создать вид ФБС: ${res.status} ${errText}`);
+        return;
+      }
+      const created = await res.json();
+      const newBlock = {
+        ...created,
+        id: created.id,
+        recipe_id: created.id,
+        fbs_block_id: null,
+        name: created.name || name,
+        current: 0,
+      };
+      const nextAvailable = [...availableFBSRef.current, created];
+      const nextBlocks = [...fbsBlocks, newBlock];
+      availableFBSRef.current = nextAvailable;
+      setAvailableFBS(nextAvailable);
+      setFbsBlocks(nextBlocks);
+      await saveToDatabase(undefined, undefined, nextBlocks);
+      await persistFbsOrder(nextBlocks);
+      await loadFBS(nextAvailable);
+      setShowNewFbsModal(false);
+      setNewFbsForm({ name: '', length_cm: 240, width_cm: 30, height_cm: 60 });
+    } catch (err) {
+      console.error('Ошибка создания ФБС:', err);
+      alert('Ошибка соединения при создании вида ФБС');
+    } finally {
+      setSavingNewFbs(false);
+    }
+  };
+
+  /** Перетаскивание ФБС: fromIndex → щель dropSlot (0..length), порядок в БД. */
+  const handleFbsReorder = (fromIndex: number, dropSlot: number) => {
+    if (fromIndex < 0 || dropSlot < 0) return;
+    // Щели from и from+1 — та же позиция (ничего не меняется).
+    if (dropSlot === fromIndex || dropSlot === fromIndex + 1) return;
+    setFbsBlocks((prev) => {
+      if (fromIndex >= prev.length || dropSlot > prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      const insertAt = dropSlot > fromIndex ? dropSlot - 1 : dropSlot;
+      next.splice(insertAt, 0, moved);
+      void persistFbsOrder(next);
+      return next;
+    });
+  };
+
+  const setFbsDropSlotSafe = (slot: number | null) => {
+    if (fbsDropSlotRef.current === slot) return;
+    fbsDropSlotRef.current = slot;
+    setFbsDropSlot(slot);
+  };
+
+  /** Удалить вид ФБС из склада (fbs_blocks) и каталога (recipes). */
+  const handleDeleteFBSType = async (block: any) => {
+    const name = String(block?.name || '').trim();
+    if (!name || name === FBS_ORDER_META_NAME) return;
+
+    const qty = Number(block.current || 0);
+    const recipeId =
+      block.recipe_id ??
+      availableFBS.find(
+        (r: any) =>
+          String(r.name || '').trim() === name ||
+          String(r.code || '').trim() === name,
+      )?.id;
+
+    const stockNote =
+      qty > 0
+        ? `\n\nНа складе сейчас ${qty} шт — остаток тоже будет удалён.`
+        : '';
+    if (!(await appConfirm(
+      `Удалить вид ФБС «${name}» из таблицы и базы?${stockNote}\n\nСтарые паспорта реализации останутся в истории.`,
+      { variant: 'danger', okLabel: 'Удалить вид', title: 'Удаление вида ФБС' },
+    ))) return;
+
+    try {
+      const qs = new URLSearchParams({ fbs_name: name });
+      if (recipeId != null && recipeId !== '') qs.set('recipe_id', String(recipeId));
+      if (block.fbs_block_id != null) qs.set('fbs_id', String(block.fbs_block_id));
+      else if (block.id != null && !recipeId) qs.set('fbs_id', String(block.id));
+
+      const res = await fetch(`/api/adminCifra/warehouse?${qs}`, { method: 'DELETE' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json.error || 'Не удалось удалить вид ФБС');
+        return;
+      }
+
+      const nextAvailable = availableFBSRef.current.filter(
+        (r: any) =>
+          String(r.name || '').trim() !== name &&
+          (recipeId == null || Number(r.id) !== Number(recipeId)),
+      );
+      availableFBSRef.current = nextAvailable;
+      setAvailableFBS(nextAvailable);
+      const nextBlocks = fbsBlocks.filter((b) => String(b.name || '').trim() !== name);
+      setFbsBlocks(nextBlocks);
+      await persistFbsOrder(nextBlocks);
+      await loadFBS(nextAvailable);
+    } catch (err) {
+      console.error('Ошибка удаления вида ФБС:', err);
+      alert('Ошибка соединения при удалении вида ФБС');
+    }
+  };
+
+  const handleSubtractFBS = async (id: number) => {
+    const block = fbsBlocks.find((b) => b.id === id);
+    const raw = await appPrompt(`Сколько блоков списать${block?.name ? ` из «${block.name}»` : ''}?`, {
+      title: 'Списание ФБС',
+      okLabel: 'Списать',
+      cancelLabel: 'Отмена',
+      variant: 'danger',
+      placeholder: '0',
+      inputMode: 'numeric',
+      unit: 'шт',
+    });
+    if (raw == null) return;
+    const qty = parseInt(String(raw).replace(',', '.'), 10);
     if (!qty || qty <= 0) return;
 
     setFbsBlocks(prev => {
-      const updated = prev.map(block => {
-        if (block.id === id) {
-          const oldCurrent = Number(block.current || 0);
+      const updated = prev.map(b => {
+        if (b.id === id) {
+          const oldCurrent = Number(b.current || 0);
           const newCurrent = Math.max(0, oldCurrent - qty);
-          addToHistory('− Списано', block.name || 'ФБС', qty, oldCurrent, newCurrent, 'шт');
-          return { ...block, current: newCurrent };
+          addToHistory('− Списано', b.name || 'ФБС', qty, oldCurrent, newCurrent, 'шт');
+          return { ...b, current: newCurrent };
         }
-        return block;
+        return b;
       });
 
       saveToDatabase(undefined, undefined, updated);
@@ -849,19 +1060,30 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
   };
 
 // ==================== 6.3 ДОБАВЛЕНИЕ ОДНОГО ТИПА ФБС ====================
-const handleAddFBSBlock = (id: number) => {
-  const qty = parseInt(prompt('Сколько блоков добавить?') || '0');
+const handleAddFBSBlock = async (id: number) => {
+  const block = fbsBlocks.find((b) => b.id === id);
+  const raw = await appPrompt(`Сколько блоков добавить${block?.name ? ` в «${block.name}»` : ''}?`, {
+    title: 'Добавление ФБС',
+    okLabel: 'Добавить',
+    cancelLabel: 'Отмена',
+    variant: 'success',
+    placeholder: '0',
+    inputMode: 'numeric',
+    unit: 'шт',
+  });
+  if (raw == null) return;
+  const qty = parseInt(String(raw).replace(',', '.'), 10);
   if (!qty || qty <= 0) return;
 
   setFbsBlocks(prev => {
-    const updated = prev.map(block => {
-      if (block.id === id) {
-        const old = Number(block.current || 0);
+    const updated = prev.map(b => {
+      if (b.id === id) {
+        const old = Number(b.current || 0);
         const next = old + qty;
-        addToHistory('+ Внесено', block.name || 'ФБС', qty, old, next, 'шт');
-        return { ...block, current: next };
+        addToHistory('+ Внесено', b.name || 'ФБС', qty, old, next, 'шт');
+        return { ...b, current: next };
       }
-      return block;
+      return b;
     });
 
     saveToDatabase(undefined, undefined, updated);
@@ -1291,18 +1513,33 @@ const removeLastCube = (index: number) => {
             </div>
           </div>
 
-          {/* ФБС — ряд 2, колонка 1 (под силосами) */}
+          {/* ФБС + реализация — ряд 2, колонка 1 (под силосами): ~1/3 + ~2/3 */}
           <div
             style={{
               gridColumn: 1,
               gridRow: 2,
+              display: 'grid',
+              gridTemplateColumns: 'minmax(220px, 1fr) minmax(0, 2fr)',
+              gap: '12px',
+              alignItems: 'stretch',
+              minHeight: 0,
+              height: '100%',
+              width: '100%',
+            }}
+          >
+          <div
+            style={{
               background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 72%, #0B1220 100%)',
               border: CARD_BORDER,
               borderRadius: '20px',
-              padding: '14px 14px 12px',
+              padding: '12px 10px 10px',
               boxShadow: CARD_VOLUME,
               width: '100%',
               boxSizing: 'border-box',
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+              maxHeight: '100%',
             }}
           >
             <div
@@ -1310,62 +1547,42 @@ const removeLastCube = (index: number) => {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                gap: '8px',
+                gap: '6px',
                 flexWrap: 'wrap',
                 marginBottom: '8px',
                 flexShrink: 0,
               }}
             >
-              <h2 style={{ fontSize: '15px', margin: 0, color: '#E2E8F0', fontWeight: 700 }}>
+              <h2 style={{ fontSize: '14px', margin: 0, color: '#E2E8F0', fontWeight: 700 }}>
                 Блоки ФБС
               </h2>
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
-                <ModalSelect
-                  value={selectedFBSId ? String(selectedFBSId) : ''}
-                  onChange={(v) => setSelectedFBSId(v ? Number(v) : null)}
-                  placeholder="Тип ФБС..."
-                  minPopupWidth={160}
-                  triggerStyle={{
-                    background: '#0F172A',
-                    color: '#E2E8F0',
-                    border: '1px solid #475569',
-                    borderRadius: 8,
-                    padding: '6px 8px',
-                    minWidth: 140,
-                    fontSize: 12,
-                    boxShadow: 'none',
-                  }}
-                  options={availableFBS.map((r: any) => ({
-                    value: String(r.id),
-                    label: r.name,
-                    text: r.name,
-                  }))}
-                />
-                <button
-                  onClick={handleAddFBS}
-                  style={{
-                    background: '#10B981',
-                    color: 'white',
-                    padding: '6px 10px',
-                    borderRadius: '8px',
-                    fontWeight: 600,
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                  }}
-                >
-                  + На склад
-                </button>
-              </div>
+              <button
+                onClick={() => {
+                  setNewFbsForm({ name: '', length_cm: 240, width_cm: 30, height_cm: 60 });
+                  setShowNewFbsModal(true);
+                }}
+                style={{
+                  background: '#10B981',
+                  color: 'white',
+                  padding: '5px 8px',
+                  borderRadius: '8px',
+                  fontWeight: 600,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                }}
+              >
+                + Вид
+              </button>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div className="scroll-hidden" style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1, minHeight: 0, overflowY: 'auto' }}>
               {fbsBlocks.length === 0 ? (
                 <div style={{ color: '#64748B', fontSize: '12px', padding: '8px 2px' }}>
-                  Нет типов ФБС — выбери из списка и добавь на склад
+                  Нет типов ФБС — создай новый вид кнопкой выше
                 </div>
               ) : (
-                fbsBlocks.map((block: any) => {
+                fbsBlocks.map((block: any, index: number) => {
                   const qty = Number(block.current || 0);
                   const empty = qty <= 0;
                   const dims =
@@ -1373,22 +1590,114 @@ const removeLastCube = (index: number) => {
                       ? `${block.length_cm}×${block.width_cm}×${block.height_cm}`
                       : block.dimensions || '—';
                   const accent = empty ? '#64748B' : '#60A5FA';
+                  const isDragging = fbsDragFrom === index;
+                  const showLineBefore =
+                    fbsDragFrom !== null &&
+                    fbsDropSlot === index &&
+                    fbsDropSlot !== fbsDragFrom &&
+                    fbsDropSlot !== fbsDragFrom + 1;
+                  const showLineAfter =
+                    index === fbsBlocks.length - 1 &&
+                    fbsDragFrom !== null &&
+                    fbsDropSlot === fbsBlocks.length &&
+                    fbsDropSlot !== fbsDragFrom + 1;
 
                   return (
                     <div
                       key={block.id}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const slot = e.clientY < rect.top + rect.height / 2 ? index : index + 1;
+                        setFbsDropSlotSafe(slot);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const from = Number(e.dataTransfer.getData('text/plain'));
+                        const slot = fbsDropSlotRef.current ?? index;
+                        setFbsDragFrom(null);
+                        setFbsDropSlotSafe(null);
+                        if (!Number.isNaN(from)) handleFbsReorder(from, slot);
+                      }}
                       style={{
+                        position: 'relative',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '10px',
+                        gap: '8px',
                         background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 100%)',
                         border: CARD_BORDER,
                         borderRadius: '12px',
                         padding: '7px 10px',
                         boxShadow: CARD_VOLUME_SOFT,
                         flexShrink: 0,
+                        opacity: isDragging ? 0.35 : 1,
                       }}
                     >
+                      {showLineBefore && (
+                        <div
+                          aria-hidden
+                          style={{
+                            position: 'absolute',
+                            left: 10,
+                            right: 10,
+                            top: -5,
+                            height: 3,
+                            borderRadius: 999,
+                            background: '#60A5FA',
+                            boxShadow: '0 0 10px rgba(96,165,250,0.75)',
+                            zIndex: 3,
+                            pointerEvents: 'none',
+                          }}
+                        />
+                      )}
+                      {showLineAfter && (
+                        <div
+                          aria-hidden
+                          style={{
+                            position: 'absolute',
+                            left: 10,
+                            right: 10,
+                            bottom: -5,
+                            height: 3,
+                            borderRadius: 999,
+                            background: '#60A5FA',
+                            boxShadow: '0 0 10px rgba(96,165,250,0.75)',
+                            zIndex: 3,
+                            pointerEvents: 'none',
+                          }}
+                        />
+                      )}
+                      <div
+                        draggable
+                        title="Перетащить"
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('text/plain', String(index));
+                          e.dataTransfer.effectAllowed = 'move';
+                          setFbsDragFrom(index);
+                          setFbsDropSlotSafe(null);
+                        }}
+                        onDragEnd={() => {
+                          setFbsDragFrom(null);
+                          setFbsDropSlotSafe(null);
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flex: '0 0 auto',
+                          width: 22,
+                          height: 28,
+                          marginLeft: -2,
+                          color: '#64748B',
+                          cursor: 'grab',
+                          touchAction: 'none',
+                          userSelect: 'none',
+                        }}
+                      >
+                        <GripVertical size={16} strokeWidth={2.2} />
+                      </div>
+
                       <div style={{ flex: '1 1 auto', minWidth: 0 }}>
                         <div
                           style={{
@@ -1421,7 +1730,7 @@ const removeLastCube = (index: number) => {
                       >
                         <span
                           style={{
-                            fontSize: '24px',
+                            fontSize: '20px',
                             fontWeight: 800,
                             letterSpacing: '-0.03em',
                             color: accent,
@@ -1431,7 +1740,7 @@ const removeLastCube = (index: number) => {
                         >
                           {qty}
                         </span>
-                        <span style={{ fontSize: '11px', color: '#64748B', fontWeight: 600 }}>шт</span>
+                        <span style={{ fontSize: '10px', color: '#64748B', fontWeight: 600 }}>шт</span>
                       </div>
 
                       <div
@@ -1445,34 +1754,54 @@ const removeLastCube = (index: number) => {
                         <button
                           onClick={() => handleAddFBSBlock(block.id)}
                           style={{
-                            padding: '6px 10px',
+                            padding: '5px 8px',
                             background: '#3B82F6',
                             border: 'none',
                             borderRadius: '8px',
                             color: 'white',
                             fontWeight: 600,
                             cursor: 'pointer',
-                            fontSize: '11px',
+                            fontSize: '10px',
                           }}
                         >
-                          + Добавить
+                          +
                         </button>
                         <button
                           onClick={() => handleSubtractFBS(block.id)}
                           disabled={empty}
                           style={{
-                            padding: '6px 10px',
+                            padding: '5px 8px',
                             background: empty ? '#334155' : '#EF4444',
                             border: 'none',
                             borderRadius: '8px',
                             color: 'white',
                             fontWeight: 600,
                             cursor: empty ? 'not-allowed' : 'pointer',
-                            fontSize: '11px',
+                            fontSize: '10px',
                             opacity: empty ? 0.7 : 1,
                           }}
                         >
-                          − Списать
+                          −
+                        </button>
+                        <button
+                          type="button"
+                          title="Удалить вид ФБС"
+                          onClick={() => handleDeleteFBSType(block)}
+                          style={{
+                            padding: '5px 7px',
+                            background: 'rgba(248,113,113,0.12)',
+                            border: '1px solid rgba(248,113,113,0.35)',
+                            borderRadius: '8px',
+                            color: '#F87171',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            fontSize: '10px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <Trash2 size={12} />
                         </button>
                       </div>
                     </div>
@@ -1480,6 +1809,234 @@ const removeLastCube = (index: number) => {
                 })
               )}
             </div>
+          </div>
+
+          {/* Реализация ФБС — справа от остатков, высота = карточка блоков, скролл внутри */}
+          <div
+            style={{
+              background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 72%, #0B1220 100%)',
+              border: CARD_BORDER,
+              borderRadius: '20px',
+              padding: '12px 12px 10px',
+              boxShadow: CARD_VOLUME,
+              boxSizing: 'border-box',
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+              maxHeight: '100%',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                marginBottom: 8,
+                flexShrink: 0,
+                flexWrap: 'wrap',
+              }}
+            >
+              <h2 style={{ fontSize: '14px', margin: 0, color: '#E2E8F0', fontWeight: 700 }}>
+                Реализация ФБС
+              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <input
+                  value={fbsPassportSearch}
+                  onChange={(e) => setFbsPassportSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') setFbsPassportQuery(fbsPassportSearch.trim());
+                  }}
+                  placeholder="№ партии…"
+                  style={{
+                    width: 112,
+                    height: 28,
+                    boxSizing: 'border-box',
+                    padding: '0 8px',
+                    borderRadius: 8,
+                    border: '1px solid #475569',
+                    background: '#0F172A',
+                    color: '#E2E8F0',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    outline: 'none',
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setFbsPassportQuery(fbsPassportSearch.trim())}
+                  style={{
+                    height: 28,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    padding: '0 10px',
+                    borderRadius: 8,
+                    border: '1px solid #475569',
+                    background: 'transparent',
+                    color: '#E2E8F0',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    fontSize: 11,
+                  }}
+                >
+                  Найти
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFbsPassportModal({ open: true, record: null })}
+                  style={{
+                    height: 28,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    background: '#3B82F6',
+                    color: 'white',
+                    padding: '0 10px',
+                    borderRadius: 8,
+                    fontWeight: 600,
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 11,
+                  }}
+                >
+                  <Plus size={13} strokeWidth={2.5} />
+                  Выписать
+                </button>
+              </div>
+            </div>
+
+            <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+              {(() => {
+                const q = fbsPassportQuery.trim().toLowerCase();
+                const filtered = q
+                  ? fbsPassports.filter((row) => {
+                      const no = String(row.passport_no || row.payload?.passport_no || '').toLowerCase();
+                      return no.includes(q);
+                    })
+                  : fbsPassports;
+                if (fbsPassports.length === 0) {
+                  return (
+                    <div style={{ color: '#64748B', fontSize: 12, padding: '10px 2px' }}>
+                      Нет выписанных паспортов — нажми «Выписать»
+                    </div>
+                  );
+                }
+                if (filtered.length === 0) {
+                  return (
+                    <div style={{ color: '#64748B', fontSize: 12, padding: '10px 2px' }}>
+                      По номеру «{fbsPassportQuery}» ничего не найдено
+                    </div>
+                  );
+                }
+                return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {filtered.map((row) => {
+                    const p = row.payload || {};
+                    const dateStr = p.issue_date || (row.created_at
+                      ? new Date(row.created_at).toLocaleDateString('ru-RU')
+                      : '—');
+                    const mark = p.fbs_mark || '—';
+                    const qty = p.quantity ? `${p.quantity} шт` : '';
+                    const org = p.consumer || '—';
+                    return (
+                      <div
+                        key={row.id}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '72px minmax(0, 1.1fr) minmax(0, 1.4fr) auto',
+                          gap: 8,
+                          alignItems: 'center',
+                          background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 100%)',
+                          border: CARD_BORDER,
+                          borderRadius: 10,
+                          padding: '7px 9px',
+                          boxShadow: CARD_VOLUME_SOFT,
+                        }}
+                      >
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#94A3B8', whiteSpace: 'nowrap' }}>
+                          {dateStr}
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 700, color: '#F1F5F9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {mark}{qty ? ` · ${qty}` : ''}
+                          </div>
+                          <div style={{ fontSize: 10.5, color: '#64748B' }}>
+                            № {row.passport_no || p.passport_no || '—'}
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#CBD5E1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={org}>
+                          {org}
+                        </div>
+                        <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+                          <button
+                            type="button"
+                            title="Открыть паспорт"
+                            onClick={() => setFbsPassportModal({ open: true, record: row })}
+                            style={{
+                              width: 30,
+                              height: 28,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: 'rgba(96,165,250,0.15)',
+                              border: '1px solid rgba(96,165,250,0.35)',
+                              borderRadius: 8,
+                              color: '#60A5FA',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <FileText size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            title="Удалить — вернуть блоки на склад"
+                            onClick={async () => {
+                              if (!(await appConfirm(
+                                `Удалить паспорт № ${row.passport_no || p.passport_no || row.id} и вернуть ${qty || 'блоки'} на склад?`,
+                                { variant: 'danger', okLabel: 'Удалить', title: 'Удаление реализации' },
+                              ))) return;
+                              try {
+                                const qs = new URLSearchParams({ id: String(row.id) });
+                                if (currentActorName) qs.set('user_name', currentActorName);
+                                const res = await fetch(`/api/adminCifra/fbs-passports?${qs}`, { method: 'DELETE' });
+                                const json = await res.json().catch(() => ({}));
+                                if (!res.ok) {
+                                  alert(json.error || 'Не удалось удалить');
+                                  return;
+                                }
+                                await loadFbsPassports();
+                                await loadFBS();
+                                await loadOperationHistory();
+                              } catch (err) {
+                                console.error(err);
+                                alert('Ошибка удаления');
+                              }
+                            }}
+                            style={{
+                              width: 30,
+                              height: 28,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: 'rgba(248,113,113,0.12)',
+                              border: '1px solid rgba(248,113,113,0.35)',
+                              borderRadius: 8,
+                              color: '#F87171',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                );
+              })()}
+            </div>
+          </div>
           </div>
 
           {/* Добавки — колонка 2, на оба ряда: низ = низ ФБС. Историю не сдвигает. */}
@@ -1669,6 +2226,137 @@ const removeLastCube = (index: number) => {
           </div>
         )}
       </div>
+
+      {fbsPassportModal.open && (
+        <FbsPassportModal
+          fbsOptions={fbsBlocks.map((b) => ({
+            id: Number(b.id),
+            name: String(b.name || ''),
+            current: Number(b.current || 0),
+          }))}
+          existingRecord={fbsPassportModal.record}
+          userName={currentActorName}
+          onClose={() => setFbsPassportModal({ open: false, record: null })}
+          onSaved={async () => {
+            await loadFbsPassports();
+            await loadFBS();
+            await loadOperationHistory();
+          }}
+        />
+      )}
+
+      {showNewFbsModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.82)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => !savingNewFbs && setShowNewFbsModal(false)}
+        >
+          <div
+            style={volumeModalStyle({
+              width: 'min(420px, 100%)',
+              borderRadius: 20,
+              padding: 24,
+            })}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#fff' }}>
+                Новый вид ФБС
+              </h3>
+              <button
+                type="button"
+                title="Закрыть"
+                disabled={savingNewFbs}
+                onClick={() => setShowNewFbsModal(false)}
+                style={modalCloseButtonStyle()}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <label style={{ display: 'block', color: '#94A3B8', fontSize: 13, marginBottom: 6 }}>
+              Название
+            </label>
+            <input
+              autoFocus
+              value={newFbsForm.name}
+              onChange={(e) => setNewFbsForm((f) => ({ ...f, name: e.target.value }))}
+              placeholder="например ФБС 24-3-6"
+              style={modalFieldStyle({ marginBottom: 14 })}
+            />
+
+            <div style={{ color: '#94A3B8', fontSize: 13, marginBottom: 6 }}>Размеры (см)</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 20 }}>
+              {(
+                [
+                  ['length_cm', 'Длина'],
+                  ['width_cm', 'Ширина'],
+                  ['height_cm', 'Высота'],
+                ] as const
+              ).map(([key, label]) => (
+                <div key={key}>
+                  <div style={{ color: '#64748B', fontSize: 11, marginBottom: 4 }}>{label}</div>
+                  <input
+                    type="number"
+                    min={1}
+                    value={newFbsForm[key]}
+                    onChange={(e) =>
+                      setNewFbsForm((f) => ({ ...f, [key]: Number(e.target.value) || 0 }))
+                    }
+                    style={modalFieldStyle({ padding: '10px 12px', fontSize: 14 })}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button
+                type="button"
+                disabled={savingNewFbs}
+                onClick={() => setShowNewFbsModal(false)}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  borderRadius: 12,
+                  border: '1px solid #475569',
+                  background: 'transparent',
+                  color: '#94A3B8',
+                  fontWeight: 600,
+                  cursor: savingNewFbs ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                disabled={savingNewFbs}
+                onClick={handleCreateFBSType}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  borderRadius: 12,
+                  border: 'none',
+                  background: '#10B981',
+                  color: '#fff',
+                  fontWeight: 700,
+                  cursor: savingNewFbs ? 'not-allowed' : 'pointer',
+                  opacity: savingNewFbs ? 0.7 : 1,
+                }}
+              >
+                {savingNewFbs ? 'Сохранение…' : 'Создать'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

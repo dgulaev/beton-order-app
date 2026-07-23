@@ -6,11 +6,14 @@ import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 import {
   CARD_BORDER,
   modalCloseButtonStyle,
+  modalFieldStyle,
   volumeCardSoftStyle,
   volumeModalStyle,
 } from '../cardStyles';
 
-type DialogKind = 'alert' | 'confirm';
+type DialogKind = 'alert' | 'confirm' | 'prompt';
+
+type DialogVariant = 'info' | 'success' | 'warning' | 'danger';
 
 type DialogRequest = {
   id: number;
@@ -19,8 +22,12 @@ type DialogRequest = {
   message: string;
   okLabel?: string;
   cancelLabel?: string;
-  variant?: 'info' | 'success' | 'warning' | 'danger';
-  resolve: (value: boolean) => void;
+  variant?: DialogVariant;
+  defaultValue?: string;
+  placeholder?: string;
+  inputMode?: 'text' | 'decimal' | 'numeric';
+  unit?: string;
+  resolve: (value: boolean | string | null) => void;
 };
 
 let seq = 1;
@@ -31,7 +38,7 @@ function emit() {
   listeners.forEach((l) => l());
 }
 
-function enqueue(req: Omit<DialogRequest, 'id' | 'resolve'>): Promise<boolean> {
+function enqueue(req: Omit<DialogRequest, 'id' | 'resolve'>): Promise<boolean | string | null> {
   return new Promise((resolve) => {
     queue = [...queue, { ...req, id: seq++, resolve }];
     emit();
@@ -53,7 +60,7 @@ function peek(): DialogRequest | null {
 /** Тёмный alert в стиле модалок. */
 export function appAlert(
   message: string,
-  opts?: { title?: string; okLabel?: string; variant?: DialogRequest['variant'] },
+  opts?: { title?: string; okLabel?: string; variant?: DialogVariant },
 ): Promise<void> {
   return enqueue({
     kind: 'alert',
@@ -71,7 +78,7 @@ export function appConfirm(
     title?: string;
     okLabel?: string;
     cancelLabel?: string;
-    variant?: DialogRequest['variant'];
+    variant?: DialogVariant;
   },
 ): Promise<boolean> {
   return enqueue({
@@ -81,10 +88,38 @@ export function appConfirm(
     okLabel: opts?.okLabel ?? 'Да',
     cancelLabel: opts?.cancelLabel ?? 'Отмена',
     variant: opts?.variant ?? 'warning',
-  });
+  }).then((v) => Boolean(v));
 }
 
-function inferVariant(message: string): DialogRequest['variant'] {
+/** Тёмный prompt с полем ввода. string = OK, null = отмена. */
+export function appPrompt(
+  message: string,
+  opts?: {
+    title?: string;
+    okLabel?: string;
+    cancelLabel?: string;
+    variant?: DialogVariant;
+    defaultValue?: string;
+    placeholder?: string;
+    inputMode?: 'text' | 'decimal' | 'numeric';
+    unit?: string;
+  },
+): Promise<string | null> {
+  return enqueue({
+    kind: 'prompt',
+    message: String(message ?? ''),
+    title: opts?.title ?? 'Ввод',
+    okLabel: opts?.okLabel ?? 'OK',
+    cancelLabel: opts?.cancelLabel ?? 'Отмена',
+    variant: opts?.variant ?? 'info',
+    defaultValue: opts?.defaultValue ?? '',
+    placeholder: opts?.placeholder,
+    inputMode: opts?.inputMode ?? 'text',
+    unit: opts?.unit,
+  }).then((v) => (typeof v === 'string' ? v : null));
+}
+
+function inferVariant(message: string): DialogVariant {
   const m = message.toLowerCase();
   if (/ошибк|не удалось|failed|error|запрещ/.test(m)) return 'danger';
   if (/успеш|сохран|✅|готово/.test(m)) return 'success';
@@ -107,10 +142,11 @@ export function installAppDialogGlobals() {
   // Оставляем нативный как fallback, но экспортируем appConfirm для замены вызовов.
   (window as any).appAlert = appAlert;
   (window as any).appConfirm = appConfirm;
+  (window as any).appPrompt = appPrompt;
 }
 
 const VARIANT: Record<
-  NonNullable<DialogRequest['variant']>,
+  DialogVariant,
   { icon: ReactNode; accent: string; okBg: string; okBorder: string }
 > = {
   info: {
@@ -142,6 +178,7 @@ const VARIANT: Record<
 export default function AppDialogHost() {
   const [current, setCurrent] = useState<DialogRequest | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [promptValue, setPromptValue] = useState('');
 
   useEffect(() => {
     setMounted(true);
@@ -154,7 +191,13 @@ export default function AppDialogHost() {
     };
   }, []);
 
-  const close = (result: boolean) => {
+  useEffect(() => {
+    if (current?.kind === 'prompt') {
+      setPromptValue(current.defaultValue ?? '');
+    }
+  }, [current?.id]);
+
+  const close = (result: boolean | string | null) => {
     const req = shift();
     if (req) req.resolve(result);
     setCurrent(peek());
@@ -164,6 +207,21 @@ export default function AppDialogHost() {
 
   const v = VARIANT[current.variant ?? 'info'];
   const lines = current.message.split('\n');
+  const isPrompt = current.kind === 'prompt';
+  const isConfirm = current.kind === 'confirm';
+
+  const dismissOutside = () => {
+    if (current.kind === 'alert') close(true);
+    else close(isPrompt ? null : false);
+  };
+
+  const submit = () => {
+    if (isPrompt) close(promptValue);
+    else close(true);
+  };
+
+  const defaultTitle =
+    current.kind === 'confirm' ? 'Подтверждение' : current.kind === 'prompt' ? 'Ввод' : 'Сообщение';
 
   return createPortal(
     <div
@@ -177,10 +235,7 @@ export default function AppDialogHost() {
         justifyContent: 'center',
         padding: 16,
       }}
-      onClick={() => {
-        // Клик вне окна: alert — OK, confirm — отмена (без действия).
-        close(current.kind === 'confirm' ? false : true);
-      }}
+      onClick={dismissOutside}
     >
       <div
         role="alertdialog"
@@ -210,7 +265,7 @@ export default function AppDialogHost() {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 17, fontWeight: 700, color: '#F1F5F9', marginBottom: 6 }}>
-              {current.title ?? (current.kind === 'confirm' ? 'Подтверждение' : 'Сообщение')}
+              {current.title ?? defaultTitle}
             </div>
             <div style={{ fontSize: 14.5, lineHeight: 1.45, color: '#CBD5E1', whiteSpace: 'pre-wrap' }}>
               {lines.map((line, i) => (
@@ -221,12 +276,45 @@ export default function AppDialogHost() {
           <button
             type="button"
             title="Закрыть"
-            onClick={() => close(current.kind === 'confirm' ? false : true)}
+            onClick={dismissOutside}
             style={modalCloseButtonStyle()}
           >
             <X size={16} />
           </button>
         </div>
+
+        {isPrompt && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+            <input
+              autoFocus
+              value={promptValue}
+              onChange={(e) => setPromptValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  submit();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  close(null);
+                }
+              }}
+              placeholder={current.placeholder}
+              inputMode={current.inputMode}
+              style={modalFieldStyle({
+                flex: 1,
+                fontSize: 18,
+                fontWeight: 700,
+                textAlign: 'right',
+                padding: '12px 14px',
+              })}
+            />
+            {current.unit ? (
+              <span style={{ color: '#94A3B8', fontSize: 14, fontWeight: 600, flexShrink: 0 }}>
+                {current.unit}
+              </span>
+            ) : null}
+          </div>
+        )}
 
         <div
           style={{
@@ -238,10 +326,10 @@ export default function AppDialogHost() {
             borderTop: CARD_BORDER,
           }}
         >
-          {current.kind === 'confirm' && (
+          {(isConfirm || isPrompt) && (
             <button
               type="button"
-              onClick={() => close(false)}
+              onClick={() => close(isPrompt ? null : false)}
               style={btnSoft}
             >
               {current.cancelLabel ?? 'Отмена'}
@@ -249,8 +337,8 @@ export default function AppDialogHost() {
           )}
           <button
             type="button"
-            onClick={() => close(true)}
-            autoFocus
+            onClick={submit}
+            autoFocus={!isPrompt}
             style={{
               ...btnSoft,
               background: v.okBg,

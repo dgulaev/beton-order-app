@@ -108,22 +108,46 @@ function normalizeGradeKey(value: string): string {
     .replace(/M(?=\d)/g, 'М'); // латинская M перед цифрой → кириллическая М
 }
 
-/** План по маркам (м³) из строк отчёта MEKA: recipe → Σ qty. */
-function getPlanGrades(rawData: any[] | null | undefined): { grade: string; volumeM3: number }[] {
-  const groups = new Map<string, { grade: string; volumeM3: number }>();
+/** Час партии MEKA из поля time («0:10:03», «17:18:40»). */
+function mekaBatchHour(row: any): number | null {
+  const m = String(row?.time || '').trim().match(/^(\d{1,2})\s*:/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  return Number.isFinite(h) && h >= 0 && h <= 23 ? h : null;
+}
+
+/** Ночная партия: после полуночи до 06:00 — часто относится к заявкам вчера. */
+function isMekaNightBatch(row: any): boolean {
+  const h = mekaBatchHour(row);
+  return h != null && h < 6;
+}
+
+/** План по маркам (м³) из строк отчёта MEKA: recipe → Σ qty (+ ночной объём). */
+function getPlanGrades(rawData: any[] | null | undefined): {
+  grade: string;
+  volumeM3: number;
+  nightM3: number;
+}[] {
+  const groups = new Map<string, { grade: string; volumeM3: number; nightM3: number }>();
   (Array.isArray(rawData) ? rawData : []).forEach((row: any) => {
     const recipe = String(row?.recipe || '').trim();
     if (!recipe || recipe === 'Неизвестно' || recipe.includes('ИТОГО')) return;
     const key = normalizeGradeKey(recipe);
     if (!key) return;
-    const prev = groups.get(key);
     const qty = Number(row.qty) || 0;
-    if (prev) prev.volumeM3 += qty;
-    else groups.set(key, { grade: recipe, volumeM3: qty });
+    const nightQty = isMekaNightBatch(row) ? qty : 0;
+    const prev = groups.get(key);
+    if (prev) {
+      prev.volumeM3 += qty;
+      prev.nightM3 += nightQty;
+    } else {
+      groups.set(key, { grade: recipe, volumeM3: qty, nightM3: nightQty });
+    }
   });
   return Array.from(groups.values()).map((g) => ({
     grade: g.grade,
     volumeM3: Math.round(g.volumeM3 * 10) / 10,
+    nightM3: Math.round(g.nightM3 * 10) / 10,
   }));
 }
 
@@ -148,11 +172,12 @@ function getActualGradesFromLogs(logs: any[]): { grade: string; volumeM3: number
 /**
  * Сводит план (MEKA recipe) и факт (concrete_grade) в общие строки.
  * Сопоставление: точный ключ → без хвостового «И» → вхождение одной строки в другую.
+ * nightM3 — объём партий MEKA с 00:00 до 06:00 (могут быть заявки вчера).
  */
 function mergeGradeRows(
-  plan: { grade: string; volumeM3: number }[],
+  plan: { grade: string; volumeM3: number; nightM3?: number }[],
   actual: { grade: string; volumeM3: number }[]
-): { grade: string; planM3: number; actualM3: number }[] {
+): { grade: string; planM3: number; actualM3: number; nightM3: number }[] {
   const actualByKey = new Map(
     actual.map((a) => [normalizeGradeKey(a.grade), { ...a }])
   );
@@ -173,7 +198,7 @@ function mergeGradeRows(
     return null;
   };
 
-  const rows: { grade: string; planM3: number; actualM3: number }[] = [];
+  const rows: { grade: string; planM3: number; actualM3: number; nightM3: number }[] = [];
 
   plan.forEach((p) => {
     const planKey = normalizeGradeKey(p.grade);
@@ -183,13 +208,18 @@ function mergeGradeRows(
       actualM3 = actualByKey.get(actualKey)?.volumeM3 ?? 0;
       usedActual.add(actualKey);
     }
-    rows.push({ grade: p.grade, planM3: p.volumeM3, actualM3 });
+    rows.push({
+      grade: p.grade,
+      planM3: p.volumeM3,
+      actualM3,
+      nightM3: Number(p.nightM3) > 0 ? Math.round(Number(p.nightM3) * 10) / 10 : 0,
+    });
   });
 
   actual.forEach((a) => {
     const key = normalizeGradeKey(a.grade);
     if (usedActual.has(key)) return;
-    rows.push({ grade: a.grade, planM3: 0, actualM3: a.volumeM3 });
+    rows.push({ grade: a.grade, planM3: 0, actualM3: a.volumeM3, nightM3: 0 });
   });
 
   return rows.sort((a, b) => (b.planM3 + b.actualM3) - (a.planM3 + a.actualM3));
@@ -249,7 +279,7 @@ type ReconcileModalState = {
   plan: { pfmKg: number; linomixKg: number };
   actual: { pfmKg: number; linomixKg: number } | null;
   trips: number | null;
-  grades: { grade: string; planM3: number; actualM3: number }[];
+  grades: { grade: string; planM3: number; actualM3: number; nightM3: number }[];
   loading: boolean;
   error: string | null;
 };
@@ -509,7 +539,12 @@ export default function ReportsPage() {
       plan: { pfmKg: 0, linomixKg: 0 },
       actual: plantAdditives,
       trips: mekaBatches,
-      grades: planGrades.map((g) => ({ grade: g.grade, planM3: g.volumeM3, actualM3: 0 })),
+      grades: planGrades.map((g) => ({
+        grade: g.grade,
+        planM3: g.volumeM3,
+        actualM3: 0,
+        nightM3: g.nightM3 || 0,
+      })),
       loading: true,
       error: null,
     });
@@ -2261,8 +2296,32 @@ export default function ReportsPage() {
                               alignItems: 'center',
                             }}
                           >
-                            <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.grade}>
-                              {row.grade}
+                            <div style={{ minWidth: 0 }}>
+                              <div
+                                style={{
+                                  fontWeight: 600,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                                title={row.grade}
+                              >
+                                {row.grade}
+                              </div>
+                              {Number(row.nightM3) > 0.05 ? (
+                                <div
+                                  style={{
+                                    marginTop: 2,
+                                    fontSize: 11,
+                                    fontWeight: 500,
+                                    color: '#FBBF24',
+                                    lineHeight: 1.3,
+                                  }}
+                                  title="Партии MEKA с 00:00 до 06:00 часто относятся к заявкам с датой доставки вчера"
+                                >
+                                  в т.ч. ночь {Number(row.nightM3).toFixed(1)} м³ → заявки вчера
+                                </div>
+                              ) : null}
                             </div>
                             <div style={{ textAlign: 'right' }}>{row.planM3.toFixed(1)}</div>
                             <div style={{ textAlign: 'right' }}>{row.actualM3.toFixed(1)}</div>
@@ -2312,9 +2371,25 @@ export default function ReportsPage() {
                         </div>
                       )}
                     </div>
-                    <div style={{ color: '#64748B', fontSize: '12.5px', marginBottom: '18px' }}>
+                    <div style={{ color: '#64748B', fontSize: '12.5px', marginBottom: '10px' }}>
                       Марки: MEKA — объём партий в отчёте · отгрузка — рейсы в приложении (дата доставки)
                       {' · '}дельта = отгрузка − MEKA
+                    </div>
+                    <div
+                      style={{
+                        color: '#FBBF24',
+                        fontSize: '12.5px',
+                        lineHeight: 1.45,
+                        marginBottom: '18px',
+                        padding: '10px 12px',
+                        borderRadius: 10,
+                        background: 'rgba(245, 158, 11, 0.10)',
+                        border: '1px solid rgba(245, 158, 11, 0.28)',
+                      }}
+                    >
+                      Подсказка: партии MEKA после 00:00 могут относиться к заявкам вчера
+                      (длинные заливки с датой доставки предыдущего дня). В отгрузке за сегодня
+                      таких рейсов не будет — это не обязательно ошибка учёта.
                     </div>
                   </>
                 )}

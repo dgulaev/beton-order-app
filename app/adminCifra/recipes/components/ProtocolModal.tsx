@@ -219,7 +219,6 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
 </style></head><body>
   <div class="head center">
     <div class="h1">${esc(prot.lab_title)}</div>
-    <div>${esc(prot.cert_line)}</div>
   </div>
   <div class="meta">
     <div><b>Результат № ${esc(prot.result_no)}</b></div>

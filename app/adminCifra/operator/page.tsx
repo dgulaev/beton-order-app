@@ -1917,7 +1917,12 @@ export default function OperatorBSUPage() {
             держим крупными, без искусственного растягивания. */}
         {activeTab === 'warehouse' && (
           <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-            <WarehousePage recipes={recipes} actorName={operatorName} />
+            <WarehousePage
+              recipes={recipes}
+              // Смену Семён/Максим передаём только общей учётке оператора.
+              // Админ/менеджер на этой вкладке должны писаться своим ФИО.
+              actorName={user?.role === 'operator' ? operatorName : null}
+            />
           </div>
         )}
         {/* ==================== ОТЧЕТЫ ==================== */}

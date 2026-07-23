@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { X } from 'lucide-react';
 import { Order } from './hooks/useCalendarOrders';
 import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
-import { modalCloseButtonStyle, volumeCardSoftStyle, volumeModalStyle } from './cardStyles';
+import { CARD_VOLUME_SOFT, modalCloseButtonStyle, volumeCardSoftStyle, volumeModalStyle } from './cardStyles';
 
 interface StatusConfig {
   label: string;
@@ -298,39 +298,45 @@ export default function Calendar({ onClose, orders: externalOrders, onSelectOrde
                   }}
                   onTouchEnd={() => { if (longPressTimer.current) clearTimeout(longPressTimer.current); }}
                   onTouchMove={() => { if (longPressTimer.current) clearTimeout(longPressTimer.current); }}
-                  style={{
+                  style={volumeCardSoftStyle({
                     height: '86px',
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    borderRadius: '14px',
-                    // Синего фона больше нет — выбор дня показываем лёгким зелёным
-                    // оттенком фона + зелёным кольцом (тем же акцентом, что и «сегодня»).
-                    backgroundColor: isSelected ? 'rgba(16,185,129,0.16)' : '#334155',
+                    borderRadius: 14,
+                    // Выбор / «сегодня» — зелёный объём + кольцо (без смены высоты клетки).
+                    ...(isSelected
+                      ? {
+                          background:
+                            'linear-gradient(165deg, rgba(16,185,129,0.28) 0%, rgba(15,23,42,0.95) 55%, rgba(15,23,42,1) 100%)',
+                          border: '1px solid rgba(16,185,129,0.45)',
+                        }
+                      : {}),
                     color: '#fff',
                     cursor: 'pointer',
                     fontSize: '19px',
                     fontWeight: '600',
                     position: 'relative',
-                    // Мягкое зелёное кольцо вместо жёсткой синей/красной рамки — в общем
-                    // цвете акцентов админки и без утолщения самой клетки (box-shadow,
-                    // а не border, поэтому высота клетки не отличается от остальных).
-                    boxShadow: (isSelected || isToday) ? 'inset 0 0 0 2px #10B981' : 'none',
-                    transition: 'background-color 0.15s ease',
-                  }}
+                    boxShadow:
+                      isSelected || isToday
+                        ? `${CARD_VOLUME_SOFT}, inset 0 0 0 2px #10B981`
+                        : CARD_VOLUME_SOFT,
+                    transition: 'filter 0.15s ease, background 0.15s ease',
+                  })}
+                  onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
                 >
                   {ordersOnDay.length > 0 && (
                     <span style={{
                       position: 'absolute',
                       top: '6px',
                       right: '8px',
-                      fontSize: '11px',
+                      fontSize: '12px',
                       fontWeight: '700',
-                      color: isSelected ? '#A7F3D0' : '#64748B',
-                      background: isSelected ? 'rgba(16,185,129,0.2)' : 'rgba(148,163,184,0.15)',
-                      borderRadius: '9999px',
-                      padding: '1px 7px',
+                      color: isSelected ? '#A7F3D0' : '#CBD5E1',
+                      background: 'transparent',
+                      padding: 0,
                     }}>
                       {ordersOnDay.length}
                     </span>

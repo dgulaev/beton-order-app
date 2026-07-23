@@ -903,6 +903,11 @@ useEffect(() => {
 
   // ==================== РЕДАКТИРОВАНИЕ ЗАЯВКИ ====================
   const handleEditOrder = (order: any) => {
+    if (order.status === 'completed') {
+      alert('Заявка в статусе «Выполнена» — объём менять нельзя. Верните в работу и добавьте рейс.');
+      return;
+    }
+
     const newAddress = prompt('Новый адрес:', order.address);
     if (newAddress === null) return;
 
@@ -927,7 +932,7 @@ useEffect(() => {
         setSelectedOrder(updatedOrder);
         setAllOrders(prev => prev.map(o => o.id === order.id ? updatedOrder : o));
       } else {
-        alert('Ошибка обновления');
+        alert(data.message || 'Ошибка обновления');
       }
     })
     .catch(() => alert('Ошибка соединения'));
@@ -2685,8 +2690,16 @@ ${order.customer_type?.includes('Юридическое')
                 step="0.01"
                 min="0.01"
                 value={selectedOrder.volume || ''} 
+                disabled={selectedOrder.status === 'completed'}
+                title={selectedOrder.status === 'completed' ? 'Объём нельзя менять у заявки в статусе «Выполнена»' : undefined}
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, volume: e.target.value })}
-                style={modalFieldStyle({ padding: '6px 10px', borderRadius: 8, fontSize: '14px' })}
+                style={modalFieldStyle({
+                  padding: '6px 10px',
+                  borderRadius: 8,
+                  fontSize: '14px',
+                  opacity: selectedOrder.status === 'completed' ? 0.55 : 1,
+                  cursor: selectedOrder.status === 'completed' ? 'not-allowed' : undefined,
+                })}
               />
 
               <div style={{ color: '#94A3B8' }}>Дата доставки</div>

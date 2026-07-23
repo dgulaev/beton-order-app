@@ -185,7 +185,8 @@ export default function MobileOrderDetailModal({
         if (onUpdate) onUpdate(saved);
         onClose();
       } else {
-        alert('Ошибка сохранения');
+        const data = await res.json().catch(() => ({}));
+        alert(data.message || 'Ошибка сохранения');
       }
     } catch {
       alert('Ошибка соединения');
@@ -418,7 +419,19 @@ export default function MobileOrderDetailModal({
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <FieldBlock icon={<span style={{ fontSize: '13px' }}>м³</span>} label="Объём">
-                <input value={editedOrder.volume || ''} onChange={e => set('volume', e.target.value)} style={INPUT} type="number" step="0.01" />
+                <input
+                  value={editedOrder.volume || ''}
+                  onChange={e => set('volume', e.target.value)}
+                  style={{
+                    ...INPUT,
+                    opacity: editedOrder.status === 'completed' ? 0.55 : 1,
+                    cursor: editedOrder.status === 'completed' ? 'not-allowed' : undefined,
+                  }}
+                  type="number"
+                  step="0.01"
+                  disabled={editedOrder.status === 'completed'}
+                  title={editedOrder.status === 'completed' ? 'Объём нельзя менять у заявки в статусе «Выполнена»' : undefined}
+                />
               </FieldBlock>
               <FieldBlock icon={<Clock size={15} />} label="Время">
                 <input
