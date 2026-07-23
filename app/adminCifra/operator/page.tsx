@@ -409,18 +409,15 @@ export default function OperatorBSUPage() {
         // ==================== 1.2 ОТГРУЖЕНО СЕГОДНЯ (загрузка из базы) ====================
   const [completedTrips, setCompletedTrips] = useState<any[]>([]);
 
-  // Загрузка отгруженных рейсов из базы — перезагружается при смене даты
+  // Загрузка отгруженных рейсов из базы — перезагружается при смене даты.
+  // Всегда ?date=YYYY-MM-DD по orders.delivery_date (день заявки), без
+  // ?today=true по created_at — иначе ночные рейсы двоились и становились «сиротами».
   useEffect(() => {
     let cancelled = false;
     const fetchCompletedTrips = async () => {
       try {
-        const now = new Date();
-        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         const selStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
-        // Для сегодня используем ?today=true (быстрый фильтр по created_at),
-        // для прошлых дат — ?date=YYYY-MM-DD (фильтр по orders.delivery_date)
-        const param = selStr === todayStr ? 'today=true' : `date=${selStr}`;
-        const res = await fetch(`/api/adminCifra/production-log?${param}`);
+        const res = await fetch(`/api/adminCifra/production-log?date=${selStr}`);
         if (res.ok && !cancelled) {
           const data = await res.json();
           setCompletedTrips(Array.isArray(data) ? data : []);
@@ -487,8 +484,15 @@ export default function OperatorBSUPage() {
   // получает. Раньше такой рейс был навечно не виден в "Отгружено сегодня", а
   // % отгрузки по заявке никогда не доходил до 100 — при следующей загрузке
   // страницы его подтянет API, а здесь — сразу, пока вкладка открыта.
+  //
+  // Ограничения (кейс #429):
+  // 1) только рейсы дня выбранной заявки (delivery_date === selectedDate);
+  // 2) если order_mixer_id уже есть в ленте (в т.ч. как обычный production_log) —
+  //    не создавать orphan — иначе «В пути» от оператора + «Разгружен» сегодня
+  //    давали ложную пометку сироты.
   useEffect(() => {
     const orphanStatuses = new Set(['Разгружен', 'Возврат']);
+    const selectedDateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
     const knownMixerIds = new Set(
       completedTrips
         .map((t: any) => t.order_mixer_id)
@@ -496,9 +500,21 @@ export default function OperatorBSUPage() {
         .map((id: any) => String(id))
     );
 
-    const newOrphans = rawMixers.filter(
-      (m: any) => orphanStatuses.has(m.status) && !knownMixerIds.has(String(m.id))
-    );
+    const mixerDeliveryDate = (m: any) =>
+      String(m.delivery_date ?? m.deliveryDate ?? '')
+        .split('T')[0]
+        .substring(0, 10)
+        .trim();
+
+    const newOrphans = rawMixers.filter((m: any) => {
+      if (!orphanStatuses.has(m.status)) return false;
+      if (knownMixerIds.has(String(m.id))) return false;
+      const d = mixerDeliveryDate(m);
+      // Без даты заявки live-сироту не добавляем — дождёмся ответа API,
+      // иначе ночной рейс чужого дня легко попадёт в «сегодня».
+      if (!d || d !== selectedDateStr) return false;
+      return true;
+    });
 
     if (newOrphans.length === 0) return;
 
@@ -523,6 +539,7 @@ export default function OperatorBSUPage() {
             duration_minutes: null,
             created_at: timestamp,
             order_volume: m.order_volume ?? null,
+            delivery_date: mixerDeliveryDate(m),
             no_operator_record: true,
             // Статус миксера в момент попадания в этот список — нужен только
             // чтобы ниже (см. 1.2.3) сопоставить запись с order_history и
@@ -533,7 +550,7 @@ export default function OperatorBSUPage() {
 
       return toAdd.length > 0 ? [...toAdd, ...prev] : prev;
     });
-  }, [rawMixers, completedTrips]);
+  }, [rawMixers, completedTrips, selectedDate]);
 
   // ==================== 1.2.3 АТРИБУЦИЯ АВТОРА "ОСИРОТЕВШЕГО" РЕЙСА ====================
   // Live-подхват выше (1.2.2) создаёт запись мгновенно из rawMixers, но там
@@ -624,6 +641,12 @@ export default function OperatorBSUPage() {
       // (строка из очереди) уже содержит order_volume из active-mixers, дальше
       // тянуть его неоткуда не нужно.
       order_volume: trip.order_volume ?? null,
+      // День заявки — чтобы лента не теряла оптимистичную строку и не
+      // путала её с чужим календарным днём по UTC created_at.
+      delivery_date: String(trip.delivery_date || '')
+        .split('T')[0]
+        .substring(0, 10)
+        .trim() || undefined,
       operator_name: operatorName,
       _pending: true, // статус миксера ещё не подтверждён сервером — красная точка на строке
     };
@@ -838,35 +861,30 @@ export default function OperatorBSUPage() {
   }, [selectedTrip?.order_id, selectedTrip?.orderId]);
 
 
-  // ==================== МАКСИМАЛЬНО СТРОГАЯ ФИЛЬТРАЦИЯ ====================
+  // ==================== ФИЛЬТР ЛЕНТЫ ПО ДНЮ ЗАЯВКИ ====================
+  // День учёта = orders.delivery_date. Не используем UTC-префикс created_at:
+  // загрузка в 01:01 МСК (= 22:01 UTC «вчера») иначе уезжала в чужой день.
   const filteredCompletedTrips = completedTrips
     .filter((trip: any) => {
       if (!trip) return false;
 
       let tripDateStr = '';
-
-      // ПРИОРИТЕТ 1: Дата фактического выполнения (самое важное)
-      if (trip.production_created_at) {
-        tripDateStr = String(trip.production_created_at).substring(0, 10).trim();
-      } else if (trip.created_at) {
-        tripDateStr = String(trip.created_at).substring(0, 10).trim();
-      } 
-      // ПРИОРИТЕТ 2: delivery_date
-      else if (trip.delivery_date) {
-        tripDateStr = String(trip.delivery_date).substring(0, 10).trim();
+      if (trip.delivery_date) {
+        tripDateStr = String(trip.delivery_date).split('T')[0].substring(0, 10).trim();
       } else if (trip.orders?.delivery_date) {
-        tripDateStr = String(trip.orders.delivery_date).substring(0, 10).trim();
+        tripDateStr = String(trip.orders.delivery_date).split('T')[0].substring(0, 10).trim();
       }
 
-      // Локальная выбранная дата (без UTC сдвига)
       const year = selectedDate.getFullYear();
       const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
       const day = String(selectedDate.getDate()).padStart(2, '0');
       const selectedDateStr = `${year}-${month}-${day}`;
 
-      const shouldShow = tripDateStr === selectedDateStr;
-
-      return shouldShow;
+      // Нет даты (оптимистичная строка / сырой realtime без JOIN) — оставляем:
+      // API и live-сироты уже режут по дню заявки. Если дата есть — строго
+      // сверяем с выбранным днём.
+      if (!tripDateStr) return true;
+      return tripDateStr === selectedDateStr;
     })
     .map((trip: any) => ({
       ...trip,

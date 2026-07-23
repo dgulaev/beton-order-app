@@ -6,6 +6,20 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+/** Календарная дата YYYY-MM-DD в Europe/Moscow (день заявки / смена БСУ). */
+function moscowDateStr(d: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+function normalizeDateStr(value: unknown): string {
+  return String(value ?? '').split('T')[0].substring(0, 10).trim();
+}
+
 // ==================== GET — Получить список отгруженных рейсов ====================
 export async function GET(request: NextRequest) {
   try {
@@ -14,6 +28,11 @@ export async function GET(request: NextRequest) {
     // ?date=YYYY-MM-DD — фильтр по конкретной дате (используется оператором
     // при переключении на прошлые дни). Если не передан — поведение прежнее.
     const dateParam = searchParams.get('date'); // формат YYYY-MM-DD
+
+    // День учёта рейса = orders.delivery_date (как дашборд и очередь).
+    // ?today=true раньше резал по created_at и плодил ложных сирот после полуночи.
+    const dayFilter =
+      dateParam || (todayOnly ? moscowDateStr() : null);
 
     let query = supabase
       .from('production_logs')
@@ -30,14 +49,8 @@ export async function GET(request: NextRequest) {
       `)
       .order('created_at', { ascending: false });
 
-    if (dateParam) {
-      // Фильтруем по конкретной дате через delivery_date в таблице orders
-      query = query.eq('orders.delivery_date', dateParam);
-    } else if (todayOnly) {
-      // Обратная совместимость: ?today=true фильтрует по created_at >= начало сегодня
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      query = query.gte('created_at', todayStart.toISOString());
+    if (dayFilter) {
+      query = query.eq('orders.delivery_date', dayFilter);
     }
 
     const { data, error } = await query;
@@ -53,7 +66,9 @@ export async function GET(request: NextRequest) {
       podvizhnost: log.order_mixers?.podvizhnost || log.podvizhnost || 'П3',
       // Общий плановый объём заявки — для расчёта колонки "Прогресс" на
       // странице оператора (см. active-mixers/route.ts для того же поля).
-      order_volume: log.orders?.volume ?? null
+      order_volume: log.orders?.volume ?? null,
+      // День заявки на корне — клиентский фильтр не должен смотреть на UTC created_at
+      delivery_date: normalizeDateStr(log.orders?.delivery_date),
     }));
 
     // ==================== "ОСИРОТЕВШИЕ" РЕЙСЫ ====================
@@ -67,12 +82,10 @@ export async function GET(request: NextRequest) {
     // (заявка при этом уже "Выполнена" — см. lib/orderMixers.ts). Подтягиваем
     // такие миксеры напрямую из order_mixers и помечаем no_operator_record,
     // чтобы UI мог их визуально выделить.
-    const loggedMixerIds = new Set(
-      (data || [])
-        .map((log: any) => log.order_mixer_id)
-        .filter((id: any) => id != null)
-        .map((id: any) => String(id))
-    );
+    //
+    // Важно: «есть ли лог» проверяем по ЛЮБОЙ дате — иначе рейс заявки
+    // вчерашнего delivery_date, разгруженный сегодня, ошибочно становится
+    // сиротой (кейс #429).
 
     let orphanQuery = supabase
       .from('order_mixers')
@@ -90,13 +103,8 @@ export async function GET(request: NextRequest) {
       `)
       .in('status', ['Разгружен', 'Возврат']);
 
-    // При фильтрации по конкретной дате ограничиваем и осиротевшие рейсы
-    if (dateParam) {
-      orphanQuery = orphanQuery.eq('orders.delivery_date', dateParam);
-    } else if (todayOnly) {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      orphanQuery = orphanQuery.gte('updated_at', todayStart.toISOString());
+    if (dayFilter) {
+      orphanQuery = orphanQuery.eq('orders.delivery_date', dayFilter);
     }
 
     const { data: orphanMixers, error: orphanError } = await orphanQuery;
@@ -105,7 +113,39 @@ export async function GET(request: NextRequest) {
       console.error('Production log orphan mixers error:', orphanError);
     }
 
-    const orphanList = (orphanMixers || []).filter((m: any) => !loggedMixerIds.has(String(m.id)));
+    const orphanCandidates = orphanMixers || [];
+    const candidateIds = orphanCandidates
+      .map((m: any) => m.id)
+      .filter((id: any) => id != null);
+
+    const loggedMixerIds = new Set<string>();
+    if (candidateIds.length > 0) {
+      const { data: existingLogs, error: logsLookupError } = await supabase
+        .from('production_logs')
+        .select('order_mixer_id')
+        .in('order_mixer_id', candidateIds);
+
+      if (logsLookupError) {
+        console.error('Production log orphan lookup error:', logsLookupError);
+      } else {
+        for (const row of existingLogs || []) {
+          if (row.order_mixer_id != null) {
+            loggedMixerIds.add(String(row.order_mixer_id));
+          }
+        }
+      }
+    }
+
+    // Также исключаем id из сегодняшней выборки логов (на случай гонки insert)
+    for (const log of data || []) {
+      if (log.order_mixer_id != null) {
+        loggedMixerIds.add(String(log.order_mixer_id));
+      }
+    }
+
+    const orphanList = orphanCandidates.filter(
+      (m: any) => !loggedMixerIds.has(String(m.id))
+    );
 
     // ==================== АТРИБУЦИЯ АВТОРА ОСИРОТЕВШЕЙ ЗАПИСИ ====================
     // order_mixers не хранит, кто именно поменял статус — эта информация есть
@@ -115,7 +155,9 @@ export async function GET(request: NextRequest) {
     // заявкам с осиротевшими рейсами и сопоставляем запись по имени миксера и
     // целевому статусу — формат строки см. lib/orderMixers.ts.
     let historyByOrder = new Map<number, any[]>();
-    const orphanOrderIds = Array.from(new Set(orphanList.map((m: any) => m.order_id).filter((id: any) => id != null)));
+    const orphanOrderIds = Array.from(
+      new Set(orphanList.map((m: any) => m.order_id).filter((id: any) => id != null))
+    );
     if (orphanOrderIds.length > 0) {
       // Берём и "Изменил статус миксера..." (основной источник — точный момент
       // перехода в "Разгружен"/"Возврат"), и "Добавил миксер..." (запасной
@@ -157,7 +199,10 @@ export async function GET(request: NextRequest) {
       // 1) Приоритет — явная смена статуса именно на текущий (Разгружен/Возврат).
       const targetMarker = `на "${m.status}"`;
       const statusChangeMatches = rows.filter(
-        (r: any) => r.action?.startsWith('Изменил статус миксера') && r.action?.includes(m.mixer_name) && r.action?.includes(targetMarker)
+        (r: any) =>
+          r.action?.startsWith('Изменил статус миксера') &&
+          r.action?.includes(m.mixer_name) &&
+          r.action?.includes(targetMarker)
       );
       const statusMatch = closestOf(statusChangeMatches);
       if (statusMatch) return statusMatch;
@@ -165,7 +210,8 @@ export async function GET(request: NextRequest) {
       // 2) Запасной вариант — запись о добавлении этого миксера в заявку
       // (актуально, если миксер сразу создавался в статусе "Разгружен").
       const addMatches = rows.filter(
-        (r: any) => r.action?.startsWith('Добавил миксер') && r.action?.includes(m.mixer_name)
+        (r: any) =>
+          r.action?.startsWith('Добавил миксер') && r.action?.includes(m.mixer_name)
       );
       return closestOf(addMatches);
     };
@@ -173,6 +219,7 @@ export async function GET(request: NextRequest) {
     const orphanFormatted = orphanList.map((m: any) => {
       const timestamp = m.unloaded_at || m.updated_at || m.created_at;
       const actor = findOrphanActor(m);
+      const deliveryDate = normalizeDateStr(m.orders?.delivery_date);
       return {
         id: `orphan-${m.id}`,
         order_id: m.order_id,
@@ -186,6 +233,7 @@ export async function GET(request: NextRequest) {
         duration_minutes: null,
         created_at: timestamp,
         order_volume: m.orders?.volume ?? null,
+        delivery_date: deliveryDate,
         // Помечаем — эта запись собрана из статуса миксера, а не создана
         // оператором через кнопку "Загружен". UI показывает её с пометкой.
         no_operator_record: true,
@@ -198,23 +246,9 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    if (todayOnly && orphanFormatted.length > 0) {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const todayStartMs = todayStart.getTime();
-      const filteredOrphans = orphanFormatted.filter((o: any) => {
-        const t = o.created_at ? new Date(o.created_at).getTime() : NaN;
-        return !isNaN(t) && t >= todayStartMs;
-      });
-      return NextResponse.json(
-        [...formatted, ...filteredOrphans].sort(
-          (a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
-        )
-      );
-    }
-
     const combined = [...formatted, ...orphanFormatted].sort(
-      (a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+      (a: any, b: any) =>
+        new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
     );
 
     return NextResponse.json(combined);
@@ -229,12 +263,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const { 
-      order_id, 
-      order_mixer_id, 
-      mixer_name, 
-      concrete_grade, 
-      volume, 
+    const {
+      order_id,
+      order_mixer_id,
+      mixer_name,
+      concrete_grade,
+      volume,
       podvizhnost,
       start_time,
       // Кто из операторов смены (Семён/Максим — общая учётка на всех) реально
@@ -245,8 +279,10 @@ export async function POST(request: NextRequest) {
 
     const end_time = new Date().toISOString();
 
-    const durationMinutes = start_time 
-      ? Math.round((new Date(end_time).getTime() - new Date(start_time).getTime()) / 60000) 
+    const durationMinutes = start_time
+      ? Math.round(
+          (new Date(end_time).getTime() - new Date(start_time).getTime()) / 60000
+        )
       : null;
 
     // ==================== ЗАПРЕТ ЗАПИСИ РЕЙСА ПО УЖЕ ЗАКРЫТОЙ ЗАЯВКЕ ====================
@@ -264,7 +300,10 @@ export async function POST(request: NextRequest) {
         .eq('id', order_id)
         .maybeSingle();
 
-      const finalStatusesRu: Record<string, string> = { completed: 'Выполнена', cancelled: 'Отменена' };
+      const finalStatusesRu: Record<string, string> = {
+        completed: 'Выполнена',
+        cancelled: 'Отменена',
+      };
       if (orderForCheck?.status && finalStatusesRu[orderForCheck.status]) {
         return NextResponse.json(
           {
@@ -293,31 +332,36 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
 
       if (recent) {
-        return NextResponse.json({ success: true, data: recent, deduplicated: true });
+        return NextResponse.json({
+          success: true,
+          data: recent,
+          deduplicated: true,
+        });
       }
     }
 
     const { data, error } = await supabase
       .from('production_logs')
-      .insert([{
-        order_id,
-        order_mixer_id,
-        mixer_name,
-        concrete_grade,
-        volume,
-        operator_name: operator_name || null,
-        podvizhnost,
-        start_time,
-        end_time,
-        duration_minutes: durationMinutes
-      }])
+      .insert([
+        {
+          order_id,
+          order_mixer_id,
+          mixer_name,
+          concrete_grade,
+          volume,
+          operator_name: operator_name || null,
+          podvizhnost,
+          start_time,
+          end_time,
+          duration_minutes: durationMinutes,
+        },
+      ])
       .select()
       .single();
 
     if (error) throw error;
 
     return NextResponse.json({ success: true, data });
-
   } catch (error: any) {
     console.error('Production log POST error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
