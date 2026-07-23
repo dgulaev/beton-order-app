@@ -10,6 +10,9 @@ import Image from 'next/image';
 import { Home, LayoutList, AlignJustify, X } from 'lucide-react';
 import VerticalTimelinePanel from '../components/VerticalTimelinePanel';
 import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
+import { CARD_BORDER, modalCloseButtonStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
+import ModalSelect from '../components/ModalSelect';
+import { appConfirm } from '../components/appDialog';
 
 export default function AdminCifraDashboard() {
 
@@ -49,6 +52,7 @@ export default function AdminCifraDashboard() {
  const [currentHourPercent, setCurrentHourPercent] = useState(42);
  const [showCalendar, setShowCalendar] = useState(false);
  const [showPlanModal, setShowPlanModal] = useState(false);
+ const [showOrdersModal, setShowOrdersModal] = useState(false);
  const [showDelaysModal, setShowDelaysModal] = useState(false);
  // Быстрое создание заявки на конкретную дату (ПКМ / долгое нажатие на день в календаре)
  const [showQuickNewOrder, setShowQuickNewOrder] = useState(false);
@@ -573,6 +577,7 @@ const fmtDelayMins = (mins: number) =>
 // ==================== 13. ДИНАМИЧЕСКИЕ KPI ==============================================
 const newOrders = todayOrders.filter(o => o.status === 'new').length;
 const inWorkOrders = todayOrders.filter(o => o.status === 'processing').length;
+const cancelledOrders = todayOrders.filter(o => o.status === 'cancelled').length;
 const activeOrdersCount = newOrders + inWorkOrders;
 
 const totalToday = todayOrders.length;
@@ -1084,17 +1089,16 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
     
     <div 
       onClick={() => setShowCalendar(true)}
-      style={{ 
-        background: '#1E2937', 
+      style={volumeCardSoftStyle({ 
         padding: '10px 20px', 
-        borderRadius: '9999px', 
+        borderRadius: 9999, 
         cursor: 'pointer',
         display: 'flex',
         alignItems: 'center',
         gap: '8px',
         fontSize: '14.5px',
-        whiteSpace: 'nowrap'
-      }}
+        whiteSpace: 'nowrap',
+      })}
     >
       📅 {new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
     </div>
@@ -1138,14 +1142,23 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pb-2">
           
        {/* ==================== 35. ЗАЯВКИ СЕГОДНЯ ==================== */}
-<div style={{ 
-  background: '#1E2937', 
-  borderRadius: '18px', 
-  padding: '16px 20px', 
-  flex: 1 
-}}>
-  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-    Заявки сегодня
+<div
+  onClick={() => setShowOrdersModal(true)}
+  style={volumeCardStyle({
+    borderRadius: 18,
+    padding: '16px 20px',
+    flex: 1,
+    cursor: 'pointer',
+    transition: 'filter 0.2s',
+  })}
+  onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+  onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
+>
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+    <div style={{ color: '#94A3B8', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+      Заявки сегодня
+    </div>
+    <span style={{ color: '#475569', fontSize: '12px' }}>подробнее →</span>
   </div>
 
   <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '4px' }}>
@@ -1159,23 +1172,39 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
 
   <div style={{ height: '1px', background: '#334155', margin: '10px 0' }} />
 
-  {/* Статусы */}
-  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '13px' }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-      <span style={{ color: '#94A3B8' }}>🟡 Новые</span>
-      <strong style={{ color: '#FACC15' }}>{todayOrders.filter(o => o.status === 'new').length}</strong>
+  {/* Два блока: активные | закрытые */}
+  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+    <div style={volumeCardSoftStyle({
+      borderRadius: 12,
+      padding: '10px 12px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px',
+    })}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px' }}>
+        <span style={{ color: '#94A3B8', fontSize: '12px' }}>🟡 Новые</span>
+        <strong style={{ color: '#FACC15', fontSize: '24px', fontWeight: 700, lineHeight: 1 }}>{newOrders}</strong>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px' }}>
+        <span style={{ color: '#94A3B8', fontSize: '12px' }}>→ В работе</span>
+        <strong style={{ color: '#60A5FA', fontSize: '24px', fontWeight: 700, lineHeight: 1 }}>{inWorkOrders}</strong>
+      </div>
     </div>
-    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-      <span style={{ color: '#94A3B8' }}>→ В работе</span>
-      <strong style={{ color: '#60A5FA' }}>{todayOrders.filter(o => o.status === 'processing').length}</strong>
-    </div>
-    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-      <span style={{ color: '#94A3B8' }}>✓ Выполнены</span>
-      <strong style={{ color: '#10B981' }}>{completedOrders}</strong>
-    </div>
-    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-      <span style={{ color: '#94A3B8' }}>❌ Отменены</span>
-      <strong style={{ color: '#EF4444' }}>{todayOrders.filter(o => o.status === 'cancelled').length}</strong>
+    <div style={volumeCardSoftStyle({
+      borderRadius: 12,
+      padding: '10px 12px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px',
+    })}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px' }}>
+        <span style={{ color: '#94A3B8', fontSize: '12px' }}>✓ Выполнены</span>
+        <strong style={{ color: '#10B981', fontSize: '24px', fontWeight: 700, lineHeight: 1 }}>{completedOrders}</strong>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px' }}>
+        <span style={{ color: '#94A3B8', fontSize: '12px' }}>✕ Отменены</span>
+        <strong style={{ color: '#EF4444', fontSize: '24px', fontWeight: 700, lineHeight: 1 }}>{cancelledOrders}</strong>
+      </div>
     </div>
   </div>
 </div>
@@ -1183,19 +1212,18 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   {/* ==================== 36. ВЫПОЛНЕНИЕ ПЛАНА ==================== */}
 <div
   onClick={() => setShowPlanModal(true)}
-  style={{ 
-  background: '#1E2937', 
-  borderRadius: '18px', 
+  style={volumeCardStyle({ 
+  borderRadius: 18, 
   padding: '16px 20px', 
   flex: 1,
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'space-between',
   cursor: 'pointer',
-  transition: 'background 0.2s',
-}}
-  onMouseEnter={(e) => { e.currentTarget.style.background = '#25334A'; }}
-  onMouseLeave={(e) => { e.currentTarget.style.background = '#1E2937'; }}
+  transition: 'filter 0.2s',
+})}
+  onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+  onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
 >
   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
     <div style={{ color: '#94A3B8', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -1277,17 +1305,16 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
     прошло > 15 мин от расчётного старта загрузки. */}
 <div
   onClick={() => setShowDelaysModal(true)}
-  style={{ 
-  background: '#1E2937', 
-  borderRadius: '18px', 
+  style={volumeCardStyle({ 
+  borderRadius: 18, 
   padding: '16px 20px', 
   display: 'flex',
   flexDirection: 'column',
   cursor: 'pointer',
-  transition: 'background 0.2s',
-}}
-  onMouseEnter={(e) => { e.currentTarget.style.background = '#25334A'; }}
-  onMouseLeave={(e) => { e.currentTarget.style.background = '#1E2937'; }}
+  transition: 'filter 0.2s',
+})}
+  onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+  onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
 >
   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
     <div style={{ color: '#94A3B8', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -1360,15 +1387,14 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
    {/* 4. Миксеры в работе — за выбранный день */}
 <div 
   onClick={() => window.location.href = '/adminCifra/mixers'}
-  style={{ 
-    background: '#1E2937', 
-    borderRadius: '18px', 
+  style={volumeCardStyle({ 
+    borderRadius: 18, 
     padding: '16px 20px', 
     cursor: 'pointer',
-    transition: 'background 0.2s'
-  }}
-  onMouseEnter={e => e.currentTarget.style.background = '#25334A'}
-  onMouseLeave={e => e.currentTarget.style.background = '#1E2937'}
+    transition: 'filter 0.2s',
+  })}
+  onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+  onMouseLeave={e => { e.currentTarget.style.filter = 'none'; }}
 >
   <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Миксеры в работе</div>
   
@@ -1408,19 +1434,17 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   </div>
 </div>      </div>
       {/* ==================== 38. ТАЙМЛАЙН (УЛУЧШЕННЫЙ — В СТИЛЕ ЦИФРА.AI) ==================== */}
-       <div style={{ 
+       <div style={volumeCardStyle({ 
             flex: 1, 
             minWidth: 0,
             minHeight: 0,
-            background: '#1E2937', 
-            borderRadius: '24px', 
+            borderRadius: 22, 
             padding: '24px 28px', 
-            border: '1px solid #334155', 
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-            position: 'relative'
-          }}>
+            position: 'relative',
+          })}>
   
   {/* Заголовок + Кнопки */}
   <div style={{ 
@@ -1801,20 +1825,19 @@ const generateDailyReport = () => {
       title={order.status === 'processing'
         ? `Отгружено ${Math.round(assignedVolume * 10) / 10} из ${Math.round(orderVolume * 10) / 10} м³ (${dispatchedPercent}%)`
         : undefined}
-      style={{
+      style={volumeCardSoftStyle({
         display: 'flex',
         alignItems: 'center',
         marginBottom: '7px',
-        background: '#25334A',
-        borderRadius: '10px',
+        borderRadius: 10,
         padding: '7px 14px',
         position: 'relative',
         minHeight: '44px',
         cursor: 'pointer',
-        transition: 'background 0.15s',
-      }}
-      onMouseEnter={e => e.currentTarget.style.background = '#2A3A52'}
-      onMouseLeave={e => e.currentTarget.style.background = '#25334A'}
+        transition: 'filter 0.15s',
+      })}
+      onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+      onMouseLeave={e => { e.currentTarget.style.filter = 'none'; }}
     >
       {/* Метка логистики */}
       <div style={{
@@ -2032,11 +2055,10 @@ const generateDailyReport = () => {
     </div>
    </div>
             {/* ==================== 45. МИКСЕРЫ В РАБОТЕ ==================== */}
-<div style={{ 
+<div style={volumeCardStyle({ 
   width: '100%', 
   maxWidth: '480px', 
-  background: '#1E2937', 
-  borderRadius: '24px', 
+  borderRadius: 22, 
   padding: '24px', 
   display: 'flex', 
   flexDirection: 'column',
@@ -2044,8 +2066,7 @@ const generateDailyReport = () => {
   alignSelf: 'stretch',
   minHeight: 0,
   overflow: 'hidden',
-  boxSizing: 'border-box'
-}}>
+})}>
   
   {/* Заголовок + счётчик */}
   <div style={{ 
@@ -2091,14 +2112,14 @@ const generateDailyReport = () => {
   <div className="scroll-hidden" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px', minHeight: 0 }}>
     {groupedMixers.length > 0 ? (
       groupedMixers.map((group) => (
-        <div key={group.orderId} style={{ 
-          background: '#25334A', 
-          borderRadius: '18px', 
-          overflow: 'hidden'
-        }}>
+        <div key={group.orderId} style={volumeCardSoftStyle({ 
+          borderRadius: 18, 
+          overflow: 'hidden',
+          padding: 0,
+        })}>
           {/* Шапка заказа */}
           <div style={{ 
-            background: '#1E2937', 
+            background: 'rgba(15, 23, 42, 0.55)', 
             padding: '14px 20px', 
             borderBottom: '1px solid #334155',
             display: 'flex',
@@ -2202,29 +2223,30 @@ const generateDailyReport = () => {
                      st === 'Возврат' ? '#94A3B8' :
                      st === 'Проблема' ? '#EF4444' : '#FACC15';
                    return (
-                     <select
+                     <ModalSelect
                        value={st}
-                       onChange={(e) => handleStatusChange(mixer.id, e.target.value)}
-                       style={{
+                       onChange={(status) => handleStatusChange(mixer.id, status)}
+                       chevronColor={stColor}
+                       minPopupWidth={160}
+                       triggerStyle={{
                          padding: '3px 8px',
-                         borderRadius: '9999px',
+                         borderRadius: 9999,
                          background: `${stColor}18`,
                          color: stColor,
                          border: `1px solid ${stColor}55`,
-                         fontSize: '12px',
-                         minWidth: '110px',
-                         cursor: 'pointer',
-                         outline: 'none',
-                         fontWeight: '500',
+                         fontSize: 12,
+                         minWidth: 110,
+                         fontWeight: 500,
                        }}
-                     >
-                       <option value="Загрузка">🟡 Загрузка</option>
-                       <option value="В пути">🔵 В пути</option>
-                       <option value="На объекте">📍 На объекте</option>
-                       <option value="Разгружен">🟢 Разгружен</option>
-                       <option value="Возврат">↩️ Возврат</option>
-                       <option value="Проблема">🔴 Проблема</option>
-                     </select>
+                       options={[
+                         { value: 'Загрузка', label: '🟡 Загрузка', text: '🟡 Загрузка' },
+                         { value: 'В пути', label: '🔵 В пути', text: '🔵 В пути' },
+                         { value: 'На объекте', label: '📍 На объекте', text: '📍 На объекте' },
+                         { value: 'Разгружен', label: '🟢 Разгружен', text: '🟢 Разгружен' },
+                         { value: 'Возврат', label: '↩️ Возврат', text: '↩️ Возврат' },
+                         { value: 'Проблема', label: '🔴 Проблема', text: '🔴 Проблема' },
+                       ]}
+                     />
                    );
                  })()}
 
@@ -2309,10 +2331,10 @@ const generateDailyReport = () => {
 
     // Модальное окно — твои размеры
     const modal = document.createElement('div');
-    modal.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.92);z-index:10000;display:flex;align-items:center;justify-content:center;`;
+    modal.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.82);z-index:10000;display:flex;align-items:center;justify-content:center;`;
 
     modal.innerHTML = `
-      <div style="background:#1E2937;width:820px;max-width:80%;border-radius:16px;padding:25px; height:1400px; max-height:100vh;overflow:auto;">
+      <div style="background:linear-gradient(165deg,#1E2937 0%,#0F172A 72%,#0B1220 100%);border:1px solid rgba(148,163,184,0.28);width:820px;max-width:80%;border-radius:16px;padding:25px;height:1400px;max-height:100vh;overflow:auto;box-shadow:0 12px 28px rgba(0,0,0,0.34),0 3px 8px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.12),inset 0 -10px 22px rgba(0,0,0,0.16),0 0 0 1px rgba(148,163,184,0.12),0 0 48px rgba(148,163,184,0.22),0 0 110px rgba(148,163,184,0.12),0 40px 100px rgba(0,0,0,0.55);">
         <h2 style="margin-top:0;color:#60A5FA;text-align:center;">Отчёт на ${selectedDate.toLocaleDateString('ru-RU')}</h2>
         <textarea id="reportText" style="width:96%;height:1200px;font-size:15.2px;padding:15px;font-family:monospace;background:#0F172A;color:#E2E8F0;border:1px solid #475569;border-radius:8px;resize:vertical;">${report}</textarea>
         
@@ -2339,8 +2361,8 @@ const generateDailyReport = () => {
       }
 
       if (refreshBtn && textArea) {
-        refreshBtn.addEventListener('click', () => {
-          if (confirm('Загрузить свежие данные? Ваши правки будут потеряны.')) {
+        refreshBtn.addEventListener('click', async () => {
+          if (await appConfirm('Загрузить свежие данные? Ваши правки будут потеряны.')) {
             textArea.value = autoReport;
             localStorage.setItem(editedKey, autoReport);
           }
@@ -2414,13 +2436,221 @@ const generateDailyReport = () => {
   />
 )}
 
+      {/* ==================== МОДАЛКА: ЗАЯВКИ СЕГОДНЯ ==================== */}
+      {showOrdersModal && (() => {
+        const groups: { key: string; label: string; color: string; items: Order[] }[] = [
+          { key: 'new', label: 'Новые', color: '#FACC15', items: todayOrders.filter((o) => o.status === 'new') },
+          { key: 'processing', label: 'В работе', color: '#60A5FA', items: todayOrders.filter((o) => o.status === 'processing') },
+          { key: 'completed', label: 'Выполнены', color: '#10B981', items: todayOrders.filter((o) => o.status === 'completed') },
+          { key: 'cancelled', label: 'Отменены', color: '#EF4444', items: todayOrders.filter((o) => o.status === 'cancelled') },
+        ];
+        const volOf = (list: Order[]) => list.reduce((s, o) => s + Number(o.volume || 0), 0);
+        return (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.82)',
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+          }}
+          onClick={() => setShowOrdersModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={volumeModalStyle({
+              width: 'min(920px, 100%)',
+              maxHeight: 'min(860px, calc(100vh - 48px))',
+              borderRadius: 22,
+              border: CARD_BORDER,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            })}
+          >
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '18px 24px',
+              borderBottom: CARD_BORDER,
+              flexShrink: 0,
+            }}>
+              <div>
+                <div style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>
+                  Заявки сегодня
+                </div>
+                <div style={{ fontSize: '13px', color: '#64748B', marginTop: '2px' }}>
+                  {selectedDate.toLocaleDateString('ru-RU', {
+                    weekday: 'long',
+                    day: 'numeric',
+                    month: 'long',
+                  })}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowOrdersModal(false)}
+                style={modalCloseButtonStyle()}
+              >
+                <X size={18} color="#94A3B8" />
+              </button>
+            </div>
+
+            <div className="scroll-hidden" style={{ overflowY: 'auto', padding: '22px 24px 28px' }}>
+              <div style={volumeCardSoftStyle({
+                textAlign: 'center',
+                padding: '22px 20px',
+                marginBottom: '16px',
+                borderRadius: 16,
+              })}>
+                <div style={{ fontSize: '64px', fontWeight: 700, lineHeight: 1, color: '#60A5FA' }}>
+                  {totalToday}
+                </div>
+                <div style={{ color: '#94A3B8', fontSize: '14px', marginTop: '6px' }}>
+                  заявок · {fmtM3(volOf(todayOrders))} м³
+                </div>
+              </div>
+
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '10px',
+                marginBottom: '22px',
+              }}>
+                {groups.map((g) => (
+                  <div
+                    key={g.key}
+                    style={volumeCardSoftStyle({
+                      padding: '14px 16px',
+                      borderRadius: 12,
+                      borderLeft: `3px solid ${g.color}`,
+                    })}
+                  >
+                    <div style={{ color: '#64748B', fontSize: '12px', marginBottom: '4px' }}>{g.label}</div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px' }}>
+                      <span style={{ fontSize: '28px', fontWeight: 700, color: g.color, lineHeight: 1 }}>
+                        {g.items.length}
+                      </span>
+                      <span style={{ fontSize: '13px', color: '#94A3B8', fontWeight: 600 }}>
+                        {fmtM3(volOf(g.items))} м³
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {todayOrders.length === 0 ? (
+                <div style={volumeCardSoftStyle({
+                  padding: '28px',
+                  textAlign: 'center',
+                  color: '#64748B',
+                  borderRadius: 14,
+                })}>
+                  Нет заявок на этот день
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+                  {groups.filter((g) => g.items.length > 0).map((g) => (
+                    <div key={g.key}>
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginBottom: '10px',
+                      }}>
+                        <div style={{ fontSize: '15px', fontWeight: 700, color: g.color }}>
+                          {g.label}
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#64748B' }}>
+                          {g.items.length} · {fmtM3(volOf(g.items))} м³
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {[...g.items]
+                          .sort((a, b) => String(a.delivery_time || '').localeCompare(String(b.delivery_time || '')))
+                          .map((order) => {
+                            const statusCfg = getStatusConfig(order.status);
+                            const client = (order as any).organization_name || (order as any).full_name || '—';
+                            return (
+                              <button
+                                key={order.id}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedOrder(order);
+                                  setShowOrdersModal(false);
+                                }}
+                                style={volumeCardSoftStyle({
+                                  display: 'block',
+                                  width: '100%',
+                                  textAlign: 'left',
+                                  padding: '12px 14px',
+                                  borderRadius: 12,
+                                  cursor: 'pointer',
+                                  color: 'inherit',
+                                  borderLeft: `3px solid ${statusCfg.color}`,
+                                })}
+                                onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
+                              >
+                                <div style={{
+                                  display: 'flex',
+                                  alignItems: 'flex-start',
+                                  justifyContent: 'space-between',
+                                  gap: '12px',
+                                }}>
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{
+                                      fontSize: '14px',
+                                      fontWeight: 600,
+                                      color: '#E2E8F0',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}>
+                                      #{order.id} · {order.delivery_time || '—'} · {client}
+                                    </div>
+                                    <div style={{ fontSize: '13px', color: '#94A3B8', marginTop: '4px' }}>
+                                      {(order as any).grade || '—'} · {fmtM3(Number(order.volume || 0))} м³
+                                      {(order as any).address ? ` · ${(order as any).address}` : ''}
+                                    </div>
+                                  </div>
+                                  <span style={{
+                                    flexShrink: 0,
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    padding: '2px 8px',
+                                    borderRadius: '9999px',
+                                    color: statusCfg.color,
+                                    background: statusCfg.bg,
+                                  }}>
+                                    {statusCfg.label}
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        );
+      })()}
+
       {/* ==================== МОДАЛКА: ВЫПОЛНЕНИЕ ПЛАНА ==================== */}
       {showPlanModal && (
         <div
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0,0,0,0.75)',
+            background: 'rgba(0,0,0,0.82)',
             zIndex: 10000,
             display: 'flex',
             alignItems: 'center',
@@ -2431,17 +2661,15 @@ const generateDailyReport = () => {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{
+            style={volumeModalStyle({
               width: 'min(920px, 100%)',
               maxHeight: 'min(860px, calc(100vh - 48px))',
-              background: '#1E2937',
-              borderRadius: '20px',
-              border: '1px solid #334155',
+              borderRadius: 22,
+              border: CARD_BORDER,
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',
-              boxShadow: '0 24px 64px rgba(0,0,0,0.45)',
-            }}
+            })}
           >
             {/* Header */}
             <div style={{
@@ -2449,7 +2677,7 @@ const generateDailyReport = () => {
               alignItems: 'center',
               justifyContent: 'space-between',
               padding: '18px 24px',
-              borderBottom: '1px solid #334155',
+              borderBottom: CARD_BORDER,
               flexShrink: 0,
             }}>
               <div>
@@ -2467,17 +2695,7 @@ const generateDailyReport = () => {
               <button
                 type="button"
                 onClick={() => setShowPlanModal(false)}
-                style={{
-                  background: '#334155',
-                  border: 'none',
-                  borderRadius: '10px',
-                  width: '36px',
-                  height: '36px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                }}
+                style={modalCloseButtonStyle()}
               >
                 <X size={18} color="#94A3B8" />
               </button>
@@ -2485,12 +2703,12 @@ const generateDailyReport = () => {
 
             <div className="scroll-hidden" style={{ overflowY: 'auto', padding: '22px 24px 28px' }}>
               {/* Сводка % */}
-              <div style={{
+              <div style={volumeCardSoftStyle({
                 textAlign: 'center',
-                paddingBottom: '20px',
-                marginBottom: '20px',
-                borderBottom: '1px solid #334155',
-              }}>
+                padding: '22px 20px',
+                marginBottom: '16px',
+                borderRadius: 16,
+              })}>
                 <div style={{
                   fontSize: '64px',
                   fontWeight: 700,
@@ -2499,7 +2717,7 @@ const generateDailyReport = () => {
                 }}>
                   {completionPercent}%
                 </div>
-                <div style={{ color: '#64748B', fontSize: '14px', marginTop: '6px' }}>
+                <div style={{ color: '#94A3B8', fontSize: '14px', marginTop: '6px' }}>
                   разгружено от плана дня · {fmtM3(factVolume)} / {fmtM3(planToday)} м³
                 </div>
                 {planToday > 0 && (
@@ -2508,8 +2726,9 @@ const generateDailyReport = () => {
                     maxWidth: '420px',
                     height: '10px',
                     borderRadius: '9999px',
-                    background: '#334155',
+                    background: '#0F172A',
                     overflow: 'hidden',
+                    border: CARD_BORDER,
                   }}>
                     <div style={{
                       height: '100%',
@@ -2553,12 +2772,10 @@ const generateDailyReport = () => {
                 ].map((row) => (
                   <div
                     key={row.label}
-                    style={{
+                    style={volumeCardSoftStyle({
                       padding: '12px 14px',
-                      background: '#0F172A',
-                      borderRadius: '12px',
-                      border: '1px solid #334155',
-                    }}
+                      borderRadius: 12,
+                    })}
                   >
                     <div style={{ color: '#64748B', fontSize: '12px', marginBottom: '4px' }}>
                       {row.label}
@@ -2586,14 +2803,12 @@ const generateDailyReport = () => {
               </div>
 
               {planOrdersDetail.length === 0 ? (
-                <div style={{
+                <div style={volumeCardSoftStyle({
                   padding: '28px',
                   textAlign: 'center',
                   color: '#64748B',
-                  background: '#0F172A',
-                  borderRadius: '12px',
-                  border: '1px solid #334155',
-                }}>
+                  borderRadius: 14,
+                })}>
                   Нет заявок на этот день
                 </div>
               ) : (
@@ -2611,19 +2826,17 @@ const generateDailyReport = () => {
                             setShowPlanModal(false);
                           }
                         }}
-                        style={{
+                        style={volumeCardSoftStyle({
                           display: 'block',
                           width: '100%',
                           textAlign: 'left',
                           padding: '12px 14px',
-                          background: '#0F172A',
-                          borderRadius: '12px',
-                          border: '1px solid #334155',
+                          borderRadius: 12,
                           cursor: 'pointer',
                           color: 'inherit',
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#475569'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#334155'; }}
+                        })}
+                        onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
                       >
                         <div style={{
                           display: 'flex',
@@ -2687,8 +2900,9 @@ const generateDailyReport = () => {
                         <div style={{
                           height: '6px',
                           borderRadius: '9999px',
-                          background: '#1E2937',
+                          background: '#0F172A',
                           overflow: 'hidden',
+                          border: CARD_BORDER,
                           marginBottom: (row.loading + row.inTransit + row.onSite) > 0 ? '8px' : 0,
                         }}>
                           <div style={{
@@ -2749,24 +2963,21 @@ const generateDailyReport = () => {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{
+            style={volumeModalStyle({
               width: 'min(860px, 100%)',
               maxHeight: 'min(860px, calc(100vh - 48px))',
-              background: '#1E2937',
-              borderRadius: '20px',
-              border: '1px solid #334155',
+              borderRadius: 20,
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',
-              boxShadow: '0 24px 64px rgba(0,0,0,0.45)',
-            }}
+            })}
           >
             <div style={{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
               padding: '18px 24px',
-              borderBottom: '1px solid #334155',
+              borderBottom: CARD_BORDER,
               flexShrink: 0,
             }}>
               <div>
@@ -2782,17 +2993,7 @@ const generateDailyReport = () => {
               <button
                 type="button"
                 onClick={() => setShowDelaysModal(false)}
-                style={{
-                  background: '#334155',
-                  border: 'none',
-                  borderRadius: '10px',
-                  width: '36px',
-                  height: '36px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                }}
+                style={modalCloseButtonStyle()}
               >
                 <X size={18} color="#94A3B8" />
               </button>
@@ -2800,16 +3001,14 @@ const generateDailyReport = () => {
 
             <div className="scroll-hidden" style={{ overflowY: 'auto', padding: '20px 24px 28px' }}>
               {/* Как считаем */}
-              <div style={{
+              <div style={volumeCardSoftStyle({
                 padding: '14px 16px',
-                background: '#0F172A',
-                borderRadius: '12px',
-                border: '1px solid #334155',
+                borderRadius: 12,
                 marginBottom: '18px',
                 fontSize: '13px',
                 color: '#94A3B8',
                 lineHeight: 1.55,
-              }}>
+              })}>
                 <div style={{ color: '#E2E8F0', fontWeight: 600, marginBottom: '6px' }}>
                   Как считаем задержку
                 </div>
@@ -2821,13 +3020,11 @@ const generateDailyReport = () => {
               </div>
 
               {delayedOrders.length === 0 ? (
-                <div style={{
+                <div style={volumeCardSoftStyle({
                   padding: '36px 20px',
                   textAlign: 'center',
-                  background: '#0F172A',
-                  borderRadius: '14px',
-                  border: '1px solid #334155',
-                }}>
+                  borderRadius: 14,
+                })}>
                   <div style={{ fontSize: '36px', marginBottom: '8px' }}>✓</div>
                   <div style={{ fontSize: '16px', fontWeight: 600, color: '#10B981', marginBottom: '4px' }}>
                     Все по графику
@@ -2868,17 +3065,16 @@ const generateDailyReport = () => {
                           setSelectedOrder(order);
                           setShowDelaysModal(false);
                         }}
-                        style={{
+                        style={volumeCardSoftStyle({
                           display: 'block',
                           width: '100%',
                           textAlign: 'left',
                           padding: '14px 16px',
-                          background: '#0F172A',
-                          borderRadius: '14px',
+                          borderRadius: 14,
                           border: `1px solid ${severity}40`,
                           cursor: 'pointer',
                           color: 'inherit',
-                        }}
+                        })}
                         onMouseEnter={(e) => { e.currentTarget.style.borderColor = severity; }}
                         onMouseLeave={(e) => { e.currentTarget.style.borderColor = `${severity}40`; }}
                       >
@@ -2938,11 +3134,10 @@ const generateDailyReport = () => {
                           gap: '8px',
                           marginBottom: '12px',
                         }}>
-                          <div style={{
+                          <div style={volumeCardSoftStyle({
                             padding: '8px 10px',
-                            background: '#1E2937',
-                            borderRadius: '10px',
-                          }}>
+                            borderRadius: 10,
+                          })}>
                             <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '2px' }}>
                               Начать грузить
                             </div>
@@ -2950,11 +3145,10 @@ const generateDailyReport = () => {
                               {fmtClockMins(order.expectedLoadStart)}
                             </div>
                           </div>
-                          <div style={{
+                          <div style={volumeCardSoftStyle({
                             padding: '8px 10px',
-                            background: '#1E2937',
-                            borderRadius: '10px',
-                          }}>
+                            borderRadius: 10,
+                          })}>
                             <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '2px' }}>
                               Доставка
                             </div>
@@ -2962,11 +3156,10 @@ const generateDailyReport = () => {
                               {fmtClockMins(order.plannedStart)}
                             </div>
                           </div>
-                          <div style={{
+                          <div style={volumeCardSoftStyle({
                             padding: '8px 10px',
-                            background: '#1E2937',
-                            borderRadius: '10px',
-                          }}>
+                            borderRadius: 10,
+                          })}>
                             <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '2px' }}>
                               Путь / загрузка
                             </div>
@@ -3023,7 +3216,7 @@ const generateDailyReport = () => {
 
       {/* Модалка календаря */}
       {showCalendar && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowCalendar(false)}>
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowCalendar(false)}>
           <div onClick={e => e.stopPropagation()}>
             <Calendar
               orders={allOrders}

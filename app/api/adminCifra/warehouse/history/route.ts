@@ -12,7 +12,7 @@ export async function GET() {
       .from('warehouse_operations')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(20);
+      .limit(40);
 
     if (error) {
       console.error('GET history error:', error);
@@ -30,6 +30,11 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
+    const userName =
+      typeof body.user_name === 'string' && body.user_name.trim()
+        ? body.user_name.trim().slice(0, 120)
+        : null;
+
     const { error } = await supabase
       .from('warehouse_operations')
       .insert({
@@ -38,7 +43,8 @@ export async function POST(request: NextRequest) {
         amount: Number(body.amount || 0),
         old_value: Number(body.old_value || 0),
         new_value: Number(body.new_value || 0),
-        unit: body.unit || 'л'
+        unit: body.unit || 'л',
+        user_name: userName,
         // НЕ отправляем 'action' — её нет в таблице
       });
 

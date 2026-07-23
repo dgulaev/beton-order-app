@@ -1,5 +1,14 @@
 // Общие стили модуля «Лаборатория» — держимся тёмной темы админки.
 import type { CSSProperties } from 'react';
+import {
+  CARD_BORDER,
+  CARD_GRADIENT,
+  CARD_VOLUME,
+  modalFieldStyle,
+  volumeCardSoftStyle,
+  volumeCardStyle,
+  volumeModalStyle,
+} from '../cardStyles';
 
 export const COLORS = {
   bg: '#0F172A',
@@ -15,15 +24,13 @@ export const COLORS = {
   amber: '#FACC15',
 };
 
-export const inputStyle: CSSProperties = {
-  width: '100%',
+export { volumeCardStyle,
+  volumeModalStyle, volumeCardSoftStyle, CARD_BORDER, CARD_GRADIENT, CARD_VOLUME };
+
+export const inputStyle: CSSProperties = modalFieldStyle({
   padding: '12px',
-  background: COLORS.input,
-  border: 'none',
-  borderRadius: '8px',
-  color: '#fff',
-  boxSizing: 'border-box',
-};
+  borderRadius: 10,
+});
 
 export const labelStyle: CSSProperties = {
   display: 'block',
@@ -33,10 +40,10 @@ export const labelStyle: CSSProperties = {
 };
 
 export const cardStyle: CSSProperties = {
-  background: COLORS.card,
-  borderRadius: '16px',
-  padding: '16px',
-  border: `1px solid ${COLORS.border}`,
+  ...volumeCardStyle({
+    borderRadius: 16,
+    padding: '16px',
+  }),
 };
 
 export function pillStyle(bg: string, color: string): CSSProperties {
@@ -67,21 +74,22 @@ export function primaryButton(color: string = COLORS.accentDark): CSSProperties 
   };
 }
 
-export const ghostButton: CSSProperties = {
+export const ghostButton: CSSProperties = volumeCardSoftStyle({
   padding: '10px 18px',
-  background: '#334155',
   color: '#E2E8F0',
-  border: 'none',
-  borderRadius: '9999px',
+  borderRadius: 9999,
   fontWeight: 500,
   fontSize: '14px',
   cursor: 'pointer',
-};
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 8,
+});
 
 export const overlayStyle: CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(0,0,0,0.9)',
+  background: 'rgba(0,0,0,0.82)',
   zIndex: 2000,
   display: 'flex',
   alignItems: 'center',
@@ -90,14 +98,12 @@ export const overlayStyle: CSSProperties = {
 };
 
 export function modalStyle(maxWidth = 560): CSSProperties {
-  return {
-    background: COLORS.card,
+  return volumeModalStyle({
     padding: '28px',
-    borderRadius: '20px',
+    borderRadius: 20,
     width: '100%',
     maxWidth: `${maxWidth}px`,
     maxHeight: '90vh',
     overflowY: 'auto',
-    boxSizing: 'border-box',
-  };
+  });
 }

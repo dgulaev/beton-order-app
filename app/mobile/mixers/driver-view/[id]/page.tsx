@@ -69,7 +69,7 @@ export default function DriverViewPage() {
 
   if (roleLoading || loadingMixer) {
     return (
-      <div style={{ minHeight: '100vh', background: '#162032', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748B' }}>
+      <div style={{ minHeight: '100vh', background: '#0F172A', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748B' }}>
         Загрузка...
       </div>
     );
@@ -77,7 +77,7 @@ export default function DriverViewPage() {
 
   if (!mixer) {
     return (
-      <div style={{ minHeight: '100vh', background: '#162032', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748B' }}>
+      <div style={{ minHeight: '100vh', background: '#0F172A', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748B' }}>
         Миксер не найден
       </div>
     );

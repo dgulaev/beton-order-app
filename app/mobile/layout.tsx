@@ -26,6 +26,8 @@ import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
 import './globals.css';
 import { hardResetBroadcastSocket, useGlobalBroadcastStatus, reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
+import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
+import AppDialogHost, { appConfirm } from '@/app/adminCifra/components/appDialog';
 
 // Сколько ждём ответ /api/driver/auth, прежде чем сдаться (см. пояснение у
 // ROLE_FETCH_TIMEOUT_MS в UserRoleProvider — та же причина).
@@ -88,17 +90,15 @@ function NavLink({ href, icon, label, pathname }: { href: string; icon: React.Re
   );
 }
 
-const INPUT_STYLE: React.CSSProperties = {
+const INPUT_STYLE: React.CSSProperties = volumeCardSoftStyle({
   width: '100%',
-  boxSizing: 'border-box',
   padding: '16px',
   marginBottom: '14px',
-  borderRadius: '12px',
-  border: '1px solid #334155',
-  background: '#162032',
+  borderRadius: 12,
   color: '#fff',
   fontSize: '17px',
-};
+  colorScheme: 'dark',
+});
 
 export default function MobileLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -325,8 +325,13 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   // Один и тот же телефон/планшет может использоваться разными людьми по
   // очереди (сотрудник передал устройство водителю и наоборот) — поэтому
   // выход сразу очищает обе возможные сессии.
-  const handleSwitchUser = () => {
-    if (!confirm('Выйти и войти как другой пользователь?')) return;
+  const handleSwitchUser = async () => {
+    if (!(await appConfirm('Выйти и войти как другой пользователь?', {
+      title: 'Смена пользователя',
+      okLabel: 'Выйти',
+      cancelLabel: 'Отмена',
+      variant: 'warning',
+    }))) return;
     clearDriverSession();
     clearDriverMixerCache();
     setDriverMixer(null);
@@ -373,36 +378,46 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   // есть, показываем их сразу, а актуальность в фоне проверяют эффекты выше.
   if ((checkingDriverSession && !driverMixer) || (roleLoading && !user) || isOldDriverLink) {
     return (
-      <div
-        style={{
-          minHeight: '100vh',
-          background: '#162032',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#94A3B8',
-          gap: '12px',
-        }}
-      >
-        <Loader2 size={32} style={{ animation: 'spin 1s linear infinite' }} />
-        Загрузка...
-      </div>
+      <>
+        <AppDialogHost />
+        <div
+          style={{
+            minHeight: '100vh',
+            background: '#0F172A',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#94A3B8',
+            gap: '12px',
+          }}
+        >
+          <Loader2 size={32} style={{ animation: 'spin 1s linear infinite' }} />
+          Загрузка...
+        </div>
+      </>
     );
   }
 
   // ==================== 11. ДАШБОРД ВОДИТЕЛЯ ====================
   if (driverMixer) {
-    return <DriverDashboard mixer={driverMixer} onLogout={handleSwitchUser} />;
+    return (
+      <>
+        <AppDialogHost />
+        <DriverDashboard mixer={driverMixer} onLogout={handleSwitchUser} />
+      </>
+    );
   }
 
   // ==================== 12. ФОРМА ВХОДА (никто не залогинен) ====================
   if (!isStaffLoggedIn) {
     return (
+      <>
+        <AppDialogHost />
       <div
         style={{
           minHeight: '100vh',
-          backgroundColor: '#162032',
+          backgroundColor: '#0F172A',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -411,14 +426,12 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
         }}
       >
         <div
-          style={{
-            background: '#334155',
+          style={volumeModalStyle({
             padding: '40px 30px',
-            borderRadius: '20px',
+            borderRadius: 20,
             width: '100%',
             maxWidth: '420px',
-            boxShadow: '0 10px 30px rgba(0,0,0,0.3)',
-          }}
+          })}
         >
           {step !== 'phone' && (
             <button
@@ -550,6 +563,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
           )}
         </div>
       </div>
+      </>
     );
   }
 
@@ -558,18 +572,20 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   // (см. MobileExitButton) — фиксированный оверлей здесь перекрывал кнопки
   // в шапках страниц (например, календарь на Дашборде).
   return (
-    <div id="mobile-root" style={{ width: '100vw', maxWidth: '100vw', overflowX: 'hidden', backgroundColor: '#162032', minHeight: '100vh', position: 'relative' }}>
+    <div id="mobile-root" style={{ width: '100vw', maxWidth: '100vw', overflowX: 'hidden', backgroundColor: '#0F172A', minHeight: '100vh', position: 'relative' }}>
+      <AppDialogHost />
       {children}
 
       {/* Нижний навбар с анимацией появления/скрытия */}
-      <div style={{
+      <div style={volumeCardSoftStyle({
         position: 'fixed',
         bottom: 0,
         left: 0,
         right: 0,
         height: '74px',
-        background: '#334155',
-        borderTop: '1px solid #334155',
+        borderRadius: 0,
+        border: 'none',
+        borderTop: CARD_BORDER,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-around',
@@ -577,7 +593,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
         paddingBottom: '8px',
         transform: navVisible ? 'translateY(0)' : 'translateY(100%)',
         transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-      }}>
+      })}>
         <NavLink href="/mobile/" icon={<Home size={26} />} label="Дашборд" pathname={pathname} />
         <NavLink href="/mobile/zayavki" icon={<Package size={26} />} label="Заявки" pathname={pathname} />
         <NavLink href="/mobile/mixers" icon={<Truck size={26} />} label="Миксеры" pathname={pathname} />

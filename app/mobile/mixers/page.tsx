@@ -11,6 +11,7 @@ import { DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/delivery
 import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
 import { useRealtimeOrderMixers } from '@/hooks/useRealtimeOrders';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -102,16 +103,14 @@ function FieldInput({
         placeholder={placeholder}
         value={value}
         onChange={e => onChange(e.target.value)}
-        style={{
+        style={volumeCardSoftStyle({
           width: '100%',
           padding: '14px 16px',
-          background: '#25334A',
-          border: 'none',
-          borderRadius: '12px',
+          borderRadius: 12,
           color: '#fff',
           fontSize: '15px',
-          boxSizing: 'border-box',
-        }}
+          colorScheme: 'dark',
+        })}
       />
       {hint && <div style={{ color: '#475569', fontSize: '12px', marginTop: '5px' }}>{hint}</div>}
     </div>
@@ -173,18 +172,16 @@ function TariffsTab() {
     return <div style={{ textAlign: 'center', padding: '60px', color: '#475569' }}>Загрузка тарифов...</div>;
   }
 
-  const inputStyle: React.CSSProperties = {
+  const inputStyle: React.CSSProperties = volumeCardSoftStyle({
     width: '100%',
     padding: '10px 12px',
-    background: '#25334A',
-    border: '1px solid #334155',
-    borderRadius: '10px',
+    borderRadius: 10,
     color: '#fff',
     fontSize: '15px',
     fontWeight: 600,
     textAlign: 'right',
-    boxSizing: 'border-box',
-  };
+    colorScheme: 'dark',
+  });
 
   function Row({ label, hint, field, suffix }: { label: string; hint?: string; field: keyof DeliverySettings; suffix: string }) {
     return (
@@ -225,7 +222,7 @@ function TariffsTab() {
       </div>
 
       {/* В черте Брянска */}
-      <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', marginBottom: '12px' }}>
+      <div style={volumeCardStyle({ borderRadius: 16, padding: '16px', marginBottom: '12px' })}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
           <Truck size={16} color="#10B981" />
           <div style={{ fontWeight: 700, fontSize: '15px', color: '#E2E8F0' }}>В черте Брянска</div>
@@ -240,7 +237,7 @@ function TariffsTab() {
       </div>
 
       {/* За городом */}
-      <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', marginBottom: '16px' }}>
+      <div style={volumeCardStyle({ borderRadius: 16, padding: '16px', marginBottom: '16px' })}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
           <MapPin size={16} color="#3B82F6" />
           <div style={{ fontWeight: 700, fontSize: '15px', color: '#E2E8F0' }}>За пределами Брянска</div>
@@ -251,7 +248,7 @@ function TariffsTab() {
         <Row label="Ставка за км" hint="В одну сторону × кол-во рейсов" field="price_per_km" suffix="₽/км" />
         <Row label="Коэф. дорог" hint="Прямая × коэффициент = реальный путь" field="road_curvature_coefficient" suffix="×" />
 
-        <div style={{ marginTop: '12px', background: '#25334A', borderRadius: '10px', padding: '12px', color: '#64748B', fontSize: '12px', lineHeight: 1.5 }}>
+        <div style={volumeCardSoftStyle({ marginTop: '12px', borderRadius: 10, padding: '12px', color: '#64748B', fontSize: '12px', lineHeight: 1.5 })}>
           Пример: 130 км по прямой, коэф. {settings.road_curvature_coefficient} → ≈{exampleKm} км.
           Один рейс: {exampleKm} × {settings.price_per_km.toLocaleString('ru-RU')} ₽ = <b style={{ color: '#CBD5E1' }}>{exampleCost.toLocaleString('ru-RU')} ₽</b>
         </div>
@@ -482,7 +479,7 @@ export default function MobileMixersPage() {
 
   // ─── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div style={{ minHeight: '100vh', paddingBottom: '100px', background: '#162032' }}>
+    <div style={{ minHeight: '100vh', paddingBottom: '100px', background: '#0F172A' }}>
 
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 16px 0' }}>
@@ -551,15 +548,13 @@ export default function MobileMixersPage() {
               <div style={{ padding: '14px 16px 0' }}>
                 <button
                   onClick={() => setShowTripSheet(true)}
-                  style={{
+                  style={volumeCardSoftStyle({
                     width: '100%',
-                    background: '#1E2D40',
-                    borderRadius: '14px',
+                    borderRadius: 14,
                     padding: '12px 14px',
-                    border: '1px solid #334155',
                     cursor: 'pointer',
                     textAlign: 'left',
-                  }}
+                  })}
                 >
                   {/* Заголовок */}
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
@@ -640,14 +635,13 @@ export default function MobileMixersPage() {
                 <div
                   key={mixer.id}
                   onClick={() => openCard(mixer)}
-                  style={{
-                    background: '#25334A',
-                    borderRadius: '14px',
-                    border: `1px solid ${hasActiveTrip ? sc.color + '50' : '#334155'}`,
+                  style={volumeCardSoftStyle({
+                    borderRadius: 14,
+                    border: hasActiveTrip ? `1px solid ${sc.color}50` : CARD_BORDER,
                     cursor: 'pointer',
                     overflow: 'hidden',
                     display: 'flex',
-                  }}
+                  })}
                 >
                   {/* Цветной индикатор слева */}
                   <div style={{
@@ -772,15 +766,14 @@ export default function MobileMixersPage() {
             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }}
             onClick={closeSheet}
           />
-          <div style={{
+          <div style={volumeModalStyle({
             position: 'fixed', bottom: '74px', left: 0, right: 0,
             zIndex: 10001,
-            background: '#25334A',
             borderRadius: '20px 20px 0 0',
             maxHeight: 'calc(80vh - 74px)',
             overflow: 'hidden',
             display: 'flex', flexDirection: 'column',
-          }}>
+          })}>
             {/* Handle */}
             <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0' }}>
               <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
@@ -834,15 +827,14 @@ export default function MobileMixersPage() {
             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }}
             onClick={closeSheet}
           />
-          <div style={{
+          <div style={volumeModalStyle({
             position: 'fixed', bottom: '74px', left: 0, right: 0,
             zIndex: 10001,
-            background: '#25334A',
             borderRadius: '20px 20px 0 0',
             maxHeight: 'calc(90vh - 74px)',
             display: 'flex', flexDirection: 'column',
             overflow: 'hidden',
-          }}>
+          })}>
             {/* Handle */}
             <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0', flexShrink: 0 }}>
               <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
@@ -873,13 +865,29 @@ export default function MobileMixersPage() {
                     <button
                       key={t}
                       onClick={() => setForm(p => ({ ...p, type: t }))}
-                      style={{
-                        flex: 1, padding: '12px',
-                        background: form.type === t ? (t === 'own' ? '#10B981' : '#FACC15') : '#25334A',
-                        border: 'none', borderRadius: '12px',
-                        color: form.type === t && t === 'rented' ? '#000' : '#fff',
-                        fontWeight: 700, fontSize: '14px', cursor: 'pointer',
-                      }}
+                      style={
+                        form.type === t
+                          ? {
+                              flex: 1,
+                              padding: '12px',
+                              background: t === 'own' ? '#10B981' : '#FACC15',
+                              border: 'none',
+                              borderRadius: 12,
+                              color: t === 'rented' ? '#000' : '#fff',
+                              fontWeight: 700,
+                              fontSize: '14px',
+                              cursor: 'pointer',
+                            }
+                          : volumeCardSoftStyle({
+                              flex: 1,
+                              padding: '12px',
+                              borderRadius: 12,
+                              color: '#fff',
+                              fontWeight: 700,
+                              fontSize: '14px',
+                              cursor: 'pointer',
+                            })
+                      }
                     >
                       {t === 'own' ? 'Свой' : 'Наёмный'}
                     </button>
@@ -898,7 +906,7 @@ export default function MobileMixersPage() {
                   hint="Время сверх нормы считается простоем водителя"
                 />
               ) : (
-                <div style={{ padding: '12px 14px', background: '#334155', borderRadius: '10px', color: '#475569', fontSize: '13px', marginBottom: '16px' }}>
+                <div style={volumeCardSoftStyle({ padding: '12px 14px', borderRadius: 10, color: '#475569', fontSize: '13px', marginBottom: '16px' })}>
                   Норма разгрузки для своих — {OWN_UNLOAD_ALLOWANCE_MIN} мин (общая настройка)
                 </div>
               )}
@@ -928,14 +936,14 @@ export default function MobileMixersPage() {
               {sheet === 'edit' && selected && (
                 <div style={{ marginTop: '16px' }}>
                   {confirmDelete ? (
-                    <div style={{ background: '#334155', borderRadius: '12px', padding: '14px' }}>
+                    <div style={volumeCardSoftStyle({ borderRadius: 12, padding: '14px' })}>
                       <div style={{ color: '#EF4444', fontWeight: 600, fontSize: '14px', marginBottom: '10px', textAlign: 'center' }}>
                         Удалить миксер «{selected.number}»?
                       </div>
                       <div style={{ display: 'flex', gap: '10px' }}>
                         <button
                           onClick={() => setConfirmDelete(false)}
-                          style={{ flex: 1, padding: '12px', background: '#25334A', color: '#94A3B8', border: 'none', borderRadius: '10px', fontWeight: 600, cursor: 'pointer' }}
+                          style={volumeCardSoftStyle({ flex: 1, padding: '12px', color: '#94A3B8', borderRadius: 10, fontWeight: 600, cursor: 'pointer' })}
                         >
                           Нет
                         </button>
@@ -989,15 +997,14 @@ export default function MobileMixersPage() {
               style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }}
               onClick={() => setShowTripSheet(false)}
             />
-            <div style={{
+            <div style={volumeModalStyle({
               position: 'fixed', bottom: '74px', left: 0, right: 0,
               zIndex: 10001,
-              background: '#25334A',
               borderRadius: '20px 20px 0 0',
               maxHeight: 'calc(85vh - 74px)',
               display: 'flex', flexDirection: 'column',
               overflow: 'hidden',
-            }}>
+            })}>
               {/* Handle */}
               <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0', flexShrink: 0 }}>
                 <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
@@ -1030,16 +1037,15 @@ export default function MobileMixersPage() {
                     <button
                       key={trip.number}
                       onClick={() => { if (mx) { openCard(mx); setShowTripSheet(false); } }}
-                      style={{
+                      style={volumeCardSoftStyle({
                         display: 'flex', alignItems: 'center', gap: '12px',
                         padding: '12px 14px',
-                        background: '#1E2D40',
-                        borderRadius: '12px',
+                        borderRadius: 12,
                         border: `1px solid ${sc.color}40`,
                         cursor: mx ? 'pointer' : 'default',
                         textAlign: 'left',
                         width: '100%',
-                      }}
+                      })}
                     >
                       {/* Цветная полоска слева */}
                       <div style={{

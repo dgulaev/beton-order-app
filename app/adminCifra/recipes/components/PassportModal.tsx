@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { COLORS, overlayStyle, modalStyle, inputStyle, labelStyle, ghostButton, primaryButton } from '../labStyles';
 import { useEscapeClose } from '../labUtils';
+import ModalSelect from '../../components/ModalSelect';
+import { appConfirm } from '../../components/appDialog';
 
 interface Props {
   orderId?: number | null;
@@ -524,13 +526,21 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               onClick={() => changeKind('concrete')}
-              style={{ ...ghostButton, background: docKind === 'concrete' ? COLORS.accentDark : '#334155', color: '#fff' }}
+              style={{
+                ...ghostButton,
+                ...(docKind === 'concrete' ? { background: COLORS.accentDark } : {}),
+                color: '#fff',
+              }}
             >
               Бетон
             </button>
             <button
               onClick={() => changeKind('mortar')}
-              style={{ ...ghostButton, background: docKind === 'mortar' ? COLORS.accentDark : '#334155', color: '#fff' }}
+              style={{
+                ...ghostButton,
+                ...(docKind === 'mortar' ? { background: COLORS.accentDark } : {}),
+                color: '#fff',
+              }}
             >
               Раствор
             </button>
@@ -545,10 +555,9 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
             {orderMixers.length > 0 && (
               <div style={{ marginBottom: '14px' }}>
                 <label style={labelStyle}>Миксер / рейс</label>
-                <select
+                <ModalSelect
                   value={data.mixer_number || ''}
-                  onChange={(e) => {
-                    const val = e.target.value;
+                  onChange={(val) => {
                     if (!val) {
                       set('mixer_number', '');
                       return;
@@ -576,15 +585,18 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
                     });
                   }}
                   style={{ ...inputStyle, cursor: 'pointer' }}
-                >
-                  <option value="">— не привязан —</option>
-                  {orderMixers.map((m: any, i: number) => {
-                    const num = m.mixer_name || m.number || `Рейс ${i + 1}`;
-                    const vol = m.volume ? ` · ${m.volume} м³` : '';
-                    const t = m.time ? ` · ${String(m.time).slice(0, 5)}` : '';
-                    return <option key={m.id || i} value={num}>{num}{vol}{t}</option>;
-                  })}
-                </select>
+                  placeholder="— не привязан —"
+                  options={[
+                    { value: '', label: '— не привязан —' },
+                    ...orderMixers.map((m: any, i: number) => {
+                      const num = m.mixer_name || m.number || `Рейс ${i + 1}`;
+                      const vol = m.volume ? ` · ${m.volume} м³` : '';
+                      const t = m.time ? ` · ${String(m.time).slice(0, 5)}` : '';
+                      const label = `${num}${vol}${t}`;
+                      return { value: String(num), label, text: label };
+                    }),
+                  ]}
+                />
               </div>
             )}
 
@@ -627,7 +639,7 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
               {recordId != null && (
                 <button
                   onClick={async () => {
-                    if (!confirm('Удалить этот паспорт?')) return;
+                    if (!(await appConfirm('Удалить этот паспорт?', { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
                     try {
                       const res = await fetch(`/api/adminCifra/concrete-passports?id=${recordId}`, { method: 'DELETE' });
                       if (!res.ok) throw new Error('delete failed');

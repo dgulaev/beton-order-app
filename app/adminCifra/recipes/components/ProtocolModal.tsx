@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { COLORS, overlayStyle, modalStyle, inputStyle, labelStyle, ghostButton, primaryButton } from '../labStyles';
+import { COLORS, overlayStyle, modalStyle, inputStyle, labelStyle, ghostButton, primaryButton, volumeCardSoftStyle } from '../labStyles';
 import { SCALE, num, ru, ruInt, computeSeries, type Specimen } from '../protocolCalc';
 import { useEscapeClose } from '../labUtils';
+import ModalSelect from '../../components/ModalSelect';
 
 interface Props {
   test: any;              // строка concrete_tests, к которой формируем протокол
@@ -332,11 +333,15 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
               </div>
               <div>
                 <label style={labelStyle}>Размер кубика, мм</label>
-                <select value={prot.cube_size} onChange={(e) => set('cube_size', Number(e.target.value))} style={inputStyle}>
-                  {[70, 100, 150, 200, 300].map((s) => (
-                    <option key={s} value={s}>{s} мм (α={SCALE[s]})</option>
-                  ))}
-                </select>
+                <ModalSelect
+                  value={String(prot.cube_size)}
+                  onChange={(v) => set('cube_size', Number(v))}
+                  style={inputStyle}
+                  options={[70, 100, 150, 200, 300].map((s) => ({
+                    value: String(s),
+                    label: `${s} мм (α=${SCALE[s]})`,
+                  }))}
+                />
               </div>
               <div>
                 <label style={labelStyle}>Дата изготовления</label>
@@ -373,8 +378,8 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
                     <div style={{ color: COLORS.muted, textAlign: 'center' }}>{idx + 1}</div>
                     <input type="number" value={s.mass} onChange={(e) => setSpec(idx, 'mass', e.target.value)} onWheel={(e) => e.currentTarget.blur()} style={inputStyle} />
                     <input type="number" value={s.load} onChange={(e) => setSpec(idx, 'load', e.target.value)} onWheel={(e) => e.currentTarget.blur()} style={inputStyle} />
-                    <div style={{ ...inputStyle, background: '#1B2536', color: COLORS.muted }}>{r && r.density > 0 ? ruInt(r.density) : '—'}</div>
-                    <div style={{ ...inputStyle, background: '#1B2536', color: r && r.strength > 0 ? COLORS.accent : COLORS.muted, fontWeight: 600 }}>{r && r.strength > 0 ? ru(r.strength) : '—'}</div>
+                    <div style={{ ...inputStyle, color: COLORS.muted }}>{r && r.density > 0 ? ruInt(r.density) : '—'}</div>
+                    <div style={{ ...inputStyle, color: r && r.strength > 0 ? COLORS.accent : COLORS.muted, fontWeight: 600 }}>{r && r.strength > 0 ? ru(r.strength) : '—'}</div>
                     <button onClick={() => delSpec(idx)} style={{ ...ghostButton, padding: '6px 0', background: 'transparent', color: COLORS.danger }}>✕</button>
                   </div>
                 );
@@ -383,7 +388,7 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
 
             {/* Итоги по серии */}
             {calc && (
-              <div style={{ display: 'flex', gap: '24px', marginTop: '12px', padding: '12px 16px', background: '#1B2536', borderRadius: '10px', flexWrap: 'wrap' }}>
+              <div style={volumeCardSoftStyle({ display: 'flex', gap: '24px', marginTop: '12px', padding: '12px 16px', borderRadius: 10, flexWrap: 'wrap' })}>
                 <div style={{ color: COLORS.muted, fontSize: '13px' }}>Средняя плотность: <b style={{ color: '#fff' }}>{calc.avgDensity > 0 ? ruInt(calc.avgDensity) : '—'} кг/м³</b></div>
                 <div style={{ color: COLORS.muted, fontSize: '13px' }}>Средняя прочность: <b style={{ color: COLORS.accent }}>{calc.avgStrength > 0 ? ru(calc.avgStrength) : '—'} МПа</b></div>
                 {age === '7' ? (

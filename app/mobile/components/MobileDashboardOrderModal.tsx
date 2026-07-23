@@ -7,6 +7,11 @@ import { useYandexRouteHref } from '@/lib/yandexRoute';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
+import {
+  modalCloseButtonStyle,
+  volumeCardSoftStyle,
+  volumeModalStyle,
+} from '@/app/adminCifra/cardStyles';
 
 interface MobileOrderDetailModalProps {
   order: Order | null;
@@ -203,22 +208,27 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 100000, overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 100000, overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any }}
       onClick={onClose}
     >
       <div
-        style={{ background: '#0D1520', minHeight: '100vh', maxWidth: '560px', margin: '0 auto', paddingBottom: '40px' }}
+        style={volumeModalStyle({
+          minHeight: '100vh',
+          maxWidth: '560px',
+          margin: '0 auto',
+          paddingBottom: '40px',
+          borderRadius: 0,
+        })}
         onClick={e => e.stopPropagation()}
       >
 
         {/* ── ШАПКА ─────────────────────────────────── */}
-        <div style={{
+        <div style={volumeCardSoftStyle({
           position: 'sticky', top: 0, zIndex: 10,
-          background: '#25334A',
-          borderBottom: '1px solid #334155',
+          borderRadius: 0,
           padding: '12px 14px',
           display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px',
-        }}>
+        })}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0, paddingRight: '4px' }}>
             <span style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
               Заявка #{order.id}
@@ -269,15 +279,15 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
             )}
           </div>
 
-          <button onClick={onClose} style={{ background: '#334155', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-            <X size={16} color="#64748B" />
+          <button type="button" onClick={onClose} aria-label="Закрыть" style={modalCloseButtonStyle({ width: 32, height: 32, fontSize: '18px' })}>
+            <X size={16} color="#94A3B8" />
           </button>
         </div>
 
         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
           {/* ── ИНФО О ЗАКАЗЕ ─────────────────────── */}
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
+          <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px' })}>
             <InfoRow label="Клиент" value={order.organization_name || order.full_name} />
             <InfoRow label="Телефон" value={order.phone} />
             <InfoRow label="Марка бетона" value={order.grade} accent="#60A5FA" />
@@ -285,7 +295,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
             <InfoRow label="Дата и время" value={`${order.delivery_date} · ${order.delivery_time}`} />
             <InfoRow label="Адрес" value={order.address} />
             {order.comment && (
-              <div style={{ marginTop: '12px', background: '#334155', borderRadius: '10px', padding: '12px', color: '#94A3B8', fontSize: '13px', lineHeight: 1.5 }}>
+              <div style={volumeCardSoftStyle({ marginTop: '12px', borderRadius: 10, padding: '12px', color: '#94A3B8', fontSize: '13px', lineHeight: 1.5 })}>
                 <span style={{ color: '#475569', display: 'block', marginBottom: '4px', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Комментарий</span>
                 <div style={{ maxHeight: '120px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
                   {order.comment}
@@ -296,14 +306,14 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
 
           {/* ── ПРОГРЕСС ОБЪЁМА ───────────────────── */}
           {currentMixers.length > 0 && (
-            <div style={{ background: '#25334A', borderRadius: '16px', padding: '14px 16px' }}>
+            <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '14px 16px' })}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                 <span style={{ color: '#475569', fontSize: '13px' }}>Назначено</span>
                 <span style={{ color: assignedVolume >= orderVolume ? '#10B981' : '#FACC15', fontWeight: 700, fontSize: '14px' }}>
                   {assignedVolume.toFixed(1)} / {orderVolume} м³
                 </span>
               </div>
-              <div style={{ background: '#334155', borderRadius: '9999px', height: '6px', overflow: 'hidden' }}>
+              <div style={{ background: 'rgba(51,65,85,0.85)', borderRadius: '9999px', height: '6px', overflow: 'hidden' }}>
                 <div style={{ height: '100%', borderRadius: '9999px', width: `${Math.min(100, (assignedVolume / orderVolume) * 100)}%`, background: assignedVolume >= orderVolume ? '#10B981' : '#FACC15', transition: 'width 0.3s' }} />
               </div>
               {totalDowntimeMin > 0 && (
@@ -315,12 +325,12 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
           )}
 
           {/* ── МИКСЕРЫ ───────────────────────────── */}
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
+          <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px' })}>
             <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
               Миксеры ({currentMixers.length})
             </div>
             {currentMixers.length === 0 ? (
-              <div style={{ color: '#334155', fontSize: '14px', textAlign: 'center', padding: '24px 0' }}>Миксеры не назначены</div>
+              <div style={{ color: '#64748B', fontSize: '14px', textAlign: 'center', padding: '24px 0' }}>Миксеры не назначены</div>
             ) : <div style={{ maxHeight: '260px', overflowY: 'auto' }}>{currentMixers.map(mixer => {
               const onSite = formatOnSite(mixer);
               const hasDowntime = Number(mixer.downtimeMinutes) > 0;
@@ -333,12 +343,12 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
                 st === 'Проблема' ? '#EF4444' :
                 st === 'Возврат' ? '#94A3B8' : '#64748B';
               return (
-                <div key={mixer.id} style={{ background: '#334155', borderRadius: '12px', padding: '12px 14px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', borderLeft: `3px solid ${statusColor}` }}>
+                <div key={mixer.id} style={volumeCardSoftStyle({ borderRadius: 12, padding: '12px 14px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', borderLeft: `3px solid ${statusColor}` })}>
                   <div>
                     <div style={{ fontWeight: 700, fontSize: '14px', color: '#E2E8F0' }}>{mixer.mixerName || mixer.number || 'Миксер'}</div>
                     <div style={{ color: '#475569', fontSize: '12px', marginTop: '2px' }}>{mixer.time}</div>
                     {onSite && (
-                      <div style={{ marginTop: '6px', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '9999px', background: hasDowntime ? '#F9731615' : '#33415515', color: hasDowntime ? '#F97316' : '#64748B', fontSize: '12px' }}>
+                      <div style={{ marginTop: '6px', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '9999px', background: hasDowntime ? '#F9731615' : 'rgba(51,65,85,0.15)', color: hasDowntime ? '#F97316' : '#64748B', fontSize: '12px' }}>
                         <Clock size={10} /> {onSite}{st === 'Разгружен' && hasDowntime ? ` (простой ${mixer.downtimeMinutes} мин)` : ''}
                       </div>
                     )}
@@ -403,7 +413,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
           </div>
 
           {/* ── ИСТОРИЯ (тот же таймлайн, что на десктопе) ── */}
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
+          <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px' })}>
             <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
               История изменений
             </div>
@@ -414,14 +424,15 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
 
           {/* ── ЗАКРЫТЬ ───────────────────────────── */}
           <button
+            type="button"
             onClick={onClose}
-            style={{
+            style={volumeCardSoftStyle({
               width: '100%', padding: '14px',
-              background: 'transparent', color: '#475569',
-              border: '1px solid #334155', borderRadius: '12px',
+              color: '#94A3B8',
+              borderRadius: 12,
               fontWeight: 600, fontSize: '15px', cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-            }}
+            })}
           >
             <X size={16} /> Закрыть
           </button>

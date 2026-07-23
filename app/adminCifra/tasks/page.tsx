@@ -2,17 +2,15 @@
 
 import { useState, useEffect } from 'react';
 import { CheckCircle } from 'lucide-react';
+import { modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
+import ModalSelect from '../components/ModalSelect';
+import ModalDateInput from '../components/ModalDateInput';
+import ModalTimeInput from '../components/ModalTimeInput';
+import { appConfirm } from '../components/appDialog';
 
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '14px',
-  background: '#25334A',
-  border: 'none',
-  borderRadius: '12px',
-  color: '#fff',
+const inputStyle: React.CSSProperties = modalFieldStyle({
   marginBottom: '16px',
-  boxSizing: 'border-box'
-};
+});
 
 const getTaskStatusStyle = (status: string) => {
   if (status === 'in_progress') return { label: 'В работе', color: '#3B82F6', bg: '#3B82F620' };
@@ -95,7 +93,7 @@ useEffect(() => {
   // ==================== БЛОК 4: СОЗДАНИЕ / РЕДАКТИРОВАНИЕ ЗАДАЧИ ====================
 const createTask = async (e: React.FormEvent) => {
   e.preventDefault();
-  if (!formData.title) return;
+  if (!formData.title || !formData.assigned_to) return;
 
   const isEditing = editingTaskId !== null;
 
@@ -184,7 +182,7 @@ const updateTaskStatus = async (taskId: number, newStatus: string, note?: string
 };
 
 const deleteTask = async (taskId: number) => {
-  if (!confirm('Вы уверены, что хотите удалить эту задачу?')) return;
+  if (!(await appConfirm('Вы уверены, что хотите удалить эту задачу?', { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
 
   try {
     const res = await fetch('/api/adminCifra/tasks', {
@@ -523,7 +521,7 @@ const showVisualNotification = (type: string, data: any) => {
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0,0,0,0.9)',
+            background: 'rgba(0,0,0,0.82)',
             zIndex: 9999,
             display: 'flex',
             alignItems: 'center',
@@ -534,17 +532,15 @@ const showVisualNotification = (type: string, data: any) => {
         >
           <div
             className="scroll-hidden"
-            style={{
-              background: '#1E2937',
+            style={volumeModalStyle({
               width: '100%',
               maxWidth: '560px',
               maxHeight: '90vh',
               overflowY: 'auto',
-              borderRadius: '20px',
+              borderRadius: 20,
               padding: '28px',
-              boxSizing: 'border-box',
-              margin: '0 16px'
-            }}
+              margin: '0 16px',
+            })}
             onClick={e => e.stopPropagation()}
           >
             <h2 style={{ marginBottom: '24px' }}>{editingTaskId ? 'Редактировать задачу' : 'Новая задача'}</h2>
@@ -564,24 +560,39 @@ const showVisualNotification = (type: string, data: any) => {
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 style={{ ...inputStyle, height: '92px', resize: 'vertical' }}
               />
-              <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr', gap: '12px' }}>
-                <select
+              <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 0.9fr', gap: '12px' }}>
+                <ModalSelect
                   value={formData.assigned_to}
-                  onChange={(e) => setFormData({ ...formData, assigned_to: e.target.value })}
-                  style={inputStyle}
-                  required
-                >
-                  <option value="">Кому назначить задачу</option>
-                  {employees.map((emp: any) => {
-                    const display = emp.organization_name && emp.organization_name.trim() !== '' ? emp.organization_name : (emp.full_name || 'Без имени');
-                    return <option key={emp.user_id} value={emp.user_id}>{display} ({emp.role})</option>;
+                  onChange={(assigned_to) => setFormData({ ...formData, assigned_to })}
+                  placeholder="Кому назначить задачу"
+                  style={{ marginBottom: 16 }}
+                  options={employees.map((emp: any) => {
+                    const display = emp.organization_name && emp.organization_name.trim() !== ''
+                      ? emp.organization_name
+                      : (emp.full_name || 'Без имени');
+                    const label = `${display} (${emp.role})`;
+                    return { value: String(emp.user_id), label, text: label };
                   })}
-                </select>
-                <input
-                  type="datetime-local"
-                  value={formData.due_date}
-                  onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
-                  style={inputStyle}
+                />
+                <ModalDateInput
+                  value={formData.due_date ? formData.due_date.slice(0, 10) : ''}
+                  onChange={(d) => {
+                    const t = formData.due_date && formData.due_date.length >= 16
+                      ? formData.due_date.slice(11, 16)
+                      : '09:00';
+                    setFormData({ ...formData, due_date: d ? `${d}T${t}` : '' });
+                  }}
+                  style={{ marginBottom: 16 }}
+                />
+                <ModalTimeInput
+                  value={formData.due_date && formData.due_date.length >= 16 ? formData.due_date.slice(11, 16) : ''}
+                  onChange={(t) => {
+                    const d = formData.due_date
+                      ? formData.due_date.slice(0, 10)
+                      : new Date().toISOString().slice(0, 10);
+                    setFormData({ ...formData, due_date: `${d}T${t}` });
+                  }}
+                  style={{ marginBottom: 16 }}
                 />
               </div>
               <div style={{ height: '8px' }} />
@@ -590,7 +601,7 @@ const showVisualNotification = (type: string, data: any) => {
                 <button
                   type="button"
                   onClick={() => { setShowForm(false); setEditingTaskId(null); }}
-                  style={{ flex: 1, padding: '14px', background: '#334155', borderRadius: '9999px', color: 'white', border: 'none', boxSizing: 'border-box' }}
+                  style={volumeCardSoftStyle({ flex: 1, padding: '14px', borderRadius: 9999, color: 'white', cursor: 'pointer' })}
                 >
                   Отмена
                 </button>

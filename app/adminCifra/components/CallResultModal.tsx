@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Phone, X, Check, Minus, XCircle } from 'lucide-react';
 import ModalActionButton from './ModalActionButton';
 import { formatPhoneDisplay } from '@/lib/phone';
+import { modalCloseButtonStyle, modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
 
 export type CallResultKind = 'positive' | 'neutral' | 'negative';
 
@@ -94,21 +95,19 @@ export default function CallResultModal({
           ? undefined
           : 'w-full max-w-[520px] max-h-[90vh] overflow-auto mx-auto scroll-hidden'
       }
-      style={
+      style={volumeModalStyle(
         isMobile
           ? {
-              background: '#1E2937',
               borderRadius: '20px 20px 0 0',
               padding: '16px 20px 28px',
               maxHeight: 'calc(90vh - 74px)',
               overflow: 'auto',
             }
           : {
-              background: '#1E2937',
               borderRadius: 24,
               padding: '28px 32px 24px',
             }
-      }
+      )}
       onClick={(e) => e.stopPropagation()}
     >
       {isMobile && (
@@ -139,31 +138,18 @@ export default function CallResultModal({
           type="button"
           onClick={onClose}
           aria-label="Закрыть"
-          style={{
-            background: '#334155',
-            border: 'none',
-            borderRadius: 9999,
-            width: 36,
-            height: 36,
-            color: '#94A3B8',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            flexShrink: 0,
-          }}
+          style={modalCloseButtonStyle()}
         >
           <X size={18} />
         </button>
       </div>
 
       <div
-        style={{
-          background: '#25334A',
+        style={volumeCardSoftStyle({
           borderRadius: 16,
           padding: isMobile ? 16 : 20,
           marginBottom: 16,
-        }}
+        })}
       >
         <div style={{ fontSize: 18, fontWeight: 700, color: '#fff', marginBottom: 4 }}>
           {displayName}
@@ -174,7 +160,7 @@ export default function CallResultModal({
       {phone ? (
         <a
           href={`tel:${phone}`}
-          style={{
+          style={volumeCardSoftStyle({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -188,22 +174,21 @@ export default function CallResultModal({
             fontWeight: 600,
             fontSize: isMobile ? 16 : 15,
             textDecoration: 'none',
-          }}
+          })}
         >
           <Phone size={18} />
           Позвонить
         </a>
       ) : (
         <div
-          style={{
+          style={volumeCardSoftStyle({
             marginBottom: 20,
             padding: 14,
             borderRadius: 14,
-            background: '#25334A',
             color: '#64748B',
             textAlign: 'center',
             fontSize: 14,
-          }}
+          })}
         >
           Телефон не указан
         </div>
@@ -227,11 +212,12 @@ export default function CallResultModal({
               key={id}
               type="button"
               onClick={() => setResult(id)}
-              style={{
+              style={volumeCardSoftStyle({
                 padding: isMobile ? '12px 8px' : '12px 10px',
                 borderRadius: 12,
-                border: `1px solid ${active ? color + '90' : '#334155'}`,
-                background: active ? `${color}18` : '#25334A',
+                ...(active
+                  ? { border: `1px solid ${color}90`, background: `${color}18` }
+                  : {}),
                 color: active ? color : '#94A3B8',
                 cursor: 'pointer',
                 display: 'flex',
@@ -241,7 +227,7 @@ export default function CallResultModal({
                 fontWeight: 600,
                 fontSize: isMobile ? 12 : 13,
                 transition: 'background 0.15s, border-color 0.15s',
-              }}
+              })}
             >
               <Icon size={18} />
               {label}
@@ -258,20 +244,13 @@ export default function CallResultModal({
         onChange={(e) => setComment(e.target.value)}
         placeholder="Необязательно…"
         rows={isMobile ? 3 : 4}
-        style={{
-          width: '100%',
-          boxSizing: 'border-box',
+        style={modalFieldStyle({
           padding: '14px 16px',
-          background: '#25334A',
-          border: 'none',
           borderRadius: 16,
-          color: '#fff',
-          fontSize: 15,
           resize: 'vertical',
           minHeight: 80,
           marginBottom: 20,
-          outline: 'none',
-        }}
+        })}
       />
 
       <div style={{ display: 'flex', gap: 12 }}>
@@ -324,7 +303,7 @@ export default function CallResultModal({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.94)',
+        background: 'rgba(0,0,0,0.82)',
         zIndex: 10001,
         display: 'flex',
         alignItems: 'center',

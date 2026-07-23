@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { COLORS, overlayStyle, modalStyle, ghostButton, primaryButton } from '../labStyles';
+import { COLORS, overlayStyle, modalStyle, ghostButton, primaryButton, volumeCardSoftStyle } from '../labStyles';
 import { useEscapeClose } from '../labUtils';
+import { appConfirm } from '../../components/appDialog';
 
 interface Props {
   onClose: () => void;
@@ -32,7 +33,7 @@ export default function TemplatesModal({ onClose, onApply }: Props) {
   }, []);
 
   const removeTemplate = async (id: number) => {
-    if (!confirm('Удалить шаблон?')) return;
+    if (!(await appConfirm('Удалить шаблон?', { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
     await fetch(`/api/adminCifra/recipe-templates?id=${id}`, { method: 'DELETE' });
     load();
   };
@@ -56,15 +57,14 @@ export default function TemplatesModal({ onClose, onApply }: Props) {
             {templates.map((t) => (
               <div
                 key={t.id}
-                style={{
-                  background: COLORS.input,
-                  borderRadius: '12px',
+                style={volumeCardSoftStyle({
+                  borderRadius: 12,
                   padding: '12px 16px',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: '12px',
-                }}
+                })}
               >
                 <div>
                   <div style={{ color: '#fff', fontWeight: 600 }}>{t.name}</div>

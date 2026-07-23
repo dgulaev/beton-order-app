@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { MapPin, Package, Clock, Phone, Navigation } from 'lucide-react';
 import { DriverTrip } from '../driverClient';
 import RouteButton from './RouteButton';
+import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 
 interface Props {
   trip: DriverTrip;
@@ -80,17 +81,16 @@ export default function DriverTripDetailModal({ trip, onClose }: Props) {
 
       {/* Шторка снизу */}
       <div
-        style={{
+        style={volumeModalStyle({
           position: 'fixed', bottom: 0, left: 0, right: 0,
           zIndex: 10001,
-          background: '#1E2937',
           borderRadius: '20px 20px 0 0',
           paddingBottom: 'max(32px, env(safe-area-inset-bottom, 32px))',
           maxHeight: '88dvh',
           overflowY: 'auto',
           WebkitOverflowScrolling: 'touch',
           overscrollBehavior: 'contain',
-        }}
+        })}
         onClick={e => e.stopPropagation()}
         onTouchMove={e => e.stopPropagation()}
       >
@@ -116,12 +116,13 @@ export default function DriverTripDetailModal({ trip, onClose }: Props) {
           </div>
           <button
             onClick={onClose}
-            style={{
-              width: '32px', height: '32px', borderRadius: '9999px',
-              background: '#263040', border: 'none', cursor: 'pointer',
+            style={volumeCardSoftStyle({
+              width: 32, height: 32, borderRadius: 9999,
+              cursor: 'pointer',
               color: '#64748B', fontSize: '18px', display: 'flex',
               alignItems: 'center', justifyContent: 'center',
-            }}
+              padding: 0,
+            })}
           >
             ✕
           </button>
@@ -132,13 +133,13 @@ export default function DriverTripDetailModal({ trip, onClose }: Props) {
 
           {/* Ключевые показатели */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-            <div style={{ background: '#263040', borderRadius: '14px', padding: '14px' }}>
+            <div style={volumeCardStyle({ borderRadius: 14, padding: '14px', border: CARD_BORDER })}>
               <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '4px' }}>Объём</div>
               <div style={{ fontSize: '22px', fontWeight: 700, color: '#10B981', lineHeight: 1 }}>
                 {trip.volume}<span style={{ fontSize: '13px', color: '#64748B', fontWeight: 400 }}> м³</span>
               </div>
             </div>
-            <div style={{ background: '#263040', borderRadius: '14px', padding: '14px' }}>
+            <div style={volumeCardStyle({ borderRadius: 14, padding: '14px', border: CARD_BORDER })}>
               <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '4px' }}>Марка</div>
               <div style={{ fontSize: '22px', fontWeight: 700, color: '#60A5FA', lineHeight: 1 }}>
                 {trip.order?.grade || '—'}
@@ -147,7 +148,7 @@ export default function DriverTripDetailModal({ trip, onClose }: Props) {
           </div>
 
           {/* Строки с деталями */}
-          <div style={{ background: '#263040', borderRadius: '14px', padding: '0 16px', marginBottom: '12px' }}>
+          <div style={volumeCardSoftStyle({ borderRadius: 14, padding: '0 16px', marginBottom: '12px' })}>
             <Row label="Время рейса" value={trip.time || trip.order?.deliveryTime || '—'} />
             <Row label="Дата"
               value={trip.order?.deliveryDate
@@ -165,7 +166,7 @@ export default function DriverTripDetailModal({ trip, onClose }: Props) {
           </div>
 
           {/* Время на объекте */}
-          <div style={{ background: '#263040', borderRadius: '14px', padding: '0 16px', marginBottom: '12px' }}>
+          <div style={volumeCardSoftStyle({ borderRadius: 14, padding: '0 16px', marginBottom: '12px' })}>
             <Row label="Начало загрузки" value={formatTime(trip.loadingStartedAt)} />
             <Row label="Прибытие на объект" value={formatTime(trip.onSiteAt)} />
             <Row label="Окончание разгрузки" value={formatTime(trip.unloadedAt)} />

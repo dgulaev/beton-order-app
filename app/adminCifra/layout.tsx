@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, FlaskConical, Truck, Package, Users, UserCog, DollarSign, Menu, X, Bell, CheckCircle, LogOut, Globe } from 'lucide-react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, Menu, X, Bell, CheckCircle, LogOut, Globe, Smartphone } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
 import Image from 'next/image';
 import { useUserRole } from '../providers/UserRoleProvider';
@@ -11,17 +11,59 @@ import { reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
 import { useWakeReload } from '@/hooks/useWakeReload';
 import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
 import { formatPhoneInput } from '@/lib/phone';
+import AppDialogHost, { appConfirm } from './components/appDialog';
 
 // ==================== PERSISTENTНЫЕ УВЕДОМЛЕНИЯ (localStorage) ====================
 const NOTIF_STORAGE_KEY = 'persistentOrderNotifications';
 const NOTIF_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 часа
 
+/** Stroke-иконки как в боковом меню (Lucide). */
+type NotifIconKey = 'package' | 'check' | 'cancel' | 'play' | 'clock' | 'refresh';
+
 interface PersistedNotif {
   id: string;
-  emoji: string;
+  /** Ключ иконки; поле `emoji` — legacy из старых сохранений. */
+  icon?: NotifIconKey | string;
+  emoji?: string;
   title: string;
   message: string;
   timestamp: number;
+}
+
+function resolveNotifIcon(raw?: string): NotifIconKey {
+  const key = (raw || '').trim();
+  if (key === 'package' || key === 'check' || key === 'cancel' || key === 'play' || key === 'clock' || key === 'refresh') {
+    return key;
+  }
+  // Старые эмодзи в localStorage
+  if (key === '✅') return 'check';
+  if (key === '❌') return 'cancel';
+  if (key === '▶️') return 'play';
+  if (key === '🔄') return 'refresh';
+  if (key === '🕒') return 'clock';
+  return 'package';
+}
+
+function notifIconHtml(icon: NotifIconKey): string {
+  const svg = (inner: string) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block">${inner}</svg>`;
+  const icons: Record<NotifIconKey, string> = {
+    // Package — как пункт «Заявки»
+    package: svg(
+      '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/>',
+    ),
+    // CircleCheck — как CheckCircle в «Задачи»
+    check: svg('<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>'),
+    cancel: svg('<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>'),
+    play: svg(
+      '<circle cx="12" cy="12" r="10"/><path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z"/>',
+    ),
+    clock: svg('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>'),
+    refresh: svg(
+      '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+    ),
+  };
+  return `<div style="color:#0f172a;flex-shrink:0;display:flex;align-items:center;opacity:0.92;">${icons[icon]}</div>`;
 }
 
 function loadPersistedNotifs(): PersistedNotif[] {
@@ -157,12 +199,22 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       // (в мобильной версии этого раздела нет) — не уводим его на /mobile.
       if (userRole === 'laborant') return;
 
+      // Ручной выбор «Основная версия» в меню — не уводим обратно на /mobile.
+      // Также уважаем ?desktop=true (одноразовый вход с мобилки).
+      try {
+        if (localStorage.getItem('adminViewPref') === 'desktop') return;
+      } catch { /* ignore */ }
+      if (window.location.search.includes('desktop=true')) {
+        try { localStorage.setItem('adminViewPref', 'desktop'); } catch { /* ignore */ }
+        return;
+      }
+
       const isMobile = /Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Samsung/i.test(navigator.userAgent) ||
                        window.innerWidth <= 768;
 
       const currentPath = window.location.pathname;
 
-      if (isMobile && currentPath.startsWith('/adminCifra') && !window.location.search.includes('desktop=true')) {
+      if (isMobile && currentPath.startsWith('/adminCifra')) {
         let newPath = currentPath.replace('/adminCifra', '/mobile');
 
         if (newPath === '/mobile/dashboard' || newPath.includes('dashboard')) {
@@ -182,13 +234,26 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     return () => clearTimeout(timer);
   }, [userRole]);
 
+  const goToMobileVersion = () => {
+    try { localStorage.setItem('adminViewPref', 'mobile'); } catch { /* ignore */ }
+    const path = pathname || '/adminCifra/dashboard';
+    let next = path.replace(/^\/adminCifra/, '/mobile');
+    if (next === '/mobile' || next === '/mobile/' || next.includes('/dashboard')) next = '/mobile/';
+    // Разделов без мобильного аналога нет смысла тащить 1:1 — уводим на дашборд.
+    const known = ['/mobile/', '/mobile/zayavki', '/mobile/mixers', '/mobile/clients', '/mobile/warehouse'];
+    if (!known.some((p) => next === p || (p !== '/mobile/' && next.startsWith(p)))) {
+      next = '/mobile/';
+    }
+    window.location.assign(next);
+  };
+
   // ==================== 2. СОСТОЯНИЯ УВЕДОМЛЕНИЙ ====================
   const [newOrdersCount, setNewOrdersCount] = useState(0);
   const [lastNotificationId, setLastNotificationId] = useState<number | null>(null);
 
   // Ref для функции создания тоста — позволяет вызывать её из mount-эффекта
   // без проблем с замыканиями (всегда последняя версия функции)
-  const createToastRef = useRef<((id: string, emoji: string, title: string, message: string) => void) | null>(null);
+  const createToastRef = useRef<((id: string, iconKey: string, title: string, message: string) => void) | null>(null);
 
   // ==================== 2.1 СОСТОЯНИЕ УВЕДОМЛЕНИЙ ПО КЛИЕНТАМ ====================
   const [clientReminders, setClientReminders] = useState<any[]>([]);
@@ -273,9 +338,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
   // ==================== 4.2 СОЗДАНИЕ DOM-ТОСТА (не зависит от sound/storage) ====================
   // Обновляем ref на каждом рендере — mount-эффект восстановления всегда вызовет актуальную версию
-  createToastRef.current = (id: string, emoji: string, title: string, message: string) => {
+  createToastRef.current = (id: string, iconKey: string, title: string, message: string) => {
     const notif = document.createElement('div');
     notif.dataset.notifId = id;
+    // Салатовый тост (как раньше) — отдельно от тёмных appAlert/confirm.
     notif.style.cssText = `
       position: relative;
       background: linear-gradient(135deg, #22c55e, #86efac);
@@ -292,13 +358,14 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       pointer-events: auto;
     `;
 
+    const icon = resolveNotifIcon(iconKey);
     notif.innerHTML = `
-      <div style="font-size: 34px;">${emoji}</div>
-      <div style="flex: 1;">
+      ${notifIconHtml(icon)}
+      <div style="flex: 1; min-width: 0;">
         <div style="font-size: 16px; font-weight: 700;">${title}</div>
         <div style="font-size: 14px; opacity: 0.92;">${message}</div>
       </div>
-      <div style="font-size: 24px; opacity: 0.75; cursor: pointer; padding: 4px 8px;" class="close-btn">✕</div>
+      <div style="font-size: 22px; opacity: 0.7; cursor: pointer; line-height: 1; padding: 2px 4px; flex-shrink: 0;" class="close-btn">✕</div>
     `;
 
     const closeBtn = notif.querySelector('.close-btn') as HTMLElement;
@@ -333,7 +400,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     // Небольшая задержка чтобы контейнер успел смонтироваться в DOM
     const timer = setTimeout(() => {
       saved.forEach(n => {
-        createToastRef.current?.(n.id, n.emoji, n.title, n.message);
+        createToastRef.current?.(n.id, n.icon || n.emoji || 'package', n.title, n.message);
       });
       // Обновляем счётчик
       setNewOrdersCount(prev => prev + saved.length);
@@ -348,7 +415,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
     let title = '';
     let message = '';
-    let emoji = '';
+    let icon: NotifIconKey = 'package';
 
     const formatDate = (dateStr: string) => {
       if (!dateStr) return '';
@@ -360,14 +427,13 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     };
 
     if (type === 'new') {
-      emoji = '🆕';
+      icon = 'package';
       title = 'Новая заявка!';
       const deliveryStr = formatDate(orderData?.delivery_date);
       message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} м³`;
       if (deliveryStr) message += ` — на ${deliveryStr}`;
     } 
     else if (type === 'status') {
-      emoji = '🔄';
       title = 'Статус изменён';
       const statusMap: Record<string, string> = {
         'new': 'Новая', 'NEW': 'Новая',
@@ -375,17 +441,24 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
         'completed': 'Выполнена',
         'cancelled': 'Отменена'
       };
+      const statusIcon: Record<string, NotifIconKey> = {
+        'new': 'package',
+        'processing': 'play',
+        'completed': 'check',
+        'cancelled': 'cancel',
+      };
       const rawStatus = (orderData?.status || '').toString().toLowerCase();
+      icon = statusIcon[rawStatus] || 'refresh';
       const statusText = statusMap[rawStatus] || orderData?.status || '—';
       message = `Заявка №${orderId} → ${statusText}`;
     } 
     else if (type === 'volume') {
-      emoji = '📦';
+      icon = 'package';
       title = 'Изменён объём';
       message = `Заявка №${orderId} — было ${oldData?.volume || '?'} → стало ${orderData?.volume} м³`;
     } 
     else if (type === 'datetime') {
-      emoji = '🕒';
+      icon = 'clock';
       title = 'Изменены дата и время';
       const deliveryStr = formatDate(orderData?.delivery_date);
       message = `Заявка №${orderId} — ${deliveryStr}`;
@@ -396,10 +469,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
     // Сохраняем в localStorage — переживёт перезагрузку страницы
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    savePersistedNotif({ id, emoji, title, message, timestamp: Date.now() });
+    savePersistedNotif({ id, icon, title, message, timestamp: Date.now() });
 
     playNotificationSound();
-    createToastRef.current?.(id, emoji, title, message);
+    createToastRef.current?.(id, icon, title, message);
   };
 
   // ==================== 4.3 HEARTBEAT — активность для «Кто в онлайн» ====================
@@ -557,7 +630,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
   // ==================== 7. КНОПКА "ВЫКИНУТЬ ВСЕХ" ====================
   const forceLogoutAll = async () => {
-    if (!confirm('Вы уверены, что хотите выкинуть ВСЕХ сотрудников?\n\nОни будут вынуждены заново ввести пароль.')) {
+    if (!(await appConfirm(
+      'Вы уверены, что хотите выкинуть ВСЕХ сотрудников?\n\nОни будут вынуждены заново ввести пароль.',
+      { title: 'Выкинуть всех', okLabel: 'Выкинуть', variant: 'danger' },
+    ))) {
       return;
     }
 
@@ -828,36 +904,59 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   </Link>
                 )}
 
+                {/*
+                  =====================================================================
+                  AUDIT KEEP — НЕ УДАЛЯТЬ пункт «Вывод баллов» и страницу /adminCifra/withdrawals.
+                  Скрыто из меню по запросу (временно не используем UI), страница оставлена —
+                  позже снова включим в меню. Сам маршрут и page.tsx должны остаться в проекте.
+                  =====================================================================
                 {(userRole === 'admin') && (
                   <Link href="/adminCifra/withdrawals" style={navLinkStyle(isActive('/adminCifra/withdrawals'), isCollapsed)}>
                     <DollarSign size={22} />
                     <span style={navTextStyle(isCollapsed)}>Вывод баллов</span>
                   </Link>
                 )}
-
-                {/* ==================== БЛОК 13 ССЫЛКА "ВЫКИНУТЬ ВСЕХ" ==================== */}
-                {(userRole === 'admin') && (
-                  <Link 
-                    href="#" 
-                    onClick={(e) => { e.preventDefault(); forceLogoutAll(); }}
-                    style={navLinkStyle(false, isCollapsed)}
-                  >
-                    <LogOut size={22} />
-                    <span style={navTextStyle(isCollapsed)}>Разлогинить всех</span>
-                  </Link>
-                )}
+                */}
               </>
             )}
             </>
+            )}
+
+            {/* Переключение вида — сразу перед «Разлогинить всех» / «Выйти» */}
+            {userRole !== 'laborant' && (
+              <Link
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  goToMobileVersion();
+                }}
+                style={navLinkStyle(false, isCollapsed)}
+                title="Мобильная версия"
+              >
+                <Smartphone size={22} />
+                <span style={navTextStyle(isCollapsed)}>Мобильная версия</span>
+              </Link>
+            )}
+
+            {/* ==================== БЛОК 13 ССЫЛКА "ВЫКИНУТЬ ВСЕХ" ==================== */}
+            {(userRole === 'admin') && (
+              <Link 
+                href="#" 
+                onClick={(e) => { e.preventDefault(); forceLogoutAll(); }}
+                style={navLinkStyle(false, isCollapsed)}
+              >
+                <LogOut size={22} />
+                <span style={navTextStyle(isCollapsed)}>Разлогинить всех</span>
+              </Link>
             )}
 
             {/* ==================== БЛОК 13.1 ЛИЧНЫЙ ВЫХОД ==================== */}
             {userRole !== 'admin' && (
               <Link
                 href="#"
-                onClick={(e) => {
+                onClick={async (e) => {
                   e.preventDefault();
-                  if (confirm('Выйти из системы?')) logout();
+                  if (await appConfirm('Выйти из системы?', { title: 'Выход', okLabel: 'Выйти' })) logout();
                 }}
                 style={navLinkStyle(false, isCollapsed)}
               >
@@ -884,6 +983,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
           {children}
         </div>
       </div>
+      <AppDialogHost />
     </div>
   );
 }

@@ -6,6 +6,9 @@ import {
   PieChart, Pie, Cell 
 } from 'recharts';
 import { findRecipeByGrade, getAdditiveDosage, type RecipeLike } from '@/lib/recipeAdditives';
+import { CARD_BORDER, modalCloseButtonStyle, modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
+import ModalDateInput from '../components/ModalDateInput';
+import { appConfirm } from '../components/appDialog';
 
 const COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
 
@@ -20,6 +23,17 @@ const _gradesActualCache = new Map<string, { grade: string; volumeM3: number }[]
 
 /** Порог итогового расхождения объёма по маркам (план MEKA vs факт отгрузки), %. */
 const RECONCILE_VOLUME_ALERT_PERCENT = 0.5;
+
+/** Объём м³: округление до 1 знака; целые без «,0» (10 → «10», 9.8 → «9,8»). */
+function formatVolumeM3(value: number | null | undefined): string {
+  const n = Number(value) || 0;
+  const rounded = Math.round(n * 10) / 10;
+  if (Number.isInteger(rounded)) return String(rounded);
+  return rounded.toLocaleString('ru-RU', {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
+}
 
 async function loadRecipesForReconcile(): Promise<RecipeLike[]> {
   if (_recipesCache) return _recipesCache;
@@ -801,9 +815,10 @@ export default function ReportsPage() {
             dateObj: new Date(`${fullDate}T12:00:00`)
           };
         })
-        // Слева → направо: от старых к новым (удобнее читать период)
+        // Слева → направо: от старых к новым. Широкий график — больше дней
+        // (раньше 31 выглядело «жидко» на широкой колонке).
         .sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime())
-        .slice(-31);
+        .slice(-60);
     }, [filteredHistory]);
 
       // ==================== КАСТОМНЫЙ TOOLTIP ====================
@@ -994,16 +1009,14 @@ export default function ReportsPage() {
           {/* ==================== СТАТИСТИКА + ФИЛЬТРЫ ====================
               Статистика считается по выбранному периоду (по умолчанию — текущий месяц).
               Пресеты периода влияют и на карточки, и на список/графики. */}
-          <div style={{
-            background: '#1E2937',
-            borderRadius: '16px',
-            border: '1px solid #334155',
+          <div style={volumeCardStyle({
+            borderRadius: 16,
             padding: 'clamp(10px, 1.2vh, 14px) clamp(12px, 1.4vw, 18px)',
             flexShrink: 0,
             display: 'flex',
             flexDirection: 'column',
             gap: 'clamp(8px, 1vh, 12px)',
-          }}>
+          })}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
               <div style={{ color: '#E2E8F0', fontSize: 'clamp(13px, 1vw, 15px)', fontWeight: 600 }}>
                 Статистика
@@ -1027,13 +1040,11 @@ export default function ReportsPage() {
               ] as const).map((card) => (
                 <div
                   key={card.label}
-                  style={{
-                    background: '#25334A',
-                    borderRadius: '12px',
+                  style={volumeCardSoftStyle({
+                    borderRadius: 12,
                     padding: 'clamp(6px, 0.9vh, 10px) clamp(8px, 1vw, 12px)',
-                    border: '1px solid #334155',
                     minWidth: 0,
-                  }}
+                  })}
                 >
                   <div style={{ color: '#94A3B8', fontSize: 'clamp(10px, 0.8vw, 12px)', marginBottom: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {card.label}
@@ -1111,11 +1122,10 @@ export default function ReportsPage() {
                   <>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#94A3B8', fontSize: '12px' }}>
                       с
-                      <input
-                        type="date"
+                      <ModalDateInput
                         value={dateFrom}
-                        onChange={(e) => {
-                          setDateFrom(e.target.value);
+                        onChange={(v) => {
+                          setDateFrom(v);
                           setCurrentPage(1);
                         }}
                         style={{
@@ -1131,11 +1141,10 @@ export default function ReportsPage() {
                     </label>
                     <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#94A3B8', fontSize: '12px' }}>
                       по
-                      <input
-                        type="date"
+                      <ModalDateInput
                         value={dateTo}
-                        onChange={(e) => {
-                          setDateTo(e.target.value);
+                        onChange={(v) => {
+                          setDateTo(v);
                           setCurrentPage(1);
                         }}
                         style={{
@@ -1186,14 +1195,15 @@ export default function ReportsPage() {
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', gap: 'clamp(6px, 0.9vh, 14px)' }}>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+            // Объём шире (~½ ряда); топ рецептов и материалы — одинаковые узкие колонки
+            gridTemplateColumns: 'minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 1fr)',
             gap: 'clamp(8px, 1vw, 16px)',
             flex: '0 1 clamp(200px, 27vh, 320px)',
             minHeight: 0
           }}>
 
                      {/* 1. Объём производства — с переключением */}
-            <div style={{ backgroundColor: '#1E2937', padding: 'clamp(10px, 1.4vh, 18px)', borderRadius: '16px', display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
+            <div style={volumeCardStyle({ padding: 'clamp(10px, 1.4vh, 18px)', borderRadius: 16, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden' })}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexShrink: 0 }}>
                 <h3 style={{ color: '#E2E8F0', margin: 0, fontSize: 'clamp(13px, 1vw, 16px)' }}>Объём производства</h3>
                 
@@ -1239,7 +1249,7 @@ export default function ReportsPage() {
                   data={viewMode === 'month' ? monthlyVolume : dailyVolume}
                   // Доля зазора от ширины категории — столбцы заполняют слот и при
                   // редких днях месяца (раньше maxBarSize=28 оставлял «иголки»).
-                  barCategoryGap={viewMode === 'month' ? '40%' : '22%'}
+                  barCategoryGap={viewMode === 'month' ? '40%' : '18%'}
                   barGap={4}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
@@ -1249,7 +1259,8 @@ export default function ReportsPage() {
                     tickLine={false}
                     axisLine={false}
                     interval="preserveStartEnd"
-                    minTickGap={8}
+                    minTickGap={viewMode === 'day' ? 12 : 8}
+                    tick={{ fontSize: 11 }}
                   />
                   <YAxis stroke="#94A3B8" tickLine={false} axisLine={false} width={40} />
                   <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }} />
@@ -1270,7 +1281,7 @@ export default function ReportsPage() {
             </div>
 
             {/* ТОП РЕЦЕПТОВ */}
-<div style={{ background: '#1E2937', borderRadius: '16px', padding: 'clamp(10px, 1.4vh, 18px)', display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
+<div style={volumeCardStyle({ borderRadius: 16, padding: 'clamp(10px, 1.4vh, 18px)', display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden' })}>
   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px', flexShrink: 0 }}>
     <h3 style={{ margin: 0, color: '#94A3B8', fontSize: 'clamp(13px, 1vw, 16px)' }}>Топ рецептов</h3>
     {isLoading && (
@@ -1289,14 +1300,15 @@ export default function ReportsPage() {
     )}
   </div>
   
+  {/* Квадратная область — пончик не растягивается по ширине колонки */}
   <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
     {isLoading && topRecipes.length === 0 ? (
       /* Скелетон — кольцо-заглушка пока грузятся данные */
       <div style={{
-        width: 'clamp(100px, 16vh, 180px)',
-        height: 'clamp(100px, 16vh, 180px)',
+        width: 'clamp(90px, 14vh, 140px)',
+        height: 'clamp(90px, 14vh, 140px)',
         borderRadius: '50%',
-        border: '24px solid #263040',
+        border: '20px solid #263040',
         borderTopColor: '#1E3A5F',
         animation: 'spin 1.4s linear infinite',
         opacity: 0.6,
@@ -1305,6 +1317,9 @@ export default function ReportsPage() {
       <div style={{
         width: '100%',
         height: '100%',
+        maxWidth: 'min(100%, 220px)',
+        maxHeight: 'min(100%, 220px)',
+        aspectRatio: '1',
         animation: topRecipes.length > 0
           ? 'chartReveal 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards'
           : 'none',
@@ -1316,8 +1331,8 @@ export default function ReportsPage() {
               data={topRecipes}
               cx="50%"
               cy="50%"
-              innerRadius="55%"
-              outerRadius="82%"
+              innerRadius="52%"
+              outerRadius="80%"
               paddingAngle={topRecipes.length > 1 ? 2 : 0}
               dataKey="value"
               nameKey="name"
@@ -1383,7 +1398,7 @@ export default function ReportsPage() {
 </div>
 
          {/* ==================== РАСХОД МАТЕРИАЛОВ С ПЕРЕКЛЮЧАТЕЛЕМ ==================== */}
-<div style={{ background: '#1E2937', borderRadius: '16px', padding: 'clamp(10px, 1.4vh, 18px)', display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden' }}>
+<div style={volumeCardStyle({ borderRadius: 16, padding: 'clamp(10px, 1.4vh, 18px)', display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden' })}>
   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexShrink: 0 }}>
     <h3 style={{ margin: 0, color: '#94A3B8', fontSize: 'clamp(13px, 1vw, 16px)' }}>Расход материалов</h3>
     
@@ -1429,22 +1444,24 @@ export default function ReportsPage() {
     </div>
   </div>
   
-  <div style={{ flex: 1, minHeight: 0 }}>
+  <div style={{ flex: 1, minHeight: 0, maxWidth: '100%' }}>
   <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
     <BarChart
       data={materialConsumption}
-      barCategoryGap="28%"
+      barCategoryGap="22%"
+      margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
     >
       <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-      <XAxis dataKey="name" stroke="#94A3B8" tickLine={false} axisLine={false} />
+      <XAxis dataKey="name" stroke="#94A3B8" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
       <YAxis
         stroke="#94A3B8"
         tickLine={false}
         axisLine={false}
-        width={40}
+        width={36}
         scale={scaleMode === 'log' ? 'log' : 'linear'}
         domain={scaleMode === 'log' ? [1, 'dataMax'] : [0, 'dataMax']}
         tickFormatter={(value) => (value / 1000).toFixed(0) + 'k'}
+        tick={{ fontSize: 11 }}
       />
       <Tooltip content={<MaterialTooltip />} cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }} />
       <Bar
@@ -1567,7 +1584,7 @@ export default function ReportsPage() {
                     });
 
                     if (res.ok) {
-                      let successMessage = `✅ Отчёт "${file.name}" успешно загружен!\nПартий: ${processed.length} • Объём: ${totalVolume} м³`;
+                      let successMessage = `✅ Отчёт "${file.name}" успешно загружен!\nПартий: ${processed.length} • Объём: ${formatVolumeM3(totalVolume)} м³`;
 
                       // Сверка добавок: колонки MEKA vs отгрузки × рецепт (без склада).
                       if ((totalAdditive1 > 0 || totalAdditive2 > 0) && reportDate) {
@@ -1704,7 +1721,7 @@ export default function ReportsPage() {
                     })()}
                   </strong>
                   <span style={{ color: '#94A3B8', marginLeft: '10px' }}>
-                    {report.raw_data?.length || 0} партий • {Math.round(report.total_volume || 0)} м³ • {report.file_name}
+                    {report.raw_data?.length || 0} партий • {formatVolumeM3(report.total_volume || 0)} м³ • {report.file_name}
                   </span>
                 </div>
 
@@ -1753,7 +1770,7 @@ export default function ReportsPage() {
                     <button 
                       style={{ ...historyBtnBase, backgroundColor: '#8B4A4A' }}
                       onClick={async () => {
-                        if (!confirm('Удалить этот отчёт?')) return;
+                        if (!(await appConfirm('Удалить этот отчёт?', { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
 
                         try {
                           console.log(`🗑 Удаляем отчёт #${report.id}`);
@@ -1818,12 +1835,12 @@ export default function ReportsPage() {
                   // также гарантирует, что body модалки всегда получает строго заданную
                   // высоту и скролл внутри неё работает предсказуемо при любом числе строк.
                   height: '86vh',
-                  background: '#1E2937',
-                  borderRadius: '20px',
-                  boxShadow: '0 24px 60px rgba(0,0,0,0.6)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  overflow: 'hidden'
+                  ...volumeModalStyle({
+                    borderRadius: 20,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    overflow: 'hidden',
+                  }),
                 }}
               >
                 {/* Заголовок модалки */}
@@ -1833,7 +1850,7 @@ export default function ReportsPage() {
                   alignItems: 'center',
                   gap: '16px',
                   padding: '20px 24px',
-                  borderBottom: '1px solid #334155',
+                  borderBottom: CARD_BORDER,
                   flexShrink: 0
                 }}>
                   <h3 style={{ margin: 0, color: '#10B981', fontSize: '17px' }}>
@@ -1850,17 +1867,15 @@ export default function ReportsPage() {
                     {selectedRecipes !== null && (
                       <button
                         onClick={() => setSelectedRecipes(null)}
-                        style={{
+                        style={volumeCardSoftStyle({
                           fontSize: '12px',
                           fontWeight: '600',
                           color: '#94A3B8',
-                          background: '#334155',
-                          border: 'none',
-                          borderRadius: '9999px',
+                          borderRadius: 9999,
                           padding: '6px 14px',
                           cursor: 'pointer',
-                          whiteSpace: 'nowrap'
-                        }}
+                          whiteSpace: 'nowrap',
+                        })}
                       >
                         ✕ Сбросить фильтр рецептов
                       </button>
@@ -1868,89 +1883,103 @@ export default function ReportsPage() {
                     <button
                       onClick={closeReportModal}
                       title="Закрыть (Esc)"
-                      style={{
-                        background: '#334155',
-                        border: 'none',
-                        color: '#E2E8F0',
-                        width: '32px',
-                        height: '32px',
-                        borderRadius: '50%',
+                      style={modalCloseButtonStyle({
+                        width: 32,
+                        height: 32,
+                        borderRadius: 10,
                         fontSize: '16px',
-                        cursor: 'pointer',
-                        flexShrink: 0
-                      }}
+                        color: '#E2E8F0',
+                      })}
                     >
                       ✕
                     </button>
                   </div>
                 </div>
 
-                {/* Тело модалки — единственная зона вертикального скролла */}
+                {/* Тело модалки: одна зона скролла (x+y) — иначе overflow-x
+                    на вложенном div ломает position:sticky у шапки таблицы. */}
                 <div
                   ref={modalBodyRef}
                   className="scroll-subtle"
                   onScroll={() => setRecipeFilterOpen(false)}
-                  style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 24px' }}
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    overflow: 'auto',
+                    padding: '20px 24px',
+                    borderRadius: '0 0 20px 20px',
+                  }}
                 >
-
-              {/* overflowY: 'hidden' обязателен — иначе браузер по спецификации CSS
-                  автоматически делает overflow-y: auto у этого блока (т.к. задан overflow-x),
-                  и он превращается в отдельный вертикальный скролл-контейнер без места для
-                  прокрутки, конфликтующий с прокруткой тела модалки выше. Из-за overflow-y:
-                  hidden колесо мыши над таблицей не всегда докручивает родителя (зависит от
-                  браузера), поэтому дублируем прокрутку вручную через onWheel. */}
-              <div
-                className="scroll-hidden"
-                onWheel={(e) => {
-                  e.preventDefault();
-                  modalBodyRef.current?.scrollBy({ top: e.deltaY, left: 0 });
-                }}
-                style={{ overflowX: 'auto', overflowY: 'hidden', borderRadius: '16px' }}
-              >
-              <table style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', backgroundColor: '#25334A' }}>
+              <table style={volumeCardSoftStyle({
+                width: '100%',
+                minWidth: '980px',
+                borderCollapse: 'separate',
+                borderSpacing: 0,
+                borderRadius: 16,
+              })}>
                 <thead>
-                  <tr style={{ backgroundColor: '#334155' }}>
-                    <th style={{ padding: '14px', textAlign: 'left' }}>NO</th>
-                    <th style={{ padding: '14px', textAlign: 'left' }}>Дата</th>
-                    <th style={{ padding: '14px', textAlign: 'left' }}>Время</th>
-                    <th style={{ padding: '14px', textAlign: 'left', position: 'relative' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span>Рецепт</span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
-                            const panelRect = modalPanelRef.current?.getBoundingClientRect();
-                            setRecipeFilterPos({
-                              top: rect.bottom - (panelRect?.top ?? 0) + 6,
-                              left: rect.left - (panelRect?.left ?? 0)
-                            });
-                            setRecipeFilterSearch('');
-                            setRecipeFilterOpen(o => !o);
-                          }}
-                          title="Фильтр по рецепту"
-                          style={{
-                            background: selectedRecipes !== null ? '#10B981' : 'transparent',
-                            border: 'none',
-                            borderRadius: '4px',
-                            color: selectedRecipes !== null ? '#fff' : '#94A3B8',
-                            cursor: 'pointer',
-                            padding: '2px 5px',
-                            fontSize: '11px',
-                            lineHeight: 1
-                          }}
-                        >
-                          ▼
-                        </button>
-                      </div>
-                    </th>
-                    <th style={{ padding: '14px', textAlign: 'right' }}>Объём (м³)</th>
-                    <th style={{ padding: '14px', textAlign: 'right' }}>Цемент (кг)</th>
-                    <th style={{ padding: '14px', textAlign: 'right' }}>Песок (кг)</th>
-                    <th style={{ padding: '14px', textAlign: 'right' }}>Щебень (кг)</th>
-                    <th style={{ padding: '14px', textAlign: 'right' }}>Вода (кг)</th>
-                    <th style={{ padding: '14px', textAlign: 'right' }}>Добавка</th>
-                    <th style={{ padding: '14px', textAlign: 'right' }}>Добавка2</th>
+                  <tr>
+                    {([
+                      { label: 'NO', align: 'left' as const },
+                      { label: 'Дата', align: 'left' as const },
+                      { label: 'Время', align: 'left' as const },
+                      { label: 'Рецепт', align: 'left' as const, recipe: true },
+                      { label: 'Объём (м³)', align: 'right' as const },
+                      { label: 'Цемент (кг)', align: 'right' as const },
+                      { label: 'Песок (кг)', align: 'right' as const },
+                      { label: 'Щебень (кг)', align: 'right' as const },
+                      { label: 'Вода (кг)', align: 'right' as const },
+                      { label: 'Добавка', align: 'right' as const },
+                      { label: 'Добавка2', align: 'right' as const },
+                    ]).map((col) => (
+                      <th
+                        key={col.label}
+                        style={{
+                          padding: '14px',
+                          textAlign: col.align,
+                          whiteSpace: 'nowrap',
+                          position: 'sticky',
+                          top: 0,
+                          zIndex: col.recipe ? 3 : 2,
+                          backgroundColor: '#334155',
+                          boxShadow: 'inset 0 -1px 0 #475569',
+                        }}
+                      >
+                        {col.recipe ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                            <span>Рецепт</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                                const panelRect = modalPanelRef.current?.getBoundingClientRect();
+                                setRecipeFilterPos({
+                                  top: rect.bottom - (panelRect?.top ?? 0) + 6,
+                                  left: rect.left - (panelRect?.left ?? 0)
+                                });
+                                setRecipeFilterSearch('');
+                                setRecipeFilterOpen(o => !o);
+                              }}
+                              title="Фильтр по рецепту"
+                              style={{
+                                background: selectedRecipes !== null ? '#10B981' : 'transparent',
+                                border: 'none',
+                                borderRadius: '4px',
+                                color: selectedRecipes !== null ? '#fff' : '#94A3B8',
+                                cursor: 'pointer',
+                                padding: '2px 5px',
+                                fontSize: '11px',
+                                lineHeight: 1
+                              }}
+                            >
+                              ▼
+                            </button>
+                          </div>
+                        ) : (
+                          col.label
+                        )}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -1960,7 +1989,7 @@ export default function ReportsPage() {
                       <td style={{ padding: '14px' }}>{row.date}</td>
                       <td style={{ padding: '14px' }}>{row.time}</td>
                       <td style={{ padding: '14px', fontWeight: '600' }}>{row.recipe}</td>
-                      <td style={{ padding: '14px', textAlign: 'right', color: '#10B981', fontWeight: '600' }}>{Math.round(row.qty)}</td>
+                      <td style={{ padding: '14px', textAlign: 'right', color: '#10B981', fontWeight: '600' }}>{formatVolumeM3(row.qty)}</td>
                       <td style={{ padding: '14px', textAlign: 'right' }}>{Math.round(row.cement).toLocaleString('ru-RU')}</td>
                       <td style={{ padding: '14px', textAlign: 'right' }}>{Math.round(row.sand).toLocaleString('ru-RU')}</td>
                       <td style={{ padding: '14px', textAlign: 'right' }}>{Math.round(row.gravel).toLocaleString('ru-RU')}</td>
@@ -1985,7 +2014,7 @@ export default function ReportsPage() {
                       <strong>ИТОГО{selectedRecipes !== null ? ' ПО ФИЛЬТРУ' : ' ЗА ДЕНЬ'}</strong>
                     </td>
                     <td style={{ padding: '16px 14px', textAlign: 'right', color: '#10B981' }}>
-                      {Math.round(filteredReportData.reduce((sum, r) => sum + (r.qty || 0), 0))} м³
+                      {formatVolumeM3(filteredReportData.reduce((sum, r) => sum + (r.qty || 0), 0))} м³
                     </td>
                     <td style={{ padding: '16px 14px', textAlign: 'right' }}>
                       {Math.round(filteredReportData.reduce((sum, r) => sum + (r.cement || 0), 0)).toLocaleString('ru-RU')} кг
@@ -2008,16 +2037,11 @@ export default function ReportsPage() {
                   </tr>
                 </tfoot>
               </table>
-              </div>
                 </div>
 
-                {/* Выпадающий список фильтра рецептов рисуется ЗДЕСЬ — вне таблицы
-                    и вне скроллящихся контейнеров (.scroll-hidden/.scroll-subtle).
-                    Раньше он был вложен в <th>, и когда фокус попадал на поле
-                    поиска (autoFocus), браузер сам скроллил ВСЕХ scroll-предков
-                    в DOM-дереве, чтобы "показать" элемент — в т.ч. горизontальный
-                    scroll-hidden у таблицы, из-за чего форма визуально "уезжала
-                    вправо". Позиция всё равно вычисляется от кнопки (fixed). */}
+                {/* Выпадающий список фильтра рецептов — вне скролла таблицы
+                    (position: fixed от кнопки), чтобы autoFocus поиска не
+                    сдвигал горизонтальный скролл. */}
                 {recipeFilterOpen && (
                   <>
                     <div
@@ -2026,23 +2050,20 @@ export default function ReportsPage() {
                     />
                     <div
                       onClick={(e) => e.stopPropagation()}
-                      style={{
+                      style={volumeCardSoftStyle({
                         position: 'fixed',
                         top: recipeFilterPos.top,
                         left: recipeFilterPos.left,
                         zIndex: 211,
-                        background: '#1E2937',
-                        border: '1px solid #475569',
-                        borderRadius: '12px',
+                        borderRadius: 12,
                         padding: '10px',
                         minWidth: '220px',
                         maxHeight: '320px',
                         overflowY: 'auto',
-                        boxShadow: '0 12px 30px rgba(0,0,0,0.6)',
                         fontWeight: '400',
                         fontSize: '14px',
-                        textTransform: 'none'
-                      }}
+                        textTransform: 'none',
+                      })}
                     >
                       <input
                         type="text"
@@ -2050,29 +2071,24 @@ export default function ReportsPage() {
                         value={recipeFilterSearch}
                         onChange={(e) => setRecipeFilterSearch(e.target.value)}
                         autoFocus
-                        style={{
-                          width: '100%',
-                          boxSizing: 'border-box',
+                        style={modalFieldStyle({
                           padding: '8px 10px',
                           marginBottom: '8px',
-                          background: '#0F172A',
-                          border: '1px solid #334155',
-                          borderRadius: '8px',
-                          color: 'white',
-                          fontSize: '13px'
-                        }}
+                          borderRadius: 8,
+                          fontSize: '13px',
+                        })}
                       />
 
                       <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                         <button
                           onClick={() => setSelectedRecipes(null)}
-                          style={{ flex: 1, padding: '6px', background: '#334155', border: 'none', borderRadius: '6px', color: '#E2E8F0', fontSize: '12px', cursor: 'pointer' }}
+                          style={volumeCardSoftStyle({ flex: 1, padding: '6px', borderRadius: 6, color: '#E2E8F0', fontSize: '12px', cursor: 'pointer' })}
                         >
                           Выбрать все
                         </button>
                         <button
                           onClick={() => setSelectedRecipes(new Set())}
-                          style={{ flex: 1, padding: '6px', background: '#334155', border: 'none', borderRadius: '6px', color: '#E2E8F0', fontSize: '12px', cursor: 'pointer' }}
+                          style={volumeCardSoftStyle({ flex: 1, padding: '6px', borderRadius: 6, color: '#E2E8F0', fontSize: '12px', cursor: 'pointer' })}
                         >
                           Снять все
                         </button>
@@ -2126,23 +2142,20 @@ export default function ReportsPage() {
               <div
                 onClick={(e) => e.stopPropagation()}
                 className="scroll-hidden"
-                style={{
+                style={volumeModalStyle({
                   position: 'fixed',
                   top: '50%',
                   left: '50%',
                   transform: 'translate(-50%, -50%)',
                   zIndex: 221,
-                  background: '#1E2937',
-                  borderRadius: '20px',
+                  borderRadius: 20,
                   padding: '28px 32px',
                   width: '100%',
                   maxWidth: '560px',
                   maxHeight: '85vh',
                   overflowY: 'auto',
                   color: '#fff',
-                  boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-                  boxSizing: 'border-box',
-                }}
+                })}
               >
                 <div style={{ fontSize: '20px', fontWeight: 700, marginBottom: '6px' }}>
                   Сверка план / факт
@@ -2176,12 +2189,11 @@ export default function ReportsPage() {
                       return (
                         <div
                           key={row.key}
-                          style={{
-                            background: '#25334A',
-                            borderRadius: '14px',
+                          style={volumeCardSoftStyle({
+                            borderRadius: 14,
                             padding: '14px 18px',
                             marginBottom: '10px',
-                          }}
+                          })}
                         >
                           <div style={{ fontWeight: 600, marginBottom: '10px' }}>{row.label}</div>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', fontSize: '13.5px' }}>
@@ -2213,12 +2225,12 @@ export default function ReportsPage() {
                     <div style={{ color: '#94A3B8', fontSize: '12.5px', fontWeight: 600, marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                       Марки бетона
                     </div>
-                    <div style={{
-                      background: '#25334A',
-                      borderRadius: '14px',
+                    <div style={volumeCardSoftStyle({
+                      borderRadius: 14,
                       overflow: 'hidden',
                       marginBottom: '8px',
-                    }}>
+                      padding: 0,
+                    })}>
                       <div style={{
                         display: 'grid',
                         gridTemplateColumns: '1.4fr 0.8fr 0.8fr 0.9fr',
@@ -2226,7 +2238,7 @@ export default function ReportsPage() {
                         padding: '10px 16px',
                         color: '#94A3B8',
                         fontSize: '12px',
-                        borderBottom: '1px solid #334155',
+                        borderBottom: CARD_BORDER,
                       }}>
                         <div>Марка</div>
                         <div style={{ textAlign: 'right' }}>MEKA, м³</div>
@@ -2245,7 +2257,7 @@ export default function ReportsPage() {
                               gap: '8px',
                               padding: '11px 16px',
                               fontSize: '13.5px',
-                              borderBottom: '1px solid #1E2937',
+                              borderBottom: CARD_BORDER,
                               alignItems: 'center',
                             }}
                           >
@@ -2272,7 +2284,7 @@ export default function ReportsPage() {
                           padding: '12px 16px',
                           fontSize: '13.5px',
                           fontWeight: 700,
-                          borderTop: '1px solid #334155',
+                          borderTop: CARD_BORDER,
                           color: '#E2E8F0',
                         }}>
                           <div>Итого</div>
@@ -2309,17 +2321,15 @@ export default function ReportsPage() {
 
                 <button
                   onClick={() => setReconcileModal(null)}
-                  style={{
+                  style={volumeCardSoftStyle({
                     width: '100%',
                     padding: '14px',
-                    background: '#334155',
                     color: '#fff',
-                    border: 'none',
-                    borderRadius: '9999px',
+                    borderRadius: 9999,
                     fontSize: '15px',
                     fontWeight: 600,
                     cursor: 'pointer',
-                  }}
+                  })}
                 >
                   Закрыть
                 </button>

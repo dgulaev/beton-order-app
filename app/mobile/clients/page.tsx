@@ -6,6 +6,7 @@ import MobileExitButton from '../components/MobileExitButton';
 import MobileClientDetailModal from '../components/MobileClientDetailModal';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import { formatPhoneDisplay } from '@/lib/phone';
+import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 
 // ==================== ТИПЫ ====================
 
@@ -176,10 +177,10 @@ export default function MobileClientsPage() {
   // ==================== РЕНДЕР ====================
 
   return (
-    <div style={{ paddingBottom: '100px', minHeight: '100vh', background: '#162032' }}>
+    <div style={{ paddingBottom: '100px', minHeight: '100vh', background: '#0F172A' }}>
 
       {/* ШАПКА */}
-      <div style={{ padding: '16px 16px 0', position: 'sticky', top: 0, background: '#162032', zIndex: 100 }}>
+      <div style={{ padding: '16px 16px 0', position: 'sticky', top: 0, background: '#0F172A', zIndex: 100 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
           <h1 style={{ fontSize: '26px', fontWeight: '700', margin: 0, color: '#fff' }}>Клиенты</h1>
           <MobileExitButton />
@@ -202,17 +203,15 @@ export default function MobileClientsPage() {
                 value={searchInput}
                 onChange={e => setSearchInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleSearch()}
-                style={{
+                style={volumeCardSoftStyle({
                   width: '100%',
                   padding: '12px 36px 12px 36px',
-                  background: '#334155',
-                  border: '1px solid #25334A',
-                  borderRadius: '12px',
+                  borderRadius: 12,
                   color: '#fff',
                   fontSize: '15px',
-                  boxSizing: 'border-box',
                   outline: 'none',
-                }}
+                  colorScheme: 'dark',
+                })}
               />
               {searchInput && (
                 <button
@@ -229,7 +228,7 @@ export default function MobileClientsPage() {
 
         {/* Активный поиск — подсказка */}
         {tab === 'clients' && committedSearch && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', paddingBottom: '10px', borderBottom: '1px solid #334155' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', paddingBottom: '10px', borderBottom: CARD_BORDER }}>
             <span style={{ fontSize: '13px', color: '#64748B' }}>
               Поиск: <span style={{ color: '#93C5FD' }}>«{committedSearch}»</span> — {clientsTotal} рез.
             </span>
@@ -257,17 +256,16 @@ export default function MobileClientsPage() {
               <div
                 key={profile.groupId}
                 onClick={() => setSelectedProfile(profile)}
-                style={{
-                  background: '#25334A',
-                  borderRadius: '16px',
+                style={volumeCardSoftStyle({
+                  borderRadius: 16,
                   marginBottom: '8px',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'stretch',
                   overflow: 'hidden',
-                  border: '1px solid #334155',
                   WebkitTapHighlightColor: 'transparent',
-                }}
+                  border: CARD_BORDER,
+                })}
               >
                 {/* Цветная полоска слева */}
                 <div style={{ width: '4px', background: color, flexShrink: 0 }} />
@@ -355,7 +353,7 @@ export default function MobileClientsPage() {
             const memberVolume = Number(member.total_volume || 0);
 
             return (
-              <div key={member.user_id} style={{ background: '#334155', borderRadius: '16px', padding: '14px 16px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <div key={member.user_id} style={volumeCardStyle({ borderRadius: 16, padding: '14px 16px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '14px' })}>
                 <div style={{
                   width: '44px', height: '44px', borderRadius: '13px',
                   background: avatarColor(name), display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -385,15 +383,15 @@ export default function MobileClientsPage() {
                   <a
                     href={`tel:${phone}`}
                     onClick={e => e.stopPropagation()}
-                    style={{
+                    style={volumeCardSoftStyle({
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      width: '40px', height: '40px', borderRadius: '11px',
-                      background: 'transparent',
+                      width: 40, height: 40, borderRadius: 11,
                       border: '1px solid #10B98135',
                       color: '#10B981',
                       flexShrink: 0, textDecoration: 'none',
                       transition: 'background 0.15s',
-                    }}
+                      padding: 0,
+                    })}
                   >
                     <Phone size={16} />
                   </a>

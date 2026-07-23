@@ -1,12 +1,14 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronDown } from 'lucide-react';
 import { Order } from '../hooks/useCalendarOrders';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
 import OrderRouteMap from './OrderRouteMap';
+import ModalTimeInput from './ModalTimeInput';
+import ModalSelect from './ModalSelect';
+import { CARD_BORDER, modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
 
 interface OrderDetailModalProps {
   order: Order | null;
@@ -83,6 +85,8 @@ const loadData = async () => {
   const [localOrder, setLocalOrder] = useState(order);
   const questionableSavingRef = useRef(false);
   const [questionableSaving, setQuestionableSaving] = useState(false);
+  const [newMixerTime, setNewMixerTime] = useState('');
+  const [newMixerPick, setNewMixerPick] = useState('');
 
   // Синхронизация при смене заказа
   useEffect(() => {
@@ -376,7 +380,7 @@ const formatVolume = (value: number | string) => {
     style={{ 
       position: 'fixed', 
       inset: 0, 
-      background: 'rgba(0,0,0,0.94)', 
+      background: 'rgba(0,0,0,0.82)', 
       // Выше, чем модалка календаря (zIndex 9999) — детальную карточку заказа,
       // открытую кликом из календаря, всегда должно быть видно поверх него.
       zIndex: 10000, 
@@ -388,17 +392,16 @@ const formatVolume = (value: number | string) => {
   >
     <div 
     className="w-full max-w-[1650px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
-  style={{ 
-    background: '#1E2937', 
-    borderRadius: '24px', 
+  style={volumeModalStyle({
+    borderRadius: 24,
     // Небольшой доп. отступ сверху относительно боковых/нижнего —
     // раньше эту "воздушную подушку" сверху давал отдельный header со
     // заголовком заявки, теперь заголовок переехал в шапки колонок,
     // поэтому добавляем чуть больше паддинга сверху, чтобы не смотрелось,
     // будто контент прилипает к скруглённому верхнему краю модалки.
-    padding: '38px 32px 32px 32px', 
-    boxShadow: '0 30px 80px rgba(0,0,0,0.7)',
-  }}
+    padding: '38px 32px 32px 32px',
+    border: CARD_BORDER,
+  })}
         onClick={e => e.stopPropagation()}
       >
         {/* ==================== ТЕЛО МОДАЛКИ: КАРТА СЛЕВА (НА ВСЮ ВЫСОТУ) + ОСТАЛЬНОЙ КОНТЕНТ ==================== */}
@@ -414,21 +417,20 @@ const formatVolume = (value: number | string) => {
             href={googleRouteHref}
             target="_blank"
             rel="noopener noreferrer"
-            style={{
+            style={volumeCardSoftStyle({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: '6px',
               padding: '9px 12px',
-              background: '#25334A',
               color: '#94A3B8',
               textAlign: 'center',
-              borderRadius: '10px',
+              borderRadius: 10,
               textDecoration: 'none',
-              fontWeight: '600',
+              fontWeight: 600,
               fontSize: '13px',
               flexShrink: 0,
-            }}
+            })}
           >
             🗺️ Открыть в Google Картах
           </a>
@@ -468,19 +470,33 @@ const formatVolume = (value: number | string) => {
                 // Обёртка нужна, чтобы поверх нативного select нарисовать свой шеврон —
                 // у select убран стандартный вид (appearance: none), иначе на разных ОС/
                 // браузерах он выглядит по-разному и не вписывается в дизайн пилюли.
-                <div style={{ position: 'relative', display: 'inline-flex' }}>
-                <select
+                <ModalSelect
                   value={localOrder.status || 'new'}
-                  onChange={async (e) => {
-                    const newStatus = e.target.value;
+                  title="Сменить статус заявки"
+                  chevronColor={getStatusConfig(localOrder.status).color}
+                  triggerStyle={{
+                    background: getStatusConfig(localOrder.status).bg,
+                    color: getStatusConfig(localOrder.status).color,
+                    border: `1px solid ${getStatusConfig(localOrder.status).color}40`,
+                    borderRadius: '9999px',
+                    padding: '7px 14px 7px 16px',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    letterSpacing: '0.2px',
+                  }}
+                  options={[
+                    { value: 'new', label: 'Новая', text: 'Новая' },
+                    { value: 'processing', label: 'В работе', text: 'В работе' },
+                    { value: 'completed', label: 'Выполнена', text: 'Выполнена' },
+                    { value: 'cancelled', label: 'Отменена', text: 'Отменена' },
+                  ]}
+                  onChange={async (newStatus) => {
                     if (newStatus === localOrder.status) return;
 
                     const oldStatus = localOrder.status;
                     const oldQuestionable = !!(localOrder as any).is_questionable;
-                    // «В работе» на сервере автоснимает метку — сразу отражаем в UI
                     const clearQuestionable = newStatus === 'processing' && oldStatus !== 'processing';
 
-                    // Локальное обновление
                     setLocalOrder(prev => ({
                       ...prev,
                       status: newStatus,
@@ -493,8 +509,6 @@ const formatVolume = (value: number | string) => {
                     ));
 
                     try {
-                      // Ручная смена статуса всегда идёт через /orders/update — там же
-                      // защита финальных статусов и запись истории с реальной ролью.
                       const res = await fetch('/api/adminCifra/orders/update', {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
@@ -514,7 +528,6 @@ const formatVolume = (value: number | string) => {
                           if (histRes.ok) setHistory(await histRes.json());
                         }
                       } else {
-                        // Откат
                         setLocalOrder(prev => ({
                           ...prev,
                           status: oldStatus,
@@ -529,7 +542,6 @@ const formatVolume = (value: number | string) => {
                       }
                     } catch (err) {
                       console.error(err);
-                      // Откат
                       setLocalOrder(prev => ({
                         ...prev,
                         status: oldStatus,
@@ -543,40 +555,7 @@ const formatVolume = (value: number | string) => {
                       alert('Не удалось связаться с сервером');
                     }
                   }}
-                  title="Сменить статус заявки"
-                  style={{
-                    background: getStatusConfig(localOrder.status).bg,
-                    color: getStatusConfig(localOrder.status).color,
-                    border: `1px solid ${getStatusConfig(localOrder.status).color}40`,
-                    borderRadius: '9999px',
-                    padding: '7px 30px 7px 16px',
-                    fontSize: '13px',
-                    fontWeight: '600',
-                    letterSpacing: '0.2px',
-                    cursor: 'pointer',
-                    appearance: 'none',
-                    WebkitAppearance: 'none',
-                    MozAppearance: 'none',
-                  }}
-                >
-                  <option value="new">Новая</option>
-                  <option value="processing">В работе</option>
-                  <option value="completed">Выполнена</option>
-                  <option value="cancelled">Отменена</option>
-                </select>
-                <ChevronDown
-                  size={14}
-                  strokeWidth={2.5}
-                  style={{
-                    position: 'absolute',
-                    right: '10px',
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    color: getStatusConfig(localOrder.status).color,
-                    pointerEvents: 'none',
-                  }}
                 />
-                </div>
               )}
 
               {/* Метка «Под вопросом» — тот же toggle, что в модалке Заявок; CAS на сервере + lock здесь */}
@@ -654,7 +633,7 @@ const formatVolume = (value: number | string) => {
               )}
             </div>
 
-            <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px 20px', lineHeight: '1.45' }}>
+            <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px 20px', lineHeight: '1.45' })}>
               <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: '6px 12px', alignItems: 'baseline' }}>
                 <div style={{ color: '#94A3B8' }}>Клиент</div>
                 <div style={{ fontWeight: '600' }}>{(order as any).organization_name || (order as any).full_name || '—'}</div>
@@ -679,10 +658,9 @@ const formatVolume = (value: number | string) => {
             {order.comment && (
               <div style={{ marginTop: '16px' }}>
                 <h4 style={{ color: '#94A3B8', marginBottom: '6px' }}>Комментарий клиента</h4>
-                <div style={{
-                  background: '#25334A',
+                <div style={volumeCardSoftStyle({
                   padding: '12px 16px',
-                  borderRadius: '16px',
+                  borderRadius: 16,
                   whiteSpace: 'pre-wrap',
                   // clamp вместо фикс-px — на 4K (больше реальной высоты
                   // окна) блок пропорционально вырастает и показывает
@@ -695,7 +673,7 @@ const formatVolume = (value: number | string) => {
                   overflowY: 'auto',
                   fontSize: '14px',
                   lineHeight: '1.5',
-                }}>
+                })}>
                   {order.comment}
                 </div>
               </div>
@@ -710,16 +688,20 @@ const formatVolume = (value: number | string) => {
               <button
                 onClick={onClose}
                 title="Закрыть"
-                style={{
-                  fontSize: '28px',
+                style={volumeCardSoftStyle({
+                  fontSize: '22px',
                   lineHeight: 1,
-                  background: 'none',
-                  border: 'none',
                   color: '#94A3B8',
                   cursor: 'pointer',
+                  width: 36,
+                  height: 36,
                   padding: 0,
+                  borderRadius: 10,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                   flexShrink: 0,
-                }}
+                })}
               >
                 ×
               </button>
@@ -734,15 +716,14 @@ const formatVolume = (value: number | string) => {
               const isFullyReady = assignedVolume >= orderVolume && assignedVolume > 0;
 
               return (
-                <div style={{ background: '#25334A', borderRadius: '16px', padding: '18px' }}>
+                <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '18px' })}>
                   {/* Сумма по миксерам */}
-<div style={{ 
-  background: '#1E2937', 
-  borderRadius: '12px', 
-  padding: '12px', 
+<div style={volumeCardSoftStyle({
+  borderRadius: 12,
+  padding: '12px',
   textAlign: 'center',
-  marginBottom: '14px'
-}}>
+  marginBottom: '14px',
+})}>
   <div style={{ color: '#94A3B8', fontSize: '13px' }}>Назначено бетона</div>
   <div style={{ fontSize: '25px', fontWeight: '700', color: '#10B981', margin: '4px 0' }}>
     {formatVolume(assignedVolume)} / {formatVolume(orderVolume)} м³
@@ -757,7 +738,7 @@ const formatVolume = (value: number | string) => {
   <div style={{
     marginTop: '10px',
     paddingTop: '10px',
-    borderTop: '1px solid #334155',
+    borderTop: CARD_BORDER,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -794,16 +775,15 @@ const formatVolume = (value: number | string) => {
         .map((mixer, index) => (
         <div 
           key={mixer.id || index}
-          style={{ 
-            background: '#1E2937', 
+          style={volumeCardSoftStyle({
             padding: '6px 12px',
-            borderRadius: '10px',
+            borderRadius: 10,
             display: 'flex',
             alignItems: 'center',
             gap: '12px',
             minHeight: '36px',
-            userSelect: 'none'
-          }}
+            userSelect: 'none',
+          })}
         >
           {/* Порядковый номер */}
           <div style={{
@@ -828,18 +808,15 @@ const formatVolume = (value: number | string) => {
           </div>
 
           {/* Время загрузки — РЕДАКТИРУЕМОЕ */}
-          <input 
-            type="time" 
+          <ModalTimeInput
             value={mixer.time || ''}
-            onChange={(e) => handleMixerTimeChange(mixer.id, e.target.value)}
-            style={{ 
-              background: '#0F172A', 
-              color: '#94A3B8', 
-              border: '1px solid #475569', 
-              borderRadius: '8px', 
+            onChange={(time) => handleMixerTimeChange(mixer.id, time)}
+            style={{
+              color: '#94A3B8',
+              borderRadius: 8,
               padding: '4px 8px',
               fontSize: '13px',
-              width: '92px'
+              width: '92px',
             }}
           />
 
@@ -874,26 +851,28 @@ const formatVolume = (value: number | string) => {
           </div>
 
           {/* Статус */}
-          <select 
-            value={mixer.status || 'Загрузка'} 
-            onChange={(e) => handleStatusChangeLocal(mixer.id, e.target.value)} 
-            style={{ 
-              padding: '4px 8px', 
-              borderRadius: '9999px', 
-              background: '#0F172A', 
-              color: 'white', 
-              border: 'none', 
-              fontSize: '13px', 
-              minWidth: '120px' 
+          <ModalSelect
+            value={mixer.status || 'Загрузка'}
+            onChange={(status) => handleStatusChangeLocal(mixer.id, status)}
+            minPopupWidth={160}
+            triggerStyle={{
+              padding: '4px 10px',
+              borderRadius: 9999,
+              background: '#0F172A',
+              color: 'white',
+              border: '1px solid rgba(148,163,184,0.25)',
+              fontSize: '13px',
+              minWidth: 120,
             }}
-          >
-            <option value="Загрузка">🟡 Загрузка</option>
-            <option value="В пути">🔵 В пути</option>
-            <option value="На объекте">📍 На объекте</option>
-            <option value="Разгружен">🟢 Разгружен</option>
-            <option value="Возврат">↩️ Возврат</option>
-            <option value="Проблема">🔴 Проблема</option>
-          </select>
+            options={[
+              { value: 'Загрузка', label: '🟡 Загрузка', text: '🟡 Загрузка' },
+              { value: 'В пути', label: '🔵 В пути', text: '🔵 В пути' },
+              { value: 'На объекте', label: '📍 На объекте', text: '📍 На объекте' },
+              { value: 'Разгружен', label: '🟢 Разгружен', text: '🟢 Разгружен' },
+              { value: 'Возврат', label: '↩️ Возврат', text: '↩️ Возврат' },
+              { value: 'Проблема', label: '🔴 Проблема', text: '🔴 Проблема' },
+            ]}
+          />
 
           {/* Время на объекте / простой — видно всегда; до "На объекте" данных нет, показываем 0 */}
           <div style={{
@@ -969,7 +948,7 @@ const formatVolume = (value: number | string) => {
           </div>
 
                        {/* ==================== ФОРМА ДОБАВЛЕНИЯ МИКСЕРА ==================== */}
-        <div style={{ borderTop: '1px solid #334155', paddingTop: '10px', marginTop: '10px' }}>
+        <div style={{ borderTop: CARD_BORDER, paddingTop: '10px', marginTop: '10px' }}>
           <h4 style={{ color: '#94A3B8', marginBottom: '10px' }}>Добавить миксер</h4>
           
           <div style={{ 
@@ -984,36 +963,30 @@ const formatVolume = (value: number | string) => {
               <label style={{ display: 'block', color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
                 Миксер
               </label>
-              <select 
-                id="mixerSelect"
-                style={{ 
-                  width: '100%', 
-                  padding: '14px', 
-                  background: '#1E2937', 
-                  border: '2px solid #475569', 
-                  borderRadius: '12px', 
-                  color: 'white',
-                  fontSize: '15px'
-                }}
-                onChange={(e) => {
-                  if (e.target.value === 'custom') {
-                    (document.getElementById('mixerName') as HTMLInputElement).value = '';
-                  } else {
-                    const selected = allMixers.find(m => m.id === Number(e.target.value));
-                    if (selected) {
-                      (document.getElementById('mixerName') as HTMLInputElement).value = selected.number;
-                    }
+              <ModalSelect
+                value={newMixerPick}
+                placeholder="— Выберите миксер —"
+                style={{ padding: '14px', borderRadius: 12, fontSize: '15px' }}
+                onChange={(val) => {
+                  setNewMixerPick(val);
+                  const nameEl = document.getElementById('mixerName') as HTMLInputElement | null;
+                  if (!nameEl) return;
+                  if (val === 'custom' || !val) {
+                    nameEl.value = '';
+                    return;
                   }
+                  const selected = allMixers.find(m => m.id === Number(val));
+                  if (selected) nameEl.value = selected.number;
                 }}
-              >
-                <option value="">— Выберите миксер —</option>
-                {allMixers.map((mixer) => (
-                  <option key={mixer.id} value={mixer.id}>
-                    {mixer.number} — {mixer.model} ({mixer.volume} м³){mixer.driver ? ` · ${mixer.driver}` : ''}
-                  </option>
-                ))}
-                <option value="custom">Другой (ввести вручную)</option>
-              </select>
+                options={[
+                  ...allMixers.map((mixer) => ({
+                    value: String(mixer.id),
+                    label: `${mixer.number} — ${mixer.model} (${mixer.volume} м³)${mixer.driver ? ` · ${mixer.driver}` : ''}`,
+                    text: `${mixer.number} — ${mixer.model}`,
+                  })),
+                  { value: 'custom', label: 'Другой (ввести вручную)', text: 'Другой (ввести вручную)' },
+                ]}
+              />
             </div>
 
             {/* Номер / Название */}
@@ -1025,14 +998,12 @@ const formatVolume = (value: number | string) => {
                 type="text" 
                 id="mixerName"
                 placeholder="Например: О021УХ32"
-                style={{ 
-                  width: '80%', 
-                  padding: '14px', 
-                  background: '#1E2937', 
-                  border: '2px solid #475569',
-                  borderRadius: '12px', 
-                  color: 'white' 
-                }}
+                style={volumeCardSoftStyle({
+                  width: '80%',
+                  padding: '14px',
+                  borderRadius: 12,
+                  color: 'white',
+                })}
               />
             </div>
 
@@ -1041,18 +1012,14 @@ const formatVolume = (value: number | string) => {
   <label style={{ display: 'block', color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
     Время погрузки <span style={{ color: '#EF4444' }}>*</span>
   </label>
-  <input 
-    type="time" 
-    id="mixerTime"
-    required
-    style={{ 
-      width: '80%', 
-      padding: '14px', 
-      background: '#1E2937', 
-      border: '2px solid #475569',
-      borderRadius: '12px', 
+  <ModalTimeInput
+    value={newMixerTime}
+    onChange={setNewMixerTime}
+    style={{
+      width: '80%',
+      padding: '14px',
+      borderRadius: 12,
       color: '#E2E8F0',
-      colorScheme: 'dark'
     }}
   />
 </div>
@@ -1067,14 +1034,12 @@ const formatVolume = (value: number | string) => {
                 id="mixerVolume"
                 placeholder="8"
                 step="0.01"
-                style={{ 
-                  width: '80%', 
-                  padding: '14px', 
-                  background: '#1E2937', 
-                  border: '2px solid #475569',
-                  borderRadius: '12px', 
-                  color: 'white' 
-                }}
+                style={volumeCardSoftStyle({
+                  width: '80%',
+                  padding: '14px',
+                  borderRadius: 12,
+                  color: 'white',
+                })}
               />
             </div>
 
@@ -1085,7 +1050,7 @@ const formatVolume = (value: number | string) => {
                <button 
                onClick={async () => {
                  const name = (document.getElementById('mixerName') as HTMLInputElement).value.trim();
-                 const time = (document.getElementById('mixerTime') as HTMLInputElement).value;
+                 const time = newMixerTime;
                  const vol = parseFloat((document.getElementById('mixerVolume') as HTMLInputElement).value || '0');
 
               // ← Обязательная проверка времени
@@ -1189,9 +1154,9 @@ const formatVolume = (value: number | string) => {
 
       // === 6. Очистка формы ===
       (document.getElementById('mixerName') as HTMLInputElement).value = '';
-      (document.getElementById('mixerTime') as HTMLInputElement).value = '';
       (document.getElementById('mixerVolume') as HTMLInputElement).value = '';
-      (document.getElementById('mixerSelect') as HTMLSelectElement).value = '';
+      setNewMixerTime('');
+      setNewMixerPick('');
 
       console.log(`✅ Миксер ${name} добавлен в конец списка (sortOrder = ${newSortOrder})`);
     } else {
@@ -1199,17 +1164,17 @@ const formatVolume = (value: number | string) => {
       alert(errData.error || 'Ошибка сохранения миксера в базу');
     }
   }}
-  style={{
+  style={volumeCardSoftStyle({
     padding: '14px 32px',
-    background: '#10B981',
+    background: 'linear-gradient(165deg, #10B981 0%, #059669 100%)',
+    border: '1px solid rgba(110,231,183,0.35)',
+    borderRadius: 12,
     color: 'white',
-    border: 'none',
-    borderRadius: '12px',
-    fontWeight: '600',
+    fontWeight: 700,
     cursor: 'pointer',
     whiteSpace: 'nowrap',
-    height: '52px'
-  }}
+    height: '52px',
+  })}
 >
   Добавить
 </button>
@@ -1218,17 +1183,17 @@ const formatVolume = (value: number | string) => {
                   автоматически на сервере, отдельного "завершения" не требуется */}
               <button
                 onClick={onClose}
-                style={{
+                style={volumeCardSoftStyle({
                   padding: '14px 28px',
-                  background: '#3B82F6',
+                  background: 'linear-gradient(165deg, #3B82F6 0%, #2563EB 100%)',
+                  border: '1px solid rgba(147,197,253,0.35)',
+                  borderRadius: 12,
                   color: 'white',
-                  border: 'none',
-                  borderRadius: '12px',
-                  fontWeight: '600',
+                  fontWeight: 700,
                   cursor: 'pointer',
                   whiteSpace: 'nowrap',
-                  height: '52px'
-                }}
+                  height: '52px',
+                })}
               >
                 ✓ Готово
               </button>
@@ -1237,19 +1202,18 @@ const formatVolume = (value: number | string) => {
         </div>
 
         {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ (ПОЛНАЯ + МИКСЕРЫ) ==================== */}
-<div style={{ marginTop: '10px', borderTop: '1px solid #334155', paddingTop: '8px' }}>
+<div style={{ marginTop: '10px', borderTop: CARD_BORDER, paddingTop: '8px' }}>
   <h4 style={{ color: '#94A3B8', marginBottom: '8px' }}>История изменений</h4>
   
-  <div style={{ 
-    background: '#25334A', 
-    borderRadius: '16px', 
-    padding: '16px', 
+  <div style={volumeCardSoftStyle({
+    borderRadius: 16,
+    padding: '16px',
     fontSize: '15px',
     // Тот же принцип: до 1080px высоты вьюпорта — ровно 160px (как на 1920),
     // на 4K и выше — растёт дальше, до потолка в 520px.
     maxHeight: 'clamp(160px, calc(160px + (100vh - 1080px) * 0.33), 520px)',
-    overflowY: 'auto'
-  }}>
+    overflowY: 'auto',
+  })}>
     <OrderHistoryTimeline entries={history} />
   </div>
 </div>

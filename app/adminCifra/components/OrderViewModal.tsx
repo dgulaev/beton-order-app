@@ -13,6 +13,7 @@ import { X, Copy } from 'lucide-react';
 import OrderRouteMap from './OrderRouteMap';
 import ModalActionButton from './ModalActionButton';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
+import { modalCloseButtonStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
 
 interface OrderViewModalProps {
   order: any;
@@ -58,31 +59,28 @@ export default function OrderViewModal({ order, onClose, onDuplicate }: OrderVie
   return (
     <div
       style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.94)', zIndex: 9999,
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 9999,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
       onClick={onClose}
     >
       <div
         className="w-full max-w-[880px] lg:max-w-[980px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
-        style={{
+        style={volumeModalStyle({
           position: 'relative',
-          background: '#1E2937',
-          borderRadius: '24px',
+          borderRadius: 24,
           padding: '32px',
-          boxShadow: '0 30px 80px rgba(0,0,0,0.7)',
-        }}
+        })}
         onClick={(e) => e.stopPropagation()}
       >
         <button
           onClick={onClose}
           title="Закрыть"
-          style={{
-            position: 'absolute', top: '26px', right: '26px',
-            width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(148, 163, 184, 0.1)', border: 'none', borderRadius: '9999px',
-            color: '#94A3B8', cursor: 'pointer',
-          }}
+          style={modalCloseButtonStyle({
+            position: 'absolute',
+            top: 26,
+            right: 26,
+          })}
         >
           <X size={18} />
         </button>
@@ -123,21 +121,21 @@ export default function OrderViewModal({ order, onClose, onDuplicate }: OrderVie
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
               <a href={twoGisHref} target="_blank" rel="noopener noreferrer"
-                style={{ flex: 1, padding: '9px 8px', background: '#25334A', color: '#94A3B8', textAlign: 'center', borderRadius: '10px', textDecoration: 'none', fontWeight: 600, fontSize: '13px' }}>
+                style={volumeCardSoftStyle({ flex: 1, padding: '9px 8px', color: '#94A3B8', textAlign: 'center', borderRadius: 10, textDecoration: 'none', fontWeight: 600, fontSize: '13px' })}>
                 2ГИС
               </a>
               <a href={yandexHref} target="_blank" rel="noopener noreferrer"
-                style={{ flex: 1, padding: '9px 8px', background: '#25334A', color: '#94A3B8', textAlign: 'center', borderRadius: '10px', textDecoration: 'none', fontWeight: 600, fontSize: '13px' }}>
+                style={volumeCardSoftStyle({ flex: 1, padding: '9px 8px', color: '#94A3B8', textAlign: 'center', borderRadius: 10, textDecoration: 'none', fontWeight: 600, fontSize: '13px' })}>
                 Яндекс
               </a>
               <a href={googleHref} target="_blank" rel="noopener noreferrer"
-                style={{ flex: 1, padding: '9px 8px', background: '#25334A', color: '#94A3B8', textAlign: 'center', borderRadius: '10px', textDecoration: 'none', fontWeight: 600, fontSize: '13px' }}>
+                style={volumeCardSoftStyle({ flex: 1, padding: '9px 8px', color: '#94A3B8', textAlign: 'center', borderRadius: 10, textDecoration: 'none', fontWeight: 600, fontSize: '13px' })}>
                 Google
               </a>
             </div>
           </div>
 
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '20px 24px', minHeight: '420px' }}>
+          <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '20px 24px', minHeight: '420px' })}>
             <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr', gap: '10px 16px', alignItems: 'start' }}>
               <Field label="Клиент" value={clientName} />
               <Field label="ИНН" value={order.inn} />

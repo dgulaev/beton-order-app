@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { COLORS, overlayStyle, modalStyle, ghostButton } from '../labStyles';
+import { COLORS, overlayStyle, modalStyle, ghostButton, volumeCardSoftStyle } from '../labStyles';
 import { useEscapeClose } from '../labUtils';
 
 interface Props {
@@ -45,7 +45,7 @@ export default function RecipeVersionsModal({ recipe, onClose }: Props) {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {versions.map((v) => (
-              <div key={v.id} style={{ background: COLORS.input, borderRadius: '12px', padding: '14px' }}>
+              <div key={v.id} style={volumeCardSoftStyle({ borderRadius: 12, padding: '14px' })}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <span style={{ color: COLORS.accent, fontWeight: 600 }}>Версия {v.version_no ?? '—'}</span>
                   <span style={{ color: COLORS.muted, fontSize: '13px' }}>{fmt(v.created_at)}</span>

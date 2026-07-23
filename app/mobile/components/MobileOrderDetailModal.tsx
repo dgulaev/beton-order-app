@@ -6,6 +6,12 @@ import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
+import {
+  modalCloseButtonStyle,
+  modalFieldStyle,
+  volumeCardSoftStyle,
+  volumeModalStyle,
+} from '@/app/adminCifra/cardStyles';
 
 interface MobileOrderDetailModalProps {
   isOpen: boolean;
@@ -43,16 +49,12 @@ function FieldBlock({ icon, label, children }: { icon: React.ReactNode; label: s
   );
 }
 
-const INPUT: React.CSSProperties = {
-  width: '100%',
+const INPUT: React.CSSProperties = modalFieldStyle({
   padding: '11px 14px',
-  background: '#25334A',
-  border: '1px solid #334155',
-  borderRadius: '10px',
-  color: '#E2E8F0',
+  borderRadius: 10,
   fontSize: '15px',
-  boxSizing: 'border-box',
-};
+  colorScheme: 'dark',
+});
 
 export default function MobileOrderDetailModal({
   isOpen,
@@ -222,22 +224,27 @@ export default function MobileOrderDetailModal({
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 10000, overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 10000, overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any }}
       onClick={onClose}
     >
       <div
-        style={{ background: '#0D1520', minHeight: '100vh', maxWidth: '560px', margin: '0 auto', paddingBottom: '40px' }}
+        style={volumeModalStyle({
+          minHeight: '100vh',
+          maxWidth: '560px',
+          margin: '0 auto',
+          paddingBottom: '40px',
+          borderRadius: 0,
+        })}
         onClick={e => e.stopPropagation()}
       >
 
         {/* ── ШАПКА ──────────────────────────────────────── */}
-        <div style={{
+        <div style={volumeCardSoftStyle({
           position: 'sticky', top: 0, zIndex: 10,
-          background: '#25334A',
-          borderBottom: '1px solid #334155',
+          borderRadius: 0,
           padding: '12px 14px',
           display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px',
-        }}>
+        })}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1, paddingRight: '4px' }}>
             <span style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
               Заявка #{editedOrder.id}
@@ -303,15 +310,15 @@ export default function MobileOrderDetailModal({
             )}
           </div>
 
-          <button onClick={onClose} style={{ background: '#334155', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-            <X size={16} color="#64748B" />
+          <button type="button" onClick={onClose} aria-label="Закрыть" style={modalCloseButtonStyle({ width: 32, height: 32, fontSize: '18px' })}>
+            <X size={16} color="#94A3B8" />
           </button>
         </div>
 
         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
           {/* ── КЛИЕНТ ──────────────────────────────────── */}
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' })}>
             <FieldBlock icon={<User size={15} />} label="Клиент">
               <div ref={clientDropdownRef} style={{ position: 'relative' }}>
                 <input
@@ -331,12 +338,12 @@ export default function MobileOrderDetailModal({
                   }).slice(0, 8);
                   if (!filtered.length) return null;
                   return (
-                    <div style={{
+                    <div style={volumeCardSoftStyle({
                       position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
-                      background: '#1A2537', border: '1px solid #334155', borderRadius: '10px',
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.5)', maxHeight: '240px', overflowY: 'auto',
+                      borderRadius: 10,
+                      maxHeight: '240px', overflowY: 'auto',
                       marginTop: '4px',
-                    }}>
+                    })}>
                       {filtered.map((c: any, ci: number) => {
                         const displayName = c.organization_name || c.full_name || '—';
                         const isLegal = !!c.organization_name;
@@ -363,7 +370,7 @@ export default function MobileOrderDetailModal({
                             }}
                             style={{
                               padding: '10px 14px', cursor: 'pointer',
-                              borderBottom: '1px solid #334155',
+                              borderBottom: '1px solid rgba(148, 163, 184, 0.18)',
                             }}
                           >
                             <div style={{ fontSize: '14px', fontWeight: 600, color: '#E2E8F0' }}>
@@ -386,7 +393,7 @@ export default function MobileOrderDetailModal({
           </div>
 
           {/* ── ПАРАМЕТРЫ ЗАКАЗА ─────────────────────── */}
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' })}>
             <FieldBlock icon={<Layers size={15} />} label="Марка бетона">
               {recipes.length > 0 ? (
                 <select
@@ -414,7 +421,13 @@ export default function MobileOrderDetailModal({
                 <input value={editedOrder.volume || ''} onChange={e => set('volume', e.target.value)} style={INPUT} type="number" step="0.01" />
               </FieldBlock>
               <FieldBlock icon={<Clock size={15} />} label="Время">
-                <input value={editedOrder.delivery_time || ''} onChange={e => set('delivery_time', e.target.value)} style={INPUT} type="time" />
+                <input
+                  value={(editedOrder.delivery_time || '').slice(0, 5)}
+                  onChange={e => set('delivery_time', e.target.value)}
+                  style={INPUT}
+                  type="time"
+                  step={60}
+                />
               </FieldBlock>
             </div>
 
@@ -424,7 +437,7 @@ export default function MobileOrderDetailModal({
           </div>
 
           {/* ── АДРЕС + КОММЕНТАРИЙ ────────────────── */}
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' })}>
             <FieldBlock icon={<MapPin size={15} />} label="Адрес доставки">
               <textarea value={editedOrder.address || ''} onChange={e => set('address', e.target.value)} rows={2} style={{ ...INPUT, resize: 'vertical', lineHeight: 1.5 }} />
             </FieldBlock>
@@ -434,7 +447,7 @@ export default function MobileOrderDetailModal({
           </div>
 
           {/* ── ИСТОРИЯ ──────────────────────────────── */}
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
+          <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px' })}>
             <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
               История изменений
             </div>

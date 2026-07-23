@@ -8,6 +8,8 @@ import { Plus, MapPin, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-re
 import { useUserRole } from '../../providers/UserRoleProvider';
 import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle } from '@/app/adminCifra/cardStyles';
+import { appConfirm } from '@/app/adminCifra/components/appDialog';
 
 export default function MobileZayavkiPage() {
 const { user } = useUserRole();   // ← Берём роль из провайдера
@@ -207,7 +209,12 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   };
 
   const handleDeleteOrder = async (orderId: number) => {
-    if (!confirm('Удалить заявку? Действие необратимо.')) return;
+    if (!(await appConfirm('Удалить заявку? Действие необратимо.', {
+      title: 'Удаление заявки',
+      okLabel: 'Удалить',
+      cancelLabel: 'Отмена',
+      variant: 'danger',
+    }))) return;
 
     try {
       const res = await fetch(`/api/adminCifra/orders/${orderId}`, { method: 'DELETE' });
@@ -243,11 +250,11 @@ const { user } = useUserRole();   // ← Берём роль из провайд
 
   return (
     <>
-      <div style={{ padding: '16px', paddingBottom: '100px', minHeight: '100vh', background: '#162032' }}>
+      <div style={{ padding: '16px', paddingBottom: '100px', minHeight: '100vh', background: '#0F172A', color: '#fff' }}>
         
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <h1 style={{ fontSize: '26px', fontWeight: '700', margin: 0 }}>Заявки</h1>
+          <h1 style={{ fontSize: '26px', fontWeight: 700, margin: 0, color: '#F1F5F9' }}>Заявки</h1>
           <MobileExitButton />
         </div>
 
@@ -255,26 +262,25 @@ const { user } = useUserRole();   // ← Берём роль из провайд
         {!showNewOrderModal && !selectedOrder && (
           <button
             onClick={() => setShowNewOrderModal(true)}
-            style={{
+            style={volumeCardSoftStyle({
               position: 'fixed',
               bottom: '90px',
               right: '20px',
               zIndex: 9000,
-              width: '42px',
-              height: '42px',
-              borderRadius: '9999px',
-              background: 'rgba(16,185,129,0.35)',
-              border: '1.5px solid rgba(16,185,129,0.55)',
-              backdropFilter: 'blur(6px)',
-              boxShadow: '0 2px 12px rgba(16,185,129,0.25)',
+              width: 48,
+              height: 48,
+              borderRadius: 9999,
+              background: 'linear-gradient(165deg, #10B981 0%, #059669 100%)',
+              border: '1px solid rgba(110,231,183,0.45)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               cursor: 'pointer',
-            }}
+              padding: 0,
+            })}
             aria-label="Новая заявка"
           >
-            <Plus size={20} color="#10B981" strokeWidth={2.5} />
+            <Plus size={22} color="#fff" strokeWidth={2.5} />
           </button>
         )}
 
@@ -286,32 +292,32 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   flexWrap: 'wrap'
 }}>
   {/* Выполнение (Бетон) */}
-  <div style={{ 
+  <div style={volumeCardStyle({ 
     flex: 1, 
-    background: '#334155', 
-    borderRadius: '16px', 
-    padding: '16px 18px' 
-  }}>
-    <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '6px' }}>Выполнение</div>
-    <div style={{ fontSize: '26px', fontWeight: '700', display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+    borderRadius: 16, 
+    padding: '16px 18px',
+    minWidth: 0,
+  })}>
+    <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '6px', fontWeight: 600, letterSpacing: '0.02em' }}>Выполнение</div>
+    <div style={{ fontSize: '26px', fontWeight: 700, display: 'flex', alignItems: 'baseline', gap: '6px', color: '#E2E8F0' }}>
       {Math.round(completedVolume)} 
-      <span style={{ opacity: 0.5, fontSize: '20px' }}>
+      <span style={{ color: '#94A3B8', fontSize: '16px', fontWeight: 600 }}>
         / {Math.round(totalVolume)} м³
       </span>
     </div>
   </div>
 
   {/* Цемент */}
-  <div style={{ 
+  <div style={volumeCardStyle({ 
     flex: 1, 
-    background: '#334155', 
-    borderRadius: '16px', 
-    padding: '16px 18px' 
-  }}>
-    <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '6px' }}>Цемент</div>
-    <div style={{ fontSize: '26px', fontWeight: '700', color: '#60A5FA', display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+    borderRadius: 16, 
+    padding: '16px 18px',
+    minWidth: 0,
+  })}>
+    <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '6px', fontWeight: 600, letterSpacing: '0.02em' }}>Цемент</div>
+    <div style={{ fontSize: '26px', fontWeight: 700, color: '#60A5FA', display: 'flex', alignItems: 'baseline', gap: '6px' }}>
       {calculateCementNeeded(true)} 
-      <span style={{ opacity: 0.5, fontSize: '20px' }}>
+      <span style={{ color: '#94A3B8', fontSize: '16px', fontWeight: 600 }}>
         / {calculateCementNeeded(false)} т.
       </span>
     </div>
@@ -338,31 +344,40 @@ const { user } = useUserRole();   // ← Берём роль из провайд
           };
 
           return (
-            <div style={{
-              background: '#25334A',
-              borderRadius: '18px',
+            <div style={volumeCardStyle({
+              borderRadius: 18,
               padding: '14px 16px',
               marginBottom: '16px',
               display: 'flex',
               alignItems: 'center',
               gap: '10px',
-            }}>
+            })}>
               {/* Стрелка влево */}
               <button
                 onClick={() => navBtn('prev')}
-                style={{ background: '#334155', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+                style={volumeCardSoftStyle({
+                  borderRadius: 10,
+                  width: 36,
+                  height: 36,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  padding: 0,
+                })}
               >
-                <ChevronLeft size={18} color="#64748B" />
+                <ChevronLeft size={18} color="#94A3B8" />
               </button>
 
               {/* Центр: иконка + дата + пилюля */}
               <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
-                <CalendarDays size={18} color={isToday ? '#10B981' : '#475569'} style={{ flexShrink: 0 }} />
+                <CalendarDays size={18} color={isToday ? '#4ADE80' : '#64748B'} style={{ flexShrink: 0 }} />
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: '15px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {dayName}, {dayNum} {monthName} {year !== today.getFullYear() ? year : ''}
                   </div>
-                  <div style={{ fontSize: '12px', color: '#475569', marginTop: '1px' }}>
+                  <div style={{ fontSize: '12px', color: '#64748B', marginTop: '1px' }}>
                     {filteredOrders.length > 0
                       ? `${filteredOrders.length} заявок · ${totalVolume.toFixed(1)} м³`
                       : 'Нет заявок'}
@@ -374,13 +389,29 @@ const { user } = useUserRole();   // ← Берём роль из провайд
               {!isToday && (
                 <button
                   onClick={() => setSelectedDate(new Date(today.getFullYear(), today.getMonth(), today.getDate()))}
-                  style={{ background: 'transparent', border: '1px solid #334155', borderRadius: '8px', padding: '5px 10px', color: '#64748B', fontSize: '12px', fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}
+                  style={volumeCardSoftStyle({
+                    borderRadius: 8,
+                    padding: '5px 10px',
+                    color: '#94A3B8',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                  })}
                 >
                   Сегодня
                 </button>
               )}
               {isToday && (
-                <span style={{ background: '#10B98118', border: '1px solid #10B98140', borderRadius: '8px', padding: '5px 10px', color: '#10B981', fontSize: '12px', fontWeight: 600, flexShrink: 0 }}>
+                <span style={volumeCardSoftStyle({
+                  borderRadius: 8,
+                  padding: '5px 10px',
+                  color: '#4ADE80',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  flexShrink: 0,
+                  border: '1px solid rgba(74,222,128,0.4)',
+                })}>
                   Сегодня
                 </span>
               )}
@@ -388,9 +419,19 @@ const { user } = useUserRole();   // ← Берём роль из провайд
               {/* Стрелка вправо */}
               <button
                 onClick={() => navBtn('next')}
-                style={{ background: '#334155', border: 'none', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+                style={volumeCardSoftStyle({
+                  borderRadius: 10,
+                  width: 36,
+                  height: 36,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  padding: 0,
+                })}
               >
-                <ChevronRight size={18} color="#64748B" />
+                <ChevronRight size={18} color="#94A3B8" />
               </button>
             </div>
           );
@@ -399,25 +440,27 @@ const { user } = useUserRole();   // ← Берём роль из провайд
         {/* ==================== СПИСОК ЗАЯВОК ==================== */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {loading ? (
-            <div style={{ textAlign: 'center', padding: '60px', color: '#64748B' }}>Загрузка...</div>
+            <div style={volumeCardSoftStyle({ textAlign: 'center', padding: '48px 20px', color: '#64748B', borderRadius: 16 })}>
+              Загрузка...
+            </div>
           ) : filteredOrders.length > 0 ? (
             filteredOrders.map((order: any) => (
               <div
                 key={order.id}
                 onClick={() => setSelectedOrder(order)}
-                style={{
-                  background: '#25334A',
-                  borderRadius: '16px',
+                style={volumeCardSoftStyle({
+                  borderRadius: 16,
                   padding: '16px',
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '10px',
-                  cursor: 'pointer'
-                }}
+                  cursor: 'pointer',
+                  border: CARD_BORDER,
+                })}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ fontWeight: '700', fontSize: '18px' }}>
-                    #{order.id} — {order.delivery_time || '—'}
+                  <div style={{ fontWeight: 700, fontSize: '18px', color: '#F1F5F9' }}>
+                    #{order.id} — {order.delivery_time ? String(order.delivery_time).slice(0, 5) : '—'}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                     {order.is_questionable && (
@@ -434,14 +477,16 @@ const { user } = useUserRole();   // ← Берём роль из провайд
                         ?
                       </span>
                     )}
-                    <div style={{ 
+                    <div style={volumeCardSoftStyle({ 
                       padding: '6px 14px', 
-                      borderRadius: '9999px', 
-                      background: getStatusColor(order.status) + '20', 
+                      borderRadius: 9999, 
+                      background: getStatusColor(order.status) + '22', 
+                      border: `1px solid ${getStatusColor(order.status)}55`,
                       color: getStatusColor(order.status),
-                      fontSize: '14px',
-                      fontWeight: '600'
-                    }}>
+                      fontSize: '13px',
+                      fontWeight: 700,
+                      boxShadow: 'none',
+                    })}>
                       {order.status === 'new' && 'Новый'}
                       {order.status === 'processing' && 'В работе'}
                       {order.status === 'completed' && 'Выполнен'}
@@ -450,7 +495,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
                   </div>
                 </div>
 
-                <div style={{ fontSize: '16px', fontWeight: '600' }}>
+                <div style={{ fontSize: '16px', fontWeight: 600, color: '#E2E8F0' }}>
                   {order.organization_name || order.full_name || '—'}
                 </div>
 
@@ -466,7 +511,12 @@ const { user } = useUserRole();   // ← Берём роль из провайд
               </div>
             ))
           ) : (
-            <div style={{ textAlign: 'center', padding: '80px 20px', color: '#64748B' }}>
+            <div style={volumeCardSoftStyle({
+              textAlign: 'center',
+              padding: '56px 20px',
+              color: '#64748B',
+              borderRadius: 16,
+            })}>
               Заявок на этот день нет
             </div>
           )}

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { X } from 'lucide-react';
 import { Order } from './hooks/useCalendarOrders';
 import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
+import { modalCloseButtonStyle, volumeCardSoftStyle, volumeModalStyle } from './cardStyles';
 
 interface StatusConfig {
   label: string;
@@ -87,24 +88,6 @@ const todayButtonStyle: React.CSSProperties = {
   fontWeight: '600',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
-  transition: 'all 0.2s',
-};
-
-// Иконка закрытия в стиле кнопки сворачивания сайдбара в layout.tsx — без фона,
-// подсветка появляется только при наведении.
-const closeIconButtonStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: 0,
-  right: 0,
-  background: 'none',
-  border: 'none',
-  color: '#94A3B8',
-  cursor: 'pointer',
-  padding: '8px',
-  borderRadius: '8px',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
   transition: 'all 0.2s',
 };
 
@@ -232,19 +215,16 @@ export default function Calendar({ onClose, orders: externalOrders, onSelectOrde
   );
 
   return (
-    <div className="overflow-hidden flex flex-col" style={{
+    <div className="overflow-hidden flex flex-col" style={volumeModalStyle({
       // width/height через vw/vh, а не % — родительская обёртка модалки в
       // dashboard/page.tsx сама не имеет явной ширины (растягивается по
       // контенту), поэтому w-full/max-w-[] от неё не работали на больших
       // экранах и календарь оставался «зажатым» до природной ширины сетки дней.
       width: 'min(1560px, 94vw)',
       height: 'min(920px, 92vh)',
-      boxSizing: 'border-box',
-      backgroundColor: '#1E2937',
-      borderRadius: '24px',
+      borderRadius: 24,
       padding: '32px',
-      boxShadow: '0 25px 70px rgba(0,0,0,0.7)',
-    }}>
+    })}>
       {/* Шапка: месяц по центру, закрытие — иконкой в углу без фона */}
       <div style={{ position: 'relative', textAlign: 'center', flexShrink: 0, marginBottom: '10px' }}>
         <h2 style={{ fontSize: '28px', fontWeight: '700', color: '#fff', margin: 0, textTransform: 'capitalize' }}>
@@ -253,11 +233,13 @@ export default function Calendar({ onClose, orders: externalOrders, onSelectOrde
         <button
           onClick={onClose}
           title="Закрыть"
-          style={closeIconButtonStyle}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(148,163,184,0.15)'; e.currentTarget.style.color = '#fff'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#94A3B8'; }}
+          style={modalCloseButtonStyle({
+            position: 'absolute',
+            top: 0,
+            right: 0,
+          })}
         >
-          <X size={24} />
+          <X size={20} />
         </button>
       </div>
 
@@ -411,7 +393,7 @@ export default function Calendar({ onClose, orders: externalOrders, onSelectOrde
         </div>
 
         {/* Список заказов на выбранный день */}
-        <div style={{ width: '540px', backgroundColor: '#334155', borderRadius: '20px', padding: '28px', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div style={volumeCardSoftStyle({ width: '540px', borderRadius: 20, padding: '28px', display: 'flex', flexDirection: 'column', minHeight: 0 })}>
           <h3 style={{ fontSize: '22px', marginBottom: '20px', color: '#fff', flexShrink: 0 }}>
             {selectedDay
               // day+month вместе даёт корректный родительный падеж («15 июля», а не «15 июль»)
@@ -429,17 +411,15 @@ export default function Calendar({ onClose, orders: externalOrders, onSelectOrde
                   <div
                     key={order.id}
                     onClick={() => onSelectOrder(order)}
-                    style={{
-                      backgroundColor: '#1E2937',
+                    style={volumeCardSoftStyle({
                       padding: '18px',
-                      borderRadius: '14px',
+                      borderRadius: 14,
                       cursor: 'pointer',
                       position: 'relative',
-                      border: '1px solid transparent',
-                      transition: 'border-color 0.15s ease',
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#3B82F6'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'transparent'; }}
+                      transition: 'filter 0.15s ease',
+                    })}
+                    onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <span style={{ fontWeight: '600', color: '#fff', fontSize: '18px' }}>#{order.id}</span>

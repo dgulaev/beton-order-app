@@ -1,11 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { COLORS, inputStyle, labelStyle, cardStyle, ghostButton, primaryButton, overlayStyle, modalStyle, pillStyle } from '../labStyles';
+import { COLORS, inputStyle, labelStyle, cardStyle, ghostButton, primaryButton, overlayStyle, modalStyle, pillStyle, volumeCardSoftStyle } from '../labStyles';
 import ProtocolModal from './ProtocolModal';
 import { SCALE, num, ru, ruInt, computeSeries, type Specimen } from '../protocolCalc';
 import { useAutoRows, LabPagination } from '../pagination';
 import { localDateStr, useEscapeClose } from '../labUtils';
+import ModalDateInput from '../../components/ModalDateInput';
+import ModalSelect from '../../components/ModalSelect';
+import { appConfirm } from '../../components/appDialog';
 
 type JournalKey = '7' | '28';
 
@@ -258,7 +261,7 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
   };
 
   const remove = async (id: number) => {
-    if (!confirm('Удалить запись испытания?')) return;
+    if (!(await appConfirm('Удалить запись испытания?', { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
     await fetch(`/api/adminCifra/concrete-tests?id=${id}`, { method: 'DELETE' });
     await load();
     onTestsChanged?.();
@@ -319,7 +322,7 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
             </>
           )}
           <span style={{ color: COLORS.muted, fontSize: '13px' }}>Дата образцов:</span>
-          <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} style={{ ...inputStyle, width: 'auto', padding: '8px 10px' }} />
+          <ModalDateInput value={dateFilter} onChange={setDateFilter} style={{ ...inputStyle, width: 'auto', padding: '8px 10px' }} />
           {dateFilter && (
             <button onClick={() => setDateFilter('')} style={{ ...ghostButton, padding: '8px 12px' }}>Сброс даты</button>
           )}
@@ -390,7 +393,7 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
 
             {/* Привязка к заявке — прочность из этого испытания автоматически
                 попадёт в паспорт качества соответствующего заказа. */}
-            <div style={{ marginBottom: '18px', padding: '12px 14px', background: '#1B2536', borderRadius: '10px' }}>
+            <div style={volumeCardSoftStyle({ marginBottom: '18px', padding: '12px 14px', borderRadius: 10 })}>
               <label style={{ ...labelStyle, marginBottom: '8px' }}>Заявка (для паспорта)</label>
               <input
                 placeholder="Поиск заявки: № / марка / клиент / дата"
@@ -398,18 +401,26 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
                 onChange={(e) => setOrderSearch(e.target.value)}
                 style={{ ...inputStyle, marginBottom: '8px' }}
               />
-              <select value={editing.order_id ?? ''} onChange={(e) => selectOrder(e.target.value)} style={inputStyle}>
-                <option value="">— не привязано —</option>
-                {selectedOrder && !orderOptions.some((o) => String(o.id) === String(selectedOrder.id)) && (
-                  <option value={selectedOrder.id}>{orderLabel(selectedOrder)}</option>
-                )}
-                {editing.order_id != null && !selectedOrder && (
-                  <option value={editing.order_id}>#{editing.order_id} (заявка вне загруженного месяца)</option>
-                )}
-                {orderOptions.map((o) => (
-                  <option key={o.id} value={o.id}>{orderLabel(o)}</option>
-                ))}
-              </select>
+              <ModalSelect
+                value={editing.order_id != null ? String(editing.order_id) : ''}
+                onChange={selectOrder}
+                style={inputStyle}
+                placeholder="— не привязано —"
+                options={[
+                  { value: '', label: '— не привязано —' },
+                  ...(selectedOrder && !orderOptions.some((o) => String(o.id) === String(selectedOrder.id))
+                    ? [{ value: String(selectedOrder.id), label: orderLabel(selectedOrder), text: orderLabel(selectedOrder) }]
+                    : []),
+                  ...(editing.order_id != null && !selectedOrder
+                    ? [{ value: String(editing.order_id), label: `#${editing.order_id} (заявка вне загруженного месяца)` }]
+                    : []),
+                  ...orderOptions.map((o) => ({
+                    value: String(o.id),
+                    label: orderLabel(o),
+                    text: orderLabel(o),
+                  })),
+                ]}
+              />
               <p style={{ color: COLORS.muted, fontSize: '12px', margin: '8px 0 0' }}>
                 {selectedOrder
                   ? `Привязано: ${orderLabel(selectedOrder)}`
@@ -428,7 +439,7 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
               </div>
               <div>
                 <label style={labelStyle}>Дата образцов</label>
-                <input type="date" value={editing.sample_date || ''} onChange={(e) => setEditing({ ...editing, sample_date: e.target.value })} style={inputStyle} />
+                <ModalDateInput value={editing.sample_date || ''} onChange={(sample_date) => setEditing({ ...editing, sample_date })} style={inputStyle} />
               </div>
               <div>
                 <label style={labelStyle}>Требуемая прочность, МПа</label>
@@ -436,17 +447,22 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
               </div>
               <div>
                 <label style={labelStyle}>Фактическая прочность, МПа</label>
-                <div style={{ ...inputStyle, background: '#1B2536', color: hasSeries ? COLORS.accent : COLORS.muted, fontWeight: 600 }}>
+                <div style={{ ...inputStyle, color: hasSeries ? COLORS.accent : COLORS.muted, fontWeight: 600 }}>
                   {hasSeries ? `${ru(calc!.avgStrength)} (среднее по серии)` : '— заполните кубики'}
                 </div>
               </div>
               <div>
                 <label style={labelStyle}>Результат</label>
-                <select value={editing.result || 'pending'} onChange={(e) => setEditing({ ...editing, result: e.target.value })} style={inputStyle}>
-                  <option value="pending">Ожидает</option>
-                  <option value="pass">Соответствует</option>
-                  <option value="fail">Не соответствует</option>
-                </select>
+                <ModalSelect
+                  value={editing.result || 'pending'}
+                  onChange={(result) => setEditing({ ...editing, result })}
+                  style={inputStyle}
+                  options={[
+                    { value: 'pending', label: 'Ожидает' },
+                    { value: 'pass', label: 'Соответствует' },
+                    { value: 'fail', label: 'Не соответствует' },
+                  ]}
+                />
                 {editing.test_type === '28' && hasSeries && (
                   <p style={{ margin: '6px 0 0', fontSize: '12px', color: calc!.pass ? COLORS.accent : COLORS.danger }}>
                     Расчёт: {calc!.pass ? 'соответствует классу' : 'не соответствует классу'}
@@ -473,11 +489,15 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
                   <span style={{ color: COLORS.muted, fontSize: '13px', fontWeight: 400 }}> · {cubeCm}×{cubeCm}×{cubeCm} см</span>
                 </h3>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <select value={prot.cube_size} onChange={(e) => setCubeSize(e.target.value)} style={{ ...inputStyle, width: 'auto', padding: '6px 10px' }}>
-                    {[70, 100, 150, 200, 300].map((s) => (
-                      <option key={s} value={s}>{s} мм (α={SCALE[s]})</option>
-                    ))}
-                  </select>
+                  <ModalSelect
+                    value={String(prot.cube_size)}
+                    onChange={setCubeSize}
+                    style={{ ...inputStyle, width: 'auto', padding: '6px 10px' }}
+                    options={[70, 100, 150, 200, 300].map((s) => ({
+                      value: String(s),
+                      label: `${s} мм (α=${SCALE[s]})`,
+                    }))}
+                  />
                   <button onClick={addSpec} style={{ ...ghostButton, padding: '6px 14px' }}>+ Кубик</button>
                 </div>
               </div>
@@ -496,8 +516,8 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
                     <div style={{ color: COLORS.muted, textAlign: 'center' }}>{idx + 1}</div>
                     <input type="number" value={s.mass} onChange={(e) => setSpec(idx, 'mass', e.target.value)} onWheel={(e) => e.currentTarget.blur()} style={inputStyle} />
                     <input type="number" value={s.load} onChange={(e) => setSpec(idx, 'load', e.target.value)} onWheel={(e) => e.currentTarget.blur()} style={inputStyle} />
-                    <div style={{ ...inputStyle, background: '#1B2536', color: COLORS.muted }}>{r && r.density > 0 ? ruInt(r.density) : '—'}</div>
-                    <div style={{ ...inputStyle, background: '#1B2536', color: r && r.strength > 0 ? COLORS.accent : COLORS.muted, fontWeight: 600 }}>{r && r.strength > 0 ? ru(r.strength) : '—'}</div>
+                    <div style={{ ...inputStyle, color: COLORS.muted }}>{r && r.density > 0 ? ruInt(r.density) : '—'}</div>
+                    <div style={{ ...inputStyle, color: r && r.strength > 0 ? COLORS.accent : COLORS.muted, fontWeight: 600 }}>{r && r.strength > 0 ? ru(r.strength) : '—'}</div>
                     <button onClick={() => delSpec(idx)} style={{ ...ghostButton, padding: '6px 0', background: 'transparent', color: COLORS.danger }}>✕</button>
                   </div>
                 );

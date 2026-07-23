@@ -5,6 +5,9 @@ import { COLORS, inputStyle, labelStyle, cardStyle, ghostButton, primaryButton, 
 import PassportModal from './PassportModal';
 import { useAutoRows, LabPagination } from '../pagination';
 import { useEscapeClose } from '../labUtils';
+import ModalDateInput from '../../components/ModalDateInput';
+import ModalSelect from '../../components/ModalSelect';
+import { appConfirm } from '../../components/appDialog';
 
 type FilterKey = 'all' | 'active' | 'no_recipes' | 'no_products';
 
@@ -130,7 +133,7 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
   };
 
   const remove = async (id: number) => {
-    if (!confirm('Удалить спецификацию?')) return;
+    if (!(await appConfirm('Удалить спецификацию?', { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
     await fetch(`/api/adminCifra/specifications?id=${id}`, { method: 'DELETE' });
     load();
   };
@@ -254,7 +257,7 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
         ))}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto' }}>
           <span style={{ color: COLORS.muted, fontSize: '13px' }}>Дата:</span>
-          <input type="date" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} style={{ ...inputStyle, width: 'auto', padding: '8px 10px' }} />
+          <ModalDateInput value={dateFilter} onChange={setDateFilter} style={{ ...inputStyle, width: 'auto', padding: '8px 10px' }} />
           {dateFilter && (
             <button onClick={() => setDateFilter('')} style={{ ...ghostButton, padding: '8px 12px' }}>Сброс</button>
           )}
@@ -327,27 +330,25 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
               <div style={{ gridColumn: '1 / -1' }}>
                 <label style={labelStyle}>Аккредитованная марка (автозаполнение)</label>
-                <select
+                <ModalSelect
                   value={editing.accredited_marking || ''}
-                  onChange={(e) => applyAccredited(e.target.value)}
+                  onChange={applyAccredited}
                   style={inputStyle}
-                >
-                  <option value="">— Выбрать из аккредитованных марок —</option>
-                  {concreteGrades.length > 0 && (
-                    <optgroup label="Бетон (ГОСТ 7473-2010)">
-                      {concreteGrades.map((g) => (
-                        <option key={g.id} value={g.marking}>{g.marking} · {g.marka}</option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {mortarGrades.length > 0 && (
-                    <optgroup label="Раствор (ГОСТ 28013-98)">
-                      {mortarGrades.map((g) => (
-                        <option key={g.id} value={g.marking}>{g.marking} · {g.marka}</option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
+                  placeholder="— Выбрать из аккредитованных марок —"
+                  options={[
+                    { value: '', label: '— Выбрать из аккредитованных марок —' },
+                    ...concreteGrades.map((g) => ({
+                      value: g.marking,
+                      label: `${g.marking} · ${g.marka}`,
+                      text: `${g.marking} · ${g.marka}`,
+                    })),
+                    ...mortarGrades.map((g) => ({
+                      value: g.marking,
+                      label: `${g.marking} · ${g.marka}`,
+                      text: `${g.marking} · ${g.marka}`,
+                    })),
+                  ]}
+                />
                 <p style={{ color: COLORS.muted, fontSize: '12px', margin: '6px 0 0' }}>
                   Подставит класс, марку, F/W/П и продукцию. Значения ниже можно поправить вручную.
                 </p>
@@ -412,10 +413,15 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
               </div>
               <div>
                 <label style={labelStyle}>Статус</label>
-                <select value={editing.status || 'active'} onChange={(e) => setEditing({ ...editing, status: e.target.value })} style={inputStyle}>
-                  <option value="active">Активна</option>
-                  <option value="archived">Архив</option>
-                </select>
+                <ModalSelect
+                  value={editing.status || 'active'}
+                  onChange={(status) => setEditing({ ...editing, status })}
+                  style={inputStyle}
+                  options={[
+                    { value: 'active', label: 'Активна' },
+                    { value: 'archived', label: 'Архив' },
+                  ]}
+                />
               </div>
             </div>
 
@@ -435,34 +441,41 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
               )}
               {(editing.recipe_links || []).map((link: any, idx: number) => (
                 <div key={idx} style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                  <select
-                    value={link.plant_id ?? ''}
-                    onChange={(e) => {
+                  <ModalSelect
+                    value={link.plant_id != null ? String(link.plant_id) : ''}
+                    onChange={(v) => {
                       const links = [...editing.recipe_links];
-                      links[idx] = { ...link, plant_id: e.target.value ? Number(e.target.value) : null };
+                      links[idx] = { ...link, plant_id: v ? Number(v) : null };
                       setEditing({ ...editing, recipe_links: links });
                     }}
                     style={{ ...inputStyle, flex: '0 0 160px' }}
-                  >
-                    <option value="">Завод...</option>
-                    {plants.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name || p.title || p.code || `Завод #${p.id}`}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={link.recipe_id ?? ''}
-                    onChange={(e) => {
+                    placeholder="Завод..."
+                    options={[
+                      { value: '', label: 'Завод...' },
+                      ...plants.map((p) => ({
+                        value: String(p.id),
+                        label: p.name || p.title || p.code || `Завод #${p.id}`,
+                      })),
+                    ]}
+                  />
+                  <ModalSelect
+                    value={link.recipe_id != null ? String(link.recipe_id) : ''}
+                    onChange={(v) => {
                       const links = [...editing.recipe_links];
-                      links[idx] = { ...link, recipe_id: e.target.value ? Number(e.target.value) : null };
+                      links[idx] = { ...link, recipe_id: v ? Number(v) : null };
                       setEditing({ ...editing, recipe_links: links });
                     }}
                     style={{ ...inputStyle, flex: 1 }}
-                  >
-                    <option value="">Рецептура...</option>
-                    {recipes.map((r) => (
-                      <option key={r.id} value={r.id}>{r.code} — {r.name}</option>
-                    ))}
-                  </select>
+                    placeholder="Рецептура..."
+                    options={[
+                      { value: '', label: 'Рецептура...' },
+                      ...recipes.map((r) => ({
+                        value: String(r.id),
+                        label: `${r.code} — ${r.name}`,
+                        text: `${r.code} — ${r.name}`,
+                      })),
+                    ]}
+                  />
                   <button
                     onClick={() => setEditing({ ...editing, recipe_links: editing.recipe_links.filter((_: any, i: number) => i !== idx) })}
                     style={{ ...ghostButton, padding: '6px 12px' }}

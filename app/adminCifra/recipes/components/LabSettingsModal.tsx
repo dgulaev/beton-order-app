@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import { COLORS, overlayStyle, modalStyle, inputStyle, labelStyle, ghostButton, primaryButton } from '../labStyles';
+import { COLORS, overlayStyle, modalStyle, inputStyle, labelStyle, ghostButton, primaryButton, volumeCardSoftStyle } from '../labStyles';
 import { useEscapeClose } from '../labUtils';
 
 interface Props {
@@ -96,10 +96,8 @@ function QrPreview({ url, title }: { url: string; title: string }) {
 
   return (
     <div
-      style={{
-        background: '#0F172A',
+      style={volumeCardSoftStyle({
         borderRadius: 12,
-        border: `1px solid ${COLORS.border}`,
         padding: 12,
         display: 'flex',
         flexDirection: 'column',
@@ -107,7 +105,7 @@ function QrPreview({ url, title }: { url: string; title: string }) {
         gap: 8,
         minHeight: 160,
         justifyContent: 'center',
-      }}
+      })}
     >
       <div style={{ color: COLORS.muted, fontSize: 12, fontWeight: 600 }}>{title}</div>
       {src ? (

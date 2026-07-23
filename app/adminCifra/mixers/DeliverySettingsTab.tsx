@@ -10,13 +10,13 @@
 import { useEffect, useState } from 'react';
 import { Truck, MapPin, Save, RotateCcw } from 'lucide-react';
 import { DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
+import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
+import { appConfirm } from '../components/appDialog';
 
-const cardStyle: React.CSSProperties = {
-  background: '#1E2937',
-  borderRadius: '20px',
+const cardStyle: React.CSSProperties = volumeCardStyle({
+  borderRadius: 22,
   padding: '24px 28px',
-  border: '1px solid #334155',
-};
+});
 
 const inputStyle: React.CSSProperties = {
   width: '140px',
@@ -114,8 +114,8 @@ export default function DeliverySettingsTab() {
     }
   };
 
-  const resetToDefaults = () => {
-    if (confirm('Вернуть исходные значения (до правок)? Изменения ещё не сохранены — можно просто продолжить редактировать.')) {
+  const resetToDefaults = async () => {
+    if (await appConfirm('Вернуть исходные значения (до правок)? Изменения ещё не сохранены — можно просто продолжить редактировать.')) {
       setSettings(DEFAULT_DELIVERY_SETTINGS);
     }
   };
@@ -201,7 +201,7 @@ export default function DeliverySettingsTab() {
           />
         </div>
 
-        <div style={{ marginTop: '16px', background: '#25334A', borderRadius: '12px', padding: '14px 16px', color: '#94A3B8', fontSize: '13px', lineHeight: 1.5 }}>
+        <div style={volumeCardSoftStyle({ marginTop: '16px', borderRadius: 12, padding: '14px 16px', color: '#94A3B8', fontSize: '13px', lineHeight: 1.5 })}>
           Пример: до пункта в Брянской области 130 км по прямой, коэффициент {settings.road_curvature_coefficient} → реальный путь ≈{' '}
           {Math.round(130 * settings.road_curvature_coefficient)} км. Один рейс: {Math.round(130 * settings.road_curvature_coefficient)} км ×{' '}
           {settings.price_per_km.toLocaleString('ru-RU')} ₽ ={' '}
@@ -217,24 +217,34 @@ export default function DeliverySettingsTab() {
         <button
           onClick={save}
           disabled={saving}
-          style={{
+          style={volumeCardSoftStyle({
             display: 'flex', alignItems: 'center', gap: '8px',
-            padding: '12px 26px', background: saving ? '#475569' : '#10B981', color: 'white',
-            border: 'none', borderRadius: '9999px', fontWeight: 600, fontSize: '14.5px',
+            padding: '12px 26px',
+            background: saving
+              ? '#475569'
+              : 'linear-gradient(165deg, #10B981 0%, #059669 100%)',
+            border: '1px solid rgba(110,231,183,0.35)',
+            borderRadius: 12,
+            color: 'white',
+            fontWeight: 700,
+            fontSize: '14.5px',
             cursor: saving ? 'not-allowed' : 'pointer',
-          }}
+          })}
         >
           <Save size={16} />
           {saving ? 'Сохраняем...' : 'Сохранить тарифы'}
         </button>
         <button
           onClick={resetToDefaults}
-          style={{
+          style={volumeCardSoftStyle({
             display: 'flex', alignItems: 'center', gap: '8px',
-            padding: '12px 22px', background: 'transparent', color: '#94A3B8',
-            border: '1px solid #334155', borderRadius: '9999px', fontWeight: 600, fontSize: '14.5px',
+            padding: '12px 22px',
+            borderRadius: 12,
+            color: '#94A3B8',
+            fontWeight: 600,
+            fontSize: '14.5px',
             cursor: 'pointer',
-          }}
+          })}
         >
           <RotateCcw size={15} />
           Сбросить к исходным

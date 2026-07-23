@@ -2,8 +2,9 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { COLORS, inputStyle, ghostButton, primaryButton, pillStyle } from '../labStyles';
+import { COLORS, inputStyle, ghostButton, primaryButton, pillStyle, volumeCardSoftStyle, volumeCardStyle } from '../labStyles';
 import PassportModal from './PassportModal';
+import { appConfirm } from '../../components/appDialog';
 
 // ==================== Дропдаун списка паспортов ====================
 // Рендерим через portal + position:fixed: иначе меню режется overflow:hidden
@@ -77,12 +78,11 @@ function PassportDropdown({
         bottom: coords.openUp ? window.innerHeight - coords.top : undefined,
         left: coords.left,
         zIndex: 10000,
-        background: '#1E2937',
-        border: '1px solid #334155',
-        borderRadius: '12px',
-        width: '280px',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-        overflow: 'hidden',
+        ...volumeCardSoftStyle({
+          borderRadius: 12,
+          width: '280px',
+          overflow: 'hidden',
+        }),
       }}
     >
       <div style={{ padding: '8px 14px 4px', color: COLORS.muted, fontSize: '12px' }}>
@@ -144,7 +144,7 @@ function PassportDropdown({
                 e.preventDefault();
                 e.stopPropagation();
                 if (deletingId != null) return;
-                if (!confirm(`Удалить паспорт ${batchNo}?`)) return;
+                if (!(await appConfirm(`Удалить паспорт ${batchNo}?`, { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
                 setDeletingId(p.id);
                 try {
                   await onDelete(p);
@@ -517,7 +517,7 @@ export default function OrdersTab({
             разрешении (4K/1920/ниже) она не вылезала за нижний край экрана и не
             создавала лишний скролл страницы. Отступ снизу 16px. Дни+статистика
             прокручиваются внутри, если не помещаются. */}
-        <div style={{ width: '320px', flexShrink: 0, position: 'sticky', top: '16px', height: rowMinH ? `${rowMinH}px` : 'calc(100vh - 118px)', maxHeight: colMaxH ? `${colMaxH}px` : 'calc(100vh - 32px)', background: COLORS.card, borderRadius: '18px', padding: '18px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={volumeCardStyle({ width: '320px', flexShrink: 0, position: 'sticky', top: '16px', height: rowMinH ? `${rowMinH}px` : 'calc(100vh - 118px)', maxHeight: colMaxH ? `${colMaxH}px` : 'calc(100vh - 32px)', borderRadius: 18, padding: '18px', display: 'flex', flexDirection: 'column', overflow: 'hidden' })}>
           <h3 style={{ margin: '0 0 12px', color: COLORS.muted, fontSize: '14px', letterSpacing: '0.03em' }}>ЗАЯВКИ НА НЕДЕЛЮ</h3>
 
           {/* Навигация по неделям */}
@@ -576,7 +576,7 @@ export default function OrdersTab({
             <div style={{ color: COLORS.muted, fontWeight: 700, fontSize: '13px', letterSpacing: '0.03em' }}>СТАТИСТИКА ЗА НЕДЕЛЮ</div>
 
             {/* Контроль паспортов — основная задача лаборанта */}
-            <div style={{ background: COLORS.input, borderRadius: '12px', padding: '12px 14px' }}>
+            <div style={volumeCardSoftStyle({ borderRadius: 12, padding: '12px 14px' })}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '8px' }}>
                 <span style={{ color: COLORS.muted, fontSize: '13px', fontWeight: 600 }}>Паспорта качества</span>
                 <span style={{ fontSize: '13px', fontWeight: 700, color: weekStats.passportPct === 100 ? COLORS.accent : '#FACC15' }}>{weekStats.passportPct}%</span>
@@ -592,18 +592,18 @@ export default function OrdersTab({
 
             {/* Объём и заявки */}
             <div style={{ display: 'flex', gap: '10px' }}>
-              <div style={{ flex: 1, background: COLORS.input, borderRadius: '12px', padding: '12px 14px' }}>
+              <div style={volumeCardSoftStyle({ flex: 1, borderRadius: 12, padding: '12px 14px' })}>
                 <div style={{ color: COLORS.muted, fontSize: '12px', marginBottom: '4px' }}>Объём бетона</div>
                 <div style={{ fontSize: '20px', fontWeight: 700, color: COLORS.accent }}>{Math.round(weekStats.totalVol)} <span style={{ fontSize: '12px', color: COLORS.muted }}>м³</span></div>
               </div>
-              <div style={{ flex: 1, background: COLORS.input, borderRadius: '12px', padding: '12px 14px' }}>
+              <div style={volumeCardSoftStyle({ flex: 1, borderRadius: 12, padding: '12px 14px' })}>
                 <div style={{ color: COLORS.muted, fontSize: '12px', marginBottom: '4px' }}>Заявок</div>
                 <div style={{ fontSize: '20px', fontWeight: 700 }}>{weekStats.total}</div>
               </div>
             </div>
 
             {/* Марки недели — что предстоит контролировать/испытывать */}
-            <div style={{ background: COLORS.input, borderRadius: '12px', padding: '12px 14px' }}>
+            <div style={volumeCardSoftStyle({ borderRadius: 12, padding: '12px 14px' })}>
               <div style={{ color: COLORS.muted, fontSize: '13px', fontWeight: 600, marginBottom: '10px' }}>Марки недели</div>
               {weekStats.grades.length === 0 ? (
                 <div style={{ color: COLORS.muted, fontSize: '12.5px', fontStyle: 'italic' }}>Нет данных</div>
@@ -697,7 +697,7 @@ export default function OrdersTab({
           {loading ? (
             <p style={{ color: COLORS.muted }}>Загрузка заявок...</p>
           ) : dayOrders.length === 0 ? (
-            <div style={{ background: COLORS.card, borderRadius: '16px', padding: '48px 24px', textAlign: 'center', color: COLORS.muted }}>
+            <div style={volumeCardStyle({ borderRadius: 16, padding: '48px 24px', textAlign: 'center', color: COLORS.muted })}>
               На этот день заявок нет.
             </div>
           ) : viewMode === 'grid' ? (
@@ -714,14 +714,16 @@ export default function OrdersTab({
                   <div
                     key={o.id}
                     className={isNew ? 'lab-new-card' : undefined}
-                    style={{
+                    style={volumeCardSoftStyle({
                       padding: '14px',
-                      borderRadius: '14px',
-                      border: isNew ? `1px solid ${COLORS.accent}` : `1px solid #3B4A63`,
-                      background: isNew ? 'rgba(74,222,128,0.08)' : '#2A3852',
+                      borderRadius: 14,
+                      border: isNew ? `1px solid ${COLORS.accent}` : undefined,
+                      boxShadow: isNew
+                        ? '0 8px 18px rgba(0,0,0,0.28), 0 2px 6px rgba(0,0,0,0.16), inset 0 1px 0 rgba(255,255,255,0.1), 0 0 0 1px rgba(74,222,128,0.25)'
+                        : undefined,
                       display: 'flex',
                       flexDirection: 'column',
-                    }}
+                    })}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -778,7 +780,7 @@ export default function OrdersTab({
               })}
             </div>
           ) : (
-            <div style={{ background: COLORS.card, borderRadius: '16px', overflow: 'hidden' }}>
+            <div style={volumeCardStyle({ borderRadius: 16, overflow: 'hidden', padding: 0 })}>
               {dayOrders.map((o, idx) => {
                 const isNew = newOrderIds.has(String(o.id));
                 const passports = passportsByOrder.get(String(o.id)) || [];

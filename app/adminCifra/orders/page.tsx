@@ -3,6 +3,7 @@
 import { useState, useEffect, Fragment } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
+import ModalSelect from '../components/ModalSelect';
 
 export default function OrdersPage() {
   const [allOrders, setAllOrders] = useState<Order[]>([]);
@@ -134,24 +135,28 @@ export default function OrdersPage() {
             fontSize: '15px'
           }}
         />
-        <select
+        <ModalSelect
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          style={{
+          onChange={setStatusFilter}
+          minPopupWidth={180}
+          triggerStyle={{
             padding: '12px 20px',
-            backgroundColor: '#334155',
+            background: '#334155',
             border: 'none',
-            borderRadius: '12px',
+            borderRadius: 12,
             color: '#fff',
-            fontSize: '15px'
+            fontSize: 15,
+            boxShadow: 'none',
+            minWidth: 180,
           }}
-        >
-          <option value="all">Все статусы</option>
-          <option value="new">Новый</option>
-          <option value="processing">В работе</option>
-          <option value="completed">Выполнена</option>
-          <option value="cancelled">Отменена</option>
-        </select>
+          options={[
+            { value: 'all', label: 'Все статусы', text: 'Все статусы' },
+            { value: 'new', label: 'Новый', text: 'Новый' },
+            { value: 'processing', label: 'В работе', text: 'В работе' },
+            { value: 'completed', label: 'Выполнена', text: 'Выполнена' },
+            { value: 'cancelled', label: 'Отменена', text: 'Отменена' },
+          ]}
+        />
       </div>
 
       <div style={{ backgroundColor: '#1E2937', borderRadius: '16px', overflow: 'hidden' }}>

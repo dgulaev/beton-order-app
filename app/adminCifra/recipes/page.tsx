@@ -1,19 +1,33 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback, useRef, type CSSProperties } from 'react';
-import { COLORS, inputStyle as sharedInput, ghostButton, primaryButton, pillStyle } from './labStyles';
+import { COLORS, inputStyle as sharedInput, ghostButton, primaryButton, pillStyle, volumeCardStyle, volumeModalStyle } from './labStyles';
 import SpecificationsTab from './components/SpecificationsTab';
 import TestsTab from './components/TestsTab';
 import OrdersTab from './components/OrdersTab';
 import RecipeVersionsModal from './components/RecipeVersionsModal';
 import TemplatesModal from './components/TemplatesModal';
 import LabSettingsModal from './components/LabSettingsModal';
+import WarehousePage from '../warehouse/page';
 import { useAutoRows, useAutoGrid, LabPagination } from './pagination';
 import { useRealtimeOrders, useOrderChangeNotifications } from '../../../hooks/useRealtimeOrders';
 import { FlaskConical } from 'lucide-react';
 import { useEscapeClose } from './labUtils';
+import ModalDateInput from '../components/ModalDateInput';
+import ModalSelect from '../components/ModalSelect';
+import { appConfirm } from '../components/appDialog';
 
-type LabTab = 'orders' | 'specifications' | 'recipes' | 'tests';
+export type LabTab = 'orders' | 'specifications' | 'recipes' | 'tests' | 'warehouse';
+
+interface LaboratoryPageProps {
+  /** Встроено во вкладку оператора — без заголовка и без своей строки табов. */
+  embedded?: boolean;
+  /** Controlled-вкладка (для dropdown у оператора). */
+  tab?: LabTab;
+  onTabChange?: (tab: LabTab) => void;
+  /** Увеличить снаружи, чтобы открыть модалку «Реквизиты». */
+  openRequisitesKey?: number;
+}
 
 function getCurrentUser() {
   if (typeof window === 'undefined') return { id: null as number | null, name: '' };
@@ -27,8 +41,18 @@ function getCurrentUser() {
   }
 }
 
-export default function LaboratoryPage() {
-  const [tab, setTab] = useState<LabTab>('orders');
+export default function LaboratoryPage({
+  embedded = false,
+  tab: controlledTab,
+  onTabChange,
+  openRequisitesKey = 0,
+}: LaboratoryPageProps) {
+  const [internalTab, setInternalTab] = useState<LabTab>('orders');
+  const tab = controlledTab ?? internalTab;
+  const setTab = (next: LabTab) => {
+    if (onTabChange) onTabChange(next);
+    if (controlledTab === undefined) setInternalTab(next);
+  };
 
   // ==================== ЗАЯВКИ (для вкладки «Заявки») ====================
   const [orders, setOrders] = useState<any[]>([]);
@@ -45,6 +69,10 @@ export default function LaboratoryPage() {
   const [testsFocusDays, setTestsFocusDays] = useState<'7' | '28' | null>(null);
   const [savingRecipe, setSavingRecipe] = useState(false);
   const [showLabSettings, setShowLabSettings] = useState(false);
+
+  useEffect(() => {
+    if (openRequisitesKey > 0) setShowLabSettings(true);
+  }, [openRequisitesKey]);
 
   const mergeOrders = (prev: any[], incoming: any[]) => {
     const map = new Map(prev.map((o) => [String(o.id), o]));
@@ -293,7 +321,7 @@ export default function LaboratoryPage() {
 
   // ==================== УДАЛЕНИЕ ====================
   const deleteRecipe = async (id: number) => {
-    if (!confirm('Удалить этот рецепт?')) return;
+    if (!(await appConfirm('Удалить этот рецепт?', { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
     try {
       const res = await fetch(`/api/adminCifra/recipes?id=${id}`, { method: 'DELETE' });
       if (res.ok) {
@@ -331,14 +359,15 @@ export default function LaboratoryPage() {
     <button
       onClick={() => setTab(key)}
       style={{
-        padding: '10px 4px',
+        padding: '12px 0',
         background: 'transparent',
         border: 'none',
-        borderBottom: tab === key ? `2px solid ${COLORS.accent}` : '2px solid transparent',
-        color: tab === key ? '#fff' : COLORS.muted,
-        fontSize: '16px',
+        fontSize: '17px',
         fontWeight: 600,
+        color: tab === key ? '#10B981' : '#64748B',
         cursor: 'pointer',
+        position: 'relative',
+        transition: 'color 0.2s',
         display: 'flex',
         alignItems: 'center',
         gap: '8px',
@@ -353,7 +382,7 @@ export default function LaboratoryPage() {
             height: '20px',
             padding: '0 6px',
             borderRadius: '9999px',
-            background: COLORS.accent,
+            background: '#10B981',
             color: '#0F172A',
             fontSize: '12px',
             fontWeight: 700,
@@ -365,41 +394,71 @@ export default function LaboratoryPage() {
           {badge}
         </span>
       )}
+      {tab === key && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '-6px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: '5px',
+            height: '5px',
+            backgroundColor: '#10B981',
+            borderRadius: '50%',
+            boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.3)',
+          }}
+        />
+      )}
+    </button>
+  );
+
+  const requisitesBtn = (
+    <button
+      type="button"
+      onClick={() => setShowLabSettings(true)}
+      style={ghostButton}
+      title="Свидетельство, декларации и QR Росаккредитации"
+    >
+      Реквизиты
     </button>
   );
 
   return (
-    <div style={{ color: '#fff', padding: '0 0 24px 0' }}>
-      {/* ==================== ЗАГОЛОВОК + ВКЛАДКИ ==================== */}
-      <div style={{ marginBottom: '18px' }}>
-        <style>{`
-          @keyframes labTabBadgePulse {
-            0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(74,222,128,0.6); }
-            50%      { transform: scale(1.12); box-shadow: 0 0 0 6px rgba(74,222,128,0); }
-          }
-          .lab-tab-badge { animation: labTabBadgePulse 1.4s infinite; }
-        `}</style>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-          <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <FlaskConical size={26} color="#94A3B8" />
-            Лаборатория
-          </h1>
-          <button
-            type="button"
-            onClick={() => setShowLabSettings(true)}
-            style={ghostButton}
-            title="Свидетельство, декларации и QR Росаккредитации"
+    <div style={{ color: '#fff', padding: embedded ? 0 : '0 0 24px 0' }}>
+      {/* ==================== ЗАГОЛОВОК + ВКЛАДКИ (только полная страница) ==================== */}
+      {!embedded && (
+        <div style={{ marginBottom: '18px' }}>
+          <style>{`
+            @keyframes labTabBadgePulse {
+              0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(74,222,128,0.6); }
+              50%      { transform: scale(1.12); box-shadow: 0 0 0 6px rgba(74,222,128,0); }
+            }
+            .lab-tab-badge { animation: labTabBadgePulse 1.4s infinite; }
+          `}</style>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+            <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <FlaskConical size={26} color="#94A3B8" />
+              Лаборатория
+            </h1>
+            {requisitesBtn}
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '48px',
+              borderBottom: '1px solid #334155',
+              paddingBottom: '8px',
+            }}
           >
-            Реквизиты
-          </button>
+            {tabBtn('orders', 'Заявки', newOrderIds.size)}
+            {tabBtn('specifications', 'Спецификации')}
+            {tabBtn('recipes', 'Рецептуры')}
+            {tabBtn('tests', 'Испытания')}
+            {tabBtn('warehouse', 'Склад')}
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '28px', borderBottom: `1px solid ${COLORS.border}` }}>
-          {tabBtn('orders', 'Заявки', newOrderIds.size)}
-          {tabBtn('specifications', 'Спецификации')}
-          {tabBtn('recipes', 'Рецептуры')}
-          {tabBtn('tests', 'Испытания')}
-        </div>
-      </div>
+      )}
 
       {/* Keep-alive вкладок: не размонтируем, чтобы не сбрасывать день/фильтры */}
       <div style={{ display: tab === 'orders' ? 'block' : 'none' }}>
@@ -436,19 +495,30 @@ export default function LaboratoryPage() {
         />
       </div>
 
+      {/* Склад — для лаборанта (и остальных ролей на этой странице) */}
+      {tab === 'warehouse' && (
+        <WarehousePage
+          recipes={recipes}
+          actorName={getCurrentUser().name || null}
+        />
+      )}
+
       {/* ==================== ВКЛАДКА РЕЦЕПТУРЫ ==================== */}
       {tab === 'recipes' && (
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', gap: '12px', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
               <input placeholder="Поиск рецептуры..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ ...inputStyle, width: '260px' }} />
-              <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)} style={{ ...inputStyle, width: 'auto' }}>
-                <option value="all">Все группы</option>
-                {groups.map((g) => (
-                  <option key={g} value={g}>{g}</option>
-                ))}
-              </select>
-              <input type="date" value={recipeDate} onChange={(e) => setRecipeDate(e.target.value)} title="Дата создания" style={{ ...inputStyle, width: 'auto' }} />
+              <ModalSelect
+                value={groupFilter}
+                onChange={setGroupFilter}
+                style={{ ...inputStyle, width: 'auto' }}
+                options={[
+                  { value: 'all', label: 'Все группы' },
+                  ...groups.map((g) => ({ value: g, label: g })),
+                ]}
+              />
+              <ModalDateInput value={recipeDate} onChange={setRecipeDate} title="Дата создания" style={{ ...inputStyle, width: 'auto' }} />
               {recipeDate && <button onClick={() => setRecipeDate('')} style={ghostButton}>Сброс даты</button>}
               <button onClick={() => setShowTemplates(true)} style={ghostButton}>Шаблоны</button>
             </div>
@@ -485,7 +555,7 @@ export default function LaboratoryPage() {
           ) : viewMode === 'grid' ? (
             <div ref={recipeGridRef} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '20px' }}>
               {pagedRecipes.map((recipe) => (
-                <div key={recipe.id} data-lab-card style={{ background: COLORS.card, borderRadius: '16px', padding: '16px', border: `1px solid ${COLORS.border}`, height: 'fit-content', opacity: recipe.is_active === false ? 0.6 : 1 }}>
+                <div key={recipe.id} data-lab-card style={volumeCardStyle({ borderRadius: 16, padding: '16px', height: 'fit-content', opacity: recipe.is_active === false ? 0.6 : 1 })}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
                     <div style={{ fontSize: '22px', fontWeight: 700 }}>{recipe.code}</div>
                     <span style={pillStyle(
@@ -534,7 +604,7 @@ export default function LaboratoryPage() {
               ))}
             </div>
           ) : (
-            <div ref={recipeListRef} style={{ background: COLORS.card, borderRadius: '16px', overflow: 'hidden' }}>
+            <div ref={recipeListRef} style={volumeCardStyle({ borderRadius: 16, overflow: 'hidden', padding: 0 })}>
               {pagedRecipes.map((recipe) => (
                 <div key={recipe.id} data-lab-row style={{ display: 'flex', alignItems: 'center', padding: '12px 20px', borderBottom: `1px solid ${COLORS.border}` }}>
                   <div style={{ width: '200px', fontWeight: 700, fontSize: '17px' }}>{recipe.code}</div>
@@ -612,7 +682,7 @@ function RecipeEditModal({
   useEscapeClose(() => setEditingRecipe(null));
   return (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.95)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} onClick={() => setEditingRecipe(null)}>
-          <div className="scroll-hidden" style={{ background: COLORS.card, padding: '28px', borderRadius: '20px', width: '100%', maxWidth: '560px', maxHeight: '90vh', overflowY: 'auto', boxSizing: 'border-box' }} onClick={(e) => e.stopPropagation()}>
+          <div className="scroll-hidden" style={volumeModalStyle({ padding: '28px', borderRadius: 20, width: '100%', maxWidth: '560px', maxHeight: '90vh', overflowY: 'auto' })} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h2 style={{ fontSize: '22px', margin: 0 }}>
                 {editingRecipe.id ? 'Редактирование' : 'Новый'} — {editingRecipe.item_type === 'fbs' ? 'ФБС' : 'Рецепт'}
@@ -628,10 +698,15 @@ function RecipeEditModal({
               {editingRecipe.item_type !== 'fbs' && (
                 <div>
                   <label style={{ display: 'block', marginBottom: '6px', color: COLORS.muted }}>Тип заполнителя</label>
-                  <select value={editingRecipe.type || 'granite'} onChange={(e) => setEditingRecipe({ ...editingRecipe, type: e.target.value })} style={inputStyle}>
-                    <option value="granite">Гранит</option>
-                    <option value="dolomite">Доломит</option>
-                  </select>
+                  <ModalSelect
+                    value={editingRecipe.type || 'granite'}
+                    onChange={(type) => setEditingRecipe({ ...editingRecipe, type })}
+                    style={inputStyle}
+                    options={[
+                      { value: 'granite', label: 'Гранит' },
+                      { value: 'dolomite', label: 'Доломит' },
+                    ]}
+                  />
                 </div>
               )}
             </div>

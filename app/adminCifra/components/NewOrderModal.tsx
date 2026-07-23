@@ -7,6 +7,10 @@ import ModalActionButton from './ModalActionButton';
 import { useMapRouteLinks, useDeliveryCoords } from '@/lib/yandexRoute';
 import { calculateDeliveryCost, fetchDeliverySettings, DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
 import { formatPhoneInput } from '@/lib/phone';
+import { CARD_BORDER, modalCloseButtonStyle, modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
+import ModalDateInput from './ModalDateInput';
+import ModalTimeInput from './ModalTimeInput';
+import ModalSelect from './ModalSelect';
 
 interface NewOrderModalProps {
   isOpen: boolean;                    // ← обязательно
@@ -106,12 +110,35 @@ export default function NewOrderModal({
 
   // ==================== 4. ЗАГРУЗКА РЕЦЕПТОВ ====================
   useEffect(() => {
+    const isFbs = (r: any) =>
+      r?.item_type === 'fbs' || (r?.code && String(r.code).startsWith('24-'));
+
     const loadRecipes = async () => {
       try {
         const res = await fetch('/api/adminCifra/recipes');
         if (res.ok) {
           const data = await res.json();
-          setRecipes(data);
+          // API отдаёт по code — ФБС (24-*) оказываются сверху. Держим их в конце,
+          // как в каталоге лаборатории; бетонные марки — выше.
+          const sorted = [...(Array.isArray(data) ? data : [])].sort((a: any, b: any) => {
+            const af = isFbs(a) ? 1 : 0;
+            const bf = isFbs(b) ? 1 : 0;
+            if (af !== bf) return af - bf;
+            return String(a.code || '').localeCompare(String(b.code || ''), 'ru');
+          });
+          setRecipes(sorted);
+
+          // По умолчанию — М300 (как раньше). Подтягиваем реальный code из списка.
+          setForm((prev) => {
+            const codes = new Set(sorted.map((r: any) => r.code));
+            if (prev.grade && codes.has(prev.grade)) return prev;
+            const m300 =
+              sorted.find((r: any) => r.code === 'М300') ||
+              sorted.find((r: any) => !isFbs(r) && String(r.name || '').includes('М300'));
+            if (m300?.code) return { ...prev, grade: m300.code };
+            const firstConcrete = sorted.find((r: any) => !isFbs(r));
+            return firstConcrete?.code ? { ...prev, grade: firstConcrete.code } : prev;
+          });
         }
       } catch (e) {
         console.error('Ошибка загрузки рецептов:', e);
@@ -380,12 +407,15 @@ const handleSubmit = async (e: React.FormEvent) => {
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.94)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div className="w-full max-w-[920px] lg:max-w-[1080px] max-h-[90vh] overflow-auto mx-auto scroll-hidden" style={{ background: '#1E2937', borderRadius: '24px', padding: s('20px 32px 24px', '32px') }} onClick={e => e.stopPropagation()}>
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      onClick={onClose}
+    >
+      <div className="w-full max-w-[920px] lg:max-w-[1080px] max-h-[90vh] overflow-auto mx-auto scroll-hidden" style={volumeModalStyle({ borderRadius: 24, padding: s('20px 32px 24px', '32px') })} onClick={e => e.stopPropagation()}>
         
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: s('14px', '24px') }}>
           <h2 style={{ margin: 0, fontSize: s('22px', '28px') }}>Новая заявка на бетон</h2>
-          <button onClick={onClose} style={{ fontSize: s('32px', '42px'), lineHeight: 1, background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}>×</button>
+          <button onClick={onClose} style={modalCloseButtonStyle()}>×</button>
         </div>
 
         <form onSubmit={handleSubmit}>
@@ -402,17 +432,21 @@ const handleSubmit = async (e: React.FormEvent) => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: s('16px', '28px') }}>
             <div>
               <h3 style={{ color: '#94A3B8', marginBottom: s('10px', '18px') }}>Клиент</h3>
-              <div style={{ background: '#25334A', padding: s('16px', '24px'), borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: s('12px', '16px') }}>
+              <div style={volumeCardSoftStyle({ borderRadius: 16, padding: s('16px', '24px'), display: 'flex', flexDirection: 'column', gap: s('12px', '16px') })}>
                 
                 <div>
                   <label style={{ color: '#94A3B8', marginBottom: s('6px', '8px'), display: 'block' }}>Тип заказчика</label>
                   <div style={{ display: 'flex', gap: '12px' }}>
                     <button type="button" onClick={() => setForm(p => ({...p, customerType: 'physical'}))}
-                      style={{ flex: 1, padding: s('10px', '12px'), borderRadius: '12px', background: form.customerType === 'physical' ? '#3B82F6' : '#334155', color: 'white', border: 'none' }}>
+                      style={form.customerType === 'physical'
+                        ? { flex: 1, padding: s('10px', '12px'), borderRadius: 12, background: '#3B82F6', color: 'white', border: '1px solid rgba(59,130,246,0.45)', cursor: 'pointer', boxSizing: 'border-box' }
+                        : volumeCardSoftStyle({ flex: 1, padding: s('10px', '12px'), borderRadius: 12, color: 'white', cursor: 'pointer' })}>
                       Физ. лицо
                     </button>
                     <button type="button" onClick={() => setForm(p => ({...p, customerType: 'legal'}))}
-                      style={{ flex: 1, padding: s('10px', '12px'), borderRadius: '12px', background: form.customerType === 'legal' ? '#3B82F6' : '#334155', color: 'white', border: 'none' }}>
+                      style={form.customerType === 'legal'
+                        ? { flex: 1, padding: s('10px', '12px'), borderRadius: 12, background: '#3B82F6', color: 'white', border: '1px solid rgba(59,130,246,0.45)', cursor: 'pointer', boxSizing: 'border-box' }
+                        : volumeCardSoftStyle({ flex: 1, padding: s('10px', '12px'), borderRadius: 12, color: 'white', cursor: 'pointer' })}>
                       Юр. лицо
                     </button>
                   </div>
@@ -431,7 +465,7 @@ const handleSubmit = async (e: React.FormEvent) => {
                         setForm(p => ({ ...p, inn }));
                         if (inn.length === 10 || inn.length === 12) fetchByInn(inn);
                       }}
-                      style={{ width: '93%', padding: s('12px', '14px'), background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}
+                      style={modalFieldStyle({ width: '93%', padding: s('12px', '14px') })}
                     />
                     {loadingInn && <small style={{ color: '#60A5FA' }}>⏳ Загрузка данных...</small>}
                   </div>
@@ -444,7 +478,7 @@ const handleSubmit = async (e: React.FormEvent) => {
                     placeholder="Название организации"
                     value={form.organizationName}
                     onChange={handleChange}
-                    style={{ padding: s('12px', '14px'), background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}
+                    style={modalFieldStyle({ padding: s('12px', '14px') })}
                     required
                   />
                 ) : (
@@ -454,7 +488,7 @@ const handleSubmit = async (e: React.FormEvent) => {
                     placeholder="ФИО полностью"
                     value={form.fullName}
                     onChange={handleChange}
-                    style={{ padding: s('12px', '14px'), background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}
+                    style={modalFieldStyle({ padding: s('12px', '14px') })}
                     required
                   />
                 )}
@@ -465,7 +499,7 @@ const handleSubmit = async (e: React.FormEvent) => {
                   placeholder="+7 (___) ___-__-__"
                   value={form.phone}
                   onChange={handleChange}
-                  style={{ padding: s('12px', '14px'), background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}
+                  style={modalFieldStyle({ padding: s('12px', '14px') })}
                   required
                 />
               </div>
@@ -489,7 +523,7 @@ const handleSubmit = async (e: React.FormEvent) => {
                 value={form.address}
                 onChange={handleChange}
                 placeholder="Полный адрес объекта"
-                style={{ flex: 1, width: '100%', boxSizing: 'border-box', padding: s('14px', '16px'), background: '#25334A', border: 'none', borderRadius: '16px', color: '#fff', minHeight: s('64px', '80px'), resize: 'vertical' }}
+                style={modalFieldStyle({ flex: 1, padding: s('14px', '16px'), borderRadius: 16, minHeight: s('64px', '80px'), resize: 'vertical' })}
                 required
               />
             </div>
@@ -499,21 +533,19 @@ const handleSubmit = async (e: React.FormEvent) => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: s('16px', '28px') }}>
             <div>
               <h3 style={{ color: '#94A3B8', marginBottom: s('10px', '18px') }}>Параметры заказа</h3>
-              <div style={{ background: '#25334A', padding: s('16px', '24px'), borderRadius: '16px', display: 'flex', flexDirection: 'column', gap: s('12px', '16px') }}>
+              <div style={volumeCardSoftStyle({ borderRadius: 16, padding: s('16px', '24px'), display: 'flex', flexDirection: 'column', gap: s('12px', '16px') })}>
                 
                 {/* ==================== МАРКА БЕТОНА / РАСТВОРА ==================== */}
-                <select 
-                  name="grade" 
-                  value={form.grade} 
-                  onChange={handleChange} 
-                  style={{ padding: s('12px', '14px'), background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}
-                >
-                  {recipes.map(r => (
-                    <option key={r.code} value={r.code}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
+                <ModalSelect
+                  value={form.grade}
+                  onChange={(grade) => setForm((p) => ({ ...p, grade }))}
+                  style={{ padding: s('12px', '14px') }}
+                  options={recipes.map((r) => ({
+                    value: r.code,
+                    label: r.name,
+                    text: r.name,
+                  }))}
+                />
 
                 <input 
                   type="number" 
@@ -523,35 +555,30 @@ const handleSubmit = async (e: React.FormEvent) => {
                   onChange={handleChange} 
                   step="0.01" 
                   min="0.01" 
-                  style={{ padding: s('12px', '14px'), background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }} 
+                  style={modalFieldStyle({ padding: s('12px', '14px') })} 
                   required 
                 />
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <input 
-                    type="date" 
-                    name="deliveryDate" 
-                    value={form.deliveryDate} 
-                    onChange={handleChange} 
-                    style={{ padding: s('12px', '14px'), background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }} 
-                    required 
+                  <ModalDateInput
+                    value={form.deliveryDate}
+                    onChange={(deliveryDate) => setForm((p) => ({ ...p, deliveryDate }))}
+                    style={{ padding: s('12px', '14px') }}
+                    allowClear={false}
                   />
-                  <input 
-                    type="time" 
-                    name="deliveryTime" 
-                    value={form.deliveryTime} 
-                    onChange={handleChange} 
-                    style={{ padding: s('12px', '14px'), background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }} 
-                    required 
+                  <ModalTimeInput
+                    value={form.deliveryTime}
+                    onChange={(deliveryTime) => setForm((p) => ({ ...p, deliveryTime }))}
+                    style={{ padding: s('12px', '14px') }}
                   />
                 </div>
 
                 {volume > 0 && (
-                  <div style={{ background: '#1E2937', padding: s('12px 16px', '16px'), borderRadius: '12px', marginTop: s('4px', '8px') }}>
+                  <div style={volumeCardSoftStyle({ padding: s('12px 16px', '16px'), borderRadius: 12, marginTop: s('4px', '8px') })}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Бетон:</span><span>{concreteCost.toLocaleString()} ₽</span></div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Доставка:</span><span>{deliveryCost.toLocaleString()} ₽</span></div>
                     {deliveryNote && <div style={{ color: '#34D399', marginTop: s('6px', '8px') }}>🚚 {deliveryNote}</div>}
-                    <div style={{ marginTop: s('8px', '12px'), fontWeight: '700', fontSize: s('17px', '18px'), borderTop: '1px solid #475569', paddingTop: s('8px', '10px') }}>
+                    <div style={{ marginTop: s('8px', '12px'), fontWeight: '700', fontSize: s('17px', '18px'), borderTop: CARD_BORDER, paddingTop: s('8px', '10px') }}>
                       Итого: {totalPrice.toLocaleString()} ₽
                     </div>
                   </div>
@@ -565,12 +592,11 @@ const handleSubmit = async (e: React.FormEvent) => {
               {addressLooksUsable ? (
                 <OrderRouteMap address={previewAddress} routeHref={previewRouteHref} />
               ) : (
-                <div style={{
+                <div style={volumeCardSoftStyle({
                   width: '100%',
                   height: '100%',
                   minHeight: s('120px', '160px'),
-                  background: '#25334A',
-                  borderRadius: '16px',
+                  borderRadius: 16,
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
@@ -580,7 +606,7 @@ const handleSubmit = async (e: React.FormEvent) => {
                   fontSize: '13px',
                   textAlign: 'center',
                   padding: '16px',
-                }}>
+                })}>
                   <MapPin size={22} strokeWidth={1.5} />
                   <span>Карта появится, когда вы укажете адрес</span>
                 </div>
@@ -597,7 +623,7 @@ const handleSubmit = async (e: React.FormEvent) => {
               value={form.comment} 
               onChange={handleChange} 
               placeholder="Дополнительная информация..." 
-              style={{ width: '97%', padding: s('12px 16px', '16px'), background: '#25334A', border: 'none', borderRadius: '16px', color: '#fff', minHeight: s('56px', '100px') }} 
+              style={modalFieldStyle({ width: '97%', padding: s('12px 16px', '16px'), borderRadius: 16, minHeight: s('56px', '100px') })} 
             />
           </div>
 

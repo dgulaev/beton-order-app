@@ -6,6 +6,11 @@ import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import MobileNewOrderModal from './MobileNewOrderModal';
 import CallResultModal from '@/app/adminCifra/components/CallResultModal';
 import { formatPhoneDisplay } from '@/lib/phone';
+import {
+  modalCloseButtonStyle,
+  volumeCardSoftStyle,
+  volumeModalStyle,
+} from '@/app/adminCifra/cardStyles';
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
@@ -97,29 +102,28 @@ export default function MobileClientDetailModal({
     <>
       {/* Оверлей */}
       <div
-        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }}
+        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 10000 }}
         onClick={onClose}
       />
 
       {/* Панель снизу */}
-      <div style={{
+      <div style={volumeModalStyle({
         position: 'fixed',
         bottom: '74px',
         left: 0,
         right: 0,
         zIndex: 10001,
-        background: '#25334A',
         borderRadius: '20px 20px 0 0',
         maxHeight: 'calc(90vh - 74px)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-      }}>
+      })}>
 
         {/* Шапка */}
         <div style={{ padding: '20px 20px 0', flexShrink: 0 }}>
           {/* Ручка */}
-          <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px', margin: '0 auto 16px' }} />
+          <div style={{ width: '40px', height: '4px', background: 'rgba(148,163,184,0.35)', borderRadius: '9999px', margin: '0 auto 16px' }} />
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -129,8 +133,10 @@ export default function MobileClientDetailModal({
               {inn && <div style={{ fontSize: '13px', color: '#64748B', marginTop: '4px' }}>ИНН {inn}</div>}
             </div>
             <button
+              type="button"
               onClick={onClose}
-              style={{ background: '#334155', border: 'none', borderRadius: '9999px', width: '36px', height: '36px', minWidth: '36px', color: '#94A3B8', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+              aria-label="Закрыть"
+              style={modalCloseButtonStyle()}
             >
               <X size={18} />
             </button>
@@ -175,12 +181,12 @@ export default function MobileClientDetailModal({
 
           {/* Адрес */}
           {address && (
-            <div style={{ padding: '12px', background: '#334155', borderRadius: '12px', marginBottom: '16px', fontSize: '14px', color: '#94A3B8' }}>
+            <div style={volumeCardSoftStyle({ padding: '12px', borderRadius: 12, marginBottom: '16px', fontSize: '14px', color: '#94A3B8' })}>
               📍 {address}
             </div>
           )}
 
-          <div style={{ height: '1px', background: '#334155', marginBottom: '12px' }} />
+          <div style={{ height: '1px', background: 'rgba(148,163,184,0.18)', marginBottom: '12px' }} />
         </div>
 
         {/* Список заказов — скроллится */}
@@ -195,7 +201,7 @@ export default function MobileClientDetailModal({
 
           {!ordersLoading && orders.length === 0 && (
             <div style={{ textAlign: 'center', padding: '32px 0' }}>
-              <Package size={36} style={{ color: '#334155', marginBottom: '8px' }} />
+              <Package size={36} style={{ color: '#64748B', marginBottom: '8px' }} />
               <div style={{ color: '#475569', fontSize: '14px' }}>Заказов пока нет</div>
             </div>
           )}
@@ -206,15 +212,14 @@ export default function MobileClientDetailModal({
             const vol = Number(order.volume || 0);
             const amount = Number(order.total_amount || order.amount || 0);
             return (
-              <div key={order.id} style={{
-                background: '#334155',
-                borderRadius: '14px',
+              <div key={order.id} style={volumeCardSoftStyle({
+                borderRadius: 14,
                 padding: '14px',
                 marginBottom: '8px',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '12px',
-              }}>
+              })}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '14px', fontWeight: '600', color: '#E2E8F0' }}>#{order.id}</span>
@@ -281,7 +286,7 @@ export default function MobileClientDetailModal({
 
 function StatChip({ label, value, small }: { label: string; value: string | number; small?: boolean }) {
   return (
-    <div style={{ flex: 1, background: '#334155', borderRadius: '12px', padding: '10px 12px', minWidth: 0 }}>
+    <div style={volumeCardSoftStyle({ flex: 1, borderRadius: 12, padding: '10px 12px', minWidth: 0 })}>
       <div style={{ fontSize: '11px', color: '#64748B', marginBottom: '3px' }}>{label}</div>
       <div style={{
         fontSize: small ? '12px' : '16px',

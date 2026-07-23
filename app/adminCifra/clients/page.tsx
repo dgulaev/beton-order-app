@@ -4,10 +4,13 @@ import { useState, useEffect, useRef } from 'react';
 import NewOrderModal from '../components/NewOrderModal';
 import OrderViewModal from '../components/OrderViewModal';
 import CallResultModal from '../components/CallResultModal';
+import ModalSelect from '../components/ModalSelect';
 
 import { formatPhoneDisplay, formatPhoneInput } from '@/lib/phone';
 import { adminCifraFetch } from '@/lib/adminCifraFetch';
 import { Users } from 'lucide-react';
+import { CARD_BORDER, CARD_VOLUME_SOFT, modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
+import { appConfirm } from '../components/appDialog';
 
 type ClientsGridFit = { cols: number; rows: number; perPage: number };
 
@@ -1055,7 +1058,7 @@ const loadGroupOrders = async (group: any) => {
       ''
     ).trim();
 
-    const ok = confirm(
+    const ok = await appConfirm(
       `Сделать клиента физическим лицом?\n\n` +
         `Организация${orgName ? ` «${orgName}»` : ''} и ИНН${currentInn ? ` ${currentInn}` : ''} будут очищены.\n` +
         `Телефон, заказы и история звонков сохранятся.`
@@ -1116,7 +1119,7 @@ const loadGroupOrders = async (group: any) => {
 
     // ==================== 3.0.3 УДАЛЕНИЕ КЛИЕНТА ====================
   const deleteClient = async (clientId: number | string) => {
-    if (!confirm('Вы уверены, что хотите удалить этого клиента?')) return;
+    if (!(await appConfirm('Вы уверены, что хотите удалить этого клиента?', { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
 
     try {
       const res = await adminCifraFetch(`/api/adminCifra/clients/delete?userId=${clientId}`, {
@@ -1390,7 +1393,7 @@ const hasManagerPermissions = (role: string) => ['admin', 'manager'].includes((r
 
 // ==================== ДЕЙСТВИЯ С ЗАКАЗОМ ====================
 const handleDeleteOrder = async (orderId: number | string) => {
-  if (!confirm(`Удалить заказ #${orderId}?`)) return;
+  if (!(await appConfirm(`Удалить заказ #${orderId}?`, { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
 
   try {
     const res = await fetch(`/api/adminCifra/orders/${orderId}`, { method: 'DELETE' });
@@ -1653,7 +1656,7 @@ const changeStaffPassword = async (staffMember: any) => {
     return;
   }
 
-  if (!confirm(`Сменить пароль для "${staffMember.full_name}" на:\n\n${newPassword}\n\nВы уверены?`)) {
+  if (!(await appConfirm(`Сменить пароль для "${staffMember.full_name}" на:\n\n${newPassword}\n\nВы уверены?`))) {
     return;
   }
 
@@ -1711,81 +1714,62 @@ const changeStaffPassword = async (staffMember: any) => {
         Клиенты CRM
       </h1>
 
+      {/* Табы — единый стиль с оператором/лабораторией */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '48px',
+          marginBottom: '14px',
+          borderBottom: '1px solid #334155',
+          paddingBottom: '8px',
+          flexShrink: 0,
+        }}
+      >
+        {[
+          { key: 'clients' as const, label: 'Клиенты' },
+          { key: 'staff' as const, label: 'Стафф' },
+        ].map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setActiveTab(t.key)}
+            style={{
+              padding: '12px 0',
+              background: 'transparent',
+              border: 'none',
+              fontSize: '17px',
+              fontWeight: 600,
+              color: activeTab === t.key ? '#10B981' : '#64748B',
+              cursor: 'pointer',
+              position: 'relative',
+              transition: 'color 0.2s',
+            }}
+          >
+            {t.label}
+            {activeTab === t.key && (
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: '-6px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  width: '5px',
+                  height: '5px',
+                  backgroundColor: '#10B981',
+                  borderRadius: '50%',
+                  boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.3)',
+                }}
+              />
+            )}
+          </button>
+        ))}
+      </div>
+
       {/* ====================== ВЕРХНЯЯ ПАНЕЛЬ УПРАВЛЕНИЯ ====================== */}
 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexShrink: 0 }}>
 
-  {/* Левая группа — Табы + Кнопки действий */}
+  {/* Левая группа — Кнопки действий */}
 <div style={{ display: 'flex', gap: '8px' }}>
-
-  {/* Кнопка Клиенты */}
-  <button 
-    onClick={() => setActiveTab('clients')} 
-    style={{
-      padding: '12px 24px',
-      background: 'transparent',
-      border: 'none',
-      color: activeTab === 'clients' ? '#10B981' : '#64748B',
-      fontSize: '17px',
-      fontWeight: '600',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px',
-      position: 'relative',
-      transition: 'color 0.25s ease',
-      cursor: 'pointer',
-    }}
-  >
-    <span style={{ fontSize: '22px', opacity: activeTab === 'clients' ? 0.9 : 0.45 }}>👥</span>
-    Клиенты
-    {activeTab === 'clients' && (
-      <div style={{
-        position: 'absolute',
-        bottom: '3px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        width: '5px',
-        height: '5px',
-        backgroundColor: '#10B981',
-        borderRadius: '50%',
-        boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
-      }} />
-    )}
-  </button>
-
-  {/* Кнопка Стафф */}
-  <button 
-    onClick={() => setActiveTab('staff')} 
-    style={{
-      padding: '12px 24px',
-      background: 'transparent',
-      border: 'none',
-      color: activeTab === 'staff' ? '#10B981' : '#64748B',
-      fontSize: '17px',
-      fontWeight: '600',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px',
-      position: 'relative',
-      transition: 'color 0.25s ease',
-      cursor: 'pointer',
-    }}
-  >
-    <span style={{ fontSize: '22px', opacity: activeTab === 'staff' ? 0.9 : 0.45 }}>👔</span>
-    Стафф
-    {activeTab === 'staff' && (
-      <div style={{
-        position: 'absolute',
-        bottom: '3px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        width: '5px',
-        height: '5px',
-        backgroundColor: '#10B981',
-        borderRadius: '50%',
-        boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
-      }} />
-    )}
-  </button>
 
   {/* Кнопка Показать дубли */}
   <button 
@@ -1945,48 +1929,54 @@ const changeStaffPassword = async (staffMember: any) => {
       value={searchTerm}
       onChange={(e) => setSearchTerm(e.target.value)}
       onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-      style={{ 
+      style={volumeCardSoftStyle({
         flex: 1,
         maxWidth: '680px',
-        padding: '12px 16px', 
-        borderRadius: '12px', 
-        background: '#1E2937', 
-        border: '1px solid #334155', 
+        padding: '12px 16px',
+        borderRadius: 12,
         color: '#fff',
         fontSize: '16px',
         outline: 'none',
-      }}
+        ...(debouncedSearch ? {
+          border: '1px solid rgba(74,222,128,0.45)',
+          boxShadow: `${CARD_VOLUME_SOFT}, 0 0 0 3px rgba(74,222,128,0.12)`,
+        } : {}),
+      })}
     />
     <button
       onClick={handleSearch}
       style={{
         padding: '12px 28px',
+        borderRadius: 12,
         background: 'rgba(74, 222, 128, 0.15)',
         color: '#4ADE80',
-        border: '1px solid rgba(74, 222, 128, 0.3)',
-        borderRadius: '12px',
+        border: '1px solid rgba(74, 222, 128, 0.35)',
+        boxShadow: CARD_VOLUME_SOFT,
         fontSize: '16px',
-        fontWeight: '600',
+        fontWeight: 700,
+        letterSpacing: '0.02em',
         cursor: 'pointer',
         whiteSpace: 'nowrap',
         flexShrink: 0,
+        transition: 'filter 0.15s ease',
       }}
+      onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.12)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
     >
-      🔍 Найти
+      Найти
     </button>
     {debouncedSearch && (
       <button
         onClick={() => { setSearchTerm(''); setDebouncedSearch(''); setCurrentPage(1); }}
-        style={{
+        style={volumeCardSoftStyle({
           padding: '12px 18px',
-          background: '#334155',
+          borderRadius: 12,
           color: '#94A3B8',
-          border: 'none',
-          borderRadius: '12px',
           fontSize: '15px',
+          fontWeight: 600,
           cursor: 'pointer',
           flexShrink: 0,
-        }}
+        })}
         title="Сбросить поиск"
       >
         ✕
@@ -2029,17 +2019,18 @@ const changeStaffPassword = async (staffMember: any) => {
               key={person.user_id}
               data-client-card
               onClick={() => handleSelectProfile(person)}
-              style={{ 
-                background: '#1E2937', 
-                borderRadius: '16px', 
+              style={volumeCardStyle({
+                borderRadius: 18,
                 padding: '16px',
                 cursor: 'pointer',
-                border: selectedProfile?.user_id === person.user_id ? '2px solid #10B981' : '1px solid #334155',
+                border: selectedProfile?.user_id === person.user_id
+                  ? '1px solid rgba(203, 213, 225, 0.42)'
+                  : CARD_BORDER,
                 minHeight: '150px',
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'space-between',
-              }}
+              })}
             >
               {/* Верхняя часть */}
               <div>
@@ -2052,7 +2043,7 @@ const changeStaffPassword = async (staffMember: any) => {
               </div>
 
               {/* Нижняя часть — статистика куратора */}
-              <div style={{ background: '#334155', borderRadius: '12px', padding: '16px' }}>
+              <div style={volumeCardSoftStyle({ borderRadius: 12, padding: '16px' })}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <div style={{ fontSize: '32px', fontWeight: '700', color: '#60A5FA' }}>
@@ -2079,31 +2070,33 @@ const changeStaffPassword = async (staffMember: any) => {
               const ordersCount = client.total_orders || client.totalOrders || 0;
 
               return (
-                <div 
+                <div
                   key={client.groupId || client.user_id || client.id}
                   data-client-card
                   onClick={() => handleSelectProfile(client)}
-                  style={{ 
-                    background: '#1E2937', 
-                    borderRadius: '16px', 
-                    padding: '14px 16px',
+                  style={volumeCardStyle({
+                    borderRadius: 18,
+                    padding: '16px',
                     cursor: 'pointer',
-                    border: selectedProfile?.groupId === client.groupId || 
-                            selectedProfile?.user_id === client.user_id 
-                      ? '2px solid #10B981' 
-                      : '1px solid #334155',
-                    minHeight: '126px',
+                    border: selectedProfile?.groupId === client.groupId ||
+                            selectedProfile?.user_id === client.user_id
+                      ? '1px solid rgba(203, 213, 225, 0.42)'
+                      : CARD_BORDER,
+                    minHeight: '150px',
+                    height: '100%',
                     display: 'flex',
                     flexDirection: 'column',
-                  }}
+                    justifyContent: 'space-between',
+                  })}
                 >
-                  {/* Верхняя часть — Имя и телефон */}
+                  {/* Верхняя часть — фиксированные высоты, чтобы статистика не прыгала */}
                   <div>
                     <div style={{
-                      fontSize: '16px',
+                      fontSize: '18px',
                       fontWeight: '700',
-                      marginBottom: '4px',
-                      lineHeight: 1.25,
+                      marginBottom: '6px',
+                      lineHeight: 1.3,
+                      height: '47px',
                       display: '-webkit-box',
                       WebkitLineClamp: 2,
                       WebkitBoxOrient: 'vertical' as const,
@@ -2111,30 +2104,43 @@ const changeStaffPassword = async (staffMember: any) => {
                     }}>
                       {client.organization_name || client.full_name || client.name || 'Без названия'}
                     </div>
-                    <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '8px' }}>
+                    <div style={{
+                      color: '#94A3B8',
+                      fontSize: '13px',
+                      marginBottom: '8px',
+                      height: '18px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}>
                       {client.phones?.length
                         ? client.phones.map((p: string) => formatPhoneDisplay(p)).join(' • ')
-                        : formatPhoneDisplay(client.phone)}
+                        : formatPhoneDisplay(client.phone) || '\u00A0'}
                     </div>
 
-                    {!client.isStaff && client.curator_name && (
-                      <div style={{ 
-                        fontSize: '12.5px', 
-                        color: '#94A3B8', 
-                        padding: '5px 8px',
-                        background: '#334155',
-                        borderRadius: '8px',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}>
-                        👤 Куратор: <span style={{ color: '#60A5FA', fontWeight: '600' }}>{client.curator_name}</span>
-                      </div>
-                    )}
+                    {/* Слот куратора всегда на месте — иначе статистика скачет */}
+                    <div style={{
+                      fontSize: '12.5px',
+                      color: '#94A3B8',
+                      padding: '5px 8px',
+                      background: !client.isStaff && client.curator_name ? 'rgba(51, 65, 85, 0.85)' : 'transparent',
+                      borderRadius: '8px',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      minHeight: '28px',
+                      boxSizing: 'border-box',
+                      visibility: !client.isStaff && client.curator_name ? 'visible' : 'hidden',
+                    }}>
+                      👤 Куратор:{' '}
+                      <span style={{ color: '#60A5FA', fontWeight: '600' }}>
+                        {client.curator_name || '—'}
+                      </span>
+                    </div>
                   </div>
 
-                  {/* Нижняя часть для клиентов */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '10px' }}>
+                  {/* Нижняя часть */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '10px', flexShrink: 0 }}>
                     <div>
                       <div style={{ color: '#60A5FA', fontSize: '22px', fontWeight: '700', lineHeight: 1 }}>
                         {vol.toFixed(1)}
@@ -2166,20 +2172,19 @@ const changeStaffPassword = async (staffMember: any) => {
 
         {/* Шапка таблицы */}
       {activeTab === 'staff' ? (
-  <div style={{
+  <div style={volumeCardSoftStyle({
     display: 'grid',
-    gridTemplateColumns: currentUserRole === 'admin' 
-      ? '2.8fr 160px 1.6fr 1.1fr 130px' 
+    gridTemplateColumns: currentUserRole === 'admin'
+      ? '2.8fr 160px 1.6fr 1.1fr 130px'
       : '2.8fr 1.6fr 1.1fr 130px',
     padding: '10px 16px',
-    background: '#25334A',
-    borderRadius: '12px',
+    borderRadius: 12,
     fontSize: '13px',
-    fontWeight: '600',
+    fontWeight: 600,
     color: '#94A3B8',
     flexShrink: 0,
     marginBottom: TABLE_ROW_GAP,
-  }}>
+  })}>
     <div>Сотрудник</div>
     {currentUserRole === 'admin' && <div style={{ textAlign: 'center' }}>Пароль</div>}
     <div>Телефон</div>
@@ -2188,47 +2193,46 @@ const changeStaffPassword = async (staffMember: any) => {
   </div>
 ) : (
 
-          <div style={{
+          <div style={volumeCardSoftStyle({
             display: 'grid',
             gridTemplateColumns: 'minmax(160px, 2fr) 110px 120px 100px 90px 110px 70px',
             padding: '8px 16px',
-            background: '#25334A',
-            borderRadius: '12px',
+            borderRadius: 12,
             fontSize: '13px',
-            fontWeight: '600',
+            fontWeight: 600,
             color: '#94A3B8',
             flexShrink: 0,
             marginBottom: TABLE_ROW_GAP,
             alignItems: 'center',
             gap: 8,
-          }}>
+          })}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
               <span style={{ whiteSpace: 'nowrap' }}>Клиент / Организация</span>
-              <select
-                value={clientTypeFilter}
-                onChange={(e) => {
-                  const v = e.target.value as 'all' | 'legal' | 'physical';
-                  setClientTypeFilter(v);
-                  setCurrentPage(1);
-                }}
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  padding: '4px 8px',
-                  borderRadius: 8,
-                  border: '1px solid #475569',
-                  background: '#1E2937',
-                  color: '#E2E8F0',
-                  fontSize: 12,
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  outline: 'none',
-                  maxWidth: 120,
-                }}
-              >
-                <option value="all">Все</option>
-                <option value="physical">Физлицо</option>
-                <option value="legal">Юрлицо</option>
-              </select>
+              <div onClick={(e) => e.stopPropagation()}>
+                <ModalSelect
+                  value={clientTypeFilter}
+                  onChange={(v) => {
+                    setClientTypeFilter(v as 'all' | 'legal' | 'physical');
+                    setCurrentPage(1);
+                  }}
+                  options={[
+                    { value: 'all', label: 'Все', text: 'Все' },
+                    { value: 'physical', label: 'Физлицо', text: 'Физлицо' },
+                    { value: 'legal', label: 'Юрлицо', text: 'Юрлицо' },
+                  ]}
+                  minPopupWidth={120}
+                  triggerStyle={{
+                    padding: '4px 8px',
+                    borderRadius: 8,
+                    border: '1px solid #475569',
+                    background: '#1E2937',
+                    color: '#E2E8F0',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    maxWidth: 120,
+                  }}
+                />
+              </div>
             </div>
             <div>ИНН</div>
             <div>Куратор</div>
@@ -2255,25 +2259,24 @@ const changeStaffPassword = async (staffMember: any) => {
       key={item.user_id}
       data-client-row
       onClick={() => handleSelectProfile(item)}
-      style={{
+      style={volumeCardSoftStyle({
         display: 'grid',
-        gridTemplateColumns: currentUserRole === 'admin' 
-          ? '2.8fr 160px 1.6fr 1.1fr 130px' 
+        gridTemplateColumns: currentUserRole === 'admin'
+          ? '2.8fr 160px 1.6fr 1.1fr 130px'
           : '2.8fr 1.6fr 1.1fr 130px',
         padding: '6px 14px',
-        borderRadius: '10px',
-        background: item.role === 'guest' ? '#1F2A38' : '#1E2937',
-        border: '1px solid #334155',
+        borderRadius: 10,
         cursor: 'pointer',
         alignItems: 'center',
         opacity: item.role === 'guest' ? 0.92 : 1,
         flexShrink: 0,
-      }}
+        transition: 'filter 0.15s ease',
+      })}
       onMouseOver={(e) => {
-        e.currentTarget.style.background = '#25334A';
+        e.currentTarget.style.filter = 'brightness(1.08)';
       }}
       onMouseOut={(e) => {
-        e.currentTarget.style.background = item.role === 'guest' ? '#1F2A38' : '#1E2937';
+        e.currentTarget.style.filter = 'none';
       }}
     >
       {/* 1. Сотрудник */}
@@ -2376,21 +2379,20 @@ const changeStaffPassword = async (staffMember: any) => {
                 key={item.groupId || item.user_id}
                 data-client-row
                 onClick={() => setSelectedProfile(item)}
-                style={{
+                style={volumeCardSoftStyle({
                   display: 'grid',
                   gridTemplateColumns: 'minmax(160px, 2fr) 110px 120px 100px 90px 110px 70px',
                   padding: '6px 14px',
-                  borderRadius: '10px',
-                  background: '#1E2937',
-                  border: '1px solid #334155',
+                  borderRadius: 10,
                   cursor: 'pointer',
                   alignItems: 'center',
                   flexShrink: 0,
                   minHeight: 0,
                   gap: 8,
-                }}
-                onMouseOver={(e) => { e.currentTarget.style.background = '#25334A'; }}
-                onMouseOut={(e) => { e.currentTarget.style.background = '#1E2937'; }}
+                  transition: 'filter 0.15s ease',
+                })}
+                onMouseOver={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+                onMouseOut={(e) => { e.currentTarget.style.filter = 'none'; }}
               >
                 <div style={{ minWidth: 0 }}>
                   <div style={{
@@ -2482,21 +2484,29 @@ const changeStaffPassword = async (staffMember: any) => {
      {/* ==================== 9. БОКОВАЯ ПАНЕЛЬ ==================== */}
 {selectedProfile && (
   <>
+    <div
+      onClick={() => setSelectedProfile(null)}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 999 }}
+    />
     {/* ==================== БОКОВАЯ ПАНЕЛЬ ДЛЯ СОТРУДНИКА ==================== */}
 {selectedProfile.isStaff ? (
-  <div style={{ 
-    position: 'fixed', 
-    top: 0, 
-    right: 0, 
-    width: '760px', 
+  <div
+    onClick={(e) => e.stopPropagation()}
+    style={volumeCardStyle({
+    position: 'fixed',
+    top: 0,
+    right: 0,
+    width: '760px',
     maxWidth: '100vw',
     height: '100%',
-    background: '#1E2937', 
-    borderLeft: '1px solid #334155', 
-    zIndex: 1000, 
-    boxSizing: 'border-box',
-    overflow: 'auto' 
-  }} className="scroll-hidden">
+    borderRadius: 0,
+    borderLeft: CARD_BORDER,
+    borderTop: 'none',
+    borderRight: 'none',
+    borderBottom: 'none',
+    zIndex: 1000,
+    overflow: 'auto',
+  })} className="scroll-hidden">
     <div style={{ padding: '32px', height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexShrink: 0 }}>
@@ -2557,7 +2567,7 @@ const changeStaffPassword = async (staffMember: any) => {
                   <div style={{ color: '#64748B', textAlign: 'center', padding: '20px 0' }}>Нет данных за период</div>
                 )}
                 {rows.map((row) => (
-                  <div key={row.name} style={{ background: '#25334A', borderRadius: '16px', padding: '18px 20px' }}>
+                  <div key={row.name} style={volumeCardSoftStyle({ borderRadius: 16, padding: '18px 20px' })}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
                       <div style={{ fontSize: '18px', fontWeight: '700' }}>{row.name}</div>
                       <div style={{ fontSize: '13px', color: '#94A3B8' }}>
@@ -2639,7 +2649,7 @@ const changeStaffPassword = async (staffMember: any) => {
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {/* Испытания */}
-                <div style={{ background: '#25334A', borderRadius: '16px', padding: '18px 20px' }}>
+                <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '18px 20px' })}>
                   <div style={{ fontSize: '15px', color: '#94A3B8', marginBottom: '12px' }}>Испытания прочности</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
                     <div>
@@ -2662,7 +2672,7 @@ const changeStaffPassword = async (staffMember: any) => {
                 </div>
 
                 {/* Паспорта качества */}
-                <div style={{ background: '#25334A', borderRadius: '16px', padding: '18px 20px' }}>
+                <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '18px 20px' })}>
                   <div style={{ fontSize: '15px', color: '#94A3B8', marginBottom: '12px' }}>Паспорта качества</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
                     <div>
@@ -2681,14 +2691,13 @@ const changeStaffPassword = async (staffMember: any) => {
                 </div>
 
                 {/* Рецептуры */}
-                <div style={{
-                  background: '#25334A',
-                  borderRadius: '12px',
+                <div style={volumeCardSoftStyle({
+                  borderRadius: 12,
                   padding: '10px 16px',
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                }}>
+                })}>
                   <div style={{ color: '#94A3B8' }}>Изменений в рецептурах</div>
                   <div style={{ fontSize: '24px', fontWeight: '700' }}>{stats.recipeEdits}</div>
                 </div>
@@ -2704,13 +2713,13 @@ const changeStaffPassword = async (staffMember: any) => {
       <>
       {/* Основная статистика */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px', flexShrink: 0 }}>
-        <div style={{ background: '#25334A', padding: '16px 20px', borderRadius: '16px', textAlign: 'center' }}>
+        <div style={volumeCardSoftStyle({ padding: '16px 20px', borderRadius: 16, textAlign: 'center' })}>
           <div style={{ fontSize: '40px', fontWeight: '700', color: '#60A5FA' }}>
             {selectedProfile.clients_count || 0}
           </div>
           <div style={{ color: '#94A3B8', fontSize: '15px' }}>Клиентов на кураторстве</div>
         </div>
-        <div style={{ background: '#25334A', padding: '16px 20px', borderRadius: '16px', textAlign: 'center' }}>
+        <div style={volumeCardSoftStyle({ padding: '16px 20px', borderRadius: 16, textAlign: 'center' })}>
           <div style={{ fontSize: '40px', fontWeight: '700' }}>
             {selectedProfile.total_volume || 0}
           </div>
@@ -2726,14 +2735,13 @@ const changeStaffPassword = async (staffMember: any) => {
       Эффективность куратора
     </h3>
     
-    <div style={{ 
-      background: '#25334A', 
-      borderRadius: '16px', 
+    <div style={volumeCardSoftStyle({
+      borderRadius: 16,
       padding: '16px',
       display: 'grid',
       gridTemplateColumns: 'repeat(2, 1fr)',
-      gap: '12px'
-    }}>
+      gap: '12px',
+    })}>
       <div>
         <div style={{ fontSize: '26px', fontWeight: '700', color: '#34D399' }}>
           {selectedProfile.clients?.length || 0}
@@ -2766,15 +2774,14 @@ const changeStaffPassword = async (staffMember: any) => {
     </div>
 
         {/* Главная метрика */}
-    <div style={{ 
-      marginTop: '8px', 
-      background: '#25334A', 
-      borderRadius: '12px', 
-      padding: '10px 16px', 
-      display: 'flex', 
-      justifyContent: 'space-between', 
-      alignItems: 'center' 
-    }}>
+    <div style={volumeCardSoftStyle({
+      marginTop: '8px',
+      borderRadius: 12,
+      padding: '10px 16px',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+    })}>
       <div style={{ color: '#94A3B8' }}>Привлёк клиентов</div>
       <div style={{ fontSize: '24px', fontWeight: '700' }}>
         {selectedProfile.clients_count || 0}
@@ -2791,14 +2798,13 @@ const changeStaffPassword = async (staffMember: any) => {
     </h3>
     <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
       {selectedProfile.clients.map((client: any) => (
-        <div key={client.user_id} style={{ 
-          background: '#25334A', 
-          padding: '12px 16px', 
-          borderRadius: '12px',
+        <div key={client.user_id} style={volumeCardSoftStyle({
+          padding: '12px 16px',
+          borderRadius: 12,
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center'
-        }}>
+          alignItems: 'center',
+        })}>
           <div>
             <div style={{ fontWeight: '600' }}>
               {client.organization_name || client.full_name || 'Без названия'}
@@ -2813,13 +2819,12 @@ const changeStaffPassword = async (staffMember: any) => {
     </div>
   </div>
 ) : (
-  <div style={{ 
-    textAlign: 'center', 
-    padding: '100px 40px', 
+  <div style={volumeCardSoftStyle({
+    textAlign: 'center',
+    padding: '100px 40px',
     color: '#94A3B8',
-    background: '#25334A',
-    borderRadius: '16px'
-  }}>
+    borderRadius: 16,
+  })}>
     Пока нет клиентов под кураторством
   </div>
 )}
@@ -2830,19 +2835,23 @@ const changeStaffPassword = async (staffMember: any) => {
   </div>
 ) : (
       /* ==================== СТАРАЯ БОКОВАЯ ПАНЕЛЬ ДЛЯ КЛИЕНТОВ (без изменений) ==================== */
-  <div style={{ 
-    position: 'fixed', 
-    top: 0, 
-    right: 0, 
-    width: '720px', 
+  <div
+    onClick={(e) => e.stopPropagation()}
+    style={volumeCardStyle({
+    position: 'fixed',
+    top: 0,
+    right: 0,
+    width: '720px',
     maxWidth: '100vw',
     height: '100%',
-    background: '#1E2937', 
-    borderLeft: '1px solid #334155', 
-    zIndex: 1000, 
-    boxSizing: 'border-box',
-    overflow: 'auto' 
-  }} className="scroll-hidden">
+    borderRadius: 0,
+    borderLeft: CARD_BORDER,
+    borderTop: 'none',
+    borderRight: 'none',
+    borderBottom: 'none',
+    zIndex: 1000,
+    overflow: 'auto',
+  })} className="scroll-hidden">
     <div style={{ padding: '32px' }}>
 
       {/* 9.1 Кнопка закрытия */}
@@ -2935,13 +2944,11 @@ const changeStaffPassword = async (staffMember: any) => {
 
             {/* Форма: физ → юр */}
             {sideConvertToLegal && !isLegal && (
-              <div style={{
+              <div style={volumeCardSoftStyle({
                 marginTop: '12px',
                 padding: '16px',
-                background: '#25334A',
-                borderRadius: '14px',
-                border: '1px solid #334155',
-              }}>
+                borderRadius: 14,
+              })}>
                 <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '12px' }}>
                   Укажите организацию (и ИНН, если есть). Телефон и заказы сохранятся.
                 </div>
@@ -3031,13 +3038,11 @@ const changeStaffPassword = async (staffMember: any) => {
                 ИНН {profileInn}
               </p>
             ) : isLegal ? (
-              <div style={{
+              <div style={volumeCardSoftStyle({
                 marginTop: '12px',
                 padding: '16px',
-                background: '#25334A',
-                borderRadius: '14px',
-                border: '1px solid #334155',
-              }}>
+                borderRadius: 14,
+              })}>
                 <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '10px' }}>
                   ИНН не заполнен
                 </div>
@@ -3188,10 +3193,10 @@ const changeStaffPassword = async (staffMember: any) => {
     <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
       Назначить куратора
     </div>
-    <select
-      value={selectedProfile.curator_id || ''}
-      onChange={async (e) => {
-        const newCuratorIdStr = e.target.value;
+    <ModalSelect
+      value={selectedProfile.curator_id ? String(selectedProfile.curator_id) : ''}
+      placeholder="Выберите куратора..."
+      onChange={async (newCuratorIdStr) => {
         if (!newCuratorIdStr) return;
         const newCuratorId = parseInt(newCuratorIdStr);
         if (isNaN(newCuratorId)) return;
@@ -3233,7 +3238,8 @@ const changeStaffPassword = async (staffMember: any) => {
             return;
           }
 
-          const newCuratorName = e.target.options[e.target.selectedIndex].text.split(' (')[0] || 'Новый куратор';
+          const picked = curators.find((c: any) => String(c.user_id) === newCuratorIdStr);
+          const newCuratorName = picked?.full_name || 'Новый куратор';
 
           const updatedProfile = {
             ...selectedProfile,
@@ -3256,23 +3262,13 @@ const changeStaffPassword = async (staffMember: any) => {
           alert("Ошибка при назначении куратора");
         }
       }}
-      style={{
-        width: '100%',
-        padding: '12px 16px',
-        background: '#334155',
-        color: 'white',
-        border: 'none',
-        borderRadius: '10px',
-        fontSize: '16px'
-      }}
-    >
-      <option value="">Выберите куратора...</option>
-      {curators.map((curator: any) => (
-        <option key={curator.user_id} value={curator.user_id}>
-          {curator.full_name} ({curator.role})
-        </option>
-      ))}
-    </select>
+      style={{ padding: '12px 16px', borderRadius: 10, fontSize: 16 }}
+      options={curators.map((curator: any) => ({
+        value: String(curator.user_id),
+        label: `${curator.full_name} (${curator.role})`,
+        text: `${curator.full_name} (${curator.role})`,
+      }))}
+    />
   </div>
 )}
 
@@ -3384,7 +3380,7 @@ const changeStaffPassword = async (staffMember: any) => {
 </div>
 
 {/* 9.5 Последний контакт */}
-<div style={{ background: '#25334A', padding: '16px', borderRadius: '14px', marginBottom: '24px' }}>
+<div style={volumeCardSoftStyle({ padding: '16px', borderRadius: 14, marginBottom: '24px' })}>
   <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '6px' }}>
     Последний контакт
   </div>
@@ -3408,13 +3404,12 @@ const changeStaffPassword = async (staffMember: any) => {
 </div>
 
       {/* ==================== 9.5.1 ПРОГНОЗ СЛЕДУЮЩЕГО ЗАКАЗА + ОБЪЁМ ==================== */}
-<div style={{ 
-  background: '#25334A', 
-  padding: '20px', 
-  borderRadius: '16px', 
+<div style={volumeCardSoftStyle({
+  padding: '20px',
+  borderRadius: 16,
   marginBottom: '24px',
-  border: '2px solid #F59E0B'
-}}>
+  border: '2px solid #F59E0B',
+})}>
   <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '12px' }}>
     📅 Прогноз следующего заказа
   </div>
@@ -3505,16 +3500,15 @@ const changeStaffPassword = async (staffMember: any) => {
         <div 
           key={o.id} 
           onClick={() => openOrderModal(o.id)}
-          style={{ 
-            background: '#25334A', 
-            padding: '18px', 
-            borderRadius: '16px', 
+          style={volumeCardSoftStyle({
+            padding: '18px',
+            borderRadius: 16,
             marginBottom: '12px',
             cursor: 'pointer',
-            transition: 'all 0.2s'
-          }}
-          onMouseOver={(e) => e.currentTarget.style.background = '#334155'}
-          onMouseOut={(e) => e.currentTarget.style.background = '#25334A'}
+            transition: 'filter 0.2s',
+          })}
+          onMouseOver={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+          onMouseOut={(e) => { e.currentTarget.style.filter = 'none'; }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <strong 
@@ -3563,12 +3557,11 @@ const changeStaffPassword = async (staffMember: any) => {
     callHistory.map((call: any, index: number) => (
       <div 
         key={index} 
-        style={{ 
-          padding: '14px', 
-          background: '#1E2937', 
-          borderRadius: '12px', 
-          marginBottom: '12px' 
-        }}
+        style={volumeCardSoftStyle({
+          padding: '14px',
+          borderRadius: 12,
+          marginBottom: '12px',
+        })}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
           <span style={{ 
@@ -3607,25 +3600,31 @@ const changeStaffPassword = async (staffMember: any) => {
 
       {/* ==================== 9.7 МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ ==================== */}
 {isEditModalOpen && editingClient && Array.isArray(editingClient) && (
-  <div style={{
-    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 1300,
-    display: 'flex', alignItems: 'center', justifyContent: 'center'
-  }}>
-    <div className="w-full max-w-[720px] max-h-[90vh] overflow-auto mx-auto scroll-hidden" style={{
-      background: '#1E2937', borderRadius: '20px', padding: '32px', color: '#fff'
-    }}>
+  <div
+    style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      backgroundColor: 'rgba(0,0,0,0.82)', zIndex: 1300,
+      display: 'flex', alignItems: 'center', justifyContent: 'center'
+    }}
+    onClick={() => { setIsEditModalOpen(false); setEditingClient(null); }}
+  >
+    <div
+      className="w-full max-w-[720px] max-h-[90vh] overflow-auto mx-auto scroll-hidden"
+      style={volumeModalStyle({
+        borderRadius: 22, padding: '32px', color: '#fff',
+      })}
+      onClick={(e) => e.stopPropagation()}
+    >
       <h2 style={{ marginBottom: '8px' }}>
         Редактирование {editingClient.length > 1 ? 'группы клиентов' : 'клиента'}
       </h2>
 
       {editingClient.map((client: any, index: number) => (
-        <div key={client.user_id || index} style={{ 
-          background: '#25334A', 
-          padding: '24px', 
-          borderRadius: '16px', 
-          marginBottom: '20px' 
-        }}>
+        <div key={client.user_id || index} style={volumeCardSoftStyle({
+          padding: '24px',
+          borderRadius: 16,
+          marginBottom: '20px',
+        })}>
           <h4 style={{ marginBottom: '20px' }}>Клиент #{index + 1}</h4>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
@@ -3642,7 +3641,7 @@ const changeStaffPassword = async (staffMember: any) => {
                   setEditingClient(newClients);
                   if (value.length === 10 || value.length === 12) fetchByInn(value, index);
                 }}
-                style={{ width: '96%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }}
+                style={modalFieldStyle({ padding: '12px', borderRadius: 10 })}
               />
             </div>
 
@@ -3651,14 +3650,14 @@ const changeStaffPassword = async (staffMember: any) => {
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Название организации</label>
               <input value={client.organization_name || ''} onChange={(e) => {
                 const newClients = [...editingClient]; newClients[index].organization_name = e.target.value; setEditingClient(newClients);
-              }} style={{ width: '96%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+              }} style={modalFieldStyle({ padding: '12px', borderRadius: 10 })} />
             </div>
 
             <div style={{ gridColumn: '1 / -1' }}>
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>ФИО</label>
               <input value={client.full_name || ''} onChange={(e) => {
                 const newClients = [...editingClient]; newClients[index].full_name = e.target.value; setEditingClient(newClients);
-              }} style={{ width: '96%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+              }} style={modalFieldStyle({ padding: '12px', borderRadius: 10 })} />
             </div>
 
             {/* Телефон и Адрес */}
@@ -3673,7 +3672,7 @@ const changeStaffPassword = async (staffMember: any) => {
                   newClients[index].phone = formatPhoneInput(e.target.value);
                   setEditingClient(newClients);
                 }}
-                style={{ width: '90%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }}
+                style={modalFieldStyle({ padding: '12px', borderRadius: 10 })}
               />
             </div>
 
@@ -3681,25 +3680,26 @@ const changeStaffPassword = async (staffMember: any) => {
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Адрес</label>
               <input value={client.address || ''} onChange={(e) => {
                 const newClients = [...editingClient]; newClients[index].address = e.target.value; setEditingClient(newClients);
-              }} style={{ width: '92%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+              }} style={modalFieldStyle({ padding: '12px', borderRadius: 10 })} />
             </div>
 
             {/* Новые поля из презентации Цифра */}
             <div style={{ gridColumn: '1 / -1' }}>
               <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Статус клиента</label>
-              <select 
-                value={client.client_status || 'cold'} 
-                onChange={(e) => {
+              <ModalSelect
+                value={client.client_status || 'cold'}
+                onChange={(client_status) => {
                   const newClients = [...editingClient];
-                  newClients[index].client_status = e.target.value;
+                  newClients[index].client_status = client_status;
                   setEditingClient(newClients);
                 }}
-                style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }}
-              >
-                <option value="cold">❄️ Холодный</option>
-                <option value="warm">🔥 Тёплый</option>
-                <option value="hot">🔥 Горячий</option>
-              </select>
+                style={{ padding: '12px', borderRadius: 10 }}
+                options={[
+                  { value: 'cold', label: '❄️ Холодный', text: '❄️ Холодный' },
+                  { value: 'warm', label: '🔥 Тёплый', text: '🔥 Тёплый' },
+                  { value: 'hot', label: '🔥 Горячий', text: '🔥 Горячий' },
+                ]}
+              />
             </div>
 
             <div>
@@ -3710,7 +3710,7 @@ const changeStaffPassword = async (staffMember: any) => {
                   newClients[index].loyalty_score = parseInt(e.target.value) || 50;
                   setEditingClient(newClients);
                 }}
-                style={{ width: '100%', padding: '12px', background: '#1E2937', border: 'none', borderRadius: '10px', color: '#fff' }} />
+                style={modalFieldStyle({ padding: '12px', borderRadius: 10 })} />
             </div>
 
           </div>
@@ -3718,7 +3718,7 @@ const changeStaffPassword = async (staffMember: any) => {
       ))}
 
       <div style={{ display: 'flex', gap: '12px', marginTop: '32px' }}>
-        <button onClick={() => { setIsEditModalOpen(false); setEditingClient(null); }} style={{ flex: 1, padding: '16px', background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}>
+        <button onClick={() => { setIsEditModalOpen(false); setEditingClient(null); }} style={volumeCardSoftStyle({ flex: 1, padding: '16px', borderRadius: 12, color: '#fff', cursor: 'pointer' })}>
           Отмена
         </button>
         <button onClick={updateGroupClients} style={{ flex: 1, padding: '16px', background: '#10B981', border: 'none', borderRadius: '12px', color: '#fff', fontWeight: '600' }}>
@@ -3732,8 +3732,15 @@ const changeStaffPassword = async (staffMember: any) => {
 
 {/* ==================== МОДАЛЬНОЕ ОКНО РЕДАКТИРОВАНИЯ СОТРУДНИКА ==================== */}
 {isStaffEditModalOpen && editingStaff && (
-  <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 1300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-    <div className="w-full max-w-[620px] max-h-[90vh] overflow-auto mx-auto scroll-hidden" style={{ background: '#1E2937', borderRadius: '20px', padding: '32px', color: '#fff' }}>
+  <div
+    style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.82)', zIndex: 1300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+    onClick={() => { setIsStaffEditModalOpen(false); setEditingStaff(null); setStaffPasswordInput(''); }}
+  >
+    <div
+      className="w-full max-w-[620px] max-h-[90vh] overflow-auto mx-auto scroll-hidden"
+      style={volumeModalStyle({ borderRadius: 22, padding: '32px', color: '#fff' })}
+      onClick={(e) => e.stopPropagation()}
+    >
       <h2 style={{ marginBottom: '24px' }}>{isNewStaff ? 'Новый сотрудник' : 'Редактирование сотрудника'}</h2>
 
       <div style={{ display: 'grid', gap: '16px' }}>
@@ -3742,7 +3749,7 @@ const changeStaffPassword = async (staffMember: any) => {
           <input 
             value={editingStaff.full_name || ''} 
             onChange={(e) => setEditingStaff({...editingStaff, full_name: e.target.value})}
-            style={{ width: '95%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '10px', color: '#fff' }} 
+            style={modalFieldStyle({ padding: '12px', borderRadius: 10 })} 
           />
         </div>
 
@@ -3753,24 +3760,25 @@ const changeStaffPassword = async (staffMember: any) => {
             value={editingStaff.phone || ''} 
             onChange={(e) => setEditingStaff({...editingStaff, phone: formatPhoneInput(e.target.value)})}
             placeholder="+7 (___) ___-__-__"
-            style={{ width: '95%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '10px', color: '#fff' }} 
+            style={modalFieldStyle({ padding: '12px', borderRadius: 10 })} 
           />
         </div>
 
         <div>
           <label style={{ display: 'block', marginBottom: '6px', color: '#94A3B8' }}>Роль</label>
-          <select 
-            value={editingStaff.role || 'manager'} 
-            onChange={(e) => setEditingStaff({...editingStaff, role: e.target.value})}
-            style={{ width: '99%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '10px', color: '#fff' }}
-          >
-            <option value="admin">Администратор</option>
-            <option value="manager">Менеджер</option>
-            <option value="dispatcher">Диспетчер</option>
-            <option value="operator">Оператор</option>
-            <option value="laborant">Лаборант</option>
-            <option value="guest">Гость (демо-доступ)</option>
-          </select>
+          <ModalSelect
+            value={editingStaff.role || 'manager'}
+            onChange={(role) => setEditingStaff({ ...editingStaff, role })}
+            style={{ padding: '12px', borderRadius: 10 }}
+            options={[
+              { value: 'admin', label: 'Администратор', text: 'Администратор' },
+              { value: 'manager', label: 'Менеджер', text: 'Менеджер' },
+              { value: 'dispatcher', label: 'Диспетчер', text: 'Диспетчер' },
+              { value: 'operator', label: 'Оператор', text: 'Оператор' },
+              { value: 'laborant', label: 'Лаборант', text: 'Лаборант' },
+              { value: 'guest', label: 'Гость (демо-доступ)', text: 'Гость (демо-доступ)' },
+            ]}
+          />
         </div>
 
         {/* ==================== ИМЕНА ОПЕРАТОРОВ СМЕНЫ ==================== */}
@@ -3793,15 +3801,14 @@ const changeStaffPassword = async (staffMember: any) => {
               {operatorShiftNames.map((name) => (
                 <div
                   key={name}
-                  style={{
+                  style={volumeCardSoftStyle({
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
                     padding: '6px 8px 6px 14px',
-                    background: '#25334A',
-                    borderRadius: '9999px',
+                    borderRadius: 9999,
                     fontSize: '14px',
-                  }}
+                  })}
                 >
                   {name}
                   <button
@@ -3835,7 +3842,7 @@ const changeStaffPassword = async (staffMember: any) => {
                 onChange={(e) => setNewOperatorNameInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addOperatorShiftName(); } }}
                 placeholder="Имя нового оператора"
-                style={{ flex: 1, padding: '10px 12px', background: '#25334A', border: 'none', borderRadius: '10px', color: '#fff' }}
+                style={modalFieldStyle({ flex: 1, width: 'auto', padding: '10px 12px', borderRadius: 10 })}
               />
               <button
                 type="button"
@@ -3866,7 +3873,7 @@ const changeStaffPassword = async (staffMember: any) => {
             value={staffPasswordInput} 
             onChange={(e) => setStaffPasswordInput(e.target.value)}
             placeholder={isNewStaff ? 'Минимум 6 символов' : '••••••'}
-            style={{ width: '95%', padding: '12px', background: '#25334A', border: 'none', borderRadius: '10px', color: '#fff' }} 
+            style={modalFieldStyle({ padding: '12px', borderRadius: 10 })} 
           />
         </div>
       </div>
@@ -3874,7 +3881,7 @@ const changeStaffPassword = async (staffMember: any) => {
       <div style={{ display: 'flex', gap: '12px', marginTop: '32px' }}>
         <button 
           onClick={() => { setIsStaffEditModalOpen(false); setEditingStaff(null); setStaffPasswordInput(''); }} 
-          style={{ flex: 1, padding: '16px', background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}
+          style={volumeCardSoftStyle({ flex: 1, padding: '16px', borderRadius: 12, color: '#fff', cursor: 'pointer' })}
         >
           Отмена
         </button>
@@ -3931,15 +3938,22 @@ const changeStaffPassword = async (staffMember: any) => {
 
              {/* ==================== МОДАЛЬНОЕ ОКНО ДУБЛЕЙ ==================== */}
 {showMergeModal && clientsToMerge.length > 0 && (
-  <div style={{
-    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.9)', zIndex: 1400,
-    display: 'flex', alignItems: 'center', justifyContent: 'center'
-  }}>
-    <div className="w-full max-w-[780px] max-h-[88vh] overflow-auto mx-auto scroll-hidden" style={{
-      background: '#1E2937', borderRadius: '20px', 
-      padding: '32px', color: '#fff'
-    }}>
+  <div
+    style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      backgroundColor: 'rgba(0,0,0,0.82)', zIndex: 1400,
+      display: 'flex', alignItems: 'center', justifyContent: 'center'
+    }}
+    onClick={() => setShowMergeModal(false)}
+  >
+    <div
+      className="w-full max-w-[780px] max-h-[88vh] overflow-auto mx-auto scroll-hidden"
+      style={volumeModalStyle({
+        borderRadius: 22,
+        padding: '32px', color: '#fff',
+      })}
+      onClick={(e) => e.stopPropagation()}
+    >
       <h2 style={{ marginBottom: '12px' }}>Группы дублей</h2>
       <p style={{ color: '#94A3B8', marginBottom: '24px' }}>
         Дубли по одному ИНН. Первая запись — целевая: остальные можно влить в неё
@@ -3949,12 +3963,11 @@ const changeStaffPassword = async (staffMember: any) => {
       {clientsToMerge.map((group: any, idx: number) => {
         const target = group.clients?.[0];
         return (
-        <div key={idx} style={{ 
-          marginBottom: '24px', 
-          background: '#25334A', 
-          padding: '20px', 
-          borderRadius: '16px' 
-        }}>
+        <div key={idx} style={volumeCardSoftStyle({
+          marginBottom: '24px',
+          padding: '20px',
+          borderRadius: 16,
+        })}>
           <h3 style={{ color: '#FBBF24', marginBottom: '12px' }}>
             {group.inn ? `ИНН: ${group.inn}` : `ФИО: ${group.full_name}`}
           </h3>
@@ -4013,14 +4026,21 @@ const changeStaffPassword = async (staffMember: any) => {
 
       {/* ==================== МОДАЛЬНОЕ ОКНО СОЗДАНИЯ НОВОГО КЛИЕНТА ==================== */}
 {isNewClientModalOpen && (
-  <div style={{
-    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 1300,
-    display: 'flex', alignItems: 'center', justifyContent: 'center'
-  }}>
-    <div className="w-full max-w-[540px] max-h-[90vh] overflow-auto mx-auto scroll-hidden" style={{
-      background: '#1E2937', borderRadius: '20px', padding: '32px', color: '#fff'
-    }}>
+  <div
+    style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+      backgroundColor: 'rgba(0,0,0,0.82)', zIndex: 1300,
+      display: 'flex', alignItems: 'center', justifyContent: 'center'
+    }}
+    onClick={() => setIsNewClientModalOpen(false)}
+  >
+    <div
+      className="w-full max-w-[540px] max-h-[90vh] overflow-auto mx-auto scroll-hidden"
+      style={volumeModalStyle({
+        borderRadius: 22, padding: '32px', color: '#fff',
+      })}
+      onClick={(e) => e.stopPropagation()}
+    >
       <h2 style={{ marginBottom: '24px' }}>Новый клиент</h2>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
@@ -4032,22 +4052,18 @@ const changeStaffPassword = async (staffMember: any) => {
             <button 
               type="button" 
               onClick={() => setNewClientForm(p => ({...p, type: 'legal'}))}
-              style={{ 
-                flex: 1, padding: '12px', borderRadius: '12px', 
-                background: newClientForm.type === 'legal' ? '#3B82F6' : '#334155', 
-                color: 'white' 
-              }}
+              style={newClientForm.type === 'legal'
+                ? { flex: 1, padding: '12px', borderRadius: '12px', background: '#3B82F6', color: 'white', border: 'none', cursor: 'pointer' }
+                : volumeCardSoftStyle({ flex: 1, padding: '12px', borderRadius: 12, color: 'white', cursor: 'pointer' })}
             >
               Юридическое лицо
             </button>
             <button 
               type="button" 
               onClick={() => setNewClientForm(p => ({...p, type: 'physical'}))}
-              style={{ 
-                flex: 1, padding: '12px', borderRadius: '12px', 
-                background: newClientForm.type === 'physical' ? '#3B82F6' : '#334155', 
-                color: 'white' 
-              }}
+              style={newClientForm.type === 'physical'
+                ? { flex: 1, padding: '12px', borderRadius: '12px', background: '#3B82F6', color: 'white', border: 'none', cursor: 'pointer' }
+                : volumeCardSoftStyle({ flex: 1, padding: '12px', borderRadius: 12, color: 'white', cursor: 'pointer' })}
             >
               Физическое лицо
             </button>
@@ -4069,26 +4085,17 @@ const changeStaffPassword = async (staffMember: any) => {
                 setDadataSuggestions([]);
               }
             }}
-            style={{ 
-              padding: '14px', 
-              background: '#25334A', 
-              border: 'none', 
-              borderRadius: '12px', 
-              color: '#fff',
-              width: '95%'
-            }}
+            style={modalFieldStyle()}
           />
 
           {/* Подсказки DaData */}
           {dadataSuggestions.length > 0 && (
-            <div style={{
+            <div style={volumeCardSoftStyle({
               marginTop: '8px',
               maxHeight: '220px',
               overflowY: 'auto',
-              background: '#25334A',
-              borderRadius: '12px',
-              border: '1px solid #334155'
-            }}>
+              borderRadius: 12,
+            })}>
               {dadataSuggestions.map((suggestion: any, index: number) => (
                 <div
                   key={index}
@@ -4105,9 +4112,9 @@ const changeStaffPassword = async (staffMember: any) => {
                   style={{
                     padding: '12px 16px',
                     cursor: 'pointer',
-                    borderBottom: index < dadataSuggestions.length - 1 ? '1px solid #334155' : 'none',
+                    borderBottom: index < dadataSuggestions.length - 1 ? CARD_BORDER : 'none',
                   }}
-                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#334155'}
+                  onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'rgba(148,163,184,0.12)'}
                   onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                 >
                   <div style={{ fontWeight: '600' }}>{suggestion.value}</div>
@@ -4126,14 +4133,14 @@ const changeStaffPassword = async (staffMember: any) => {
             placeholder="Название организации *" 
             value={newClientForm.organization_name} 
             onChange={(e) => setNewClientForm({...newClientForm, organization_name: e.target.value})}
-            style={{ padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff' }}
+            style={modalFieldStyle()}
           />
         ) : (
           <input 
             placeholder="ФИО полностью *" 
             value={newClientForm.full_name} 
             onChange={(e) => setNewClientForm({...newClientForm, full_name: e.target.value})}
-            style={{ padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff' }}
+            style={modalFieldStyle()}
           />
         )}
 
@@ -4142,21 +4149,21 @@ const changeStaffPassword = async (staffMember: any) => {
           placeholder="+7 (___) ___-__-__"
           value={newClientForm.phone}
           onChange={(e) => setNewClientForm({ ...newClientForm, phone: formatPhoneInput(e.target.value) })}
-          style={{ padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff' }}
+          style={modalFieldStyle()}
         />
 
         <input 
           placeholder="Адрес" 
           value={newClientForm.address} 
           onChange={(e) => setNewClientForm({...newClientForm, address: e.target.value})}
-          style={{ padding: '14px', background: '#25334A', border: 'none', borderRadius: '12px', color: '#fff' }}
+          style={modalFieldStyle()}
         />
       </div>
 
       <div style={{ display: 'flex', gap: '12px', marginTop: '32px' }}>
         <button 
           onClick={() => setIsNewClientModalOpen(false)} 
-          style={{ flex: 1, padding: '16px', background: '#334155', border: 'none', borderRadius: '12px', color: '#fff' }}
+          style={volumeCardSoftStyle({ flex: 1, padding: '16px', borderRadius: 12, color: '#fff', cursor: 'pointer' })}
         >
           Отмена
         </button>

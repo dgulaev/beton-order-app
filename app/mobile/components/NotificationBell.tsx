@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bell, X, CheckCheck, Package, AlertCircle } from 'lucide-react';
 import { useMobileNotifications, MobileNotification } from '@/hooks/useMobileNotifications';
+import { volumeCardSoftStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -31,17 +32,15 @@ function NotifCard({
 
   return (
     <div
-      style={{
-        background: '#1E2937',
-        border: `1px solid #334155`,
+      style={volumeCardSoftStyle({
         borderLeft: `3px solid ${accentColor}`,
-        borderRadius: '12px',
+        borderRadius: 12,
         padding: '12px 14px',
         display: 'flex',
         flexDirection: 'column',
         gap: '6px',
         position: 'relative',
-      }}
+      })}
     >
       {/* Закрыть */}
       <button
@@ -157,20 +156,19 @@ export default function NotificationBell() {
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  const BTN_STYLE: React.CSSProperties = {
-    background: '#1E2937',
-    border: '1px solid #334155',
-    borderRadius: '9999px',
-    width: '40px',
-    height: '40px',
-    minWidth: '40px',
+  const BTN_STYLE: React.CSSProperties = volumeCardSoftStyle({
+    borderRadius: 9999,
+    width: 40,
+    height: 40,
+    minWidth: 40,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
     cursor: 'pointer',
     position: 'relative',
-  };
+    padding: 0,
+  });
 
   return (
     <>
@@ -224,7 +222,7 @@ export default function NotificationBell() {
             style={{
               position: 'fixed',
               inset: 0,
-              background: 'rgba(0,0,0,0.5)',
+              background: 'rgba(0,0,0,0.82)',
               zIndex: 2000,
             }}
             onClick={() => setOpen(false)}
@@ -246,20 +244,17 @@ export default function NotificationBell() {
             }}
           >
             <div
-              style={{
+              style={volumeModalStyle({
                 position: 'absolute',
                 top: 0,
                 left: 0,
                 right: 0,
-                background: '#162032',
-                borderBottom: '1px solid #334155',
                 maxHeight: '70vh',
                 display: 'flex',
                 flexDirection: 'column',
                 pointerEvents: 'all',
                 borderRadius: '0 0 20px 20px',
-                boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-              }}
+              })}
             >
               {/* Заголовок */}
               <div

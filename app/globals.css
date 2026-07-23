@@ -74,6 +74,74 @@ body::-webkit-scrollbar,
   color-scheme: dark;
 }
 
+/* ==================== ИКОНКИ date / time / select (тёмная админка) ====================
+   Нативные calendar/clock/chevron иначе остаются чёрными на тёмном поле.
+   Единый мягкий slate-tint (~#94A3B8), как подписи в модалках. */
+.admin-layout input[type="date"],
+.admin-layout input[type="time"],
+.admin-layout input[type="datetime-local"],
+.admin-layout select,
+input[type="date"].modal-field,
+input[type="time"].modal-field,
+input[type="datetime-local"].modal-field,
+select.modal-field {
+  color-scheme: dark;
+}
+
+/* Кастомная стрелка select (нативная на macOS не сдвигается padding'ом).
+   Позиция right 10px — вровень с иконками date/time.
+   .select-custom-arrow — пилюли со своей стрелкой (не трогаем). */
+.admin-layout select:not(.select-custom-arrow),
+select.modal-field:not(.select-custom-arrow) {
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"),
+    linear-gradient(165deg, #1E2937 0%, #0F172A 100%) !important;
+  background-repeat: no-repeat, no-repeat !important;
+  background-position: right 10px center, 0 0 !important;
+  background-size: 12px 12px, 100% 100% !important;
+  padding-right: 2rem !important;
+}
+
+/* Календарь — мягкий синий (#60A5FA) */
+.admin-layout input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.95;
+  filter: invert(64%) sepia(62%) saturate(1200%) hue-rotate(190deg) brightness(102%) contrast(96%);
+}
+
+/* Часы — мягкий бирюзовый (#2DD4BF) */
+.admin-layout input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.95;
+  filter: invert(72%) sepia(48%) saturate(900%) hue-rotate(125deg) brightness(98%) contrast(95%);
+}
+
+.admin-layout input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.95;
+  filter: invert(64%) sepia(62%) saturate(1200%) hue-rotate(190deg) brightness(102%) contrast(96%);
+}
+
+.admin-layout input[type="date"]::-webkit-calendar-picker-indicator:hover,
+.admin-layout input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover,
+input[type="date"]::-webkit-calendar-picker-indicator:hover,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+  filter: invert(70%) sepia(62%) saturate(1400%) hue-rotate(190deg) brightness(108%) contrast(96%);
+}
+
+.admin-layout input[type="time"]::-webkit-calendar-picker-indicator:hover,
+input[type="time"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+  filter: invert(78%) sepia(48%) saturate(1100%) hue-rotate(125deg) brightness(105%) contrast(95%);
+}
+
 /* ==================== АНИМАЦИИ ДЛЯ УВЕДОМЛЕНИЙ ==================== */
 
 @keyframes bellRing {

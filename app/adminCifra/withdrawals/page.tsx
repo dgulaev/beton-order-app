@@ -1,7 +1,16 @@
 'use client';
 
+/*
+  =====================================================================
+  AUDIT KEEP — НЕ УДАЛЯТЬ эту страницу (/adminCifra/withdrawals).
+  Пункт «Вывод баллов» временно скрыт из бокового меню в layout.tsx,
+  но страница оставлена — планируем снова использовать позже.
+  =====================================================================
+*/
+
 import { useState, useEffect } from 'react';
 import { DollarSign } from 'lucide-react';
+import { appConfirm } from '../components/appDialog';
 
 export default function WithdrawalsPage() {
   const [withdrawals, setWithdrawals] = useState<any[]>([]);
@@ -55,7 +64,7 @@ export default function WithdrawalsPage() {
 
   // Отметить как выплачено
   const markAsPaid = async (id: number) => {
-    if (!confirm('Отметить как выплачено?')) return;
+    if (!(await appConfirm('Отметить как выплачено?'))) return;
 
     try {
       const res = await fetch('/api/adminCifra/withdrawals', {

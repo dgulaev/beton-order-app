@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 
 interface MobileCalendarProps {
   selectedDate: Date;
@@ -81,7 +82,7 @@ export default function MobileCalendar({
   });
 
   return (
-    <div style={{ padding: '0 16px 8px' }}>
+    <div style={volumeCardStyle({ padding: '12px 16px 8px', borderRadius: 18, margin: '0 8px' })}>
 
       {/* ── Навигация по месяцам ───────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
@@ -140,33 +141,35 @@ export default function MobileCalendar({
           const jsDay = new Date(currentYear, currentMonth, day).getDay();
           const isWeekendOrHoliday = jsDay === 0 || jsDay === 6 || isRussianHoliday(currentMonth, day);
 
-          let bg = '#25334A';
-          if (isSelected) bg = 'rgba(16,185,129,0.16)';
-          else if (hasOrders || isToday) bg = '#1E2D40';
-
-          const boxShadow = (isSelected || isToday) ? 'inset 0 0 0 2px #10B981' : 'none';
           const dayColor = isWeekendOrHoliday ? '#FACC15' : '#E2E8F0';
+          const dayExtra: React.CSSProperties = {
+            height: '64px',
+            borderRadius: 12,
+            cursor: 'pointer',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '2px',
+            padding: '4px 2px',
+            position: 'relative',
+            transition: 'background-color 0.15s ease',
+          };
+          if (isSelected) {
+            dayExtra.background = 'rgba(16,185,129,0.16)';
+            dayExtra.boxShadow = 'inset 0 0 0 2px #10B981';
+            dayExtra.border = 'none';
+          } else if (isToday) {
+            dayExtra.boxShadow = 'inset 0 0 0 2px #10B981';
+          }
 
           return (
             <button
               key={idx}
               onClick={() => handleDayClick(day)}
-              style={{
-                height: '64px',
-                borderRadius: '12px',
-                border: 'none',
-                boxShadow,
-                background: bg,
-                cursor: 'pointer',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '2px',
-                padding: '4px 2px',
-                position: 'relative',
-                transition: 'background-color 0.15s ease',
-              }}
+              style={isSelected
+                ? dayExtra
+                : volumeCardSoftStyle(dayExtra)}
             >
               {/* Количество заявок — правый верхний угол, синий без фона */}
               {hasOrders && (
@@ -213,7 +216,7 @@ export default function MobileCalendar({
       </div>
 
       {/* ── Легенда ──────────────────────── */}
-      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '18px', paddingTop: '14px', borderTop: '1px solid #334155' }}>
+      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '18px', paddingTop: '14px', borderTop: CARD_BORDER }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#475569' }}>
           <span style={{ width: '12px', height: '12px', borderRadius: '3px', boxShadow: 'inset 0 0 0 1.5px #10B981', display: 'inline-block' }} />
           Сегодня / выбран
@@ -235,15 +238,14 @@ export default function MobileCalendar({
   );
 }
 
-const navBtn: React.CSSProperties = {
-  background: '#334155',
-  border: 'none',
-  borderRadius: '10px',
-  width: '36px',
-  height: '36px',
+const navBtn: React.CSSProperties = volumeCardSoftStyle({
+  borderRadius: 10,
+  width: 36,
+  height: 36,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   cursor: 'pointer',
   flexShrink: 0,
-};
+  padding: 0,
+});

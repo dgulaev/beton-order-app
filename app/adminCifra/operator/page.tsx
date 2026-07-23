@@ -6,8 +6,19 @@ import { useRealtimeProductionLogs } from '@/hooks/useRealtimeOrders';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import WarehousePage from '../warehouse/page';
 import ReportsPage, { preloadReportsData } from '../reports/page';
-import RecipesPage from '../recipes/page';
-import { UserCog } from 'lucide-react';
+import RecipesPage, { type LabTab } from '../recipes/page';
+import { CARD_VOLUME_SOFT, MODAL_VOLUME_GLOW, modalCloseButtonStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
+import { UserCog, ChevronDown } from 'lucide-react';
+import ModalSelect from '../components/ModalSelect';
+import { appConfirm } from '../components/appDialog';
+
+const LAB_MENU_ITEMS: { key: LabTab; label: string }[] = [
+  { key: 'orders', label: 'Заявки' },
+  { key: 'specifications', label: 'Спецификации' },
+  { key: 'recipes', label: 'Рецептуры' },
+  { key: 'tests', label: 'Испытания' },
+  { key: 'warehouse', label: 'Склад' },
+];
 
 // ==================== ПОДПИСИ РОЛЕЙ ДЛЯ "ОСИРОТЕВШИХ" РЕЙСОВ ====================
 // Статус миксера "Разгружен"/"Возврат" может выставить не только диспетчер,
@@ -26,6 +37,30 @@ const ORPHAN_ACTOR_ROLE_LABELS: Record<string, string> = {
 export default function OperatorBSUPage() {
   const [selectedTrip, setSelectedTrip] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'zayavki' | 'warehouse' | 'reports' | 'recipes'>('zayavki');
+  const [labTab, setLabTab] = useState<LabTab>('orders');
+  const [labMenuOpen, setLabMenuOpen] = useState(false);
+  const [labRequisitesKey, setLabRequisitesKey] = useState(0);
+  const labMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!labMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!labMenuRef.current?.contains(e.target as Node)) setLabMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLabMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [labMenuOpen]);
+
+  useEffect(() => {
+    if (activeTab !== 'recipes') setLabMenuOpen(false);
+  }, [activeTab]);
 
   // ==================== ЧАСЫ РЕАЛЬНОГО ВРЕМЕНИ В ШАПКЕ ====================
   const [clockNow, setClockNow] = useState(() => new Date());
@@ -87,7 +122,7 @@ export default function OperatorBSUPage() {
     // должно быть мгновенным, в том числе при передаче смены среди дня.
     // Всем остальным — явное подтверждение с предупреждением.
     if (user?.role !== 'operator') {
-      const confirmed = window.confirm(
+      const confirmed = await appConfirm(
         `Вы вошли не как оператор БСУ (роль: ${user?.role || 'неизвестна'}).\n\n` +
         `Назначить смену «${name}»? Обычно это делает сам оператор на своём пульте — ` +
         `подтверждайте только если действительно нужно поменять/исправить смену вручную.`
@@ -1158,120 +1193,235 @@ export default function OperatorBSUPage() {
           }}
         >
           Смена:
-          <select
+          <ModalSelect
             value={activeOperatorName || ''}
-            onChange={(e) => handleShiftOperatorChange(e.target.value)}
-            style={{
+            onChange={(name) => handleShiftOperatorChange(name)}
+            placeholder="Выбрать…"
+            chevronColor={activeOperatorName ? '#10B981' : '#94A3B8'}
+            minPopupWidth={160}
+            triggerStyle={{
               background: 'transparent',
               border: 'none',
               color: activeOperatorName ? '#10B981' : '#94A3B8',
               fontWeight: 600,
-              fontSize: '15px',
-              cursor: 'pointer',
-              outline: 'none',
-              appearance: 'none',
-              WebkitAppearance: 'none',
-              paddingRight: '4px',
+              fontSize: 15,
+              padding: 0,
+              boxShadow: 'none',
             }}
-          >
-            <option value="" disabled>Выбрать…</option>
-            {operatorShiftNames.map((name) => (
-              <option key={name} value={name} style={{ color: '#0F172A' }}>{name}</option>
-            ))}
-          </select>
+            options={operatorShiftNames.map((name) => ({
+              value: name,
+              label: name,
+              text: name,
+            }))}
+          />
         </div>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '14px 32px', boxSizing: 'border-box', overflow: 'hidden' }}>
 
-             {/* ==================== 2. БЛОК СТАТИСТИКИ (только на вкладке Заявки) ==================== */}
-{activeTab === 'zayavki' && (
-  <div style={{ 
-    display: 'grid', 
-    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
-    gap: '14px',
-    marginBottom: '14px',
-    flexShrink: 0
-  }}>
-    {stats.map((stat, index) => (
-      <div key={index} style={{
-        backgroundColor: '#1E2937',
-        borderRadius: '18px',
-        padding: '14px 18px',
-        border: '1px solid #334155'
-      }}>
-        <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '6px' }}>
-          {stat.label}
-        </div>
+        {/* ==================== 2. ТАБЫ (выше статистики — не прыгают при переключении) ==================== */}
         <div style={{ 
-          fontSize: '26px', 
-          fontWeight: '700', 
-          color: stat.color,
-          marginBottom: '2px'
+          display: 'flex', 
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '14px',
+          borderBottom: '1px solid #334155',
+          paddingBottom: '8px',
+          flexShrink: 0
         }}>
-          {stat.value}
-        </div>
-        <div style={{ color: '#64748B', fontSize: '15px' }}>
-          {stat.unit}
-        </div>
-      </div>
-    ))}
-  </div>
-)}
+          <div style={{ display: 'flex', gap: '48px', alignItems: 'center' }}>
+            {([
+              { key: 'zayavki' as const, label: 'Заявки' },
+              { key: 'warehouse' as const, label: 'Склад' },
+              { key: 'reports' as const, label: 'Отчеты' },
+            ]).map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                style={{
+                  padding: '12px 0',
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: '17px',
+                  fontWeight: '600',
+                  color: activeTab === tab.key ? '#10B981' : '#64748B',
+                  cursor: 'pointer',
+                  position: 'relative',
+                  transition: 'color 0.2s'
+                }}
+              >
+                {tab.label}
+                {activeTab === tab.key && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: '-6px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    width: '5px',
+                    height: '5px',
+                    backgroundColor: '#10B981',
+                    borderRadius: '50%',
+                    boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.3)'
+                  }} />
+                )}
+              </button>
+            ))}
 
-                              {/* ==================== 3. ТАБЫ + КНОПКА ЗАГРУЗКИ ==================== */}
-<div style={{ 
-  display: 'flex', 
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  marginBottom: '14px',
-  borderBottom: '1px solid #334155',
-  paddingBottom: '8px',
-  flexShrink: 0
-}}>
-  
-  {/* Табы слева */}
-  <div style={{ display: 'flex', gap: '48px' }}>
-    {[
-      { key: 'zayavki',   label: 'Заявки',    action: () => setActiveTab('zayavki') },
-      { key: 'warehouse', label: 'Склад',     action: () => setActiveTab('warehouse') },
-      { key: 'reports',   label: 'Отчеты',    action: () => setActiveTab('reports') },
-      { key: 'recipes',   label: 'Лаборатория',   action: () => setActiveTab('recipes') }
-    ].map((tab) => (
-      <button
-        key={tab.key}
-        onClick={tab.action}
-        style={{
-          padding: '12px 0',
-          background: 'transparent',
-          border: 'none',
-          fontSize: '17px',
-          fontWeight: '600',
-          color: activeTab === tab.key ? '#10B981' : '#64748B',
-          cursor: 'pointer',
-          position: 'relative',
-          transition: 'color 0.2s'
-        }}
-      >
-        {tab.label}
-        {activeTab === tab.key && (
-          <div style={{
-            position: 'absolute',
-            bottom: '-6px',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            width: '5px',
-            height: '5px',
-            backgroundColor: '#10B981',
-            borderRadius: '50%',
-            boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.3)'
-          }} />
+            {/* Лаборатория — dropdown по клику */}
+            <div ref={labMenuRef} style={{ position: 'relative' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (activeTab !== 'recipes') {
+                    setActiveTab('recipes');
+                    setLabMenuOpen(true);
+                  } else {
+                    setLabMenuOpen((v) => !v);
+                  }
+                }}
+                style={{
+                  padding: '12px 0',
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: '17px',
+                  fontWeight: '600',
+                  color: activeTab === 'recipes' ? '#10B981' : '#64748B',
+                  cursor: 'pointer',
+                  position: 'relative',
+                  transition: 'color 0.2s',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                Лаборатория
+                <ChevronDown
+                  size={16}
+                  style={{
+                    opacity: 0.85,
+                    transform: labMenuOpen ? 'rotate(180deg)' : 'none',
+                    transition: 'transform 0.15s ease',
+                  }}
+                />
+                {activeTab === 'recipes' && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: '-6px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    width: '5px',
+                    height: '5px',
+                    backgroundColor: '#10B981',
+                    borderRadius: '50%',
+                    boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.3)'
+                  }} />
+                )}
+              </button>
+
+              {labMenuOpen && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 10px)',
+                    left: 0,
+                    minWidth: '220px',
+                    background: '#1E2937',
+                    border: '1px solid #334155',
+                    borderRadius: '14px',
+                    boxShadow: '0 16px 36px rgba(0,0,0,0.45), 0 4px 12px rgba(0,0,0,0.3)',
+                    padding: '8px',
+                    zIndex: 40,
+                  }}
+                >
+                  {LAB_MENU_ITEMS.map((item) => {
+                    const active = activeTab === 'recipes' && labTab === item.key;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => {
+                          setActiveTab('recipes');
+                          setLabTab(item.key);
+                          setLabMenuOpen(false);
+                        }}
+                        style={{
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '10px 12px',
+                          background: active ? 'rgba(16, 185, 129, 0.12)' : 'transparent',
+                          border: active ? '1px solid rgba(16, 185, 129, 0.35)' : '1px solid transparent',
+                          borderRadius: '10px',
+                          color: active ? '#10B981' : '#E2E8F0',
+                          fontSize: '15px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                  <div style={{ height: 1, background: '#334155', margin: '6px 4px' }} />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('recipes');
+                      setLabRequisitesKey((k) => k + 1);
+                      setLabMenuOpen(false);
+                    }}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '10px 12px',
+                      background: 'transparent',
+                      border: '1px solid transparent',
+                      borderRadius: '10px',
+                      color: '#94A3B8',
+                      fontSize: '15px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Реквизиты
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ==================== 3. БЛОК СТАТИСТИКИ (только на вкладке Заявки) ==================== */}
+        {activeTab === 'zayavki' && (
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
+            gap: '14px',
+            marginBottom: '14px',
+            flexShrink: 0
+          }}>
+            {stats.map((stat, index) => (
+              <div key={index} style={volumeCardStyle({
+                borderRadius: 18,
+                padding: '14px 18px',
+              })}>
+                <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '6px' }}>
+                  {stat.label}
+                </div>
+                <div style={{ 
+                  fontSize: '26px', 
+                  fontWeight: '700', 
+                  color: stat.color,
+                  marginBottom: '2px'
+                }}>
+                  {stat.value}
+                </div>
+                <div style={{ color: '#64748B', fontSize: '15px' }}>
+                  {stat.unit}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
-      </button>
-    ))}
-  </div>
-</div>
-  
 
         {/* ==================== 4. ОСНОВНОЙ КОНТЕНТ ==================== */}
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -1283,7 +1433,15 @@ export default function OperatorBSUPage() {
                 контента внутри (умалчиваемый min-width: auto), из-за чего левая
                 панель раньше "выталкивалась" за пределы экрана на 1920 и ниже. */}
                                                 {/* ==================== 4.1 ОЧЕРЕДЬ НА ЗАГРУЗКУ ==================== */}
-            <div style={{ backgroundColor: '#1E2937', borderRadius: '24px', padding: '20px', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box', minWidth: 0 }}>
+            <div style={volumeCardStyle({
+              borderRadius: 22,
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+              overflow: 'hidden',
+              minWidth: 0,
+            })}>
               
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexShrink: 0 }}>
                 <h2 style={{ fontSize: '19px', fontWeight: '600' }}>
@@ -1359,9 +1517,8 @@ export default function OperatorBSUPage() {
                 }
                 }}
 
-                      style={{
-                        backgroundColor: '#25334A',
-                        borderRadius: '12px',
+                      style={volumeCardSoftStyle({
+                        borderRadius: 12,
                         padding: '13px 18px',
                         display: 'grid',
                         gridTemplateColumns: '56px 70px 105px 122px 62px 98px 70px 1fr 260px',
@@ -1369,8 +1526,8 @@ export default function OperatorBSUPage() {
                         alignItems: 'center',
                         minHeight: '28px',
                         fontSize: '15px',
-                        cursor: 'pointer'
-                      }}
+                        cursor: 'pointer',
+                      })}
                     >
                       <div style={{ fontWeight: '600', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>{trip.time || '—'}</div>
                       <div style={{ fontWeight: '700', color: '#60A5FA', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center' }}>
@@ -1385,54 +1542,51 @@ export default function OperatorBSUPage() {
                       <div title={trip.concrete_grade || ''} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>{trip.concrete_grade || '—'}</div>
                       <div style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center' }}>{trip.volume} м³</div>
 
-                      <select 
-  value={podvizhnostOverrides[trip.id] ?? trip.podvizhnost ?? 'П3'}
-  onChange={async (e) => {
-    const newPodvizhnost = e.target.value;
-    
-    try {
-      await fetch('/api/adminCifra/order-mixers/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          id: trip.id, 
-          podvizhnost: newPodvizhnost 
-        })
-      });
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ justifySelf: 'center', width: 64 }}
+                      >
+                        <ModalSelect
+                          value={podvizhnostOverrides[trip.id] ?? trip.podvizhnost ?? 'П3'}
+                          onChange={async (newPodvizhnost) => {
+                            try {
+                              await fetch('/api/adminCifra/order-mixers/status', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  id: trip.id,
+                                  podvizhnost: newPodvizhnost,
+                                }),
+                              });
 
-      setPodvizhnostOverrides(prev => ({
-        ...prev,
-        [trip.id]: newPodvizhnost
-      }));
-
-    } catch (err) {
-      console.error('Ошибка сохранения подвижности:', err);
-      alert('Не удалось сохранить подвижность');
-    }
-  }}
-  onClick={(e) => e.stopPropagation()}
-  style={{ 
-    padding: '7px 8px', 
-    background: '#1E2937', 
-    border: 'none', 
-    borderRadius: '6px', 
-    color: '#fff', 
-    fontSize: '14px',
-    // Без явной ширины <select>, будучи прямым потомком grid-строки,
-    // растягивается на всю колонку (justify-items: stretch по умолчанию) —
-    // из-за этого он выглядел непропорционально широким. Фиксируем компактную
-    // ширину и центрируем в колонке — свободное место остаётся по краям
-    // равномерно, визуально отделяя колонку от соседних.
-    width: '64px',
-    justifySelf: 'center'
-  }}
->
-  <option value="П1">П1</option>
-  <option value="П2">П2</option>
-  <option value="П3">П3</option>
-  <option value="П4">П4</option>
-  <option value="П5">П5</option>
-</select>
+                              setPodvizhnostOverrides((prev) => ({
+                                ...prev,
+                                [trip.id]: newPodvizhnost,
+                              }));
+                            } catch (err) {
+                              console.error('Ошибка сохранения подвижности:', err);
+                              alert('Не удалось сохранить подвижность');
+                            }
+                          }}
+                          minPopupWidth={80}
+                          chevronColor="#94A3B8"
+                          triggerStyle={{
+                            padding: '7px 8px',
+                            background: '#1E2937',
+                            border: 'none',
+                            borderRadius: 6,
+                            color: '#fff',
+                            fontSize: 14,
+                            width: 64,
+                            boxShadow: 'none',
+                          }}
+                          options={['П1', 'П2', 'П3', 'П4', 'П5'].map((v) => ({
+                            value: v,
+                            label: v,
+                            text: v,
+                          }))}
+                        />
+                      </div>
 
                       {/* Прогресс по заявке: N — сколько рейсов уже отгружено сегодня,
                           M — оценка итогового числа рейсов на всю заявку с учётом её
@@ -1532,7 +1686,14 @@ export default function OperatorBSUPage() {
             </div>
 
                         {/* ==================== 4.2 ОТГРУЖЕНО СЕГОДНЯ ==================== */}
-            <div style={{ backgroundColor: '#1E2937', borderRadius: '24px', padding: '20px', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box' }}>
+            <div style={volumeCardStyle({
+              borderRadius: 22,
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+              overflow: 'hidden',
+            })}>
               <h2 style={{ fontSize: '19px', fontWeight: '600', marginBottom: '14px', color: '#10B981', flexShrink: 0 }}>
                 🚚 Отгружено сегодня ({filteredCompletedTrips.length})
               </h2>
@@ -1574,9 +1735,8 @@ export default function OperatorBSUPage() {
                             : 'диспетчером/менеджером/водителем'
                         } напрямую, минуя кнопку "Загружен" у оператора БСУ — точного времени загрузки нет`
                       : undefined}
-                    style={{
-                      backgroundColor: '#25334A',
-                      borderRadius: '12px',
+                    style={volumeCardSoftStyle({
+                      borderRadius: 12,
                       padding: '12px 16px',
                       display: 'grid',
                       // Фиксированные колонки вместо flex+space-between — иначе на
@@ -1594,10 +1754,10 @@ export default function OperatorBSUPage() {
                       // Рейс, никогда не прошедший через кнопку оператора "Загружен"
                       // (статус выставлен диспетчером/водителем напрямую) — выделяем
                       // янтарной полосой слева, чтобы это было заметно с первого взгляда.
-                      ...(trip.no_operator_record ? {
-                        boxShadow: 'inset 3px 0 0 #F59E0B',
-                      } : {}),
-                    }}
+                      ...(trip.no_operator_record
+                        ? { boxShadow: `${CARD_VOLUME_SOFT}, inset 3px 0 0 #F59E0B` }
+                        : {}),
+                    })}
                   >
                       <div style={{ fontWeight: '600', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {trip.time || '—'}
@@ -1753,9 +1913,11 @@ export default function OperatorBSUPage() {
           </div>
         )}
         {/* ==================== СКЛАД ==================== */}
+        {/* Скролл только если контент выше экрана — карточки силосов/добавок
+            держим крупными, без искусственного растягивания. */}
         {activeTab === 'warehouse' && (
           <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-            <WarehousePage recipes={recipes} />
+            <WarehousePage recipes={recipes} actorName={operatorName} />
           </div>
         )}
         {/* ==================== ОТЧЕТЫ ==================== */}
@@ -1769,7 +1931,12 @@ export default function OperatorBSUPage() {
         {/* ==================== РЕЦЕПТЫ ==================== */}
         {activeTab === 'recipes' && (
           <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-            <RecipesPage />
+            <RecipesPage
+              embedded
+              tab={labTab}
+              onTabChange={setLabTab}
+              openRequisitesKey={labRequisitesKey}
+            />
           </div>
         )}
         </div>
@@ -1781,7 +1948,7 @@ export default function OperatorBSUPage() {
           style={{
             position: 'fixed', 
             inset: 0, 
-            backgroundColor: 'rgba(0,0,0,0.94)', 
+            backgroundColor: 'rgba(0,0,0,0.82)', 
             zIndex: 1000,
             display: 'flex', 
             alignItems: 'center', 
@@ -1791,23 +1958,31 @@ export default function OperatorBSUPage() {
         >
           <div 
             className="scroll-hidden"
-            style={{ 
-              background: '#1E2937', 
+            style={volumeModalStyle({ 
               padding: '32px', 
-              borderRadius: '24px', 
+              borderRadius: 24, 
               width: '100%',
               maxWidth: '680px',
               maxHeight: '90vh',
               overflowY: 'auto',
               color: '#fff',
               margin: '0 16px',
-              boxSizing: 'border-box'
-            }} 
+            })} 
             onClick={e => e.stopPropagation()}
           >
-            <h2 style={{ fontSize: '28px', fontWeight: '700', marginBottom: '24px' }}>
-              Рейс #{selectedTrip.id || selectedTrip.orderId}
-            </h2>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', marginBottom: '24px' }}>
+              <h2 style={{ fontSize: '28px', fontWeight: '700', margin: 0 }}>
+                Рейс #{selectedTrip.id || selectedTrip.orderId}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setSelectedTrip(null)}
+                title="Закрыть"
+                style={modalCloseButtonStyle()}
+              >
+                ×
+              </button>
+            </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '28px' }}>
               <div>
@@ -1827,13 +2002,12 @@ export default function OperatorBSUPage() {
             {/* РЕЦЕПТ БЕТОНА */}
             <div style={{ marginBottom: '24px' }}>
               <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>РЕЦЕПТ БЕТОНА</div>
-              <div style={{ 
-                background: '#25334A', 
-                padding: '18px', 
-                borderRadius: '12px',
+              <div style={volumeCardSoftStyle({
+                padding: '18px',
+                borderRadius: 12,
                 fontSize: '15px',
-                lineHeight: '1.65'
-              }}>
+                lineHeight: '1.65',
+              })}>
                 {(() => {
                   const grade = (selectedTrip.concrete_grade || '').toUpperCase().trim();
                   const recipe = recipes.find((r: any) => 
@@ -1862,13 +2036,12 @@ export default function OperatorBSUPage() {
             {/* КЛИЕНТ */}
             <div style={{ marginBottom: '24px' }}>
               <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>КЛИЕНТ</div>
-              <div style={{ 
-                background: '#25334A', 
-                padding: '16px', 
-                borderRadius: '12px',
+              <div style={volumeCardSoftStyle({
+                padding: '16px',
+                borderRadius: 12,
                 fontSize: '16px',
-                fontWeight: '600'
-              }}>
+                fontWeight: '600',
+              })}>
                 {selectedTrip.organization_name || selectedTrip.client_name || selectedTrip.client || '—'}
               </div>
             </div>
@@ -1876,15 +2049,14 @@ export default function OperatorBSUPage() {
                                                 {/* ==================== КОММЕНТАРИЙ КЛИЕНТА ==================== */}
             <div style={{ marginBottom: '32px' }}>
               <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>КОММЕНТАРИЙ КЛИЕНТА</div>
-              <div style={{ 
-                background: '#25334A', 
-                padding: '20px', 
-                borderRadius: '12px',
+              <div style={volumeCardSoftStyle({
+                padding: '20px',
+                borderRadius: 12,
                 fontSize: '15px',
                 lineHeight: '1.6',
                 whiteSpace: 'pre-wrap',
-                minHeight: '90px'
-              }}>
+                minHeight: '90px',
+              })}>
                 {selectedTrip.comment || 'Комментариев от клиента нет'}
               </div>
             </div>
@@ -1892,15 +2064,14 @@ export default function OperatorBSUPage() {
             {/* ИСТОРИЯ */}
             <div style={{ marginBottom: '32px' }}>
               <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '10px' }}>ИСТОРИЯ ИЗМЕНЕНИЙ</div>
-              <div style={{ 
-                background: '#25334A', 
-                padding: '16px', 
-                borderRadius: '12px',
+              <div style={volumeCardSoftStyle({
+                padding: '16px',
+                borderRadius: 12,
                 fontSize: '14.5px',
                 lineHeight: '1.7',
                 maxHeight: '220px',
-                overflowY: 'auto'
-              }}>
+                overflowY: 'auto',
+              })}>
                 {tripHistory.length > 0 ? tripHistory.map((entry: any, i: number) => (
                   <div key={i} style={{ marginBottom: '8px' }}>
                     • {new Date(entry.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} —{' '}
@@ -1918,17 +2089,15 @@ export default function OperatorBSUPage() {
             <div style={{ display: 'flex', gap: '12px' }}>
               <button 
                 onClick={() => setSelectedTrip(null)}
-                style={{ 
+                style={volumeCardSoftStyle({
                   flex: 1,
                   padding: '16px',
-                  background: '#334155',
                   color: '#fff',
-                  border: 'none',
-                  borderRadius: '9999px',
+                  borderRadius: 9999,
                   fontSize: '16px',
                   fontWeight: '600',
-                  cursor: 'pointer'
-                }}
+                  cursor: 'pointer',
+                })}
               >
                 Закрыть
               </button>
@@ -1954,21 +2123,21 @@ export default function OperatorBSUPage() {
             alignItems: 'center',
             justifyContent: 'center',
           }}
+          onClick={() => setShiftReminderDismissed(true)}
         >
           <div
-            style={{
-              background: '#1E2937',
+            onClick={(e) => e.stopPropagation()}
+            style={volumeModalStyle({
               border: '1px solid #F59E0B',
-              boxShadow: '0 0 0 4px rgba(245, 158, 11, 0.12), 0 20px 60px rgba(0,0,0,0.5)',
+              boxShadow: `${MODAL_VOLUME_GLOW}, 0 0 0 4px rgba(245, 158, 11, 0.12)`,
               padding: '36px 40px',
-              borderRadius: '24px',
+              borderRadius: 24,
               width: '100%',
               maxWidth: '480px',
               margin: '0 16px',
               color: '#fff',
               textAlign: 'center',
-              boxSizing: 'border-box',
-            }}
+            })}
           >
             <div style={{ fontSize: '40px', marginBottom: '10px' }}>👋</div>
             <div style={{ fontSize: '21px', fontWeight: '700', marginBottom: '8px' }}>

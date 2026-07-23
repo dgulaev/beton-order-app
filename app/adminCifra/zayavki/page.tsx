@@ -5,7 +5,7 @@ import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders, useRealtimeOrderMixers } from '../../../hooks/useRealtimeOrders';
 import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
-import { Package, Save, Trash2, Send, Share2, Copy, X, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Package, Save, Trash2, Send, Share2, Copy, X, AlertTriangle, CheckCircle2, Search } from 'lucide-react';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 import OrderRouteMap from '@/app/adminCifra/components/OrderRouteMap';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
@@ -17,6 +17,19 @@ import {
   type AdditiveDensities,
 } from '@/lib/recipeAdditives';
 import { formatPhoneDisplay, formatPhoneInput } from '@/lib/phone';
+import {
+  CARD_BORDER,
+  CARD_VOLUME_SOFT,
+  modalCloseButtonStyle,
+  modalFieldStyle,
+  volumeCardSoftStyle,
+  volumeCardStyle,
+  volumeModalStyle,
+} from '../cardStyles';
+import ModalDateInput from '@/app/adminCifra/components/ModalDateInput';
+import ModalTimeInput from '@/app/adminCifra/components/ModalTimeInput';
+import { appConfirm } from '@/app/adminCifra/components/appDialog';
+import ModalSelect from '@/app/adminCifra/components/ModalSelect';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
@@ -363,19 +376,17 @@ function WeekVolumeChart({
     <>
       {/* ===== Компактное превью ===== */}
       <div
-        style={{
-          background: '#1E2937',
-          borderRadius: '14px',
+        style={volumeCardSoftStyle({
+          borderRadius: 14,
           padding: '8px 10px 6px',
           marginTop: '8px',
           marginBottom: '4px',
           width: '100%',
-          boxSizing: 'border-box',
           flexShrink: 0,
           height: '148px',
           display: 'flex',
           flexDirection: 'column',
-        }}
+        })}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
           <div style={{ color: '#94A3B8', fontSize: '12px', fontWeight: 600 }}>Объём по дням</div>
@@ -435,22 +446,18 @@ function WeekVolumeChart({
         >
           <div
             className="scroll-hidden"
-            style={{
-              background: '#1E2937',
-              borderRadius: '20px',
+            style={volumeModalStyle({
+              borderRadius: 20,
               width: '100%',
               maxWidth: '1080px',
               // На 1920 места хватает — почти во весь экран, без внутреннего скролла
               height: 'min(920px, 96vh)',
               maxHeight: '96vh',
               overflow: 'hidden',
-              border: '1px solid #334155',
-              boxShadow: '0 24px 64px rgba(0,0,0,0.45)',
               padding: '18px 22px 14px',
-              boxSizing: 'border-box',
               display: 'flex',
               flexDirection: 'column',
-            }}
+            })}
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '10px', flexShrink: 0 }}>
@@ -462,9 +469,7 @@ function WeekVolumeChart({
                     type="button"
                     onClick={() => shiftWeek(-1)}
                     title="Предыдущая неделя"
-                    style={{
-                      background: '#334155',
-                      border: 'none',
+                    style={volumeCardSoftStyle({
                       color: '#E2E8F0',
                       width: 36,
                       height: 36,
@@ -472,8 +477,12 @@ function WeekVolumeChart({
                       cursor: 'pointer',
                       fontSize: 20,
                       lineHeight: 1,
+                      padding: 0,
                       flexShrink: 0,
-                    }}
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    })}
                   >
                     ←
                   </button>
@@ -491,9 +500,7 @@ function WeekVolumeChart({
                     type="button"
                     onClick={() => shiftWeek(1)}
                     title="Следующая неделя"
-                    style={{
-                      background: '#334155',
-                      border: 'none',
+                    style={volumeCardSoftStyle({
                       color: '#E2E8F0',
                       width: 36,
                       height: 36,
@@ -501,8 +508,12 @@ function WeekVolumeChart({
                       cursor: 'pointer',
                       fontSize: 20,
                       lineHeight: 1,
+                      padding: 0,
                       flexShrink: 0,
-                    }}
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    })}
                   >
                     →
                   </button>
@@ -511,17 +522,7 @@ function WeekVolumeChart({
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                style={{
-                  background: '#334155',
-                  border: 'none',
-                  color: '#E2E8F0',
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  cursor: 'pointer',
-                  fontSize: 18,
-                  flexShrink: 0,
-                }}
+                style={modalCloseButtonStyle({ color: '#E2E8F0', fontSize: 18 })}
               >
                 ✕
               </button>
@@ -539,7 +540,7 @@ function WeekVolumeChart({
                   color: deltaPrev > 0 ? '#34D399' : deltaPrev < 0 ? '#F87171' : '#94A3B8',
                 },
               ].map((c) => (
-                <div key={c.label} style={{ background: '#0F172A', borderRadius: 12, padding: '8px 12px', border: '1px solid #334155' }}>
+                <div key={c.label} style={volumeCardSoftStyle({ borderRadius: 12, padding: '8px 12px' })}>
                   <div style={{ color: '#64748B', fontSize: 12, marginBottom: 2 }}>{c.label}</div>
                   <div style={{ color: c.color, fontSize: 17, fontWeight: 700 }}>{c.value}</div>
                 </div>
@@ -550,7 +551,7 @@ function WeekVolumeChart({
               <WeekChartLegend />
             </div>
 
-            <div style={{ flex: '1 1 300px', minHeight: 260, maxHeight: 340, background: '#0F172A', borderRadius: 14, padding: '8px 4px 4px', border: '1px solid #334155' }}>
+            <div style={volumeCardSoftStyle({ flex: '1 1 300px', minHeight: 260, maxHeight: 340, borderRadius: 14, padding: '8px 4px 4px' })}>
               <WeekVolumeChartSvg
                 days={days}
                 series={series}
@@ -565,14 +566,12 @@ function WeekVolumeChart({
 
             {/* Детали дня — под графиком, не перекрывает */}
             <div
-              style={{
+              style={volumeCardSoftStyle({
                 marginTop: 10,
-                background: '#0F172A',
                 borderRadius: 12,
                 padding: '10px 14px',
-                border: '1px solid #334155',
                 flexShrink: 0,
-              }}
+              })}
             >
               {focus && focusDay ? (
                 <div style={{ display: 'grid', gridTemplateColumns: '1.4fr repeat(4, 1fr)', gap: 10, alignItems: 'center' }}>
@@ -884,7 +883,7 @@ useEffect(() => {
 
   // ==================== УДАЛЕНИЕ ЗАЯВКИ ====================
   const handleDeleteOrder = async (orderId: number) => {
-    if (!confirm('Вы уверены, что хотите удалить эту заявку? Действие необратимо.')) return;
+    if (!(await appConfirm('Вы уверены, что хотите удалить эту заявку? Действие необратимо.', { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
 
     try {
       const res = await fetch(`/api/adminCifra/orders/${orderId}`, { method: 'DELETE' });
@@ -938,7 +937,7 @@ useEffect(() => {
   const sendNotification = async (orderId: number) => {
     if (!orderId) return alert('ID заявки не найден');
 
-    if (!confirm('Отправить обновлённую заявку в Max?')) return;
+    if (!(await appConfirm('Отправить обновлённую заявку в Max?'))) return;
 
     setIsSendingNotification(true);
 
@@ -1639,42 +1638,31 @@ ${order.customer_type?.includes('Юридическое')
       boxSizing: 'border-box'
     }}>
     
-    {/* Header */}
+    {/* Заголовок */}
     <div style={{ 
-      background: '#1E2937', 
-      padding: '14px 32px', 
-      borderRadius: '20px 20px 0 0',
       display: 'flex', 
       alignItems: 'center', 
       justifyContent: 'space-between',
-      flexShrink: 0
+      flexShrink: 0,
+      marginBottom: '14px',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '40px' }}>
-        <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Package size={26} color="#94A3B8" />
-          Заявки
-        </h1>
-        
-        
-      </div>
+      <h1 style={{ fontSize: '26px', fontWeight: 700, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <Package size={26} color="#94A3B8" />
+        Заявки
+      </h1>
     </div>
 
-                              {/* ==================== KPI БАР ==================== */}
-      <div style={{ 
-        padding: '12px 20px', 
-        background: '#1E2937', 
-        display: 'flex', 
-        gap: '12px', 
-        borderTop: '1px solid #334155',
-        borderRadius: '0 0 20px 20px',
-        alignItems: 'stretch',
-        flexWrap: 'nowrap',
-        flexShrink: 0,
-        marginBottom: '16px',
-      }}>
+    {/* ==================== KPI — отдельные карточки по параметрам ==================== */}
+    <div style={{ 
+      display: 'grid',
+      gridTemplateColumns: 'minmax(0, 1.25fr) repeat(3, minmax(0, 1fr)) minmax(0, 0.95fr)',
+      gap: '12px',
+      flexShrink: 0,
+      marginBottom: '14px',
+    }}>
         
         {/* Выполнение плана */}
-        <div style={{ flex: '1.2 1 0', minWidth: 0 }}>
+        <div style={volumeCardStyle({ borderRadius: 18, padding: '14px 16px', minWidth: 0 })}>
           <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '6px', marginBottom: '6px' }}>
             <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em' }}>Выполнение плана</div>
             <div style={{ fontSize: '18px', fontWeight: 700, color: completionColor, flexShrink: 0 }}>{completionPct}%</div>
@@ -1683,7 +1671,7 @@ ${order.customer_type?.includes('Юридическое')
             <span style={{ fontSize: '26px', fontWeight: 700, color: completionColor, lineHeight: 1 }}>
               {fmtM3(unloadedVolume)}
             </span>
-            <span style={{ fontSize: '14px', color: '#94A3B8', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: '26px', color: '#94A3B8', fontWeight: 700, whiteSpace: 'nowrap', lineHeight: 1 }}>
               / {fmtM3(planVolume)} м³
             </span>
           </div>
@@ -1734,11 +1722,11 @@ ${order.customer_type?.includes('Юридическое')
         </div>
 
         {/* Цемент */}
-        <div style={{ flex: '0.85 1 0', minWidth: 0 }}>
+        <div style={volumeCardStyle({ borderRadius: 18, padding: '14px 16px', minWidth: 0 })}>
           <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em', marginBottom: '6px' }}>Цемент</div>
           <div style={{ fontSize: '22px', fontWeight: 700, color: '#60A5FA', lineHeight: 1.1, marginBottom: '8px', whiteSpace: 'nowrap' }}>
             {cementCompletedMemo}
-            <span style={{ color: '#94A3B8', fontSize: '14px', fontWeight: 600 }}>
+            <span style={{ color: '#94A3B8', fontSize: '22px', fontWeight: 700 }}>
               {' / '}{Number(cementAllMemo) % 1 === 0 ? Math.round(Number(cementAllMemo)) : Number(cementAllMemo).toFixed(1)} т
             </span>
           </div>
@@ -1754,8 +1742,8 @@ ${order.customer_type?.includes('Юридическое')
           <div style={{ fontSize: '12px', color: '#94A3B8', fontWeight: 500 }}>от разгруженного объёма</div>
         </div>
 
-        {/* ПФМ — отдельный блок */}
-        <div style={{ flex: '0.85 1 0', minWidth: 0 }}>
+        {/* ПФМ */}
+        <div style={volumeCardStyle({ borderRadius: 18, padding: '14px 16px', minWidth: 0 })}>
           <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em', marginBottom: '6px' }}>
             ПФМ
             {weekAdditiveForecast?.pfm?.shortage && (
@@ -1764,7 +1752,7 @@ ${order.customer_type?.includes('Юридическое')
           </div>
           <div style={{ fontSize: '22px', fontWeight: 700, color: '#FACC15', lineHeight: 1.1, marginBottom: '8px', whiteSpace: 'nowrap' }}>
             {fmtKg(additiveFactByType.pfm)}
-            <span style={{ color: '#94A3B8', fontSize: '14px', fontWeight: 600 }}>
+            <span style={{ color: '#94A3B8', fontSize: '22px', fontWeight: 700 }}>
               {' / '}{fmtKg(additivePlanByType.pfm)} кг
             </span>
           </div>
@@ -1782,8 +1770,8 @@ ${order.customer_type?.includes('Юридическое')
           </div>
         </div>
 
-        {/* Линомикс — отдельный блок */}
-        <div style={{ flex: '0.85 1 0', minWidth: 0 }}>
+        {/* Линомикс */}
+        <div style={volumeCardStyle({ borderRadius: 18, padding: '14px 16px', minWidth: 0 })}>
           <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em', marginBottom: '6px' }}>
             Линомикс
             {weekAdditiveForecast?.linomix?.shortage && (
@@ -1792,7 +1780,7 @@ ${order.customer_type?.includes('Юридическое')
           </div>
           <div style={{ fontSize: '22px', fontWeight: 700, color: '#A78BFA', lineHeight: 1.1, marginBottom: '8px', whiteSpace: 'nowrap' }}>
             {fmtKg(additiveFactByType.linomix)}
-            <span style={{ color: '#94A3B8', fontSize: '14px', fontWeight: 600 }}>
+            <span style={{ color: '#94A3B8', fontSize: '22px', fontWeight: 700 }}>
               {' / '}{fmtKg(additivePlanByType.linomix)} кг
             </span>
           </div>
@@ -1811,7 +1799,7 @@ ${order.customer_type?.includes('Юридическое')
         </div>
 
         {/* Заявки по статусам */}
-        <div style={{ flex: '0.9 1 0', minWidth: 0 }}>
+        <div style={volumeCardStyle({ borderRadius: 18, padding: '14px 16px', minWidth: 0 })}>
           <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em', marginBottom: '6px' }}>Заявки</div>
           <div style={{ fontSize: '26px', fontWeight: 700, lineHeight: 1.1, marginBottom: '8px', whiteSpace: 'nowrap' }}>
             {orderStatusCounts.active}
@@ -1841,7 +1829,7 @@ ${order.customer_type?.includes('Юридическое')
           </div>
         </div>
 
-      </div>
+    </div>
 
       <div style={{ display: 'flex', gap: '24px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
         
@@ -1854,16 +1842,14 @@ ${order.customer_type?.includes('Юридическое')
           boxSizing: 'border-box',
           overflow: 'hidden'
         }}>
-          <div style={{ 
-            background: '#1E2937', 
-            borderRadius: '20px', 
+          <div style={volumeCardStyle({ 
+            borderRadius: 22, 
             padding: '20px',
             height: '100%',
-            boxSizing: 'border-box',
             display: 'flex',
             flexDirection: 'column',
-            overflow: 'hidden'
-          }}>
+            overflow: 'hidden',
+          })}>
             
             <h3 style={{ marginBottom: '10px', color: '#94A3B8', fontSize: '16px', flexShrink: 0 }}>
               ЗАЯВКИ НА НЕДЕЛЮ
@@ -1963,22 +1949,24 @@ ${order.customer_type?.includes('Юридическое')
       <div
         key={dateStr}
         onClick={() => setSelectedDate(d)}
-        style={{
+        style={volumeCardSoftStyle({
           flex: 1,
           minHeight: 0,
           maxHeight: '58px',
           padding: '0 16px',
-          background: isSelected ? '#3B82F620' : '#25334A',
-          borderRadius: '10px',
+          background: isSelected
+            ? 'linear-gradient(165deg, rgba(59,130,246,0.22) 0%, rgba(30,41,55,0.95) 100%)'
+            : undefined,
+          borderRadius: 10,
           cursor: 'pointer',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          border: isSelected ? '2px solid #3B82F6' : 'none',
+          border: isSelected ? '2px solid #3B82F6' : undefined,
           transition: 'all 0.2s ease',
           userSelect: 'none',
-          overflow: 'hidden'
-        }}
+          overflow: 'hidden',
+        })}
       >
         <div style={{ fontWeight: '600', fontSize: '14px', whiteSpace: 'nowrap' }}>
           {d.toLocaleDateString('ru-RU', { 
@@ -2041,12 +2029,11 @@ ${order.customer_type?.includes('Юридическое')
 
                                     {/* ==================== РАЗДЕЛИТЕЛЬ + СВОДКА ЗА НЕДЕЛЮ ==================== */}
             <div style={{ marginTop: '8px', paddingTop: '10px', borderTop: '1px solid #334155', flexShrink: 0 }}>
-              <div style={{ 
-                background: '#25334A', 
-                borderRadius: '16px', 
+              <div style={volumeCardSoftStyle({ 
+                borderRadius: 16, 
                 padding: '12px 16px',
-                fontSize: '15px'
-              }}>
+                fontSize: '15px',
+              })}>
                 <div style={{ color: '#94A3B8', marginBottom: '8px', fontWeight: '600' }}>Итого за неделю</div>
                 
                 {/* 1. Количество заявок */}
@@ -2141,53 +2128,68 @@ ${order.customer_type?.includes('Юридическое')
       value={searchQuery}
       onChange={(e) => { setSearchQuery(e.target.value); if (searchMode) setSearchMode(false); }}
       onKeyDown={(e) => e.key === 'Enter' && runSearch()}
-      style={{
-        padding: '8px 16px',
-        background: searchMode ? 'rgba(59,130,246,0.12)' : '#25334A',
-        border: searchMode ? '1.5px solid rgba(59,130,246,0.4)' : '1.5px solid transparent',
-        borderRadius: '9999px',
+      style={volumeCardSoftStyle({
+        padding: '9px 16px',
+        borderRadius: 12,
         width: '300px',
         color: '#fff',
         fontSize: '14px',
         outline: 'none',
-        transition: 'all 0.2s',
+        transition: 'border-color 0.2s, box-shadow 0.2s',
         flexShrink: 0,
-      }}
+        ...(searchMode ? {
+          border: '1px solid rgba(59,130,246,0.55)',
+          boxShadow: `${CARD_VOLUME_SOFT}, 0 0 0 3px rgba(59,130,246,0.12)`,
+        } : {}),
+      })}
     />
 
     <button
       onClick={runSearch}
       disabled={!searchQuery.trim()}
       style={{
-        padding: '8px 18px',
-        background: searchQuery.trim() ? '#3B82F6' : '#25334A',
-        border: 'none',
-        borderRadius: '9999px',
-        color: searchQuery.trim() ? '#fff' : '#64748B',
-        fontSize: '14px',
-        fontWeight: 600,
+        padding: '9px 20px',
+        borderRadius: 12,
+        background: searchQuery.trim()
+          ? 'linear-gradient(165deg, #60A5FA 0%, #3B82F6 55%, #2563EB 100%)'
+          : 'linear-gradient(165deg, #334155 0%, #1E2937 100%)',
+        border: searchQuery.trim()
+          ? '1px solid rgba(191,219,254,0.45)'
+          : CARD_BORDER,
+        boxShadow: searchQuery.trim()
+          ? `${CARD_VOLUME_SOFT}, 0 0 0 1px rgba(59,130,246,0.15), inset 0 1px 0 rgba(255,255,255,0.22)`
+          : CARD_VOLUME_SOFT,
+        color: searchQuery.trim() ? '#FFFFFF' : '#94A3B8',
+        fontSize: '15px',
+        fontWeight: 700,
+        letterSpacing: '0.04em',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '7px',
         cursor: searchQuery.trim() ? 'pointer' : 'default',
-        transition: 'all 0.2s',
+        transition: 'filter 0.2s, opacity 0.2s',
         flexShrink: 0,
+        opacity: searchQuery.trim() ? 1 : 0.85,
       }}
+      onMouseEnter={(e) => { if (searchQuery.trim()) e.currentTarget.style.filter = 'brightness(1.1)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
     >
+      <Search size={15} strokeWidth={2.5} />
       Найти
     </button>
 
     {searchMode && (
       <button
         onClick={clearSearch}
-        style={{
-          padding: '8px 14px',
-          background: 'transparent',
-          border: '1.5px solid #334155',
-          borderRadius: '9999px',
+        style={volumeCardSoftStyle({
+          padding: '9px 14px',
+          borderRadius: 12,
           color: '#94A3B8',
           fontSize: '13px',
           fontWeight: 600,
           cursor: 'pointer',
           flexShrink: 0,
-        }}
+        })}
       >
         ✕ Сбросить
       </button>
@@ -2226,35 +2228,37 @@ ${order.customer_type?.includes('Юридическое')
     {/* Кнопка Новая заявка */}
     <button
       onClick={() => setShowNewOrderModal(true)}
-      style={{
-        padding: '8px 22px',
-        background: '#10B981',
+      style={volumeCardSoftStyle({
+        padding: '9px 22px',
+        background: 'linear-gradient(165deg, #10B981 0%, #059669 100%)',
+        border: '1px solid rgba(110,231,183,0.35)',
+        borderRadius: 12,
         color: 'white',
-        border: 'none',
-        borderRadius: '9999px',
         fontSize: '14px',
         fontWeight: 600,
-        display: 'flex', alignItems: 'center', gap: '6px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
         cursor: 'pointer',
         flexShrink: 0,
-      }}
+      })}
+      onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
     >
       + Новая заявка
     </button>
   </div>
 
     {/* ==================== СПИСОК ЗАЯВОК СО СКРОЛЛОМ ==================== */}
-<div style={{ 
+<div style={volumeCardStyle({ 
   flex: 1,
   minHeight: 0,
-  boxSizing: 'border-box',
-  background: '#1E2937', 
-  borderRadius: '24px', 
+  borderRadius: 24, 
   padding: '24px 32px',
   display: 'flex',
   flexDirection: 'column',
-  overflow: 'hidden'
-}}>
+  overflow: 'hidden',
+})}>
   
   <div className="scroll-hidden" style={{ 
     flex: 1, 
@@ -2270,17 +2274,18 @@ ${order.customer_type?.includes('Юридическое')
       <div
   key={order.id}
   onClick={() => handleOpenOrder(order)}
-  style={{
-    background: '#25334A',
-    borderRadius: '14px',
+  style={volumeCardSoftStyle({
+    borderRadius: 14,
     padding: '9px 20px',
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     gap: '20px',
-    transition: 'all 0.2s',
-    flexShrink: 0
-  }}
+    transition: 'filter 0.2s',
+    flexShrink: 0,
+  })}
+  onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+  onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
 >
         {/* Порядковый номер */}
         <div style={{ 
@@ -2371,20 +2376,18 @@ ${order.customer_type?.includes('Юридическое')
       {/* МОДАЛЬНОЕ ОКНО ЗАКАЗА — БЕЗ IFRAME */}
 {selectedOrder && (
   <div 
-    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.94)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} 
-    
+    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+    onClick={() => setSelectedOrder(null)}
   >
     <div 
       className="w-full max-w-[1650px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
-      style={{ 
+      style={volumeModalStyle({ 
         position: 'relative',
-        background: '#1E2937', 
-        borderRadius: '24px', 
+        borderRadius: 24, 
         // Небольшой доп. отступ сверху — заголовок теперь встроен в шапки
         // колонок, а не в отдельную строку (см. комментарий в OrderDetailModal.tsx).
         padding: '38px 32px 32px 32px', 
-        boxShadow: '0 30px 80px rgba(0,0,0,0.7)'
-      }} 
+      })} 
       onClick={e => e.stopPropagation()}
     >
       <style>{`
@@ -2398,22 +2401,12 @@ ${order.customer_type?.includes('Юридическое')
       <button
         onClick={() => setSelectedOrder(null)}
         title="Закрыть"
-        style={{
+        style={modalCloseButtonStyle({
           position: 'absolute',
           top: '26px',
           right: '26px',
-          width: '32px',
-          height: '32px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          background: 'rgba(148, 163, 184, 0.1)',
-          border: 'none',
-          borderRadius: '9999px',
-          color: '#94A3B8',
-          cursor: 'pointer',
           zIndex: 1,
-        }}
+        })}
       >
         <X size={18} />
       </button>
@@ -2435,7 +2428,16 @@ ${order.customer_type?.includes('Юридическое')
               href={twoGisRouteHref}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ flex: 1, padding: '9px 8px', background: '#25334A', color: '#94A3B8', textAlign: 'center', borderRadius: '10px', textDecoration: 'none', fontWeight: '600', fontSize: '13px' }}
+              style={volumeCardSoftStyle({
+                flex: 1,
+                padding: '9px 8px',
+                color: '#94A3B8',
+                textAlign: 'center',
+                borderRadius: 10,
+                textDecoration: 'none',
+                fontWeight: 600,
+                fontSize: '13px',
+              })}
             >
               2ГИС
             </a>
@@ -2443,7 +2445,16 @@ ${order.customer_type?.includes('Юридическое')
               href={googleRouteHref}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ flex: 1, padding: '9px 8px', background: '#25334A', color: '#94A3B8', textAlign: 'center', borderRadius: '10px', textDecoration: 'none', fontWeight: '600', fontSize: '13px' }}
+              style={volumeCardSoftStyle({
+                flex: 1,
+                padding: '9px 8px',
+                color: '#94A3B8',
+                textAlign: 'center',
+                borderRadius: 10,
+                textDecoration: 'none',
+                fontWeight: 600,
+                fontSize: '13px',
+              })}
             >
               🗺️ Google
             </a>
@@ -2559,7 +2570,7 @@ ${order.customer_type?.includes('Юридическое')
             )}
           </div>
           
-          <div style={{ background: '#25334A', borderRadius: '16px', padding: '14px 18px', lineHeight: '1.3' }}>
+          <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '14px 18px', lineHeight: '1.3' })}>
             <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '7px', alignItems: 'center' }}>
 
               <div style={{ color: '#94A3B8' }}>Клиент</div>
@@ -2576,7 +2587,7 @@ ${order.customer_type?.includes('Юридическое')
                     setClientQuery('');
                     setShowClientDropdown(true);
                   }}
-                  style={{ width: '100%', background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff', boxSizing: 'border-box' }}
+                  style={modalFieldStyle({ padding: '6px 10px', borderRadius: 8, fontSize: '14px' })}
                 />
                 {showClientDropdown && (() => {
                   const q = clientQuery.toLowerCase();
@@ -2588,12 +2599,12 @@ ${order.customer_type?.includes('Юридическое')
                   }).slice(0, 10);
                   if (!filtered.length) return null;
                   return (
-                    <div style={{
+                    <div style={volumeCardSoftStyle({
                       position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
-                      background: '#1E2937', border: '1px solid #334155', borderRadius: '8px',
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.4)', maxHeight: '220px', overflowY: 'auto',
+                      borderRadius: 8,
+                      maxHeight: '220px', overflowY: 'auto',
                       marginTop: '4px',
-                    }}>
+                    })}>
                       {filtered.map((c: any, ci: number) => {
                         const displayName = c.organization_name || c.full_name || c.name || '—';
                         const isLegal = !!c.organization_name;
@@ -2642,7 +2653,7 @@ ${order.customer_type?.includes('Юридическое')
                   <input 
                     value={selectedOrder.inn || ''} 
                     onChange={(e) => setSelectedOrder({ ...selectedOrder, inn: e.target.value })}
-                    style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
+                    style={modalFieldStyle({ padding: '6px 10px', borderRadius: 8, fontSize: '14px' })}
                   />
                 </>
               )}
@@ -2652,25 +2663,21 @@ ${order.customer_type?.includes('Юридическое')
                 type="tel"
                 value={selectedOrder.phone ? formatPhoneInput(selectedOrder.phone) : ''}
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, phone: formatPhoneInput(e.target.value) })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
+                style={modalFieldStyle({ padding: '6px 10px', borderRadius: 8, fontSize: '14px' })}
               />
 
               <div style={{ color: '#94A3B8' }}>Марка бетона</div>
-              <select
+              <ModalSelect
                 value={selectedOrder.grade || ''}
-                onChange={(e) => setSelectedOrder({ ...selectedOrder, grade: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: selectedOrder.grade ? '#fff' : '#64748B', width: '100%' }}
-              >
-                {!selectedOrder.grade && <option value="">— выберите марку —</option>}
-                {recipes
+                onChange={(grade) => setSelectedOrder({ ...selectedOrder, grade })}
+                placeholder="— выберите марку —"
+                style={{ padding: '6px 10px', borderRadius: 8, fontSize: '14px' }}
+                options={recipes
                   .map((r: any) => r.code || r.name)
                   .filter((v: string, i: number, arr: string[]) => v && arr.indexOf(v) === i)
                   .sort()
-                  .map((grade: string) => (
-                    <option key={grade} value={grade}>{grade}</option>
-                  ))
-                }
-              </select>
+                  .map((grade: string) => ({ value: grade, label: grade, text: grade }))}
+              />
 
               <div style={{ color: '#94A3B8' }}>Объём</div>
               <input 
@@ -2679,50 +2686,49 @@ ${order.customer_type?.includes('Юридическое')
                 min="0.01"
                 value={selectedOrder.volume || ''} 
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, volume: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
+                style={modalFieldStyle({ padding: '6px 10px', borderRadius: 8, fontSize: '14px' })}
               />
 
               <div style={{ color: '#94A3B8' }}>Дата доставки</div>
-              <input 
-                type="date" 
-                value={selectedOrder.delivery_date ? selectedOrder.delivery_date.split('T')[0] : ''} 
-                onChange={(e) => setSelectedOrder({ ...selectedOrder, delivery_date: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
+              <ModalDateInput
+                value={selectedOrder.delivery_date ? selectedOrder.delivery_date.split('T')[0] : ''}
+                onChange={(delivery_date) => setSelectedOrder({ ...selectedOrder, delivery_date })}
+                style={{ padding: '6px 10px', borderRadius: 8, fontSize: '14px' }}
+                allowClear={false}
               />
 
               <div style={{ color: '#94A3B8' }}>Время доставки</div>
-              <input 
-                type="time" 
-                value={selectedOrder.delivery_time || ''} 
-                onChange={(e) => setSelectedOrder({ ...selectedOrder, delivery_time: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff' }}
+              <ModalTimeInput
+                value={selectedOrder.delivery_time || ''}
+                onChange={(delivery_time) => setSelectedOrder({ ...selectedOrder, delivery_time })}
+                style={{ padding: '6px 10px', borderRadius: 8, fontSize: '14px' }}
               />
 
                                 <div style={{ color: '#94A3B8' }}>Статус заявки</div>
                 
                 {getStatusConfig(selectedOrder.status).final ? (
                   // ==================== ФИНАЛЬНЫЕ СТАТУСЫ — ЗАЩИЩЕНЫ ====================
-                  <div style={{ 
-                    backgroundColor: getStatusConfig(selectedOrder.status).bg,
+                  <div style={volumeCardSoftStyle({
+                    background: getStatusConfig(selectedOrder.status).bg,
                     color: getStatusConfig(selectedOrder.status).color,
-                    padding: '8px 16px',
-                    borderRadius: '10px',
-                    display: 'inline-flex',
+                    border: `1px solid ${getStatusConfig(selectedOrder.status).color}40`,
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                    display: 'flex',
                     alignItems: 'center',
                     gap: '8px',
-                    fontWeight: '600',
+                    fontWeight: 600,
                     fontSize: '14px',
-                    width: '88%'
-                  }}>
+                    width: '100%',
+                    boxSizing: 'border-box',
+                  })}>
                     {getStatusConfig(selectedOrder.status).label} — конечный статус
                   </div>
                 ) : (
                   // Можно менять
-                  <select 
-                    value={selectedOrder.status || 'new'} 
-                    onChange={(e) => {
-                      const newStatus = e.target.value;
-                      // Локально сразу снимаем метку — на сервере то же при Save / смене статуса
+                  <ModalSelect
+                    value={selectedOrder.status || 'new'}
+                    onChange={(newStatus) => {
                       setSelectedOrder({
                         ...selectedOrder,
                         status: newStatus,
@@ -2731,28 +2737,27 @@ ${order.customer_type?.includes('Юридическое')
                           : {}),
                       });
                     }}
-                    style={{ 
-                      background: '#334155', 
-                      border: 'none', 
-                      borderRadius: '8px', 
-                      padding: '6px 10px', 
-                      color: '#fff',
-                      fontSize: '14px',
-                      width: '100%'
-                    }}
-                  >
-                    <option value="new">🟡 Новая</option>
-                    <option value="processing">🔵 В работе</option>
-                    <option value="completed">🟢 Выполнена</option>
-                    <option value="cancelled">🔴 Отменена</option>
-                  </select>
+                    style={{ padding: '6px 10px', borderRadius: 8, fontSize: '14px' }}
+                    options={[
+                      { value: 'new', label: '🟡 Новая', text: '🟡 Новая' },
+                      { value: 'processing', label: '🔵 В работе', text: '🔵 В работе' },
+                      { value: 'completed', label: '🟢 Выполнена', text: '🟢 Выполнена' },
+                      { value: 'cancelled', label: '🔴 Отменена', text: '🔴 Отменена' },
+                    ]}
+                  />
                 )}
 
               <div style={{ color: '#94A3B8' }}>Адрес доставки</div>
               <textarea 
                 value={selectedOrder.address || ''} 
                 onChange={(e) => setSelectedOrder({ ...selectedOrder, address: e.target.value })}
-                style={{ background: '#334155', border: 'none', borderRadius: '8px', padding: '6px 10px', color: '#fff', minHeight: '48px', gridColumn: '2' }}
+                style={modalFieldStyle({
+                  padding: '6px 10px',
+                  borderRadius: 8,
+                  fontSize: '14px',
+                  minHeight: '48px',
+                  gridColumn: '2',
+                })}
               />
 
             </div>
@@ -2770,7 +2775,16 @@ ${order.customer_type?.includes('Юридическое')
                   onScroll={handleCommentScroll}
                   value={selectedOrder.comment} 
                   onChange={(e) => setSelectedOrder({ ...selectedOrder, comment: e.target.value })}
-                  style={{ width: '100%', height: '100%', boxSizing: 'border-box', resize: 'none', background: '#25334A', border: 'none', borderRadius: '16px', padding: '12px 16px', color: '#fff', minHeight: '72px' }}
+                  style={volumeCardSoftStyle({
+                    width: '100%',
+                    height: '100%',
+                    boxSizing: 'border-box',
+                    resize: 'none',
+                    borderRadius: 16,
+                    padding: '12px 16px',
+                    color: '#fff',
+                    minHeight: '72px',
+                  })}
                 />
                 <ScrollMoreHint visible={commentHasMore} />
               </div>
@@ -2796,11 +2810,11 @@ ${order.customer_type?.includes('Юридическое')
                         Назначенные миксеры ({orderMixers.length})
                       </h3>
 
-                      <div style={{ background: '#25334A', borderRadius: '16px', padding: '14px' }}>
+                      <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '14px' })}>
                         <div style={{
                           marginBottom: '12px',
                           paddingBottom: '12px',
-                          borderBottom: '1px solid #334155',
+                          borderBottom: CARD_BORDER,
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
@@ -2823,16 +2837,15 @@ ${order.customer_type?.includes('Юридическое')
                             return (
                               <div
                                 key={mixer.id}
-                                style={{
+                                style={volumeCardSoftStyle({
                                   display: 'flex',
                                   alignItems: 'center',
                                   gap: '8px',
-                                  background: '#1E2937',
-                                  borderRadius: '8px',
+                                  borderRadius: 8,
                                   padding: '7px 12px',
                                   whiteSpace: 'nowrap',
                                   overflow: 'hidden',
-                                }}
+                                })}
                               >
                                 <span style={{ fontWeight: '700', fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                   {mixer.mixerName || mixer.number}
@@ -2855,15 +2868,13 @@ ${order.customer_type?.includes('Юридическое')
                                     }}
                                     onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
                                     title="Фактический объём этого миксера — можно исправить постфактум"
-                                    style={{
-                                      background: '#0F172A',
+                                    style={modalFieldStyle({
                                       color: '#94A3B8',
-                                      border: '1px solid #475569',
-                                      borderRadius: '6px',
+                                      borderRadius: 6,
                                       padding: '2px 3px',
                                       fontSize: '12.5px',
-                                      width: '40px'
-                                    }}
+                                      width: '40px',
+                                    })}
                                   />
                                   <span style={{ color: '#94A3B8', fontSize: '13px' }}>м³</span>
                                 </span>
@@ -2896,15 +2907,14 @@ ${order.customer_type?.includes('Юридическое')
   <div
     ref={historyRef}
     onScroll={handleHistoryScroll}
-    style={{ 
-    background: '#25334A', 
-    borderRadius: '16px', 
-    padding: '16px', 
-    maxHeight: '260px', 
+    style={volumeCardSoftStyle({
+    borderRadius: 16,
+    padding: '16px',
+    maxHeight: '260px',
     overflowY: 'auto',
     fontSize: '14px',
-    lineHeight: '1.6'
-  }}>
+    lineHeight: '1.6',
+  })}>
     <OrderHistoryTimeline entries={orderHistory} />
   </div>
   <ScrollMoreHint visible={historyHasMore} />
@@ -3053,12 +3063,12 @@ ${order.customer_type?.includes('Юридическое')
           <div
             onClick={e => e.stopPropagation()}
             className="scroll-hidden"
-            style={{
-              background: '#1E2937', borderRadius: '20px', padding: '28px',
+            style={volumeModalStyle({
+              borderRadius: 20, padding: '28px',
               width: '100%', maxWidth: '560px', maxHeight: '80vh',
-              overflowY: 'auto', boxSizing: 'border-box',
+              overflowY: 'auto',
               border: weekAdditiveForecast.hasAlert ? '1.5px solid rgba(239,68,68,0.4)' : '1.5px solid rgba(16,185,129,0.3)',
-            }}
+            })}
           >
             {/* Заголовок */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
@@ -3085,7 +3095,7 @@ ${order.customer_type?.includes('Юридическое')
               </div>
               <button
                 onClick={() => setShowAdditivePopup(false)}
-                style={{ background: 'none', border: 'none', color: '#64748B', cursor: 'pointer', padding: '4px', fontSize: '20px', lineHeight: 1 }}
+                style={modalCloseButtonStyle({ color: '#64748B' })}
               >✕</button>
             </div>
 
@@ -3101,10 +3111,10 @@ ${order.customer_type?.includes('Юридическое')
                 : null;
               const orders = weekAdditiveForecast.details.filter(d => d.additiveId === id);
               return (
-                <div key={key} style={{
-                  background: '#25334A', borderRadius: '14px', padding: '16px', marginBottom: '14px',
-                  border: item.shortage ? '1px solid rgba(239,68,68,0.3)' : '1px solid #334155',
-                }}>
+                <div key={key} style={volumeCardSoftStyle({
+                  borderRadius: 14, padding: '16px', marginBottom: '14px',
+                  border: item.shortage ? '1px solid rgba(239,68,68,0.3)' : CARD_BORDER,
+                })}>
                   {/* Шапка добавки */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                     <span style={{ fontWeight: 700, fontSize: '15px' }}>{name}</span>
@@ -3173,7 +3183,16 @@ ${order.customer_type?.includes('Юридическое')
             {/* Кнопка закрытия */}
             <button
               onClick={() => setShowAdditivePopup(false)}
-              style={{ width: '100%', padding: '12px', background: '#334155', borderRadius: '12px', color: '#94A3B8', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '14px', marginTop: '4px' }}
+              style={volumeCardSoftStyle({
+                width: '100%',
+                padding: '12px',
+                borderRadius: 12,
+                color: '#94A3B8',
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: '14px',
+                marginTop: '4px',
+              })}
             >
               Закрыть
             </button>

@@ -7,17 +7,19 @@ import { calculateDeliveryCost, fetchDeliverySettings, DEFAULT_DELIVERY_SETTINGS
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { X, Send, User, Phone, Building2, Layers, Clock, Calendar, MapPin, MessageSquare, Wallet } from 'lucide-react';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
+import {
+  modalCloseButtonStyle,
+  modalFieldStyle,
+  volumeCardSoftStyle,
+  volumeModalStyle,
+} from '@/app/adminCifra/cardStyles';
 
-const INPUT: React.CSSProperties = {
-  width: '100%',
+const INPUT: React.CSSProperties = modalFieldStyle({
   padding: '11px 14px',
-  background: '#25334A',
-  border: '1px solid #334155',
-  borderRadius: '10px',
-  color: '#E2E8F0',
+  borderRadius: 10,
   fontSize: '15px',
-  boxSizing: 'border-box',
-};
+  colorScheme: 'dark',
+});
 
 function Label({ icon, text }: { icon: React.ReactNode; text: string }) {
   return (
@@ -114,7 +116,25 @@ export default function MobileNewOrderModal({
         const res = await fetch('/api/adminCifra/recipes');
         if (res.ok) {
           const data = await res.json();
-          setRecipes(data);
+          const isFbs = (r: any) =>
+            r?.item_type === 'fbs' || (r?.code && String(r.code).startsWith('24-'));
+          const sorted = [...(Array.isArray(data) ? data : [])].sort((a: any, b: any) => {
+            const af = isFbs(a) ? 1 : 0;
+            const bf = isFbs(b) ? 1 : 0;
+            if (af !== bf) return af - bf;
+            return String(a.code || '').localeCompare(String(b.code || ''), 'ru');
+          });
+          setRecipes(sorted);
+          setForm((prev) => {
+            const codes = new Set(sorted.map((r: any) => r.code));
+            if (prev.grade && codes.has(prev.grade)) return prev;
+            const m300 =
+              sorted.find((r: any) => r.code === 'М300') ||
+              sorted.find((r: any) => !isFbs(r) && String(r.name || '').includes('М300'));
+            if (m300?.code) return { ...prev, grade: m300.code };
+            const firstConcrete = sorted.find((r: any) => !isFbs(r));
+            return firstConcrete?.code ? { ...prev, grade: firstConcrete.code } : prev;
+          });
         }
       } catch (e) {
         console.error('Ошибка загрузки рецептов:', e);
@@ -238,26 +258,32 @@ export default function MobileNewOrderModal({
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 20000, overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 20000, overflowY: 'auto', WebkitOverflowScrolling: 'touch' as any }}
       onClick={onClose}
     >
       <div
-        style={{ background: '#0D1520', minHeight: '100vh', maxWidth: '560px', margin: '0 auto', paddingBottom: '40px' }}
+        style={volumeModalStyle({
+          minHeight: '100vh',
+          maxWidth: '560px',
+          margin: '0 auto',
+          paddingBottom: '40px',
+          borderRadius: 0,
+        })}
         onClick={e => e.stopPropagation()}
       >
 
         {/* ── ШАПКА ──────────────────────────────── */}
-        <div style={{
+        <div style={volumeCardSoftStyle({
           position: 'sticky', top: 0, zIndex: 10,
-          background: '#25334A', borderBottom: '1px solid #334155',
+          borderRadius: 0,
           padding: '14px 16px',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        }}>
+        })}>
           <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>
             {isCopy ? 'Копия заявки' : 'Новая заявка'}
           </span>
-          <button onClick={onClose} style={{ background: '#334155', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-            <X size={16} color="#64748B" />
+          <button type="button" onClick={onClose} aria-label="Закрыть" style={modalCloseButtonStyle({ width: 32, height: 32, fontSize: '18px' })}>
+            <X size={16} color="#94A3B8" />
           </button>
         </div>
 
@@ -265,7 +291,7 @@ export default function MobileNewOrderModal({
           <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
             {/* ── КЛИЕНТ ─────────────────────────── */}
-            <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' })}>
 
               {/* Тип */}
               <div>
@@ -276,14 +302,22 @@ export default function MobileNewOrderModal({
                       key={t}
                       type="button"
                       onClick={() => setForm(p => ({ ...p, customerType: t }))}
-                      style={{
-                        flex: 1, padding: '10px 8px',
-                        borderRadius: '10px',
-                        border: `1px solid ${form.customerType === t ? '#3B82F6' : '#334155'}`,
-                        background: form.customerType === t ? '#3B82F620' : 'transparent',
-                        color: form.customerType === t ? '#3B82F6' : '#475569',
-                        fontSize: '14px', fontWeight: 600, cursor: 'pointer',
-                      }}
+                      style={form.customerType === t
+                        ? {
+                            flex: 1, padding: '10px 8px',
+                            borderRadius: 10,
+                            border: '1px solid rgba(59,130,246,0.45)',
+                            background: '#3B82F6',
+                            color: 'white',
+                            fontSize: '14px', fontWeight: 600, cursor: 'pointer',
+                            boxSizing: 'border-box',
+                          }
+                        : volumeCardSoftStyle({
+                            flex: 1, padding: '10px 8px',
+                            borderRadius: 10,
+                            color: '#94A3B8',
+                            fontSize: '14px', fontWeight: 600, cursor: 'pointer',
+                          })}
                     >
                       {t === 'physical' ? 'Физ. лицо' : 'Юр. лицо'}
                     </button>
@@ -312,7 +346,7 @@ export default function MobileNewOrderModal({
             </div>
 
             {/* ── ПАРАМЕТРЫ ЗАКАЗА ────────────────── */}
-            <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' })}>
 
               <div>
                 <Label icon={<Layers size={11} />} text="Марка бетона" />
@@ -328,7 +362,7 @@ export default function MobileNewOrderModal({
                 </div>
                 <div>
                   <Label icon={<Clock size={11} />} text="Время" />
-                  <input name="deliveryTime" type="time" value={form.deliveryTime} onChange={handleChange} required style={INPUT} />
+                  <input name="deliveryTime" type="time" step={60} value={form.deliveryTime} onChange={handleChange} required style={INPUT} />
                 </div>
               </div>
 
@@ -339,7 +373,7 @@ export default function MobileNewOrderModal({
             </div>
 
             {/* ── АДРЕС И КОММЕНТАРИЙ ─────────────── */}
-            <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' })}>
               <div>
                 <Label icon={<MapPin size={11} />} text="Адрес доставки" />
                 <textarea name="address" placeholder="г. Брянск, ул. ..." value={form.address} onChange={handleChange} required rows={2} style={{ ...INPUT, resize: 'vertical', lineHeight: 1.5 }} />
@@ -352,7 +386,7 @@ export default function MobileNewOrderModal({
 
             {/* ── СТОИМОСТЬ ───────────────────────── */}
             {volume > 0 && (
-              <div style={{ background: '#25334A', borderRadius: '16px', padding: '16px' }}>
+              <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px' })}>
                 <Label icon={<Wallet size={11} />} text="Расчёт стоимости" />
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94A3B8', fontSize: '14px', padding: '6px 0' }}>
                   <span>Бетон</span><span>{concreteCost.toLocaleString()} ₽</span>

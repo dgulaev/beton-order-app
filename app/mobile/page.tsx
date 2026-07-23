@@ -16,6 +16,7 @@ import {
 } from '@/hooks/useRealtimeOrders';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
+import { CARD_BORDER, CARD_GRADIENT_SOFT, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 
 export default function MobileDashboard() {
   // ==================== 1. СТАТУСЫ И СОСТОЯНИЯ ====================
@@ -490,7 +491,7 @@ useWakeRefresh(() => {
 
   return (
     <div style={{
-        backgroundColor: '#162032',
+        backgroundColor: '#0F172A',
         minHeight: '100vh',
         width: '100%',
         maxWidth: '100vw',
@@ -509,14 +510,14 @@ useWakeRefresh(() => {
         <style jsx global>{`
           #dashboard-scroll::-webkit-scrollbar {
             width: 3px !important;
-            background: #162032 !important;
+            background: #0F172A !important;
           }
           #dashboard-scroll::-webkit-scrollbar-thumb {
-            background: #162032 !important;   /* тот же цвет что и фон */
+            background: #0F172A !important;   /* тот же цвет что и фон */
             border-radius: 10px !important;
           }
           #dashboard-scroll::-webkit-scrollbar-track {
-            background: #162032 !important;
+            background: #0F172A !important;
           }
         `}</style>
 
@@ -540,7 +541,7 @@ useWakeRefresh(() => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
             onClick={() => setShowCalendar(true)}
-            style={{ background: '#334155', border: '1px solid #334155', borderRadius: '10px', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+            style={volumeCardSoftStyle({ borderRadius: 10, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0 })}
             title="Открыть календарь"
           >
             <CalendarDays size={17} color="#60A5FA" />
@@ -555,7 +556,7 @@ useWakeRefresh(() => {
           {/* Заявки сегодня */}
           <div
             onClick={() => setShowOrdersSheet(true)}
-            style={{ background: '#25334A', borderRadius: '16px', padding: '18px', textAlign: 'center', cursor: 'pointer' }}
+            style={volumeCardStyle({ borderRadius: 16, padding: '18px', textAlign: 'center', cursor: 'pointer' })}
           >
             <div style={{ color: '#94A3B8', fontSize: '14px', marginBottom: '4px' }}>Заявки сегодня</div>
             <div style={{ fontSize: '48px', fontWeight: 700, color: '#60A5FA', lineHeight: 1, marginBottom: '10px' }}>
@@ -574,16 +575,15 @@ useWakeRefresh(() => {
           {/* Выполнение плана — факт по разгруженным м³ + прогресс-бар */}
           <div
             onClick={() => setShowPlanSheet(true)}
-            style={{
-              background: '#25334A',
-              borderRadius: '16px',
+            style={volumeCardStyle({
+              borderRadius: 16,
               padding: '14px 16px',
               cursor: 'pointer',
               display: 'flex',
               flexDirection: 'column',
               justifyContent: 'space-between',
               minHeight: '148px',
-            }}
+            })}
           >
             <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '8px' }}>
               Выполнение плана
@@ -689,18 +689,17 @@ useWakeRefresh(() => {
             };
 
             return (
-              <div style={{
-                background: '#25334A',
-                borderRadius: '14px',
+              <div style={volumeCardStyle({
+                borderRadius: 14,
                 padding: '8px 10px',
                 marginBottom: '14px',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
-              }}>
+              })}>
                 <button
                   onClick={() => navBtn('prev')}
-                  style={{ background: '#334155', border: 'none', borderRadius: '8px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+                  style={volumeCardSoftStyle({ borderRadius: 8, width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, padding: 0 })}
                 >
                   <ChevronLeft size={16} color="#64748B" />
                 </button>
@@ -714,7 +713,7 @@ useWakeRefresh(() => {
                 {!isToday && (
                   <button
                     onClick={() => setSelectedDate(new Date(today.getFullYear(), today.getMonth(), today.getDate()))}
-                    style={{ background: 'transparent', border: '1px solid #334155', borderRadius: '7px', padding: '4px 9px', color: '#64748B', fontSize: '11px', fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}
+                    style={volumeCardSoftStyle({ borderRadius: 7, padding: '4px 9px', color: '#94A3B8', fontSize: '11px', fontWeight: 600, cursor: 'pointer', flexShrink: 0 })}
                   >
                     Сегодня
                   </button>
@@ -722,7 +721,7 @@ useWakeRefresh(() => {
 
                 <button
                   onClick={() => navBtn('next')}
-                  style={{ background: '#334155', border: 'none', borderRadius: '8px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+                  style={volumeCardSoftStyle({ borderRadius: 8, width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, padding: 0 })}
                 >
                   <ChevronRight size={16} color="#64748B" />
                 </button>
@@ -920,21 +919,23 @@ useWakeRefresh(() => {
                       >
                         <div
                           onClick={() => setSelectedOrder(order)}
-                          style={{
-                            background: isDelayed ? 'rgba(239,68,68,0.07)' : '#25334A',
-                            borderRadius: '12px',
+                          style={volumeCardSoftStyle({
+                            // Сохраняем цветной акцент статуса + затемнение отработанных (isPast).
+                            background: isDelayed
+                              ? 'linear-gradient(165deg, rgba(239,68,68,0.18) 0%, #0F172A 100%)'
+                              : CARD_GRADIENT_SOFT,
+                            borderRadius: 12,
                             padding: '10px 12px',
                             height: `${cardH(order)}px`,
-                            boxSizing: 'border-box',
                             overflow: 'hidden',
                             cursor: 'pointer',
-                            border: `1px solid ${isDelayed ? '#EF444440' : isCancelled ? '#334155' : color + '30'}`,
-                            borderLeft: `3px solid ${isDelayed ? '#EF4444' : isCancelled ? '#334155' : color}`,
+                            border: `1px solid ${isDelayed ? '#EF444440' : isCancelled ? 'rgba(148,163,184,0.2)' : color + '55'}`,
+                            borderLeft: `3px solid ${isDelayed ? '#EF4444' : isCancelled ? '#475569' : color}`,
                             opacity: isPast ? 0.5 : 1,
                             display: 'flex',
                             flexDirection: 'column',
                             justifyContent: 'center',
-                          }}
+                          })}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '3px', gap: '6px' }}>
                             <span style={{ fontSize: '13px', fontWeight: 600, color: '#E2E8F0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
@@ -1042,7 +1043,7 @@ useWakeRefresh(() => {
                       width: `${TIME_W}px`, textAlign: 'right', flexShrink: 0,
                       fontSize: '10px', fontWeight: 800, color: '#10B981',
                       lineHeight: 1,
-                      background: '#162032', padding: '0 2px',
+                      background: '#0F172A', padding: '0 2px',
                     }}>
                       {nowTimeStr}
                     </span>
@@ -1064,15 +1065,16 @@ useWakeRefresh(() => {
       {/* ── Миксеры в работе (сегодня) ── */}
       <div
         onClick={() => totalActiveMixers > 0 && setShowMixerSheet(true)}
-        style={{
-          background: '#25334A',
-          borderRadius: '16px',
-          border: hasProblems ? '1.5px solid #EF444470' : '1px solid #334155',
+        style={volumeCardStyle({
+          borderRadius: 16,
+          border: hasProblems ? '1.5px solid #EF444470' : CARD_BORDER,
           overflow: 'hidden',
           cursor: totalActiveMixers > 0 ? 'pointer' : 'default',
-          boxShadow: hasProblems ? '0 0 18px rgba(239,68,68,0.15)' : 'none',
+          boxShadow: hasProblems
+            ? '0 12px 28px rgba(0,0,0,0.34), 0 0 18px rgba(239,68,68,0.2), inset 0 1px 0 rgba(255,255,255,0.1)'
+            : undefined,
           marginTop: '12px',
-        }}
+        })}
       >
         {/* Красный баннер проблем */}
         {hasProblems && (
@@ -1221,8 +1223,8 @@ useWakeRefresh(() => {
       {/* ==================== ШТОРКА: ЗАЯВКИ СЕГОДНЯ ==================== */}
       {showOrdersSheet && (
         <>
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }} onClick={() => setShowOrdersSheet(false)} />
-          <div style={{ position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001, background: '#25334A', borderRadius: '20px 20px 0 0', overflow: 'hidden' }}>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 10000 }} onClick={() => setShowOrdersSheet(false)} />
+          <div style={{ position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001, ...volumeModalStyle({ borderRadius: '20px 20px 0 0', overflow: 'hidden' }) }}>
             <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0' }}>
               <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
             </div>
@@ -1245,7 +1247,7 @@ useWakeRefresh(() => {
                 { label: 'Выполнены', count: kpiCompletedOrders, color: '#10B981', icon: '✓'  },
                 { label: 'Отменены',  count: kpiCancelledOrders, color: '#EF4444', icon: '✕'  },
               ].map(row => (
-                <div key={row.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: '#1E2D40', borderRadius: '12px' }}>
+                <div key={row.label} style={{ ...volumeCardSoftStyle({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderRadius: 12 }) }}>
                   <span style={{ color: '#94A3B8', fontSize: '15px' }}>{row.icon} {row.label}</span>
                   <span style={{ fontSize: '22px', fontWeight: 700, color: row.color }}>{row.count}</span>
                 </div>
@@ -1258,8 +1260,8 @@ useWakeRefresh(() => {
       {/* ==================== ШТОРКА: ВЫПОЛНЕНИЕ ПЛАНА ==================== */}
       {showPlanSheet && (
         <>
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }} onClick={() => setShowPlanSheet(false)} />
-          <div style={{ position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001, background: '#25334A', borderRadius: '20px 20px 0 0', overflow: 'hidden' }}>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 10000 }} onClick={() => setShowPlanSheet(false)} />
+          <div style={{ position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001, ...volumeModalStyle({ borderRadius: '20px 20px 0 0', overflow: 'hidden' }) }}>
             <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0' }}>
               <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
             </div>
@@ -1309,7 +1311,7 @@ useWakeRefresh(() => {
                 { label: 'Заявки закрыты', value: `${kpiCompletedOrders} из ${kpiActiveOrders.length}`, color: '#10B981' },
                 { label: 'Объём закрытых заявок', value: `${fmtM3(kpiCompletedVolume)} м³`, color: '#64748B' },
               ].map(row => (
-                <div key={row.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: '#1E2D40', borderRadius: '12px', gap: '10px' }}>
+                <div key={row.label} style={{ ...volumeCardSoftStyle({ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderRadius: 12, gap: '10px' }) }}>
                   <span style={{ color: '#94A3B8', fontSize: '14px' }}>{row.label}</span>
                   <span style={{ fontSize: '16px', fontWeight: 700, color: row.color, whiteSpace: 'nowrap' }}>{row.value}</span>
                 </div>
@@ -1323,13 +1325,18 @@ useWakeRefresh(() => {
       {showMixerSheet && (
         <>
           <div
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 10000 }}
             onClick={() => setShowMixerSheet(false)}
           />
           <div style={{
             position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001,
-            background: '#25334A', borderRadius: '20px 20px 0 0',
-            maxHeight: 'calc(85vh - 74px)', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            ...volumeModalStyle({
+              borderRadius: '20px 20px 0 0',
+              maxHeight: 'calc(85vh - 74px)',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }),
           }}>
             {/* Handle */}
             <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0', flexShrink: 0 }}>
@@ -1369,11 +1376,11 @@ useWakeRefresh(() => {
                   const driver = mx?.driver || trip.driver || '—';
                   const ini = driver.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
                   return (
-                    <div key={trip.number} style={{
+                    <div key={trip.number} style={volumeCardSoftStyle({
                       display: 'flex', alignItems: 'center', gap: '12px',
-                      padding: '12px 14px', background: '#1E2D40',
-                      borderRadius: '12px', border: `1px solid ${color}40`,
-                    }}>
+                      padding: '12px 14px',
+                      borderRadius: 12, border: `1px solid ${color}40`,
+                    })}>
                       {/* Полоска слева */}
                       <div style={{ width: '3px', alignSelf: 'stretch', borderRadius: '9999px', background: color, flexShrink: 0 }} />
                       {/* Аватар */}
@@ -1422,12 +1429,16 @@ useWakeRefresh(() => {
       {/* ==================== МОДАЛКА КАЛЕНДАРЯ ==================== */}
       {showCalendar && (
         <div
-          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 99999, display: 'flex', alignItems: 'flex-end' }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 99999, display: 'flex', alignItems: 'flex-end' }}
           onClick={() => setShowCalendar(false)}
         >
           <div
             onClick={e => e.stopPropagation()}
-            style={{ width: '100%', background: '#0D1520', borderRadius: '24px 24px 0 0', paddingBottom: '32px', boxShadow: '0 -8px 40px rgba(0,0,0,0.6)' }}
+            style={volumeModalStyle({
+              width: '100%',
+              borderRadius: '24px 24px 0 0',
+              paddingBottom: '32px',
+            })}
           >
             {/* Ручка */}
             <div style={{ display: 'flex', justifyContent: 'center', paddingTop: '12px', paddingBottom: '4px' }}>
@@ -1439,7 +1450,16 @@ useWakeRefresh(() => {
               <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>Планирование</span>
               <button
                 onClick={() => setShowCalendar(false)}
-                style={{ background: '#334155', border: 'none', borderRadius: '9999px', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                style={volumeCardSoftStyle({
+                  borderRadius: 9999,
+                  width: 32,
+                  height: 32,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  padding: 0,
+                })}
               >
                 <X size={16} color="#64748B" />
               </button>

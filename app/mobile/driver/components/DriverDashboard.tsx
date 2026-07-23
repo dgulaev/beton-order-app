@@ -11,6 +11,7 @@ import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { driverFetch, DriverMixerInfo, DriverTrip } from '../driverClient';
 import DriverTripDetailModal from './DriverTripDetailModal';
 import RouteButton from './RouteButton';
+import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 
 interface Props {
   mixer: DriverMixerInfo;
@@ -450,13 +451,11 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
     return (
       <div
         key={trip.id}
-        style={{
-          background: '#1E2937',
-          borderRadius: '16px',
+        style={volumeCardSoftStyle({
+          borderRadius: 16,
           padding: '16px',
           marginBottom: '12px',
-          border: '1px solid #334155',
-        }}
+        })}
       >
         <div
           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', cursor: 'pointer' }}
@@ -633,25 +632,23 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
   const renderHistoryCard = (trip: DriverTrip) => (
     <div
       key={trip.id}
-      style={{
-        background: '#1E2937',
-        borderRadius: '12px',
+      style={volumeCardSoftStyle({
+        borderRadius: 12,
         padding: '12px 14px',
         marginBottom: '8px',
-        border: '1px solid #263040',
         display: 'flex',
         alignItems: 'center',
         gap: '12px',
-      }}
+      })}
     >
       {/* Номер заявки */}
-      <div style={{
+      <div style={volumeCardStyle({
         minWidth: '44px',
         textAlign: 'center',
-        background: '#0F172A',
-        borderRadius: '8px',
+        borderRadius: 8,
         padding: '6px 4px',
-      }}>
+        border: CARD_BORDER,
+      })}>
         <div style={{ color: '#475569', fontSize: '10px' }}>#</div>
         <div style={{ color: '#94A3B8', fontSize: '14px', fontWeight: 700 }}>{trip.orderId}</div>
       </div>
@@ -765,12 +762,10 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
               onClick={onBack}
               aria-label="Назад"
               title="Вернуться в список миксеров"
-              style={{
-                background: '#1E2937',
-                border: '1px solid #334155',
-                borderRadius: '9999px',
+              style={volumeCardSoftStyle({
+                borderRadius: 9999,
                 padding: '0 14px',
-                height: '40px',
+                height: 40,
                 color: '#60A5FA',
                 display: 'flex',
                 alignItems: 'center',
@@ -778,7 +773,7 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
                 fontSize: '13px',
                 fontWeight: 600,
                 flexShrink: 0,
-              }}
+              })}
             >
               ← Назад
             </button>
@@ -787,19 +782,18 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
               onClick={onLogout}
               aria-label="Выйти"
               title="Выйти / сменить пользователя"
-              style={{
-                background: '#1E2937',
-                border: '1px solid #334155',
-                borderRadius: '9999px',
-                width: '40px',
-                height: '40px',
-                minWidth: '40px',
+              style={volumeCardSoftStyle({
+                borderRadius: 9999,
+                width: 40,
+                height: 40,
+                minWidth: 40,
                 color: '#94A3B8',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 flexShrink: 0,
-              }}
+                padding: 0,
+              })}
             >
               <LogOut size={18} />
             </button>
@@ -824,21 +818,18 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
       {!readOnly && notifPermission === 'default' && (
           <button
             onClick={requestNotifPermission}
-            style={{
+            style={volumeCardSoftStyle({
               marginTop: '14px',
               width: '100%',
-              boxSizing: 'border-box',
               padding: '12px',
-              borderRadius: '12px',
-              border: '1px solid #334155',
-              background: '#1E2937',
+              borderRadius: 12,
               color: '#60A5FA',
               fontSize: '13.5px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: '8px',
-            }}
+            })}
           >
             <Bell size={15} /> Включить уведомления о новых рейсах
           </button>
@@ -960,8 +951,7 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
           onTouchMove={(e) => e.target === e.currentTarget && e.preventDefault()}
         >
           <div
-            style={{
-              background: '#1E2937',
+            style={volumeModalStyle({
               borderRadius: '20px 20px 0 0',
               paddingTop: '24px',
               paddingLeft: '20px',
@@ -969,8 +959,7 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
               paddingBottom: 'max(32px, env(safe-area-inset-bottom, 32px))',
               width: '100%',
               maxWidth: '480px',
-              boxShadow: '0 -8px 40px rgba(0,0,0,0.4)',
-            }}
+            })}
             onClick={(e) => e.stopPropagation()}
             onTouchMove={(e) => e.stopPropagation()}
           >
@@ -988,7 +977,7 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
                   ? 'Нажмите Подтвердить только когда миксер\nвъехал на территорию объекта'
                   : 'Нажмите Подтвердить только когда весь\nбетон выгружен из миксера'}
               </div>
-              <div style={{ color: '#94A3B8', fontSize: '13px', marginTop: '10px', background: '#263040', borderRadius: '8px', padding: '8px 12px' }}>
+              <div style={volumeCardSoftStyle({ color: '#94A3B8', fontSize: '13px', marginTop: '10px', borderRadius: 8, padding: '8px 12px' })}>
                 Рейс #{confirmPending.trip.orderId} · {confirmPending.trip.volume} м³
                 {confirmPending.trip.order?.address && (
                   <div style={{ color: '#475569', fontSize: '12px', marginTop: '2px' }}>
