@@ -850,7 +850,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             <>
             <Link href="/adminCifra/dashboard" style={navLinkStyle(isActive('/adminCifra/dashboard'), isCollapsed)}>
               <Home size={22} />
-              <span style={navTextStyle(isCollapsed)}>Дашборд</span>
+              <span style={navTextStyle(isCollapsed)}>Диспетчерская</span>
             </Link>
 
             {/* ==================== БЛОК 10: ПУНКТ МЕНЮ "ЗАЯВКИ" ==================== */}

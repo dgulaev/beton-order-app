@@ -7,7 +7,7 @@ import { useRealtimeOrders, useRealtimeOrderMixers, formatOrderMixer } from '../
 import OrderDetailModal from '../components/OrderDetailModal';
 import NewOrderModal from '../components/NewOrderModal';
 import Image from 'next/image';
-import { Home, LayoutList, AlignJustify, X } from 'lucide-react';
+import { Home, LayoutList, AlignJustify, X, User, CalendarDays } from 'lucide-react';
 import VerticalTimelinePanel from '../components/VerticalTimelinePanel';
 import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
 import { CARD_BORDER, modalCloseButtonStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
@@ -614,10 +614,10 @@ const dayMixerTrips = useMemo(
 
 const volumeByStatus = useMemo(() => {
   const FLOW = [
-    { status: 'Загрузка', label: 'загрузка', color: '#FACC15', showCount: false },
-    { status: 'В пути', label: 'в пути', color: '#60A5FA', showCount: false },
-    { status: 'На объекте', label: 'на объекте', color: '#34D399', showCount: false },
-    { status: 'Разгружен', label: 'разгружено', color: '#10B981', showCount: true },
+    { status: 'Загрузка', color: '#FACC15', showCount: false },
+    { status: 'В пути', color: '#60A5FA', showCount: false },
+    { status: 'На объекте', color: '#34D399', showCount: false },
+    { status: 'Разгружен', color: '#10B981', showCount: true },
   ] as const;
   const vols: Record<string, number> = {};
   const counts: Record<string, number> = {};
@@ -1044,9 +1044,10 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
         {/* ==================== 32. ОСНОВНОЙ GRID ==================== */}
         <div style={{ 
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr) minmax(320px, 480px)', 
+          // Чуть ближе к таймлайну (gap↓) и шире колонка; maxWidth карточки = max трека.
+          gridTemplateColumns: 'minmax(0, 1fr) minmax(340px, 520px)', 
           gridTemplateRows: 'minmax(0, 1fr)',
-          gap: '32px',
+          gap: '24px',
           maxWidth: '100%', 
           width: '100%', 
           flex: 1,
@@ -1065,59 +1066,71 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
           height: '100%'
         }}>
         
-        {/* Topbar — адаптив */}
+        {/* Topbar — плашки по базовой линии заголовка (чуть ниже глифов) */}
 <div style={{ 
   display: 'flex', 
   justifyContent: 'space-between', 
-  alignItems: 'center',
-  flexWrap: 'wrap',           // ← разрешает перенос на новую строку
-  gap: '16px' 
+  alignItems: 'baseline',
+  flexWrap: 'wrap',
+  gap: '16px',
 }}>
-  <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
+  <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap' }}>
     <h1 style={{ 
       fontSize: '26px',
       fontWeight: 700, 
       color: '#fff',
       margin: 0,
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px'
+      lineHeight: 1,
+      display: 'inline-flex',
+      alignItems: 'baseline',
+      gap: '10px',
     }}>
-      <Home size={26} color="#94A3B8" />
-      Дашборд
+      <Home size={22} color="#94A3B8" style={{ position: 'relative', top: 2, flexShrink: 0 }} />
+      <span>Диспетчерская</span>
     </h1>
     
     <div 
       onClick={() => setShowCalendar(true)}
-      style={volumeCardSoftStyle({ 
-        padding: '10px 20px', 
-        borderRadius: 9999, 
-        cursor: 'pointer',
-        display: 'flex',
+      style={volumeCardSoftStyle({
+        display: 'inline-flex',
         alignItems: 'center',
-        gap: '8px',
-        fontSize: '14.5px',
+        gap: 7,
+        color: '#F87171',
+        fontWeight: 600,
+        fontSize: 13.5,
+        padding: '4px 12px',
+        borderRadius: 9999,
+        cursor: 'pointer',
         whiteSpace: 'nowrap',
+        border: '1px solid rgba(248,113,113,0.45)',
+        background: 'linear-gradient(165deg, rgba(248,113,113,0.22) 0%, rgba(15,23,42,0.95) 55%, rgba(15,23,42,1) 100%)',
+        boxShadow: '0 8px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(248,113,113,0.35), inset 0 0 22px rgba(248,113,113,0.16)',
+        // Ниже относительно надписи: baseline + небольшой сдвиг вниз
+        position: 'relative',
+        top: 5,
       })}
     >
-      📅 {new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
+      <CalendarDays size={15} strokeWidth={2} color="#F87171" />
+      {new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
     </div>
   </div>
 
-         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+         <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px' }}>
   {(userRole === 'admin' || userRole === 'manager') && notifications.length > 0 && (
     <div 
       style={{ 
         background: '#EF4444', 
         color: 'white', 
-        padding: '12px 20px', 
+        padding: '8px 16px', 
         borderRadius: '9999px',
         fontWeight: '700',
         display: 'flex',
         alignItems: 'center',
         gap: '8px',
         animation: 'pulse 2s infinite',
-        cursor: 'pointer'
+        cursor: 'pointer',
+        position: 'relative',
+        top: 5,
       }}
       onClick={() => window.location.href = '/adminCifra/withdrawals'}
     >
@@ -1125,15 +1138,24 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
     </div>
   )}
 
-  {/* Имя сотрудника из full_name */}
-  <div style={{ 
-    color: '#60A5FA', 
-    fontWeight: '500',
-    background: 'rgba(96, 165, 250, 0.1)',
-    padding: '8px 16px',
-    borderRadius: '9999px'
-  }}>
-    👤 {userFullName || 'Сотрудник'}
+  {/* Имя сотрудника — volume-пилюля с салатовым свечением внутри */}
+  <div style={volumeCardSoftStyle({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 7,
+    color: '#4ADE80',
+    fontWeight: 600,
+    fontSize: 13.5,
+    padding: '4px 12px',
+    borderRadius: 9999,
+    border: '1px solid rgba(74,222,128,0.45)',
+    background: 'linear-gradient(165deg, rgba(74,222,128,0.22) 0%, rgba(15,23,42,0.95) 55%, rgba(15,23,42,1) 100%)',
+    boxShadow: '0 8px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(74,222,128,0.35), inset 0 0 22px rgba(74,222,128,0.18)',
+    position: 'relative',
+    top: 5,
+  })}>
+    <User size={15} strokeWidth={2} color="#4ADE80" />
+    {userFullName || 'Сотрудник'}
   </div>
 </div>
 </div>
@@ -1285,7 +1307,6 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
           ) : (
             <span style={{ fontWeight: 700 }}>{fmtM3(item.volume)} м³</span>
           )}
-          <span style={{ opacity: 0.9, fontWeight: 500 }}>{item.label}</span>
         </span>
       ))}
     </div>
@@ -2057,7 +2078,7 @@ const generateDailyReport = () => {
             {/* ==================== 45. МИКСЕРЫ В РАБОТЕ ==================== */}
 <div style={volumeCardStyle({ 
   width: '100%', 
-  maxWidth: '480px', 
+  maxWidth: '520px', 
   borderRadius: 22, 
   padding: '24px', 
   display: 'flex', 
