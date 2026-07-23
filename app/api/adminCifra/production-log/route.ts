@@ -293,11 +293,27 @@ export async function POST(request: NextRequest) {
     // так и не смог перейти в статус "В пути" (это уже блокирует
     // lib/orderMixers.ts). Без этой проверки лента "Отгружено сегодня" может
     // содержать рейсы, которых по факту не было.
-    if (order_id) {
+    //
+    // Марку бетона ВСЕГДА берём из актуальной заявки в БД, а не из тела
+    // запроса (кэш очереди оператора). Кейс #652: диспетчер сменил М150и→М250и
+    // за минуту до «Загружен», в лог ушла устаревшая марка из вкладки.
+    let resolvedOrderId =
+      order_id != null && order_id !== '' ? Number(order_id) : null;
+    if ((!resolvedOrderId || !Number.isFinite(resolvedOrderId)) && order_mixer_id) {
+      const { data: mixerRow } = await supabase
+        .from('order_mixers')
+        .select('order_id')
+        .eq('id', order_mixer_id)
+        .maybeSingle();
+      if (mixerRow?.order_id != null) resolvedOrderId = Number(mixerRow.order_id);
+    }
+
+    let gradeFromOrder: string | null = null;
+    if (resolvedOrderId) {
       const { data: orderForCheck } = await supabase
         .from('orders')
-        .select('status')
-        .eq('id', order_id)
+        .select('status, grade')
+        .eq('id', resolvedOrderId)
         .maybeSingle();
 
       const finalStatusesRu: Record<string, string> = {
@@ -308,12 +324,16 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           {
             success: false,
-            message: `Заявка #${order_id} уже в статусе "${finalStatusesRu[orderForCheck.status]}" — запись рейса запрещена`,
+            message: `Заявка #${resolvedOrderId} уже в статусе "${finalStatusesRu[orderForCheck.status]}" — запись рейса запрещена`,
           },
           { status: 400 }
         );
       }
+      const g = String(orderForCheck?.grade || '').trim();
+      if (g) gradeFromOrder = g;
     }
+
+    const concreteGradeFinal = gradeFromOrder || (typeof concrete_grade === 'string' ? concrete_grade.trim() : '') || null;
 
     // ⚠️ Защита от задвоения на сервере (доп. страховка к клиентской защите
     // от повторного клика): если для этого же миксера рейс уже был записан
@@ -344,10 +364,10 @@ export async function POST(request: NextRequest) {
       .from('production_logs')
       .insert([
         {
-          order_id,
+          order_id: resolvedOrderId ?? order_id,
           order_mixer_id,
           mixer_name,
-          concrete_grade,
+          concrete_grade: concreteGradeFinal,
           volume,
           operator_name: operator_name || null,
           podvizhnost,

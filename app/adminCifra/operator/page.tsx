@@ -780,8 +780,22 @@ export default function OperatorBSUPage() {
         alert(`⚠️ Рейс миксера ${trip.mixer_name || trip.number || trip.id} не удалось записать: ${json?.message || 'ошибка сервера'}. Обратитесь к диспетчеру.`);
       } else {
         const realId = json?.data?.id;
-        if (realId) {
-          setCompletedTrips(prev => prev.map(l => (l.id === tempId ? { ...l, id: realId } : l)));
+        const gradeFromServer = json?.data?.concrete_grade;
+        if (realId || gradeFromServer) {
+          setCompletedTrips((prev) =>
+            prev.map((l) =>
+              l.id === tempId
+                ? {
+                    ...l,
+                    ...(realId ? { id: realId } : {}),
+                    // Марка с сервера (актуальная из заявки) — не кэш очереди.
+                    ...(gradeFromServer != null && gradeFromServer !== ''
+                      ? { concrete_grade: gradeFromServer }
+                      : {}),
+                  }
+                : l
+            )
+          );
         }
       }
     } catch (err) {
