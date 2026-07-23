@@ -25,6 +25,8 @@ type LabSettings = {
   gost_mortar?: string;
   fsa_url_concrete?: string;
   fsa_url_mortar?: string;
+  pfm_density_kg_per_l?: string | number;
+  linomix_density_kg_per_l?: string | number;
 };
 
 const empty: LabSettings = {
@@ -43,6 +45,8 @@ const empty: LabSettings = {
   gost_mortar: '',
   fsa_url_concrete: '',
   fsa_url_mortar: '',
+  pfm_density_kg_per_l: '1.16',
+  linomix_density_kg_per_l: '1.18',
 };
 
 function Field({
@@ -135,7 +139,20 @@ export default function LabSettingsModal({ onClose }: Props) {
         const res = await fetch('/api/adminCifra/lab-settings');
         if (res.ok) {
           const data = await res.json();
-          if (!cancelled) setForm({ ...empty, ...data });
+          if (!cancelled) {
+            setForm({
+              ...empty,
+              ...data,
+              pfm_density_kg_per_l:
+                data?.pfm_density_kg_per_l != null && data.pfm_density_kg_per_l !== ''
+                  ? String(data.pfm_density_kg_per_l)
+                  : empty.pfm_density_kg_per_l,
+              linomix_density_kg_per_l:
+                data?.linomix_density_kg_per_l != null && data.linomix_density_kg_per_l !== ''
+                  ? String(data.linomix_density_kg_per_l)
+                  : empty.linomix_density_kg_per_l,
+            });
+          }
         }
       } catch (e) {
         console.error(e);
@@ -150,6 +167,18 @@ export default function LabSettingsModal({ onClose }: Props) {
 
   const save = async () => {
     if (saving) return;
+
+    const pfmDensity = parseFloat(String(form.pfm_density_kg_per_l ?? '').replace(',', '.'));
+    const linDensity = parseFloat(String(form.linomix_density_kg_per_l ?? '').replace(',', '.'));
+    if (!Number.isFinite(pfmDensity) || pfmDensity <= 0 || pfmDensity > 5) {
+      alert('Плотность ПФМ-НЛК: укажи число кг/л от 0 до 5 (например 1.16)');
+      return;
+    }
+    if (!Number.isFinite(linDensity) || linDensity <= 0 || linDensity > 5) {
+      alert('Плотность Линомикс: укажи число кг/л от 0 до 5 (например 1.18)');
+      return;
+    }
+
     setSaving(true);
     try {
       const res = await fetch('/api/adminCifra/lab-settings', {
@@ -171,6 +200,8 @@ export default function LabSettingsModal({ onClose }: Props) {
           gost_mortar: form.gost_mortar || null,
           fsa_url_concrete: form.fsa_url_concrete || null,
           fsa_url_mortar: form.fsa_url_mortar || null,
+          pfm_density_kg_per_l: pfmDensity,
+          linomix_density_kg_per_l: linDensity,
         }),
       });
       if (!res.ok) {
@@ -226,6 +257,26 @@ export default function LabSettingsModal({ onClose }: Props) {
               onChange={(v) => set('lab_attestat', v)}
               placeholder="Свидетельство об аттестации №…, действует до ДД.ММ.ГГГГ"
             />
+
+            <h3 style={{ color: COLORS.blue, fontSize: 15, margin: '22px 0 12px' }}>Плотность добавок (склад)</h3>
+            <p style={{ margin: '0 0 12px', color: COLORS.muted, fontSize: 13, lineHeight: 1.4 }}>
+              кг на 1 литр. Нужна при поступлении на склад (тонны → литры) и при автосписании с рейса (кг → литры).
+              Меняй при смене партии.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Field
+                label="ПФМ-НЛК, кг/л"
+                value={String(form.pfm_density_kg_per_l ?? '')}
+                onChange={(v) => set('pfm_density_kg_per_l', v)}
+                placeholder="1.16"
+              />
+              <Field
+                label="Линомикс ТипР, кг/л"
+                value={String(form.linomix_density_kg_per_l ?? '')}
+                onChange={(v) => set('linomix_density_kg_per_l', v)}
+                placeholder="1.18"
+              />
+            </div>
 
             <h3 style={{ color: COLORS.blue, fontSize: 15, margin: '22px 0 12px' }}>Бетон (декларация и QR)</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 12, alignItems: 'start' }}>

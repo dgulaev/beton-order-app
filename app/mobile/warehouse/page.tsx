@@ -9,6 +9,10 @@ import {
   findRecipeByGrade,
   calculateAdditiveUsage,
   calculateCementUsageKg,
+  tonsToAdditiveLiters,
+  getAdditiveDensity,
+  densitiesFromLabSettings,
+  type AdditiveDensities,
 } from '@/lib/recipeAdditives';
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ КОМПОНЕНТЫ ====================
@@ -67,7 +71,7 @@ function InputModal({ title, unit, onConfirm, onClose }: InputModalProps) {
         style={{ background: '#334155', borderRadius: '20px', padding: '28px', width: '100%', maxWidth: '380px' }}
         onClick={e => e.stopPropagation()}
       >
-        <div style={{ fontSize: '17px', fontWeight: '600', color: '#fff', marginBottom: '16px' }}>{title}</div>
+        <div style={{ fontSize: '17px', fontWeight: '600', color: '#fff', marginBottom: '16px', whiteSpace: 'pre-line' }}>{title}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <input
             autoFocus
@@ -125,6 +129,7 @@ export default function MobileWarehousePage() {
   const [availableFBS, setAvailableFBS] = useState<any[]>([]);
   const [recipes, setRecipes] = useState<any[]>([]);
   const [todayConsumption, setTodayConsumption] = useState({ cement: 0, pfm: 0, linomix: 0 });
+  const [additiveDensities, setAdditiveDensities] = useState<AdditiveDensities>({});
   const [loading, setLoading] = useState(true);
 
   // Модалка ввода: { title, unit, onConfirm } или null
@@ -134,9 +139,10 @@ export default function MobileWarehousePage() {
 
   const loadWarehouse = useCallback(async () => {
     try {
-      const [warehouseRes, recipesRes] = await Promise.all([
+      const [warehouseRes, recipesRes, labRes] = await Promise.all([
         fetch('/api/adminCifra/warehouse', { cache: 'no-store' }),
         fetch('/api/adminCifra/recipes', { cache: 'no-store' }),
+        fetch('/api/adminCifra/lab-settings', { cache: 'no-store' }),
       ]);
 
       if (warehouseRes.ok) {
@@ -164,6 +170,10 @@ export default function MobileWarehousePage() {
               : null,
           }));
         setAvailableFBS(fbs);
+      }
+
+      if (labRes.ok) {
+        setAdditiveDensities(densitiesFromLabSettings(await labRes.json()));
       }
     } catch (err) {
       console.error('Ошибка загрузки склада:', err);
@@ -272,15 +282,31 @@ export default function MobileWarehousePage() {
   };
 
   // ==================== ДЕЙСТВИЯ С ДОБАВКАМИ ====================
+  // Поступление: тонны → литры. Ручное списание: литры.
+
+  const resolveAdditiveId = (add: any, idx: number): 1 | 2 => {
+    const id = Number(add?.additive_id ?? add?.id);
+    if (id === 1 || id === 2) return id as 1 | 2;
+    return idx === 0 ? 1 : 2;
+  };
 
   const additiveAction = (idx: number, delta: 1 | -1) => {
     const add = additives[idx];
     if (!add) return;
     const isAdd = delta > 0;
+    const additiveId = resolveAdditiveId(add, idx);
+    const density = getAdditiveDensity(additiveId, additiveDensities);
+    const litersPerTon = Math.round(tonsToAdditiveLiters(additiveId, 1, additiveDensities));
+
     setInputModal({
-      title: isAdd ? `Внести в ${add.name}` : `Списать из ${add.name}`,
-      unit: 'л',
-      onConfirm: (liters) => {
+      title: isAdd
+        ? `Внести в ${add.name}\n1 т ≈ ${litersPerTon} л (${density} кг/л)`
+        : `Списать из ${add.name} (литры)`,
+      unit: isAdd ? 'т' : 'л',
+      onConfirm: (value) => {
+        const liters = isAdd
+          ? Math.round(tonsToAdditiveLiters(additiveId, value, additiveDensities) * 10) / 10
+          : value;
         setAdditives(prev => {
           const updated = prev.map((a, i) => i === idx
             ? { ...a, current: Math.max(0, Number(a.current || 0) + delta * liters) }
@@ -395,8 +421,8 @@ export default function MobileWarehousePage() {
                 {low && <span style={{ color: '#F59E0B', marginLeft: '8px' }}>⚠ Низкий уровень</span>}
               </div>
               <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
-                <ActionBtn color="#3B82F6" onClick={() => additiveAction(idx, 1)}>+ Внести</ActionBtn>
-                <ActionBtn color="#EF4444" onClick={() => additiveAction(idx, -1)}>− Списать</ActionBtn>
+                <ActionBtn color="#3B82F6" onClick={() => additiveAction(idx, 1)}>+ Внести (т)</ActionBtn>
+                <ActionBtn color="#EF4444" onClick={() => additiveAction(idx, -1)}>− Списать (л)</ActionBtn>
               </div>
             </div>
           );

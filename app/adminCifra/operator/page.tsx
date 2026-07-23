@@ -1543,7 +1543,8 @@ export default function OperatorBSUPage() {
                   шапку с той же сеткой колонок, что и у строк ниже. */}
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: '48px 40px 88px 104px 40px 162px 1fr',
+                // Объём 56px: «6.5 м³» не влезало в 40px и обрезалось до «6.5…»
+                gridTemplateColumns: '48px 40px 88px 96px 56px 154px 1fr',
                 gap: '8px',
                 padding: '0 16px 8px',
                 color: '#94A3B8',
@@ -1585,7 +1586,7 @@ export default function OperatorBSUPage() {
                       // всё гарантированно помещалось в одну строку без переноса
                       // при фиксированной ширине самой панели (660px, см. grid
                       // родителя выше).
-                      gridTemplateColumns: '48px 40px 88px 104px 40px 162px 1fr',
+                      gridTemplateColumns: '48px 40px 88px 96px 56px 154px 1fr',
                       gap: '8px',
                       alignItems: 'center',
                       minHeight: '28px',
@@ -1640,7 +1641,7 @@ export default function OperatorBSUPage() {
                       </div>
                       {/* ======================================================== */}
 
-                      <div style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <div style={{ fontWeight: '600', whiteSpace: 'nowrap' }}>
                         {trip.volume} м³
                       </div>
                       {/* alignSelf: 'stretch' — растягиваем ячейку на всю высоту строки

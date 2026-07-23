@@ -55,11 +55,20 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
           draft.designation = composeDesignation(draft);
           draft.issue_date = new Date().toLocaleDateString('ru-RU');
           if (!draft.decl_reg_date) draft.decl_reg_date = kind === 'mortar' ? '' : '18.12.2023';
-          // Авто-суффикс: если уже есть паспорта → /N+1 (база = batch_no / mix_no / №заказа)
-          if (passportCount > 0) {
-            const raw = String(draft.batch_no || draft.mix_no || orderId || 'п').replace(/\/\d+$/, '');
-            draft.batch_no = `${raw || 'п'}/${passportCount + 1}`;
+          // Привязка к заявке: номер партии по умолчанию = № заявки.
+          // Второй и далее — «429/2», «429/3»… (база = batch_no / mix_no / №заявки)
+          if (!draft.batch_no) {
+            if (passportCount > 0) {
+              const raw = String(draft.mix_no || orderId || 'п').replace(/\/\d+$/, '');
+              draft.batch_no = `${raw || orderId || 'п'}/${passportCount + 1}`;
+            } else {
+              draft.batch_no = String(orderId);
+            }
+          } else if (passportCount > 0) {
+            const raw = String(draft.batch_no).replace(/\/\d+$/, '');
+            draft.batch_no = `${raw || orderId}/${passportCount + 1}`;
           }
+          draft.order_id = orderId;
           setData(draft);
         }
       } else {
@@ -103,7 +112,12 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
         const kind = existingRecord.doc_kind === 'mortar' ? 'mortar' : 'concrete';
         setRecordId(existingRecord.id);
         setDocKind(kind);
-        setData({ ...(existingRecord.payload || {}), doc_kind: kind });
+        setData({
+          ...(existingRecord.payload || {}),
+          doc_kind: kind,
+          // Сохраняем привязку к заявке даже если в payload её нет
+          order_id: existingRecord.order_id ?? existingRecord.payload?.order_id ?? orderId ?? null,
+        });
         setLoading(false);
         return;
       }
@@ -127,7 +141,11 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
             const kind = rec.doc_kind === 'mortar' ? 'mortar' : 'concrete';
             setRecordId(rec.id);
             setDocKind(kind);
-            setData({ ...(rec.payload || {}), doc_kind: kind });
+            setData({
+              ...(rec.payload || {}),
+              doc_kind: kind,
+              order_id: rec.order_id ?? rec.payload?.order_id ?? orderId ?? null,
+            });
             setLoading(false);
             return;
           }
@@ -204,9 +222,10 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
           ...(isUpdate ? { id: recordId } : { created_by: userId ? Number(userId) : null }),
           passport_no: data.batch_no ? String(data.batch_no) : null,
           doc_kind: docKind,
-          order_id: orderId ?? null,
+          // Не затираем привязку: prop → payload → уже сохранённая запись
+          order_id: orderId ?? data.order_id ?? existingRecord?.order_id ?? null,
           spec_id: specId ?? null,
-          payload: data,
+          payload: { ...data, order_id: orderId ?? data.order_id ?? existingRecord?.order_id ?? null },
         }),
       });
       if (!res.ok) {
@@ -296,7 +315,10 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
     const stamp = new Date().toLocaleString('ru-RU', {
       day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
     });
-    const topbar = `<div class="topbar"><span>${stamp}</span><span>Паспорт ${esc(data.batch_no)}</span></div>`;
+    const orderLabel = orderId || data.order_id;
+    const topbar = `<div class="topbar"><span>${stamp}</span><span>${
+      orderLabel ? `Заявка №${esc(orderLabel)} · ` : ''
+    }Паспорт ${esc(data.batch_no)}</span></div>`;
 
     const html = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Паспорт ${esc(data.batch_no)}</title>
 <style>
@@ -491,7 +513,12 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <h2 style={{ fontSize: '20px', color: '#fff', margin: 0 }}>
             {recordId ? 'Редактирование паспорта' : 'Новый паспорт качества'}
-            {data.batch_no && <span style={{ color: COLORS.muted, fontSize: '15px', marginLeft: '10px' }}>#{data.batch_no}</span>}
+            {(orderId || data.order_id) && (
+              <span style={{ color: COLORS.blue, fontSize: '15px', marginLeft: '10px' }}>
+                Заявка №{orderId || data.order_id}
+              </span>
+            )}
+            {data.batch_no && <span style={{ color: COLORS.muted, fontSize: '15px', marginLeft: '10px' }}>· партия {data.batch_no}</span>}
             {data.mixer_number && <span style={{ color: COLORS.blue, fontSize: '14px', marginLeft: '8px' }}>· {data.mixer_number}</span>}
           </h2>
           <div style={{ display: 'flex', gap: '8px' }}>

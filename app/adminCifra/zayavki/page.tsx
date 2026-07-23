@@ -9,7 +9,13 @@ import { Package, Save, Trash2, Send, Share2, Copy, X, AlertTriangle, CheckCircl
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 import OrderRouteMap from '@/app/adminCifra/components/OrderRouteMap';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
-import { findRecipeByGrade, getAdditiveDosage, ADDITIVE_NAMES } from '@/lib/recipeAdditives';
+import {
+  findRecipeByGrade,
+  getAdditiveDosage,
+  ADDITIVE_NAMES,
+  densitiesFromLabSettings,
+  type AdditiveDensities,
+} from '@/lib/recipeAdditives';
 import { formatPhoneDisplay, formatPhoneInput } from '@/lib/phone';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
@@ -683,6 +689,7 @@ export default function ZayavkiPage() {
   const [recipes, setRecipes] = useState<any[]>([]);
   // Остатки добавок на складе (литры), подгружаются один раз
   const [warehouseAdditives, setWarehouseAdditives] = useState<{ pfm: number; linomix: number } | null>(null);
+  const [additiveDensities, setAdditiveDensities] = useState<AdditiveDensities>({});
   const [showAdditivePopup, setShowAdditivePopup] = useState(false);
 
   // ==================== ПОИСК КЛИЕНТА В МОДАЛКЕ РЕДАКТИРОВАНИЯ ====================
@@ -1421,17 +1428,24 @@ ${order.customer_type?.includes('Юридическое')
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // ==================== ЗАГРУЗКА ОСТАТКОВ СКЛАДА ====================
+  // ==================== ЗАГРУЗКА ОСТАТКОВ СКЛАДА + ПЛОТНОСТИ ====================
   useEffect(() => {
     const fetchWarehouse = async () => {
       try {
-        const res = await fetch('/api/adminCifra/warehouse');
-        if (!res.ok) return;
-        const data = await res.json();
-        const adds: any[] = data.additives || [];
-        const pfm    = Number(adds.find((a: any) => Number(a.additive_id) === 1)?.current ?? 0);
-        const linomix = Number(adds.find((a: any) => Number(a.additive_id) === 2)?.current ?? 0);
-        setWarehouseAdditives({ pfm, linomix });
+        const [whRes, labRes] = await Promise.all([
+          fetch('/api/adminCifra/warehouse'),
+          fetch('/api/adminCifra/lab-settings'),
+        ]);
+        if (whRes.ok) {
+          const data = await whRes.json();
+          const adds: any[] = data.additives || [];
+          const pfm = Number(adds.find((a: any) => Number(a.additive_id) === 1)?.current ?? 0);
+          const linomix = Number(adds.find((a: any) => Number(a.additive_id) === 2)?.current ?? 0);
+          setWarehouseAdditives({ pfm, linomix });
+        }
+        if (labRes.ok) {
+          setAdditiveDensities(densitiesFromLabSettings(await labRes.json()));
+        }
       } catch { /* тихо */ }
     };
     fetchWarehouse();
@@ -1585,7 +1599,7 @@ ${order.customer_type?.includes('Юридическое')
 
     forecastOrders.forEach((order: any) => {
       const recipe = findRecipeByGrade(recipes, order.grade);
-      const dosage = getAdditiveDosage(recipe);
+      const dosage = getAdditiveDosage(recipe, additiveDensities);
       if (!dosage) return;
       const volume = Number(order.volume || 0);
       if (volume <= 0) return;
@@ -1611,7 +1625,7 @@ ${order.customer_type?.includes('Юридическое')
       hasAlert: (pfmStock !== null && pfmStock < pfmLiters) || (linomixStock !== null && linomixStock < linomixLiters),
       details,
     };
-  }, [allOrders, selectedDate, recipes, warehouseAdditives]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allOrders, selectedDate, recipes, warehouseAdditives, additiveDensities]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div style={{ 

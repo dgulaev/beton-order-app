@@ -319,6 +319,8 @@ create table if not exists public.lab_settings (
   gost_mortar            text,
   fsa_url_concrete       text,
   fsa_url_mortar         text,
+  pfm_density_kg_per_l   numeric(6, 3) default 1.16,
+  linomix_density_kg_per_l numeric(6, 3) default 1.18,
   single_row             boolean not null default true unique,
   created_at             timestamptz not null default now(),
   updated_at             timestamptz not null default now()

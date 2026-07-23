@@ -6,6 +6,9 @@
 // сегодня»), и в /adminCifra/zayavki (плановый расход на день). Модуль не
 // делает I/O (никаких supabase/fetch), поэтому безопасен для импорта в любом
 // окружении — просто набор чистых функций над уже загруженным списком рецептов.
+//
+// Плотность (кг/л) задаётся в lab_settings (настройки лаборатории) и передаётся
+// сюда через AdditiveDensities; константы ниже — только fallback.
 
 export interface RecipeLike {
   code?: string | null;
@@ -25,6 +28,10 @@ export interface AdditiveDosage {
   densityKgPerLiter: number;
 }
 
+/** Плотности из lab_settings (или любого другого источника), кг/л. */
+export type AdditiveDensities = Partial<Record<1 | 2, number>>;
+
+/** Fallback, если в lab_settings плотность ещё не задана / колонок нет. */
 export const ADDITIVE_DENSITY_KG_PER_LITER: Record<1 | 2, number> = {
   1: 1.16, // ПФМ-НЛК
   2: 1.18, // Линомикс ТипР
@@ -35,9 +42,50 @@ export const ADDITIVE_NAMES: Record<1 | 2, string> = {
   2: 'Линомикс ТипР',
 };
 
+export function getAdditiveDensity(
+  additiveId: 1 | 2,
+  densities?: AdditiveDensities | null
+): number {
+  const override = Number(densities?.[additiveId]);
+  if (Number.isFinite(override) && override > 0) return override;
+  return ADDITIVE_DENSITY_KG_PER_LITER[additiveId];
+}
+
+/** Разбор строки lab_settings → плотности для additive_id 1/2. */
+export function densitiesFromLabSettings(
+  row:
+    | {
+        pfm_density_kg_per_l?: number | string | null;
+        linomix_density_kg_per_l?: number | string | null;
+      }
+    | null
+    | undefined
+): AdditiveDensities {
+  const pfm = Number(row?.pfm_density_kg_per_l);
+  const lin = Number(row?.linomix_density_kg_per_l);
+  return {
+    1: Number.isFinite(pfm) && pfm > 0 ? pfm : undefined,
+    2: Number.isFinite(lin) && lin > 0 ? lin : undefined,
+  };
+}
+
+/**
+ * Поступление на склад: добавку привозят в тоннах, остаток ёмкостей — в литрах.
+ * литры = тонны × 1000 / плотность (кг/л).
+ */
+export function tonsToAdditiveLiters(
+  additiveId: 1 | 2,
+  tons: number,
+  densities?: AdditiveDensities | null
+): number {
+  const density = getAdditiveDensity(additiveId, densities);
+  if (!tons || tons <= 0 || !density) return 0;
+  return (tons * 1000) / density;
+}
+
 /**
  * Поиск рецепта по марке — тот же порядок проверок, что уже проверен в
- * /adminCifra/zayavki (plановый расчёт добавок на день): точное совпадение
+ * /adminCifra/zayavki (плановый расчёт добавок на день): точное совпадение
  * кода, код без хвостового «и» (доломит), вхождение кода марки в строку,
  * вхождение марки в название рецепта.
  */
@@ -60,7 +108,10 @@ export function findRecipeByGrade<T extends RecipeLike>(recipes: T[], grade: str
  * в текущих рецептах — если задано и то, и другое, приоритет отдаём типу
  * рецепта (mortar → Линомикс), иначе первой непустой колонке.
  */
-export function getAdditiveDosage(recipe: RecipeLike | null | undefined): AdditiveDosage | null {
+export function getAdditiveDosage(
+  recipe: RecipeLike | null | undefined,
+  densities?: AdditiveDensities | null
+): AdditiveDosage | null {
   if (!recipe) return null;
 
   const additive1 = Number(recipe.additive || 0);
@@ -69,17 +120,31 @@ export function getAdditiveDosage(recipe: RecipeLike | null | undefined): Additi
   const useSecond = recipe.type === 'mortar' ? additive2 > 0 : additive2 > 0 && additive1 <= 0;
 
   if (useSecond) {
-    return { additiveId: 2, name: ADDITIVE_NAMES[2], kgPerM3: additive2, densityKgPerLiter: ADDITIVE_DENSITY_KG_PER_LITER[2] };
+    return {
+      additiveId: 2,
+      name: ADDITIVE_NAMES[2],
+      kgPerM3: additive2,
+      densityKgPerLiter: getAdditiveDensity(2, densities),
+    };
   }
   if (additive1 > 0) {
-    return { additiveId: 1, name: ADDITIVE_NAMES[1], kgPerM3: additive1, densityKgPerLiter: ADDITIVE_DENSITY_KG_PER_LITER[1] };
+    return {
+      additiveId: 1,
+      name: ADDITIVE_NAMES[1],
+      kgPerM3: additive1,
+      densityKgPerLiter: getAdditiveDensity(1, densities),
+    };
   }
   return null;
 }
 
 /** Итог по объёму рейса/заявки: сколько кг добавки и сколько это литров на складе. */
-export function calculateAdditiveUsage(recipe: RecipeLike | null | undefined, volumeM3: number) {
-  const dosage = getAdditiveDosage(recipe);
+export function calculateAdditiveUsage(
+  recipe: RecipeLike | null | undefined,
+  volumeM3: number,
+  densities?: AdditiveDensities | null
+) {
+  const dosage = getAdditiveDosage(recipe, densities);
   if (!dosage || !volumeM3 || volumeM3 <= 0) return null;
 
   const kg = volumeM3 * dosage.kgPerM3;

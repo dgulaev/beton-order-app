@@ -14,10 +14,34 @@ export async function GET() {
   return NextResponse.json(data || {});
 }
 
+const ALLOWED_FIELDS = [
+  'org_name',
+  'org_address',
+  'inn',
+  'kpp',
+  'phone',
+  'director_name',
+  'lab_head_name',
+  'lab_attestat',
+  'aeff_class',
+  'declaration_concrete',
+  'declaration_mortar',
+  'gost_concrete',
+  'gost_mortar',
+  'fsa_url_concrete',
+  'fsa_url_mortar',
+  'pfm_density_kg_per_l',
+  'linomix_density_kg_per_l',
+] as const;
+
 export async function PUT(request: NextRequest) {
   const body = await request.json();
-  const { id, ...updateData } = body;
-  updateData.updated_at = new Date().toISOString();
+  const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const key of ALLOWED_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) {
+      updateData[key] = body[key];
+    }
+  }
   const { data, error } = await supabase
     .from('lab_settings')
     .update(updateData)

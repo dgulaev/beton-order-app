@@ -5,7 +5,16 @@ import Image from 'next/image';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 
 import { supabase } from '@/lib/supabaseClient';
-import { findRecipeByGrade, calculateAdditiveUsage, calculateCementUsageKg } from '@/lib/recipeAdditives';
+import {
+  findRecipeByGrade,
+  calculateAdditiveUsage,
+  calculateCementUsageKg,
+  tonsToAdditiveLiters,
+  getAdditiveDensity,
+  densitiesFromLabSettings,
+  ADDITIVE_NAMES,
+  type AdditiveDensities,
+} from '@/lib/recipeAdditives';
 
 interface WarehousePageProps {
   recipes?: any[];
@@ -25,6 +34,8 @@ export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
     linomix: 0 
   });
   const [operationHistory, setOperationHistory] = useState<any[]>([]);
+  /** Плотности из настроек лаборатории (т→л / кг→л). */
+  const [additiveDensities, setAdditiveDensities] = useState<AdditiveDensities>({});
 
   const isProcessingRef = useRef(false);
 
@@ -77,10 +88,17 @@ export default function WarehousePage({ recipes = [] }: WarehousePageProps) {
    // ==================== 2. ЗАГРУЗКА ДАННЫХ ====================
 const loadWarehouse = async () => {
   try {
-    const warehouseRes = await fetch('/api/adminCifra/warehouse', { 
-      cache: 'no-store',
-      headers: { 'Cache-Control': 'no-cache' }
-    });
+    const [warehouseRes, recipesRes, labRes] = await Promise.all([
+      fetch('/api/adminCifra/warehouse', {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      }),
+      fetch('/api/adminCifra/recipes', {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      }),
+      fetch('/api/adminCifra/lab-settings', { cache: 'no-store' }),
+    ]);
 
     if (warehouseRes.ok) {
       const data = await warehouseRes.json();
@@ -96,14 +114,7 @@ const loadWarehouse = async () => {
       }));
 
       setAdditives(loadedAdditives);
-      // console.log('📊 Загружены добавки из БД:', loadedAdditives); // убрали
     }
-
-    // Рецепты ФБС
-    const recipesRes = await fetch('/api/adminCifra/recipes', { 
-      cache: 'no-store',
-      headers: { 'Cache-Control': 'no-cache' }
-    });
 
     if (recipesRes.ok) {
       const allData = await recipesRes.json();
@@ -112,7 +123,11 @@ const loadWarehouse = async () => {
       );
       
       setAvailableFBS(onlyFBS);
-      // console.log(`📦 Загружено ФБС рецептов: ${onlyFBS.length} шт`); // убрали
+    }
+
+    if (labRes.ok) {
+      const lab = await labRes.json();
+      setAdditiveDensities(densitiesFromLabSettings(lab));
     }
   } catch (err) {
     console.error('Ошибка загрузки склада:', err);
@@ -382,47 +397,64 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
     return tons.toFixed(3) + ' т';
   };
 
- // ==================== 6.1 РАБОТА С ДОБАВКАМИ (ТОЧНО КАК ЦЕМЕНТ) ====================
+ // ==================== 6.1 РАБОТА С ДОБАВКАМИ ====================
+  // Поступление: тонны → литры (плотность в recipeAdditives).
+  // Ручное списание / обнуление: литры. Автосписание с рейса — отдельно (кг→л).
   const handleAddAdditive = (index: number) => {
-    const name = index === 0 ? 'ПФМ-НЛК' : 'Линомикс ТипР';
-    const input = prompt(`Сколько литров добавить в ${name}?`);
+    const additiveId = (index === 0 ? 1 : 2) as 1 | 2;
+    const name = ADDITIVE_NAMES[additiveId];
+    const density = getAdditiveDensity(additiveId, additiveDensities);
+    const litersPerTon = Math.round(tonsToAdditiveLiters(additiveId, 1, additiveDensities));
+    const input = prompt(
+      `Сколько тонн добавить в ${name}?\n(1 т ≈ ${litersPerTon} л при плотности ${density} кг/л — из настроек лаборатории)`
+    );
     if (input === null) return;
-    const liters = parseFloat(input);
-    if (isNaN(liters) || liters <= 0) return alert('Введите положительное число');
+    const tons = parseFloat(input.replace(',', '.'));
+    if (isNaN(tons) || tons <= 0) return alert('Введите положительное число (тонны)');
+
+    const liters = Math.round(tonsToAdditiveLiters(additiveId, tons, additiveDensities) * 10) / 10;
 
     setAdditives(prev => {
       const updated = prev.map((add, i) => {
         if (i === index) {
           const oldCurrent = Number(add?.current || 0);
           const newCurrent = oldCurrent + liters;
-          
-          addToHistory('+ Внесено', name, liters, oldCurrent, newCurrent, 'л');
-          
+
+          addToHistory(
+            `+ Внесено ${tons} т → ${liters} л`,
+            name,
+            liters,
+            oldCurrent,
+            newCurrent,
+            'л'
+          );
+
           return { ...add, current: newCurrent };
         }
         return add;
       });
 
-      saveToDatabase(undefined, updated);   // silos = undefined, additives = updated
+      saveToDatabase(undefined, updated);
       return updated;
     });
   };
 
   const handleSubtractAdditive = (index: number) => {
-    const name = index === 0 ? 'ПФМ-НЛК' : 'Линомикс ТипР';
+    const additiveId = (index === 0 ? 1 : 2) as 1 | 2;
+    const name = ADDITIVE_NAMES[additiveId];
     const input = prompt(`Сколько литров списать из ${name}?`);
     if (input === null) return;
-    const liters = parseFloat(input);
-    if (isNaN(liters) || liters <= 0) return alert('Введите положительное число');
+    const liters = parseFloat(input.replace(',', '.'));
+    if (isNaN(liters) || liters <= 0) return alert('Введите положительное число (литры)');
 
     setAdditives(prev => {
       const updated = prev.map((add, i) => {
         if (i === index) {
           const oldCurrent = Number(add?.current || 0);
           const newCurrent = Math.max(0, oldCurrent - liters);
-          
+
           addToHistory('− Списано', name, liters, oldCurrent, newCurrent, 'л');
-          
+
           return { ...add, current: newCurrent };
         }
         return add;
@@ -434,8 +466,9 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
   };
 
   const resetAdditive = (index: number) => {
-    const name = index === 0 ? 'ПФМ-НЛК' : 'Линомикс ТипР';
-    if (confirm(`Обнулить ${name}?`)) {
+    const additiveId = (index === 0 ? 1 : 2) as 1 | 2;
+    const name = ADDITIVE_NAMES[additiveId];
+    if (confirm(`Обнулить ${name}? (остаток в литрах станет 0)`)) {
       setAdditives(prev => {
         const updated = prev.map((add, i) => {
           if (i === index) {
@@ -865,9 +898,9 @@ const removeLastCube = (index: number) => {
 
         {/* Кнопки для ПФМ */}
         <div style={{ marginTop: '16px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
-          <button onClick={() => handleAddAdditive(0)} style={{ padding: '12px 24px', background: '#3B82F6', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>+ Внести</button>
-          <button onClick={() => handleSubtractAdditive(0)} style={{ padding: '12px 24px', background: '#EF4444', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>− Списать</button>
-          <button onClick={() => resetAdditive(0)} style={{ padding: '12px 24px', background: '#475569', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>Обнулить</button>
+          <button onClick={() => handleAddAdditive(0)} style={{ padding: '12px 24px', background: '#3B82F6', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>+ Внести (т)</button>
+          <button onClick={() => handleSubtractAdditive(0)} style={{ padding: '12px 24px', background: '#EF4444', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>− Списать (л)</button>
+          <button onClick={() => resetAdditive(0)} style={{ padding: '12px 24px', background: '#475569', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>Обнулить (л)</button>
           <button onClick={() => addNewCube(0)} style={{ padding: '12px 24px', background: '#10B981', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>+ Кубик</button>
           <button onClick={() => removeLastCube(0)} style={{ padding: '12px 24px', background: '#F59E0B', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>− Кубик</button>
         </div>
@@ -929,9 +962,9 @@ const removeLastCube = (index: number) => {
         </div>
 
         <div style={{ marginTop: '16px', display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
-          <button onClick={() => handleAddAdditive(1)} style={{ padding: '12px 24px', background: '#3B82F6', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>+ Внести</button>
-          <button onClick={() => handleSubtractAdditive(1)} style={{ padding: '12px 24px', background: '#EF4444', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>− Списать</button>
-          <button onClick={() => resetAdditive(1)} style={{ padding: '12px 24px', background: '#475569', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>Обнулить</button>
+          <button onClick={() => handleAddAdditive(1)} style={{ padding: '12px 24px', background: '#3B82F6', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>+ Внести (т)</button>
+          <button onClick={() => handleSubtractAdditive(1)} style={{ padding: '12px 24px', background: '#EF4444', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>− Списать (л)</button>
+          <button onClick={() => resetAdditive(1)} style={{ padding: '12px 24px', background: '#475569', border: 'none', borderRadius: '12px', color: 'white', fontWeight: '600', cursor: 'pointer' }}>Обнулить (л)</button>
         </div>
       </div>
 

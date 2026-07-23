@@ -89,7 +89,8 @@ async function buildAutofill(orderId: number, docKind: string) {
     actual_strength_7: test7?.actual_strength_mpa ?? '',
     // Номер номинального состава берём из рецептуры (редактируется в паспорте).
     mix_no: recipe?.mix_no ?? '',
-    batch_no: '',
+    // По умолчанию номер партии = номер заявки (привязка для лаборанта/печати).
+    batch_no: String(orderId),
   };
 }
 
@@ -146,8 +147,28 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   const body = await request.json();
-  const { id, ...updateData } = body;
-  const { data, error } = await supabase.from('concrete_passports').update(updateData).eq('id', id).select().single();
+  const id = body.id;
+  if (id == null) return NextResponse.json({ error: 'ID required' }, { status: 400 });
+
+  // Как в POST — только известные колонки. order_id не затираем null'ом,
+  // если клиент его не прислал (иначе пропадает привязка к заявке).
+  const updateData: Record<string, unknown> = {};
+  if ('passport_no' in body) updateData.passport_no = body.passport_no ?? null;
+  if ('doc_kind' in body) updateData.doc_kind = body.doc_kind === 'mortar' ? 'mortar' : 'concrete';
+  if ('payload' in body) updateData.payload = body.payload ?? null;
+  if ('spec_id' in body) {
+    updateData.spec_id = body.spec_id != null && body.spec_id !== '' ? Number(body.spec_id) : null;
+  }
+  if (body.order_id != null && body.order_id !== '') {
+    updateData.order_id = Number(body.order_id);
+  }
+
+  const { data, error } = await supabase
+    .from('concrete_passports')
+    .update(updateData)
+    .eq('id', id)
+    .select()
+    .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data);
 }

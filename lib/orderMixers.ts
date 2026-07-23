@@ -5,7 +5,11 @@
 // того, кто меняет статус.
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 import { OWN_UNLOAD_ALLOWANCE_MIN, ORDER_MIXER_STATUSES, type OrderMixerStatus } from '@/lib/mixerConfig';
-import { findRecipeByGrade, calculateAdditiveUsage } from '@/lib/recipeAdditives';
+import {
+  findRecipeByGrade,
+  calculateAdditiveUsage,
+  densitiesFromLabSettings,
+} from '@/lib/recipeAdditives';
 
 const FINAL_ORDER_STATUSES = ['completed', 'cancelled'];
 const STATUS_LABELS_RU: Record<string, string> = {
@@ -253,9 +257,9 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   // литрового остатка склада, без перевода по плотности. Теперь списываем
   // сразу в момент разгрузки конкретного рейса, по реальной дозировке из
   // рецепта (recipes.additive/additive2), с переводом кг → литры по
-  // плотности (1.16 для ПФМ-НЛК, 1.18 для Линомикса). Работает для ЛЮБОГО
-  // способа перевести миксер в "Разгружен" — оператор, диспетчер, водитель,
-  // админ — все идут через эту функцию.
+  // плотности из lab_settings (настройки лаборатории; fallback 1.16 / 1.18).
+  // Работает для ЛЮБОГО способа перевести миксер в "Разгружен" — оператор,
+  // диспетчер, водитель, админ — все идут через эту функцию.
   //
   // Выполняется ПОСЛЕ атомарного UPDATE выше (переход уже подтверждён и
   // зафиксирован в БД), поэтому склад не трогаем, если статус на самом деле
@@ -273,8 +277,22 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
         .from('recipes')
         .select('code, name, type, cement, additive, additive2');
 
+      // Плотность из настроек лаборатории; если колонок ещё нет — fallback в коде.
+      let densities = densitiesFromLabSettings(null);
+      try {
+        const { data: labSettings, error: labError } = await supabase
+          .from('lab_settings')
+          .select('pfm_density_kg_per_l, linomix_density_kg_per_l')
+          .eq('id', 1)
+          .maybeSingle();
+        if (!labError) densities = densitiesFromLabSettings(labSettings);
+        else console.warn('lab_settings density columns unavailable, using defaults:', labError.message);
+      } catch (labErr) {
+        console.warn('Не удалось прочитать плотность добавок из lab_settings:', labErr);
+      }
+
       const recipe = findRecipeByGrade(recipes || [], mixer.orders?.grade);
-      const usage = calculateAdditiveUsage(recipe, Number(mixer.volume || 0));
+      const usage = calculateAdditiveUsage(recipe, Number(mixer.volume || 0), densities);
 
       if (usage) {
         const { error: rpcError } = await supabase.rpc('warehouse_additive_adjust', {
