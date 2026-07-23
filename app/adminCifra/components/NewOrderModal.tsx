@@ -10,6 +10,7 @@ import { formatPhoneInput } from '@/lib/phone';
 import { CARD_BORDER, modalCloseButtonStyle, modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
 import ModalDateInput from './ModalDateInput';
 import ModalTimeInput from './ModalTimeInput';
+import { nowTimeHHMM } from './modalPickerShared';
 import ModalSelect from './ModalSelect';
 
 interface NewOrderModalProps {
@@ -79,7 +80,7 @@ export default function NewOrderModal({
         grade: initialData.grade || 'М300',
         volume: initialData.volume?.toString() || '',
         deliveryDate: deliveryDateRaw ? String(deliveryDateRaw).split('T')[0] : new Date().toISOString().split('T')[0],
-        deliveryTime: initialData.deliveryTime || initialData.delivery_time || '09:00',
+        deliveryTime: initialData.deliveryTime || initialData.delivery_time || nowTimeHHMM(),
         address: initialData.address || '',
         customerType: initialData.customerType || 'physical',
         organizationName: initialData.organizationName || initialData.organization_name || '',
@@ -162,7 +163,7 @@ export default function NewOrderModal({
     grade: 'М300',
     volume: '',
     deliveryDate: new Date().toISOString().split('T')[0],
-    deliveryTime: '10:00',
+    deliveryTime: nowTimeHHMM(),
     address: '',
     customerType: 'legal' as 'physical' | 'legal',   // ← Изменено с 'physical' на 'legal'
     organizationName: '',
@@ -171,6 +172,12 @@ export default function NewOrderModal({
     inn: '',
     comment: '',
   });
+
+  // При каждом открытии «новой» заявки (не копия) — свежее текущее время.
+  useEffect(() => {
+    if (!isOpen || initialData) return;
+    setForm((prev) => ({ ...prev, deliveryTime: nowTimeHHMM() }));
+  }, [isOpen, initialData]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingInn, setLoadingInn] = useState(false);

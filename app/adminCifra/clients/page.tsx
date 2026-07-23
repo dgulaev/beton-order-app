@@ -11,6 +11,7 @@ import { adminCifraFetch } from '@/lib/adminCifraFetch';
 import { Users } from 'lucide-react';
 import { CARD_BORDER, CARD_VOLUME_SOFT, modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import { appConfirm } from '../components/appDialog';
+import { nowTimeHHMM } from '../components/modalPickerShared';
 
 type ClientsGridFit = { cols: number; rows: number; perPage: number };
 
@@ -1462,7 +1463,7 @@ const duplicateOrder = (order: any) => {
     
     // ←←← ИСПРАВЛЕНИЕ: всегда сегодняшняя дата при дублировании
     delivery_date: today,
-    delivery_time: order.delivery_time || order.deliveryTime || '10:00',
+    delivery_time: order.delivery_time || order.deliveryTime || nowTimeHHMM(),
     
     address: order.address || clientData.address || '',
     

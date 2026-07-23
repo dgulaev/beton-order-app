@@ -1734,25 +1734,35 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   const endMinutes = startMinutes + durationMinutes;
 
   const leftPercent = (startMinutes / 1440) * 100;
+  // Сколько % ещё остаётся до правого края суток (плашка не должна вылезать за строку).
+  const maxWidthPercent = Math.max(0, 100 - leftPercent);
   // Логарифмическое сжатие длины плашки: для малых объёмов полоса не исчезает,
   // для больших не «съедает» весь таймлайн. log(1+x)/log(1+maxX) × maxWidth.
-  // Минимальная ширина 5% = ~72 мин экранных = всегда читаемый статус.
+  // Минимальная ширина 5% = ~72 мин экранных = всегда читаемый статус —
+  // но не больше остатка до полуночи (иначе поздние заявки «вылезают»).
   const MAX_DURATION = 240; // минут — «насыщение» шкалы при ~120 м³
   const logWidth = (Math.log(1 + Math.min(durationMinutes, MAX_DURATION)) / Math.log(1 + MAX_DURATION)) * 30;
-  let widthPercent = Math.max(logWidth, 5); // минимум 5% (~72px на Full HD) чтобы влезал текст
+  let widthPercent = Math.min(Math.max(logWidth, 5), maxWidthPercent);
   let isOverflow = false;
   let overflowMinutes = 0;
 
   if (endMinutes > 1440) {
-    const linearW = ((1440 - startMinutes) / 1440) * 100;
-    widthPercent = Math.max(linearW, 5);
+    // Обрезаем ровно по 24:00, без min 5% — иначе снова вылезем за край.
+    widthPercent = ((1440 - startMinutes) / 1440) * 100;
     isOverflow = true;
     overflowMinutes = Math.round(endMinutes - 1440);
+  } else if (Math.max(logWidth, 5) > maxWidthPercent + 0.01) {
+    // Расчётный конец ещё сегодня, но визуальная плашка (min 5% / minWidth)
+    // не влезает до края суток — режем по краю и ставим стрелку (без «завтра»).
+    widthPercent = maxWidthPercent;
+    isOverflow = true;
   }
 
   const overflowLabel = overflowMinutes >= 60
     ? `+${Math.floor(overflowMinutes / 60)}ч ${overflowMinutes % 60 > 0 ? `${overflowMinutes % 60}м` : ''} завтра`
-    : `+${overflowMinutes}м завтра`;
+    : overflowMinutes > 0
+      ? `+${overflowMinutes}м завтра`
+      : '';
 
      // ==================== 41. СТАТУС ЗАКАЗА ====================
     const statusColor = 
@@ -1856,6 +1866,7 @@ const generateDailyReport = () => {
         minHeight: '44px',
         cursor: 'pointer',
         transition: 'filter 0.15s',
+        overflow: 'hidden', // плашка не вылезает за правый край строки
       })}
       onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
       onMouseLeave={e => { e.currentTarget.style.filter = 'none'; }}
@@ -1885,17 +1896,19 @@ const generateDailyReport = () => {
         </div>
         <div style={{ color: '#94A3B8', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <span>{order.grade} • {volume} м³</span>
-          {isOverflow && (
+          {isOverflow && overflowLabel && (
             <span style={{ color: '#FACC15', fontWeight: '600' }}>{overflowLabel}</span>
           )}
         </div>
       </div>
 
-      {/* Плашка заказа — автопрозрачность при наезде на текст */}
+      {/* Плашка заказа — автопрозрачность при наезде на текст.
+          При переходе на завтра: ширина ≤ остатка до 24:00, справа →→, без minWidth. */}
       <div style={{
         position: 'absolute',
         left: `${leftPercent}%`,
         width: `${widthPercent}%`,
+        maxWidth: `${maxWidthPercent}%`,
         height: '28px',
         background: `${statusColor}${pillAlpha}`,
         borderRadius: isOverflow ? '9999px 4px 4px 9999px' : '9999px',
@@ -1910,7 +1923,8 @@ const generateDailyReport = () => {
         whiteSpace: 'nowrap',
         boxShadow: `0 0 10px ${statusColor}${pillShadowAlpha}, 0 2px 6px rgba(0,0,0,0.25)`,
         zIndex: 10,
-        minWidth: '90px',
+        minWidth: isOverflow ? 0 : '90px',
+        boxSizing: 'border-box',
         transition: 'background 0.3s',
         ...(isOverflow ? {
           backgroundImage: `linear-gradient(to right, ${statusColor}${pillAlpha}, ${statusColor}${pillAlpha} 70%, rgba(0,0,0,0))`,

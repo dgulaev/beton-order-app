@@ -7,6 +7,7 @@ import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
 import OrderRouteMap from './OrderRouteMap';
 import ModalTimeInput from './ModalTimeInput';
+import { nowTimeHHMM } from './modalPickerShared';
 import ModalSelect from './ModalSelect';
 import { CARD_BORDER, modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
 
@@ -85,7 +86,7 @@ const loadData = async () => {
   const [localOrder, setLocalOrder] = useState(order);
   const questionableSavingRef = useRef(false);
   const [questionableSaving, setQuestionableSaving] = useState(false);
-  const [newMixerTime, setNewMixerTime] = useState('');
+  const [newMixerTime, setNewMixerTime] = useState(() => nowTimeHHMM());
   const [newMixerPick, setNewMixerPick] = useState('');
 
   // Синхронизация при смене заказа
@@ -1155,7 +1156,7 @@ const formatVolume = (value: number | string) => {
       // === 6. Очистка формы ===
       (document.getElementById('mixerName') as HTMLInputElement).value = '';
       (document.getElementById('mixerVolume') as HTMLInputElement).value = '';
-      setNewMixerTime('');
+      setNewMixerTime(nowTimeHHMM());
       setNewMixerPick('');
 
       console.log(`✅ Миксер ${name} добавлен в конец списка (sortOrder = ${newSortOrder})`);

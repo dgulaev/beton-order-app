@@ -7,6 +7,7 @@ import { PlusCircle, ClipboardList, Gift, Wallet } from 'lucide-react';
 import { formatPhoneInput, normalizePhone } from '@/lib/phone';
 import { useDeliveryCoords } from '@/lib/yandexRoute';
 import { calculateDeliveryCost, fetchDeliverySettings, DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
+import { nowTimeHHMM } from '@/app/adminCifra/components/modalPickerShared';
 
 declare const WebApp: any;
 
@@ -62,7 +63,7 @@ export default function ConcreteOrderPage() {
     grade: 'М300',
     volume: '',
     deliveryDate: new Date().toISOString().split('T')[0],
-    deliveryTime: '10:00',
+    deliveryTime: nowTimeHHMM(),
     address: '',
     customerType: 'physical' as 'physical' | 'legal',
     organizationName: '',
@@ -625,7 +626,7 @@ const loadReferrals = async () => {
         grade: 'М300',
         volume: '',
         deliveryDate: new Date().toISOString().split('T')[0],
-        deliveryTime: '10:00',
+        deliveryTime: nowTimeHHMM(),
         address: '',
         customerType: 'physical',
         organizationName: '',

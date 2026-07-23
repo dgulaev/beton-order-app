@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Clock } from 'lucide-react';
 import { modalFieldStyle } from '../cardStyles';
-import { pad2, pickerItemStyle, PortalPopup, useDismissOnOutside } from './modalPickerShared';
+import { nowTimeHHMM, pad2, pickerItemStyle, PortalPopup, useDismissOnOutside } from './modalPickerShared';
 
 type Props = {
   value: string;
@@ -18,7 +18,15 @@ const COL_H = 220;
 /** Принимает HH:MM и HH:MM:SS (из БД часто приходит с секундами). */
 function parseTime(v: string): { h: number; m: number; ok: boolean } {
   const m = /^(\d{1,2}):(\d{2})(?::\d{2})?/.exec(String(v || '').trim());
-  if (!m) return { h: 9, m: 0, ok: false };
+  if (!m) {
+    // Пустое/битое значение — крутим колесо от текущего московского времени.
+    const now = /^(\d{1,2}):(\d{2})/.exec(nowTimeHHMM());
+    return {
+      h: now ? Math.min(23, Number(now[1])) : 0,
+      m: now ? Math.min(59, Number(now[2])) : 0,
+      ok: false,
+    };
+  }
   return {
     h: Math.min(23, Number(m[1])),
     m: Math.min(59, Number(m[2])),
@@ -108,6 +116,8 @@ export default function ModalTimeInput({ value, onChange, style, disabled, title
         disabled={disabled}
         onClick={() => {
           if (disabled) return;
+          // Пустое поле при первом открытии — сразу текущее время, колесо с него.
+          if (!ok) onChange(nowTimeHHMM());
           setOpen((v) => !v);
         }}
         style={{

@@ -6,6 +6,7 @@ import { modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardS
 import ModalSelect from '../components/ModalSelect';
 import ModalDateInput from '../components/ModalDateInput';
 import ModalTimeInput from '../components/ModalTimeInput';
+import { nowTimeHHMM } from '../components/modalPickerShared';
 import { appConfirm } from '../components/appDialog';
 
 const inputStyle: React.CSSProperties = modalFieldStyle({
@@ -579,7 +580,7 @@ const showVisualNotification = (type: string, data: any) => {
                   onChange={(d) => {
                     const t = formData.due_date && formData.due_date.length >= 16
                       ? formData.due_date.slice(11, 16)
-                      : '09:00';
+                      : nowTimeHHMM();
                     setFormData({ ...formData, due_date: d ? `${d}T${t}` : '' });
                   }}
                   style={{ marginBottom: 16 }}

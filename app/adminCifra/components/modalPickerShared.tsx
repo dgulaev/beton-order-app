@@ -184,6 +184,19 @@ export function pad2(n: number) {
   return String(n).padStart(2, '0');
 }
 
+/** Текущее время HH:MM в Europe/Moscow — дефолт для новых заявок и пикера. */
+export function nowTimeHHMM(date: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Moscow',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  const hour = map.hour === '24' ? '00' : (map.hour || '00');
+  return `${hour}:${map.minute || '00'}`;
+}
+
 export function formatRuDate(iso: string) {
   if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso || '';
   const [y, m, d] = iso.split('-');

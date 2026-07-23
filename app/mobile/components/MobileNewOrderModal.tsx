@@ -13,6 +13,7 @@ import {
   volumeCardSoftStyle,
   volumeModalStyle,
 } from '@/app/adminCifra/cardStyles';
+import { nowTimeHHMM } from '@/app/adminCifra/components/modalPickerShared';
 
 const INPUT: React.CSSProperties = modalFieldStyle({
   padding: '11px 14px',
@@ -58,7 +59,7 @@ export default function MobileNewOrderModal({
     grade: 'М300',
     volume: '',
     deliveryDate: '',
-    deliveryTime: '10:00',
+    deliveryTime: nowTimeHHMM(),
     address: '',
     customerType: 'legal' as 'physical' | 'legal',
     organizationName: '',
@@ -77,11 +78,12 @@ export default function MobileNewOrderModal({
    // ==================== 4. ЗАПОЛНЕНИЕ ДАННЫМИ ПРИ КОПИРОВАНИИ ====================
   useEffect(() => {
     if (!initialData || Object.keys(initialData).length === 0) {
-      // Свежая заявка без дублирования — просто подставляем дату по умолчанию
-      // (день, открытый на странице «Заявки»), иначе поле остаётся пустым.
-      if (defaultDeliveryDate) {
-        setForm(prev => ({ ...prev, deliveryDate: defaultDeliveryDate }));
-      }
+      // Свежая заявка — дата дня + текущее московское время.
+      setForm((prev) => ({
+        ...prev,
+        ...(defaultDeliveryDate ? { deliveryDate: defaultDeliveryDate } : {}),
+        deliveryTime: nowTimeHHMM(),
+      }));
       return;
     }
 
@@ -96,7 +98,7 @@ export default function MobileNewOrderModal({
       grade: initialData.grade || 'М300',
       volume: initialData.volume?.toString() || '',
       deliveryDate: initialData.deliveryDate || defaultDeliveryDate || new Date().toISOString().split('T')[0],
-      deliveryTime: initialData.deliveryTime || '10:00',
+      deliveryTime: initialData.deliveryTime || nowTimeHHMM(),
       address: initialData.address || '',
       customerType: initialData.customerType || 'legal',
       organizationName: initialData.organizationName || '',
@@ -108,6 +110,12 @@ export default function MobileNewOrderModal({
 
     setForm(newFormData);
   }, [initialData, defaultDeliveryDate]);
+
+  // При открытии новой заявки — актуальное текущее время (Москва).
+  useEffect(() => {
+    if (!isOpen || (initialData && Object.keys(initialData).length > 0)) return;
+    setForm((prev) => ({ ...prev, deliveryTime: nowTimeHHMM() }));
+  }, [isOpen, initialData]);
 
   // ==================== 5. ЗАГРУЗКА РЕЦЕПТОВ ====================
   useEffect(() => {
