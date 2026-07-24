@@ -10,6 +10,7 @@ import ModalTimeInput from './ModalTimeInput';
 import { nowTimeHHMM } from './modalPickerShared';
 import ModalSelect from './ModalSelect';
 import { CARD_BORDER, modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 interface OrderDetailModalProps {
   order: Order | null;
@@ -512,7 +513,7 @@ const formatVolume = (value: number | string) => {
                     try {
                       const res = await fetch('/api/adminCifra/orders/update', {
                         method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
                         body: JSON.stringify({
                           id: order.id,
                           status: newStatus,
@@ -600,7 +601,7 @@ const formatVolume = (value: number | string) => {
                       try {
                         const res = await fetch('/api/adminCifra/orders/update', {
                           method: 'PUT',
-                          headers: { 'Content-Type': 'application/json' },
+                          headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
                           body: JSON.stringify({
                             id: order.id,
                             is_questionable: newValue,

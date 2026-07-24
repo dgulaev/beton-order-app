@@ -81,7 +81,7 @@ function OutlineBtn({
 
 export default function MobileClientsPage() {
   const { user } = useUserRole();
-  const currentRole = user?.role || 'manager';
+  const currentRole = user?.role || '';
   const currentUserName = user?.full_name || user?.username || 'Сотрудник';
 
   const [tab, setTab] = useState<Tab>('clients');

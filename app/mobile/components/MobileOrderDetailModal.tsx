@@ -13,6 +13,7 @@ import {
   volumeModalStyle,
 } from '@/app/adminCifra/cardStyles';
 import { VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 interface MobileOrderDetailModalProps {
   isOpen: boolean;
@@ -64,7 +65,7 @@ export default function MobileOrderDetailModal({
   onUpdate,
   onDelete,
   onCopyOrder,
-  currentRole = 'admin',
+  currentRole = '',
   currentUserName = 'Сотрудник',
   recipes = [],
   clients = [],
@@ -146,7 +147,7 @@ export default function MobileOrderDetailModal({
     try {
       const res = await fetch('/api/adminCifra/orders/update', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           id: editedOrder.id,
           is_questionable: newValue,
@@ -174,7 +175,7 @@ export default function MobileOrderDetailModal({
     try {
       const res = await fetch('/api/adminCifra/orders/update', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ ...editedOrder, userRole: currentRole, userName: currentUserName }),
       });
       if (res.ok) {

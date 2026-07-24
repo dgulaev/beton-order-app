@@ -119,6 +119,16 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   // Пишем heartbeat в active_sessions — иначе «Кто в онлайн» не видит мобильную сессию
   useStaffHeartbeat(isStaffLoggedIn && user?.role !== 'guest');
 
+  const staffRole = (user?.role || '').toLowerCase();
+  const isLaborant = staffRole === 'laborant';
+  const isGuest = staffRole === 'guest';
+
+  // Лаборант работает только в десктопной «Лаборатории» — с мобилки уводим туда.
+  useEffect(() => {
+    if (!isStaffLoggedIn || !isLaborant) return;
+    window.location.replace('/adminCifra/recipes');
+  }, [isStaffLoggedIn, isLaborant]);
+
   // ==================== 2. СЕССИЯ ВОДИТЕЛЯ ====================
   // /mobile/driver остаётся рабочей ссылкой (редиректим на /mobile, см. её page.tsx),
   // но сама проверка и рендер дашборда водителя теперь живут здесь, в общем гейте.
@@ -348,6 +358,15 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isOldDriverLink) router.replace('/mobile');
   }, [isOldDriverLink, router]);
+
+  // Guest не должен сидеть на складе и миксерах
+  useEffect(() => {
+    if (!isStaffLoggedIn || isLaborant || !isGuest) return;
+    const path = pathname || '';
+    if (path.startsWith('/mobile/warehouse') || path.startsWith('/mobile/mixers')) {
+      router.replace('/mobile/');
+    }
+  }, [isStaffLoggedIn, isGuest, isLaborant, pathname, router]);
 
   // ==================== BROADCAST ИНДИКАТОР ====================
   const broadcastStatus = useGlobalBroadcastStatus();
@@ -596,8 +615,12 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
       })}>
         <NavLink href="/mobile/" icon={<Home size={26} />} label="Дашборд" pathname={pathname} />
         <NavLink href="/mobile/zayavki" icon={<Package size={26} />} label="Заявки" pathname={pathname} />
-        <NavLink href="/mobile/mixers" icon={<Truck size={26} />} label="Миксеры" pathname={pathname} />
-        <NavLink href="/mobile/warehouse" icon={<Factory size={26} />} label="Склад" pathname={pathname} />
+        {!isGuest && (
+          <NavLink href="/mobile/mixers" icon={<Truck size={26} />} label="Миксеры" pathname={pathname} />
+        )}
+        {!isGuest && (
+          <NavLink href="/mobile/warehouse" icon={<Factory size={26} />} label="Склад" pathname={pathname} />
+        )}
         <NavLink href="/mobile/clients" icon={<Users size={26} />} label="Клиенты" pathname={pathname} />
 
         {/* Broadcast-индикатор: правый нижний угол навбара */}

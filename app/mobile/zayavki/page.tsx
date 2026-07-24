@@ -10,6 +10,7 @@ import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle } from '@/app/adminCifra/cardStyles';
 import { appConfirm } from '@/app/adminCifra/components/appDialog';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 export default function MobileZayavkiPage() {
 const { user } = useUserRole();   // ← Берём роль из провайдера
@@ -34,7 +35,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   const [allClients, setAllClients] = useState<any[]>([]);
 
   // Роль и имя берём из UserRoleProvider
-  const currentRole = user?.role || 'admin';
+  const currentRole = user?.role || '';
   const userFullName = user?.full_name || user?.username || 'Сотрудник';
 
   // ==================== 4. ЗАГРУЗКА ДАННЫХ ====================
@@ -217,7 +218,10 @@ const { user } = useUserRole();   // ← Берём роль из провайд
     }))) return;
 
     try {
-      const res = await fetch(`/api/adminCifra/orders/${orderId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/adminCifra/orders/${orderId}`, {
+        method: 'DELETE',
+        headers: adminCifraAuthHeaders(),
+      });
       if (res.ok) {
         setAllOrders(prev => prev.filter(o => o.id !== orderId));
         setSelectedOrder(null);

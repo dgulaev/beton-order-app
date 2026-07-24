@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -8,9 +9,12 @@ const supabase = createClient(
 
 // PATCH — закрыть одно уведомление
 export async function PATCH(
-  _req: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  if (auth.error) return auth.error;
+
   const { id: rawId } = await params;
   const id = Number(rawId);
   if (!id) {

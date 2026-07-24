@@ -1,6 +1,7 @@
 // app/api/adminCifra/orders/update/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -8,9 +9,17 @@ const supabase = createClient(
 );
 
 export async function PUT(request: NextRequest) {
+  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  if (auth.error) {
+    return NextResponse.json(
+      { success: false, message: 'Нет доступа к изменению заявки' },
+      { status: 403 },
+    );
+  }
+
   try {
     const body = await request.json();
-    const { id, userRole, userName, ...updateData } = body;
+    const { id, userRole: _clientRole, userName, ...updateData } = body;
 
     if (!id) {
       return NextResponse.json({ success: false, message: 'ID заявки обязателен' }, { status: 400 });
@@ -91,8 +100,12 @@ export async function PUT(request: NextRequest) {
     // ==================== 3. ЗАПИСЬ ИСТОРИИ ИЗМЕНЕНИЙ ====================
     const changes: any[] = [];
     
-    const finalUserRole = userRole || 'admin';
-    const finalUserName = userName || 'Система (авто)';
+    // Роль только с сервера — клиентский userRole не доверяем.
+    const finalUserRole = auth.user.role;
+    const finalUserName =
+      (typeof userName === 'string' && userName.trim() ? userName.trim() : null)
+      || auth.user.full_name
+      || 'Сотрудник';
 
     const fieldsToTrack = [
       'grade', 'volume', 'delivery_date', 'delivery_time',

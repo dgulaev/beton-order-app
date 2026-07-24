@@ -15,6 +15,11 @@ import {
   type AdditiveDensities,
 } from '@/lib/recipeAdditives';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
+import { useLowRateAlerts } from '@/app/adminCifra/components/useLowRateAlerts';
+import { appAlert } from '@/app/adminCifra/components/appDialog';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import type { LowRateAlertInfo } from '@/lib/siloConfig';
+import { useUserRole } from '../../providers/UserRoleProvider';
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ КОМПОНЕНТЫ ====================
 
@@ -123,6 +128,8 @@ function InputModal({ title, unit, onConfirm, onClose }: InputModalProps) {
 // ==================== ГЛАВНАЯ СТРАНИЦА ====================
 
 export default function MobileWarehousePage() {
+  const { user } = useUserRole();
+  const actorName = user?.full_name || user?.username || 'Сотрудник';
   const [silos, setSilos] = useState<any[]>([]);
   const [additives, setAdditives] = useState<any[]>([]);
   const [fbsBlocks, setFbsBlocks] = useState<any[]>([]);
@@ -131,6 +138,9 @@ export default function MobileWarehousePage() {
   const [todayConsumption, setTodayConsumption] = useState({ cement: 0, pfm: 0, linomix: 0 });
   const [additiveDensities, setAdditiveDensities] = useState<AdditiveDensities>({});
   const [loading, setLoading] = useState(true);
+  const [lowRateAlerts, setLowRateAlerts] = useState<LowRateAlertInfo[]>([]);
+  const [activeSiloId, setActiveSiloId] = useState<number | null>(null);
+  useLowRateAlerts(lowRateAlerts);
 
   // Модалка ввода: { title, unit, onConfirm } или null
   const [inputModal, setInputModal] = useState<{ title: string; unit: string; onConfirm: (v: number) => void } | null>(null);
@@ -139,15 +149,17 @@ export default function MobileWarehousePage() {
 
   const loadWarehouse = useCallback(async () => {
     try {
-      const [warehouseRes, recipesRes, labRes] = await Promise.all([
+      const [warehouseRes, recipesRes, labRes, shiftRes] = await Promise.all([
         fetch('/api/adminCifra/warehouse', { cache: 'no-store' }),
         fetch('/api/adminCifra/recipes', { cache: 'no-store' }),
         fetch('/api/adminCifra/lab-settings', { cache: 'no-store' }),
+        fetch('/api/adminCifra/operator-shift', { cache: 'no-store' }),
       ]);
 
       if (warehouseRes.ok) {
         const data = await warehouseRes.json();
         setSilos(data.silos || []);
+        setLowRateAlerts(Array.isArray(data.lowRateAlerts) ? data.lowRateAlerts : []);
         setAdditives(
           (data.additives || data.warehouse_additives || []).map((a: any) => ({
             ...a,
@@ -174,6 +186,12 @@ export default function MobileWarehousePage() {
 
       if (labRes.ok) {
         setAdditiveDensities(densitiesFromLabSettings(await labRes.json()));
+      }
+
+      if (shiftRes.ok) {
+        const shift = await shiftRes.json();
+        const sid = shift?.active_silo_id != null ? Number(shift.active_silo_id) : null;
+        setActiveSiloId(Number.isFinite(sid as number) ? sid : null);
       }
     } catch (err) {
       console.error('Ошибка загрузки склада:', err);
@@ -236,65 +254,145 @@ export default function MobileWarehousePage() {
 
   // Realtime: новая отгрузка → пересчитать расход
   useRealtimeBroadcast({ topic: 'production_logs:all', onInsert: () => loadTodayConsumption(recipes) });
-  // Realtime: миксер разгружен → обновить остатки добавок
+  // Цемент списывается на «В пути», добавки — на «Разгружен»
   useRealtimeBroadcast({
     topic: 'order_mixers:all',
-    onUpdate: (r: any) => { if (r?.status === 'Разгружен') loadWarehouse(); },
+    onUpdate: (r: any) => {
+      if (r?.status === 'В пути' || r?.status === 'Разгружен') loadWarehouse();
+    },
   });
 
-  // ==================== СОХРАНЕНИЕ В БД ====================
+  // Poll остатков/алертов (как на десктопе)
+  useEffect(() => {
+    const t = setInterval(() => { void loadWarehouse(); }, 15000);
+    return () => clearInterval(t);
+  }, [loadWarehouse]);
 
-  const save = async (s?: any[], a?: any[], f?: any[]) => {
+  // ==================== СОХРАНЕНИЕ В БД ====================
+  // В payload — только явно переданные срезы (не затираем силосы при правке добавок).
+
+  const save = async (s?: any[], a?: any[], f?: any[]): Promise<boolean> => {
     try {
-      await fetch('/api/adminCifra/warehouse', {
+      const payload: Record<string, unknown> = {};
+      if (s !== undefined) {
+        payload.silos = s.map((x: any) => ({
+          silo_id: Number(x.silo_id),
+          current: Number(x.current || 0),
+          max: Number(x.max || 0),
+          name: x.name,
+        }));
+      }
+      if (a !== undefined) {
+        payload.additives = a.map((x: any) => ({
+          additive_id: Number(x.additive_id || x.id || 1),
+          name: x.name,
+          current: Number(x.current || 0),
+          max: Number(x.max || 9000),
+        }));
+      }
+      if (f !== undefined) {
+        payload.fbs = f.map((x: any) => ({
+          id: Number(x.id),
+          name: x.name || x.code || '',
+          current: Number(x.current || 0),
+        }));
+      }
+      if (Object.keys(payload).length === 0) return true;
+
+      const res = await fetch('/api/adminCifra/warehouse', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          silos: (s || silos).map((x: any) => ({ silo_id: Number(x.silo_id), current: Number(x.current || 0) })),
-          additives: (a || additives).map((x: any) => ({ additive_id: Number(x.additive_id || x.id || 1), name: x.name, current: Number(x.current || 0), max: Number(x.max || 9000) })),
-          fbs: (f || fbsBlocks).map((x: any) => ({ id: Number(x.id), name: x.name || x.code || '', current: Number(x.current || 0) })),
-        }),
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
       });
+      if (!res.ok) {
+        console.error('Ошибка сохранения склада:', res.status, await res.text().catch(() => ''));
+        return false;
+      }
+      return true;
     } catch (err) {
       console.error('Ошибка сохранения склада:', err);
+      return false;
     }
   };
 
   // ==================== ДЕЙСТВИЯ С СИЛОСАМИ ====================
 
   const siloAction = (siloId: number, delta: 1 | -1) => {
-    const silo = silos.find(s => s.silo_id === siloId);
+    const silo = silos.find((s) => s.silo_id === siloId);
     if (!silo) return;
     const isAdd = delta > 0;
     setInputModal({
       title: isAdd ? `Внести в ${silo.name}` : `Списать из ${silo.name}`,
       unit: 'кг',
-      onConfirm: (kg) => {
-        setSilos(prev => {
-          const updated = prev.map(s => s.silo_id === siloId
-            ? { ...s, current: Math.max(-50, Number(s.current || 0) + delta * kg / 1000) }
-            : s);
-          save(updated);
-          return updated;
+      onConfirm: async (kg) => {
+        if (isAdd) {
+          try {
+            const res = await fetch('/api/adminCifra/warehouse/silo-mutate', {
+              method: 'POST',
+              headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({
+                action: 'add',
+                siloId,
+                amountKg: kg,
+                userName: actorName,
+              }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              await appAlert(data.error || 'Не удалось внести', { title: 'Ошибка', variant: 'danger' });
+              return;
+            }
+            setSilos((prev) => prev.map((s) => (
+              s.silo_id === siloId ? { ...s, current: Number(data.newCurrent ?? s.current) } : s
+            )));
+            if (Number(data.savingKg || 0) > 0) {
+              await appAlert(
+                `Зафиксирована экономия: ${Number(data.savingKg).toLocaleString('ru-RU')} кг`,
+                { title: 'Экономия цемента', variant: 'success' },
+              );
+            }
+            void loadWarehouse();
+          } catch (err) {
+            console.error(err);
+            await appAlert('Ошибка внесения цемента', { title: 'Ошибка', variant: 'danger' });
+          }
+          return;
+        }
+
+        const snapshot = silos;
+        const updated = silos.map((s) => {
+          if (s.silo_id !== siloId) return s;
+          const oldCurrent = Number(s.current || 0);
+          const newCurrent = Math.max(-50, oldCurrent - kg / 1000);
+          return { ...s, current: newCurrent };
         });
+        setSilos(updated);
+        const ok = await save(updated);
+        if (!ok) {
+          setSilos(snapshot);
+          await appAlert('Не удалось списать цемент', { title: 'Ошибка', variant: 'danger' });
+          return;
+        }
+        void loadWarehouse();
       },
     });
   };
 
   // ==================== ДЕЙСТВИЯ С ДОБАВКАМИ ====================
   // Поступление: тонны → литры. Ручное списание: литры.
+  // Важно: работаем по id добавки, не по индексу после filter.
 
-  const resolveAdditiveId = (add: any, idx: number): 1 | 2 => {
+  const resolveAdditiveId = (add: any): 1 | 2 => {
     const id = Number(add?.additive_id ?? add?.id);
     if (id === 1 || id === 2) return id as 1 | 2;
-    return idx === 0 ? 1 : 2;
+    return 1;
   };
 
-  const additiveAction = (idx: number, delta: 1 | -1) => {
-    const add = additives[idx];
+  const additiveAction = (add: any, delta: 1 | -1) => {
     if (!add) return;
     const isAdd = delta > 0;
-    const additiveId = resolveAdditiveId(add, idx);
+    const additiveKey = Number(add.additive_id ?? add.id);
+    const additiveId = resolveAdditiveId(add);
     const density = getAdditiveDensity(additiveId, additiveDensities);
     const litersPerTon = Math.round(tonsToAdditiveLiters(additiveId, 1, additiveDensities));
 
@@ -303,17 +401,22 @@ export default function MobileWarehousePage() {
         ? `Внести в ${add.name}\n1 т ≈ ${litersPerTon} л (${density} кг/л)`
         : `Списать из ${add.name} (литры)`,
       unit: isAdd ? 'т' : 'л',
-      onConfirm: (value) => {
+      onConfirm: async (value) => {
         const liters = isAdd
           ? Math.round(tonsToAdditiveLiters(additiveId, value, additiveDensities) * 10) / 10
           : value;
-        setAdditives(prev => {
-          const updated = prev.map((a, i) => i === idx
+        const snapshot = additives;
+        const updated = additives.map((a) =>
+          Number(a.additive_id ?? a.id) === additiveKey
             ? { ...a, current: Math.max(0, Number(a.current || 0) + delta * liters) }
-            : a);
-          save(undefined, updated);
-          return updated;
-        });
+            : a,
+        );
+        setAdditives(updated);
+        const ok = await save(undefined, updated);
+        if (!ok) {
+          setAdditives(snapshot);
+          await appAlert('Не удалось сохранить добавку', { title: 'Ошибка', variant: 'danger' });
+        }
       },
     });
   };
@@ -321,20 +424,25 @@ export default function MobileWarehousePage() {
   // ==================== ДЕЙСТВИЯ С ФБС ====================
 
   const fbsAction = (blockId: number, delta: 1 | -1) => {
-    const block = fbsBlocks.find(b => b.id === blockId);
+    const block = fbsBlocks.find((b) => b.id === blockId);
     if (!block) return;
     setInputModal({
       title: delta > 0 ? `Добавить ${block.name}` : `Списать ${block.name}`,
       unit: 'шт',
-      onConfirm: (qty) => {
+      onConfirm: async (qty) => {
         const n = Math.round(qty);
-        setFbsBlocks(prev => {
-          const updated = prev.map(b => b.id === blockId
+        const snapshot = fbsBlocks;
+        const updated = fbsBlocks.map((b) =>
+          b.id === blockId
             ? { ...b, current: Math.max(0, Number(b.current || 0) + delta * n) }
-            : b);
-          save(undefined, undefined, updated);
-          return updated;
-        });
+            : b,
+        );
+        setFbsBlocks(updated);
+        const ok = await save(undefined, undefined, updated);
+        if (!ok) {
+          setFbsBlocks(snapshot);
+          await appAlert('Не удалось сохранить ФБС', { title: 'Ошибка', variant: 'danger' });
+        }
       },
     });
   };
@@ -367,6 +475,15 @@ export default function MobileWarehousePage() {
 
       {/* СИЛОСЫ ЦЕМЕНТА */}
       <SectionTitle>Силосы цемента</SectionTitle>
+      {activeSiloId == null && (
+        <div style={{
+          marginBottom: '12px', padding: '10px 12px', borderRadius: 12,
+          background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)',
+          color: '#FBBF24', fontSize: '13px', lineHeight: 1.35,
+        }}>
+          Рабочий силос сегодня не выбран — автосписание цемента при «В пути» не сработает. Выбери силос на десктопе у оператора.
+        </div>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '28px' }}>
         {silos.map((silo: any) => {
           const current = Number(silo.current || 0);
@@ -374,11 +491,29 @@ export default function MobileWarehousePage() {
           const pct = Math.min(Math.max((current / max) * 100, 0), 100);
           const low = pct < 30;
           const negative = current < 0;
+          const isActive = Number(silo.silo_id) === activeSiloId;
 
           return (
-            <div key={silo.silo_id} style={volumeCardStyle({ padding: '16px', borderRadius: 16 })}>
+            <div
+              key={silo.silo_id}
+              style={volumeCardStyle({
+                padding: '16px',
+                borderRadius: 16,
+                border: isActive ? '1px solid rgba(52,211,153,0.55)' : undefined,
+              })}
+            >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
-                <span style={{ fontWeight: '600', fontSize: '16px', color: '#E2E8F0' }}>{silo.name}</span>
+                <span style={{ fontWeight: '600', fontSize: '16px', color: '#E2E8F0' }}>
+                  {silo.name}
+                  {isActive && (
+                    <span style={{
+                      marginLeft: 8, fontSize: 11, fontWeight: 700, color: '#34D399',
+                      textTransform: 'uppercase', letterSpacing: '0.04em',
+                    }}>
+                      рабочий
+                    </span>
+                  )}
+                </span>
                 <span style={{ fontSize: '18px', fontWeight: '700', color: negative ? '#F87171' : low ? '#FBBF24' : '#34D399' }}>
                   {current.toFixed(2)} <span style={{ fontSize: '13px', color: '#64748B' }}>/ {silo.max} т</span>
                 </span>
@@ -406,9 +541,10 @@ export default function MobileWarehousePage() {
           const pct = Math.min(Math.max((current / max) * 100, 0), 100);
           const low = pct < 30;
           const barColor = idx === 0 ? '#8B5CF6' : '#F59E0B';
+          const addKey = Number(add.additive_id ?? add.id ?? idx);
 
           return (
-            <div key={add.id || idx} style={volumeCardStyle({ padding: '16px', borderRadius: 16 })}>
+            <div key={addKey} style={volumeCardStyle({ padding: '16px', borderRadius: 16 })}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
                 <span style={{ fontWeight: '600', fontSize: '16px', color: '#E2E8F0' }}>{add.name}</span>
                 <span style={{ fontSize: '18px', fontWeight: '700', color: low ? '#FBBF24' : barColor }}>
@@ -421,8 +557,8 @@ export default function MobileWarehousePage() {
                 {low && <span style={{ color: '#F59E0B', marginLeft: '8px' }}>⚠ Низкий уровень</span>}
               </div>
               <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
-                <ActionBtn color="#3B82F6" onClick={() => additiveAction(idx, 1)}>+ Внести (т)</ActionBtn>
-                <ActionBtn color="#EF4444" onClick={() => additiveAction(idx, -1)}>− Списать (л)</ActionBtn>
+                <ActionBtn color="#3B82F6" onClick={() => additiveAction(add, 1)}>+ Внести (т)</ActionBtn>
+                <ActionBtn color="#EF4444" onClick={() => additiveAction(add, -1)}>− Списать (л)</ActionBtn>
               </div>
             </div>
           );

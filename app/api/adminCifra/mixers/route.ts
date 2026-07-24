@@ -1,6 +1,7 @@
 // app/api/adminCifra/mixers/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -26,6 +27,9 @@ export async function GET() {
 
 // POST — добавление / обновление миксера
 export async function POST(request: NextRequest) {
+  const auth = await requireAdminCifraStaff(request, ['admin']);
+  if (auth.error) return auth.error;
+
   try {
     const body = await request.json();
     const { id, number, model, driver, phone, volume, type, status, unload_allowance_min } = body;
@@ -72,6 +76,26 @@ export async function POST(request: NextRequest) {
     }
   } catch (error: any) {
     console.error('Mixers POST error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+// DELETE — удаление миксера (?id=)
+export async function DELETE(request: NextRequest) {
+  const auth = await requireAdminCifraStaff(request, ['admin']);
+  if (auth.error) return auth.error;
+
+  try {
+    const id = Number(request.nextUrl.searchParams.get('id'));
+    if (!Number.isFinite(id) || id <= 0) {
+      return NextResponse.json({ error: 'id обязателен' }, { status: 400 });
+    }
+
+    const { error } = await supabase.from('mixers').delete().eq('id', id);
+    if (error) throw error;
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error('Mixers DELETE error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { WAREHOUSE_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import {
   SILO_SPEC,
   syncAllSiloLowRateAlerts,
@@ -68,6 +69,9 @@ const FBS_ORDER_META_NAME = '__fbs_display_order__';
 const FBS_ORDER_META_CODE = '__fbs_display_order__';
 
 export async function POST(request: NextRequest) {
+  const auth = await requireAdminCifraStaff(request, WAREHOUSE_MUTATION_ROLES);
+  if (auth.error) return auth.error;
+
   try {
     const { silos, additives, fbs, fbsOrder } = await request.json();
 

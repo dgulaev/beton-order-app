@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -7,7 +8,10 @@ const supabase = createClient(
 );
 
 // GET — активные уведомления только за сегодняшний день
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  if (auth.error) return auth.error;
+
   // Начало текущего дня по московскому времени (UTC+3)
   const now = new Date();
   const todayStart = new Date(
@@ -36,7 +40,10 @@ export async function GET() {
 }
 
 // DELETE — закрыть все (dismiss all)
-export async function DELETE() {
+export async function DELETE(request: NextRequest) {
+  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  if (auth.error) return auth.error;
+
   const { error } = await supabase
     .from('mobile_notifications')
     .update({ dismissed_at: new Date().toISOString() })

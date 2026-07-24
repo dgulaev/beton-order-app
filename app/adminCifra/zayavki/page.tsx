@@ -31,6 +31,7 @@ import ModalTimeInput from '@/app/adminCifra/components/ModalTimeInput';
 import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import ModalSelect from '@/app/adminCifra/components/ModalSelect';
 import { InstantFieldHint, VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
@@ -917,7 +918,10 @@ useEffect(() => {
     if (!(await appConfirm('Вы уверены, что хотите удалить эту заявку? Действие необратимо.', { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
 
     try {
-      const res = await fetch(`/api/adminCifra/orders/${orderId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/adminCifra/orders/${orderId}`, {
+        method: 'DELETE',
+        headers: adminCifraAuthHeaders(),
+      });
 
       if (res.ok) {
         alert('✅ Заявка успешно удалена');
@@ -953,7 +957,7 @@ useEffect(() => {
 
     fetch('/api/adminCifra/orders/update', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(updatedOrder),
     })
     .then(res => res.json())
@@ -2598,7 +2602,7 @@ ${order.customer_type?.includes('Юридическое')
                     try {
                       const res = await fetch('/api/adminCifra/orders/update', {
                         method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
                         body: JSON.stringify({
                           id: selectedOrder.id,
                           is_questionable: newValue,
@@ -3034,7 +3038,7 @@ ${order.customer_type?.includes('Юридическое')
 
                 const res = await fetch('/api/adminCifra/orders/update', {
                   method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
                   body: JSON.stringify(payload)
                 });
 

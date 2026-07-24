@@ -8,6 +8,7 @@ import ModalSelect from '../components/ModalSelect';
 
 import { formatPhoneDisplay, formatPhoneInput } from '@/lib/phone';
 import { adminCifraFetch } from '@/lib/adminCifraFetch';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { Users } from 'lucide-react';
 import { CARD_BORDER, CARD_VOLUME_SOFT, modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import { appConfirm } from '../components/appDialog';
@@ -1398,7 +1399,10 @@ const handleDeleteOrder = async (orderId: number | string) => {
   if (!(await appConfirm(`Удалить заказ #${orderId}?`, { variant: 'danger', okLabel: 'Удалить', title: 'Удаление' }))) return;
 
   try {
-    const res = await fetch(`/api/adminCifra/orders/${orderId}`, { method: 'DELETE' });
+    const res = await fetch(`/api/adminCifra/orders/${orderId}`, {
+      method: 'DELETE',
+      headers: adminCifraAuthHeaders(),
+    });
     if (res.ok) {
       alert('✅ Заказ успешно удалён');
       setSelectedOrder(null);

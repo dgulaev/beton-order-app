@@ -30,6 +30,7 @@ import { appAlert, appConfirm, appPrompt } from '../components/appDialog';
 import { useLowRateAlerts } from '../components/useLowRateAlerts';
 import { FileText, GripVertical, Plus, ScrollText, Trash2, X } from 'lucide-react';
 import type { LowRateAlertInfo } from '@/lib/siloConfig';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import FbsPassportModal from './FbsPassportModal';
 import SiloJournalModal from './SiloJournalModal';
 import CementSavingsModal from './CementSavingsModal';
@@ -103,7 +104,7 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
     try {
       const res = await fetch('/api/adminCifra/warehouse', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ fbsOrder: names }),
       });
       if (!res.ok) {
@@ -525,7 +526,7 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
 
     const response = await fetch('/api/adminCifra/warehouse', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
     });
 

@@ -1,6 +1,6 @@
 // Внести / обнулить силос с фиксацией экономии при отрицательном остатке.
 import { NextRequest, NextResponse } from 'next/server';
-import { ADMIN_CIFRA_STAFF_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { WAREHOUSE_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { siloNameById, syncSiloLowRateAlert } from '@/lib/siloConfig';
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 
@@ -34,7 +34,7 @@ async function writeHistory(opts: {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ADMIN_CIFRA_STAFF_ROLES);
+  const auth = await requireAdminCifraStaff(request, WAREHOUSE_MUTATION_ROLES);
   if (auth.error) return auth.error;
 
   try {

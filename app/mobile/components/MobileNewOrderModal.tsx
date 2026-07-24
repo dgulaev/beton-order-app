@@ -45,7 +45,7 @@ export default function MobileNewOrderModal({
   onClose,
   onSuccess,
   defaultDeliveryDate,
-  currentRole = 'admin',
+  currentRole = '',
   currentUserName = 'Сотрудник',
   initialData = null,
 }: MobileNewOrderModalProps) {

@@ -542,7 +542,7 @@ useWakeRefresh(() => {
           id: mixerId,
           force: isLoadedTrip || orderIsFinal,
           userName: user?.full_name || user?.username || 'Администратор',
-          userRole: userRole || 'admin',
+          userRole: userRole || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));

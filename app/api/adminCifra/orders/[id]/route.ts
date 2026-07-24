@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -42,6 +43,14 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireAdminCifraStaff(request, ['admin']);
+  if (auth.error) {
+    return NextResponse.json(
+      { success: false, message: 'Удаление заявок доступно только администратору' },
+      { status: 403 },
+    );
+  }
+
   try {
     const { id } = await params;
     const orderId = parseInt(id);
@@ -49,7 +58,7 @@ export async function DELETE(
       return NextResponse.json({ success: false, message: 'Неверный ID' }, { status: 400 });
     }
 
-    console.log(`🗑️ Начинаем удаление заявки #${orderId}`);
+    console.log(`🗑️ Начинаем удаление заявки #${orderId} (${auth.user.full_name || auth.user.user_id})`);
 
     // 1. Удаляем связанные referral_transactions
     const { error: refError } = await supabase

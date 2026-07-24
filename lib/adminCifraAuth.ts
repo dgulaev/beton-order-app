@@ -62,3 +62,16 @@ export async function requireAdminCifraStaff(
 }
 
 export const ADMIN_MUTATION_ROLES = ['admin', 'manager'] as const;
+
+/** Мутации склада / заявок: без guest и laborant. */
+export const WAREHOUSE_MUTATION_ROLES = [
+  'admin',
+  'manager',
+  'dispatcher',
+  'operator',
+] as const;
+
+export const ORDER_MUTATION_ROLES = WAREHOUSE_MUTATION_ROLES;
+
+/** Удаление «лёгкого» рейса (ещё без списания) — те же роли, что и заявки. */
+export const ORDER_MIXER_DELETE_ROLES = WAREHOUSE_MUTATION_ROLES;

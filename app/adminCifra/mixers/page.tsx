@@ -9,6 +9,7 @@ import { Truck } from 'lucide-react';
 import { modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import { appConfirm } from '../components/appDialog';
 import AdminPagination from '../components/AdminPagination';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 interface MixerDriver {
   id: number;
@@ -211,7 +212,7 @@ export default function MixersPage() {
 
       const res = await fetch('/api/adminCifra/mixers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload)
       });
 

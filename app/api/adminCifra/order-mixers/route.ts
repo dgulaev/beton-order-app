@@ -1,7 +1,7 @@
 // app/api/adminCifra/order-mixers/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { ORDER_MIXER_DELETE_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import {
   formatSiloCementJournalActor,
   siloNameById,
@@ -241,26 +241,28 @@ export async function DELETE(request: NextRequest) {
       || mixer.additive_write_off_liters != null
       || Boolean(body?.force);
 
+    // Auth всегда: «лёгкий» рейс — staff, уже отгруженный/force — только admin.
+    const auth = await requireAdminCifraStaff(
+      request,
+      needsAdmin ? ['admin'] : ORDER_MIXER_DELETE_ROLES,
+    );
+    if (auth.error) {
+      return NextResponse.json(
+        {
+          error: needsAdmin
+            ? (orderIsFinal
+              ? `Заявка в статусе "${STATUS_LABELS_RU[orderStatus!] || orderStatus}" — удаление рейсов только для администратора`
+              : 'Удаление уже отгруженного рейса доступно только администратору')
+            : 'Нет доступа к удалению рейса',
+        },
+        { status: 403 },
+      );
+    }
+
     let actorName = typeof body?.userName === 'string' && body.userName.trim()
       ? body.userName.trim()
-      : 'Администратор';
-    let actorRole: string | null = typeof body?.userRole === 'string' ? body.userRole : null;
-
-    if (needsAdmin) {
-      const auth = await requireAdminCifraStaff(request, ['admin']);
-      if (auth.error) {
-        return NextResponse.json(
-          {
-            error: orderIsFinal
-              ? `Заявка в статусе "${STATUS_LABELS_RU[orderStatus!] || orderStatus}" — удаление рейсов только для администратора`
-              : 'Удаление уже отгруженного рейса доступно только администратору',
-          },
-          { status: 403 },
-        );
-      }
-      actorName = auth.user.full_name || actorName;
-      actorRole = auth.user.role;
-    }
+      : (auth.user.full_name || 'Сотрудник');
+    let actorRole: string | null = auth.user.role;
 
     // ==================== ВОЗВРАТ ЦЕМЕНТА НА СИЛОС ====================
     // Сначала CAS-claim: снимаем метку списания, потом возвращаем кг.

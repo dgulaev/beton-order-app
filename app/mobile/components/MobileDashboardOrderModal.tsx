@@ -12,6 +12,7 @@ import {
   volumeCardSoftStyle,
   volumeModalStyle,
 } from '@/app/adminCifra/cardStyles';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 interface MobileOrderDetailModalProps {
   order: Order | null;
@@ -132,7 +133,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
     try {
       const res = await fetch('/api/adminCifra/orders/update', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ id: order.id, status: newStatus, userName: currentUser?.name || 'Пользователь', userRole: currentUser?.role || 'unknown' }),
       });
       const data = await res.json();
@@ -178,7 +179,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
     try {
       const res = await fetch('/api/adminCifra/orders/update', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           id: order.id,
           is_questionable: newValue,

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 export type MobileNotification = {
   id: number;
@@ -24,7 +25,9 @@ export function useMobileNotifications() {
 
   const fetchNotifications = useCallback(async () => {
     try {
-      const res = await fetch('/api/mobile/notifications');
+      const res = await fetch('/api/mobile/notifications', {
+        headers: adminCifraAuthHeaders(),
+      });
       const json = await res.json();
       if (json.success) setNotifications(json.data);
     } catch (e) {
@@ -66,7 +69,10 @@ export function useMobileNotifications() {
     // Оптимистично убираем из списка
     setNotifications((prev) => prev.filter((n) => n.id !== id));
     try {
-      await fetch(`/api/mobile/notifications/${id}`, { method: 'PATCH' });
+      await fetch(`/api/mobile/notifications/${id}`, {
+        method: 'PATCH',
+        headers: adminCifraAuthHeaders(),
+      });
     } catch (e) {
       console.error('[Notifications] dismiss error', e);
       // При ошибке восстанавливаем — перечитаем с сервера
@@ -77,7 +83,10 @@ export function useMobileNotifications() {
   const dismissAll = useCallback(async () => {
     setNotifications([]);
     try {
-      await fetch('/api/mobile/notifications', { method: 'DELETE' });
+      await fetch('/api/mobile/notifications', {
+        method: 'DELETE',
+        headers: adminCifraAuthHeaders(),
+      });
     } catch (e) {
       console.error('[Notifications] dismissAll error', e);
       fetchNotifications();

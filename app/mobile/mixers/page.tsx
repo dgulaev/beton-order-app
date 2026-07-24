@@ -12,6 +12,7 @@ import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
 import { useRealtimeOrderMixers } from '@/hooks/useRealtimeOrders';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -411,7 +412,7 @@ export default function MobileMixersPage() {
         : form;
       const res = await fetch('/api/adminCifra/mixers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
       });
       if (res.ok) {
@@ -430,7 +431,10 @@ export default function MobileMixersPage() {
     if (!selected) return;
     setSaving(true);
     try {
-      const res = await fetch(`/api/adminCifra/mixers?id=${selected.id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/adminCifra/mixers?id=${selected.id}`, {
+        method: 'DELETE',
+        headers: adminCifraAuthHeaders(),
+      });
       if (res.ok) {
         await fetchMixers();
         closeSheet();
