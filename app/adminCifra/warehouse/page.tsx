@@ -27,9 +27,12 @@ import {
   volumeModalStyle,
 } from '../cardStyles';
 import { appAlert, appConfirm, appPrompt } from '../components/appDialog';
+import { useLowRateAlerts } from '../components/useLowRateAlerts';
 import { FileText, GripVertical, Plus, ScrollText, Trash2, X } from 'lucide-react';
+import type { LowRateAlertInfo } from '@/lib/siloConfig';
 import FbsPassportModal from './FbsPassportModal';
 import SiloJournalModal from './SiloJournalModal';
+import CementSavingsModal from './CementSavingsModal';
 
 /** Служебная строка в fbs_blocks: в code хранится JSON-массив имён (порядок карточки). */
 const FBS_ORDER_META_NAME = '__fbs_display_order__';
@@ -41,7 +44,7 @@ interface WarehousePageProps {
 }
 
 export default function WarehousePage({ recipes = [], actorName = null }: WarehousePageProps) {
-  const { user } = useUserRole();
+  const { user, isAdmin } = useUserRole();
   // Общая учётка «operator» (Семён/Максим): в историю пишем имя со смены.
   // Все остальные роли (admin/manager/dispatcher/…) — всегда своё ФИО из логина,
   // даже если склад открыт со страницы оператора и там выбрана чужая смена.
@@ -74,6 +77,9 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
     record: null,
   });
   const [siloJournalOpen, setSiloJournalOpen] = useState(false);
+  const [cementSavingsOpen, setCementSavingsOpen] = useState(false);
+  const [lowRateAlerts, setLowRateAlerts] = useState<LowRateAlertInfo[]>([]);
+  useLowRateAlerts(lowRateAlerts);
   const [todayConsumption, setTodayConsumption] = useState({
     cement: 0,
     sand: 0,
@@ -221,6 +227,7 @@ const loadWarehouse = async () => {
       const data = await warehouseRes.json();
       
       setSilos(data.silos || []);
+      setLowRateAlerts(Array.isArray(data.lowRateAlerts) ? data.lowRateAlerts : []);
 
       const loadedAdditives = (data.additives || data.warehouse_additives || []).map((a: any) => ({
         ...a,
@@ -500,6 +507,15 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
 };
 
 
+  const siloMutateHeaders = (): Record<string, string> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (typeof window !== 'undefined') {
+      const userId = localStorage.getItem('userId');
+      if (userId) headers['x-user-id'] = userId;
+    }
+    return headers;
+  };
+
   // ==================== 4. ВНЕСТИ ЦЕМЕНТ ====================
   const handleAddCement = async (id: number) => {
     const input = await appPrompt(`Введите количество цемента для силоса №${id}:`, {
@@ -514,31 +530,57 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
     if (input === null) return;
 
     const kg = parseFloat(String(input).replace(',', '.'));
-    if (isNaN(kg)) {
+    if (isNaN(kg) || kg === 0) {
       await appAlert('Введите корректное число', { title: 'Ошибка', variant: 'danger' });
       return;
     }
 
-    // ✅ Разрешаем отрицательные значения для ВСЕХ силосов
-    const tons = kg / 1000;
-
-    setSilos(prev => {
-      const updatedSilos = prev.map(s => {
-        if (s.silo_id === id) {
+    // Отрицательный ввод = ручное списание без закрытия цикла экономии
+    if (kg < 0) {
+      const tons = kg / 1000;
+      setSilos((prev) => {
+        const updatedSilos = prev.map((s) => {
+          if (s.silo_id !== id) return s;
           const oldCurrent = Number(s.current || 0);
-          const newCurrent = Math.max(-50, oldCurrent + tons); // минимальный порог -50 тонн
-          
-          const action = kg >= 0 ? '+ Внесено' : '− Списано';
-          addToHistory(action, s.name || `Силос №${id}`, kg, oldCurrent * 1000, newCurrent * 1000, 'кг');
-          
+          const newCurrent = Math.max(-50, oldCurrent + tons);
+          addToHistory('− Списано', s.name || `Силос №${id}`, kg, oldCurrent * 1000, newCurrent * 1000, 'кг');
           return { ...s, current: newCurrent };
-        }
-        return s;
+        });
+        saveToDatabase(updatedSilos);
+        return updatedSilos;
       });
+      return;
+    }
 
-      saveToDatabase(updatedSilos);
-      return updatedSilos;
-    });
+    try {
+      const res = await fetch('/api/adminCifra/warehouse/silo-mutate', {
+        method: 'POST',
+        headers: siloMutateHeaders(),
+        body: JSON.stringify({
+          action: 'add',
+          siloId: id,
+          amountKg: kg,
+          userName: currentActorName,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        await appAlert(data.error || 'Не удалось внести', { title: 'Ошибка', variant: 'danger' });
+        return;
+      }
+      setSilos((prev) => prev.map((s) => (
+        s.silo_id === id ? { ...s, current: Number(data.newCurrent ?? s.current) } : s
+      )));
+      if (isAdmin && Number(data.savingKg || 0) > 0) {
+        await appAlert(
+          `Зафиксирована экономия: ${Number(data.savingKg).toLocaleString('ru-RU')} кг`,
+          { title: 'Экономия цемента', variant: 'success' },
+        );
+      }
+    } catch (err) {
+      console.error(err);
+      await appAlert('Ошибка внесения цемента', { title: 'Ошибка', variant: 'danger' });
+    }
   };
 
   // ==================== 4.1 СПИСАТЬ ЦЕМЕНТ ====================
@@ -583,20 +625,41 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
 
   // ==================== 5. ОБНУЛЕНИЕ СИЛОСА ====================
   const resetSilo = async (id: number) => {
-    if (await appConfirm(`Обнулить силос №${id}?`)) {
-      setSilos(prev => {
-        const updatedSilos = prev.map(s => {
-          if (s.silo_id === id) {
-            const oldCurrent = Number(s.current || 0);
-            addToHistory('Обнулен', s.name || `Силос №${id}`, oldCurrent * 1000, oldCurrent * 1000, 0, 'кг');
-            return { ...s, current: 0 };
-          }
-          return s;
-        });
+    const silo = silos.find((s) => Number(s.silo_id) === id);
+    const cur = Number(silo?.current || 0);
+    const negKg = cur < 0 ? Math.round(Math.abs(cur) * 1000 * 10) / 10 : 0;
+    const confirmText = negKg > 0
+      ? `Обнулить силос №${id}?\n\nОтрицательный остаток ${negKg.toLocaleString('ru-RU')} кг будет записан как экономия.`
+      : `Обнулить силос №${id}?`;
+    if (!(await appConfirm(confirmText, { variant: 'danger', okLabel: 'Обнулить' }))) return;
 
-        saveToDatabase(updatedSilos);
-        return updatedSilos;
+    try {
+      const res = await fetch('/api/adminCifra/warehouse/silo-mutate', {
+        method: 'POST',
+        headers: siloMutateHeaders(),
+        body: JSON.stringify({
+          action: 'reset',
+          siloId: id,
+          userName: currentActorName,
+        }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        await appAlert(data.error || 'Не удалось обнулить', { title: 'Ошибка', variant: 'danger' });
+        return;
+      }
+      setSilos((prev) => prev.map((s) => (
+        s.silo_id === id ? { ...s, current: 0 } : s
+      )));
+      if (isAdmin && Number(data.savingKg || 0) > 0) {
+        await appAlert(
+          `Зафиксирована экономия: ${Number(data.savingKg).toLocaleString('ru-RU')} кг`,
+          { title: 'Экономия цемента', variant: 'success' },
+        );
+      }
+    } catch (err) {
+      console.error(err);
+      await appAlert('Ошибка обнуления силоса', { title: 'Ошибка', variant: 'danger' });
     }
   };
 
@@ -1333,6 +1396,7 @@ const removeLastCube = async (index: number) => {
     if (op.operation_type === 'add') return '+ Внесено';
     if (op.operation_type === 'subtract') return '− Списано';
     if (op.operation_type === 'reset') return 'Обнулено';
+    if (op.operation_type === 'alert') return '⚠ Алерт';
     return 'Операция';
   }; 
 
@@ -1445,27 +1509,51 @@ const removeLastCube = async (index: number) => {
               <h2 style={{ fontSize: '18px', margin: 0, color: '#E2E8F0', fontWeight: 700 }}>
                 Силосы цемента
               </h2>
-              <button
-                type="button"
-                onClick={() => setSiloJournalOpen(true)}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '7px 12px',
-                  borderRadius: 10,
-                  border: '1px solid rgba(251, 191, 36, 0.4)',
-                  background: 'rgba(251, 191, 36, 0.12)',
-                  color: '#FBBF24',
-                  fontSize: '12.5px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <ScrollText size={14} />
-                Журнал
-              </button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() => setCementSavingsOpen(true)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '7px 12px',
+                      borderRadius: 10,
+                      border: '1px solid rgba(52, 211, 153, 0.4)',
+                      background: 'rgba(16, 185, 129, 0.12)',
+                      color: '#34D399',
+                      fontSize: '12.5px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Экономия
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setSiloJournalOpen(true)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '7px 12px',
+                    borderRadius: 10,
+                    border: '1px solid rgba(251, 191, 36, 0.4)',
+                    background: 'rgba(251, 191, 36, 0.12)',
+                    color: '#FBBF24',
+                    fontSize: '12.5px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <ScrollText size={14} />
+                  Журнал
+                </button>
+              </div>
             </div>
             <div
               style={{
@@ -2373,6 +2461,9 @@ const removeLastCube = async (index: number) => {
       {siloJournalOpen && (
         <SiloJournalModal onClose={() => setSiloJournalOpen(false)} />
       )}
+      {cementSavingsOpen && isAdmin ? (
+        <CementSavingsModal onClose={() => setCementSavingsOpen(false)} />
+      ) : null}
 
       {fbsPassportModal.open && (
         <FbsPassportModal

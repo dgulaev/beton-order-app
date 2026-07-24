@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { useUserRole } from '@/app/providers/UserRoleProvider';
-import { SILO_SPEC } from '@/lib/siloConfig';
+import { SILO_SPEC, type LowRateAlertInfo } from '@/lib/siloConfig';
 import { CARD_BORDER, volumeCardSoftStyle } from '../cardStyles';
 import { appAlert, appConfirm, appPrompt } from './appDialog';
 import CementTransferModal from './CementTransferModal';
+import { useLowRateAlerts } from './useLowRateAlerts';
 
 type SiloRow = {
   silo_id: number;
@@ -44,6 +45,8 @@ export default function OperatorSilosBar({
   const [busyId, setBusyId] = useState<number | null>(null);
   const [backfillBusy, setBackfillBusy] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
+  const [lowRateAlerts, setLowRateAlerts] = useState<LowRateAlertInfo[]>([]);
+  useLowRateAlerts(lowRateAlerts);
 
   const loadSilos = useCallback(async () => {
     try {
@@ -61,6 +64,7 @@ export default function OperatorSilosBar({
         return found || { silo_id: spec.silo_id, name: spec.name, current: 0, max: spec.max };
       });
       setSilos(ordered);
+      setLowRateAlerts(Array.isArray(data.lowRateAlerts) ? data.lowRateAlerts : []);
     } catch (err) {
       console.error('Не удалось загрузить силосы:', err);
     }
@@ -72,42 +76,24 @@ export default function OperatorSilosBar({
     return () => clearInterval(t);
   }, [loadSilos]);
 
-  const persistSilos = async (next: SiloRow[]) => {
-    setSilos(next);
-    await fetch('/api/adminCifra/warehouse', {
+  const mutateSilo = async (body: Record<string, unknown>) => {
+    const res = await fetch('/api/adminCifra/warehouse/silo-mutate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminAuthHeaders(),
       body: JSON.stringify({
-        silos: next.map((s) => ({
-          silo_id: s.silo_id,
-          current: s.current,
-          max: s.max,
-          name: s.name,
-        })),
+        ...body,
+        userName: actorName || undefined,
       }),
     });
-  };
-
-  const logHistory = (
-    operation_type: string,
-    item_type: string,
-    amount: number,
-    old_value: number,
-    new_value: number,
-  ) => {
-    fetch('/api/adminCifra/warehouse/history', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        operation_type,
-        item_type,
-        amount,
-        old_value,
-        new_value,
-        unit: 'кг',
-        user_name: actorName || null,
-      }),
-    }).catch(() => {});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || 'Не удалось изменить силос');
+    }
+    return data as {
+      savingKg?: number;
+      newCurrent?: number;
+      siloName?: string;
+    };
   };
 
   const handleAdd = async (siloId: number) => {
@@ -122,37 +108,52 @@ export default function OperatorSilosBar({
     });
     if (input === null) return;
     const kg = parseFloat(String(input).replace(',', '.'));
-    if (!Number.isFinite(kg) || kg === 0) {
-      await appAlert('Введите корректное число кг', { title: 'Ошибка', variant: 'danger' });
+    if (!Number.isFinite(kg) || kg <= 0) {
+      await appAlert('Введите количество кг больше 0', { title: 'Ошибка', variant: 'danger' });
       return;
     }
 
     setBusyId(siloId);
     try {
-      const tons = kg / 1000;
-      const next = silos.map((s) => {
-        if (s.silo_id !== siloId) return s;
-        const oldCurrent = s.current;
-        const newCurrent = oldCurrent + tons;
-        logHistory('add', s.name, Math.abs(kg), oldCurrent * 1000, newCurrent * 1000);
-        return { ...s, current: newCurrent };
-      });
-      await persistSilos(next);
+      const result = await mutateSilo({ action: 'add', siloId, amountKg: kg });
+      await loadSilos();
+      if (Number(result.savingKg || 0) > 0 && isAdmin) {
+        await appAlert(
+          `Зафиксирована экономия: ${Number(result.savingKg).toLocaleString('ru-RU')} кг\n`
+          + `(отрицательный остаток до внесения)`,
+          { title: 'Экономия цемента', variant: 'success' },
+        );
+      }
+    } catch (err: any) {
+      console.error(err);
+      await appAlert(err?.message || 'Ошибка внесения', { title: 'Ошибка', variant: 'danger' });
     } finally {
       setBusyId(null);
     }
   };
 
   const handleReset = async (siloId: number) => {
-    if (!(await appConfirm(`Обнулить силос №${siloId}?`, { variant: 'danger', okLabel: 'Обнулить' }))) return;
+    const silo = silos.find((s) => s.silo_id === siloId);
+    const negKg = silo && silo.current < 0
+      ? Math.round(Math.abs(silo.current) * 1000 * 10) / 10
+      : 0;
+    const confirmText = negKg > 0
+      ? `Обнулить силос №${siloId}?\n\nОтрицательный остаток ${negKg.toLocaleString('ru-RU')} кг будет записан как экономия.`
+      : `Обнулить силос №${siloId}?`;
+    if (!(await appConfirm(confirmText, { variant: 'danger', okLabel: 'Обнулить' }))) return;
     setBusyId(siloId);
     try {
-      const next = silos.map((s) => {
-        if (s.silo_id !== siloId) return s;
-        logHistory('reset', s.name, s.current * 1000, s.current * 1000, 0);
-        return { ...s, current: 0 };
-      });
-      await persistSilos(next);
+      const result = await mutateSilo({ action: 'reset', siloId });
+      await loadSilos();
+      if (Number(result.savingKg || 0) > 0 && isAdmin) {
+        await appAlert(
+          `Зафиксирована экономия: ${Number(result.savingKg).toLocaleString('ru-RU')} кг`,
+          { title: 'Экономия цемента', variant: 'success' },
+        );
+      }
+    } catch (err: any) {
+      console.error(err);
+      await appAlert(err?.message || 'Ошибка обнуления', { title: 'Ошибка', variant: 'danger' });
     } finally {
       setBusyId(null);
     }

@@ -12,6 +12,68 @@ export function siloNameById(siloId: number | null | undefined): string {
   return spec?.name || (siloId ? `Силос №${siloId}` : 'Силос');
 }
 
+/** Порог «глубокого минуса» (т): силос 1/2 → 5 т, силос 3 → 10 т. */
+export function siloLowRateThresholdTons(siloId: number | null | undefined): number {
+  return Number(siloId) === 3 ? 10 : 5;
+}
+
+export type LowRateAlertInfo = {
+  siloId: number;
+  siloName: string;
+  currentTons: number;
+  thresholdTons: number;
+  fired: boolean;
+  pending: boolean;
+  /** ISO-время эпизода — чтобы UI не блокировал повторный алерт после сброса */
+  alertAt: string | null;
+};
+
+/** Синхронизация алерта низкого расхода после изменения остатка силоса. */
+export async function syncSiloLowRateAlert(
+  supabase: { rpc: (...args: any[]) => any },
+  siloId: number,
+): Promise<LowRateAlertInfo | null> {
+  if (![1, 2, 3].includes(Number(siloId))) return null;
+  try {
+    const { data, error } = await supabase.rpc('warehouse_silo_sync_low_rate_alert', {
+      p_silo_id: siloId,
+    });
+    if (error) {
+      // Функция ещё не применена — тихо пропускаем
+      if (String(error.message || '').includes('warehouse_silo_sync_low_rate_alert')) {
+        return null;
+      }
+      console.error('syncSiloLowRateAlert:', error);
+      return null;
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) return null;
+    return {
+      siloId: Number(row.silo_id),
+      siloName: siloNameById(Number(row.silo_id)),
+      currentTons: Number(row.current_tons ?? 0),
+      thresholdTons: Number(row.threshold_tons ?? siloLowRateThresholdTons(siloId)),
+      fired: Boolean(row.fired),
+      pending: Boolean(row.pending),
+      alertAt: row.alert_at ? String(row.alert_at) : null,
+    };
+  } catch (err) {
+    console.error('syncSiloLowRateAlert:', err);
+    return null;
+  }
+}
+
+export async function syncAllSiloLowRateAlerts(
+  supabase: { rpc: (...args: any[]) => any },
+): Promise<LowRateAlertInfo[]> {
+  const out: LowRateAlertInfo[] = [];
+  for (const spec of SILO_SPEC) {
+    const info = await syncSiloLowRateAlert(supabase, spec.silo_id);
+    if (info?.pending) out.push(info);
+  }
+  return out;
+}
+
 export function siloIdFromItemType(itemType: string | null | undefined): number | null {
   const t = String(itemType || '');
   const m = t.match(/силос\s*№?\s*([123])\b/i);

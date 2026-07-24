@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { SILO_SPEC } from '@/lib/siloConfig';
+import {
+  SILO_SPEC,
+  syncAllSiloLowRateAlerts,
+  syncSiloLowRateAlert,
+} from '@/lib/siloConfig';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -46,9 +50,13 @@ export async function GET() {
       supabase.from('warehouse_additives').select('*').order('additive_id')
     ]);
 
+    // Синхронизация алертов глубокого минуса + список ещё не подтверждённых
+    const lowRateAlerts = await syncAllSiloLowRateAlerts(supabase);
+
     return NextResponse.json({
       silos: silosRes.data || [],
-      additives: additivesRes.data || []
+      additives: additivesRes.data || [],
+      lowRateAlerts,
     });
   } catch (error) {
     console.error('Ошибка GET склада:', error);
@@ -113,6 +121,7 @@ export async function POST(request: NextRequest) {
           .from('warehouse_silos')
           .update(updateData)
           .eq('silo_id', Number(s.silo_id));
+        await syncSiloLowRateAlert(supabase, Number(s.silo_id));
       }
     }
 

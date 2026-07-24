@@ -2,7 +2,11 @@
 // Пример: списали с Силоса 2, а реально крутили с Силоса 1.
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
-import { formatSiloCementJournalActor, siloNameById } from '@/lib/siloConfig';
+import {
+  formatSiloCementJournalActor,
+  siloNameById,
+  syncSiloLowRateAlert,
+} from '@/lib/siloConfig';
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 
 function moscowDateStr(d: Date = new Date()): string {
@@ -303,6 +307,8 @@ async function transferOneLegacy(
     toOldTons: Number(subAdj?.old_current ?? 0),
     toNewTons: Number(subAdj?.new_current ?? 0),
   });
+  await syncSiloLowRateAlert(supabase, fromSiloId);
+  await syncSiloLowRateAlert(supabase, toSiloId);
 
   return {
     id: mixerId,
@@ -413,23 +419,26 @@ async function transferOne(
     };
   }
 
+  const toId = Number(row.to_silo_id || toSiloId);
   await writeTransferJournal({
     orderId,
     actorName,
     fromSiloId,
-    toSiloId: Number(row.to_silo_id || toSiloId),
+    toSiloId: toId,
     cementKg,
     fromOldTons: Number(row.from_old_tons ?? 0),
     fromNewTons: Number(row.from_new_tons ?? 0),
     toOldTons: Number(row.to_old_tons ?? 0),
     toNewTons: Number(row.to_new_tons ?? 0),
   });
+  await syncSiloLowRateAlert(supabase, fromSiloId);
+  await syncSiloLowRateAlert(supabase, toId);
 
   return {
     id: mixerId,
     orderId,
     fromSiloId,
-    toSiloId: Number(row.to_silo_id || toSiloId),
+    toSiloId: toId,
     cementKg,
     ok: true,
   };

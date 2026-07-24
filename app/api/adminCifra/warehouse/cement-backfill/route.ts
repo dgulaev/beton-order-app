@@ -3,7 +3,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { calculateCementUsageKg, findRecipeByGrade } from '@/lib/recipeAdditives';
-import { formatSiloCementJournalActor, siloNameById } from '@/lib/siloConfig';
+import {
+  formatSiloCementJournalActor,
+  siloNameById,
+  syncSiloLowRateAlert,
+} from '@/lib/siloConfig';
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 
 const LOADED_STATUSES = ['В пути', 'На объекте', 'Разгружен', 'Возврат'] as const;
@@ -269,6 +273,10 @@ export async function POST(request: NextRequest) {
 
       writtenOff += 1;
       totalKg += trip.cementKg;
+    }
+
+    if (writtenOff > 0) {
+      await syncSiloLowRateAlert(supabase, siloId);
     }
 
     totalKg = Math.round(totalKg * 10) / 10;

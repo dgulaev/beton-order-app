@@ -169,6 +169,14 @@ function opMeta(op: Op) {
   if (type === 'reset') {
     return { label: 'Обнулено', accent: '#94A3B8', bg: 'rgba(100, 116, 139, 0.14)', sign: '' };
   }
+  if (type === 'alert') {
+    return {
+      label: 'Алерт',
+      accent: '#FBBF24',
+      bg: 'rgba(251, 191, 36, 0.12)',
+      sign: '',
+    };
+  }
   return { label: 'Операция', accent: '#94A3B8', bg: 'rgba(100, 116, 139, 0.12)', sign: '' };
 }
 

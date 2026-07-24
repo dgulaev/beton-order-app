@@ -2,7 +2,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
-import { formatSiloCementJournalActor, siloNameById } from '@/lib/siloConfig';
+import {
+  formatSiloCementJournalActor,
+  siloNameById,
+  syncSiloLowRateAlert,
+} from '@/lib/siloConfig';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -309,6 +313,7 @@ export async function DELETE(request: NextRequest) {
         }),
       });
       if (histError) console.error('Не удалось записать историю возврата цемента:', histError);
+      await syncSiloLowRateAlert(supabase, siloId);
     }
 
     // Лог «Отгружено сегодня» — иначе строка останется сиротой у оператора

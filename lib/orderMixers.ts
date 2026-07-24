@@ -11,7 +11,11 @@ import {
   calculateCementUsageKg,
   densitiesFromLabSettings,
 } from '@/lib/recipeAdditives';
-import { formatSiloCementJournalActor, siloNameById } from '@/lib/siloConfig';
+import {
+  formatSiloCementJournalActor,
+  siloNameById,
+  syncSiloLowRateAlert,
+} from '@/lib/siloConfig';
 
 const FINAL_ORDER_STATUSES = ['completed', 'cancelled'];
 const STATUS_LABELS_RU: Record<string, string> = {
@@ -435,6 +439,7 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
                 }),
               });
               if (histError) console.error('Не удалось записать историю списания цемента:', histError);
+              await syncSiloLowRateAlert(supabase, siloId);
             }
           }
         }
@@ -510,6 +515,7 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
               actorName: userName || (userRole === 'driver' ? 'Водитель' : 'Диспетчер'),
             }),
           });
+          await syncSiloLowRateAlert(supabase, siloId);
         }
       }
     } catch (err) {
