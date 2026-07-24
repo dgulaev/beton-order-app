@@ -14,7 +14,7 @@ type Entry = {
   siloId: number;
   siloName: string;
   amountKg: number;
-  reason: 'reset' | 'refill';
+  reason: 'reset' | 'refill' | 'meka_reconcile';
   balanceBeforeTons: number;
   userName: string | null;
   createdAt: string;
@@ -210,7 +210,7 @@ export default function CementSavingsModal({ onClose }: Props) {
               </h2>
             </div>
             <div style={{ fontSize: 12.5, color: '#94A3B8' }}>
-              Минус на силосе при обнулении или внесении · только для администратора
+              Минус при обнулении/внесении и возврат по сверке MEKA · только для администратора
             </div>
           </div>
           <button type="button" onClick={onClose} style={modalCloseButtonStyle()} aria-label="Закрыть">
@@ -380,7 +380,11 @@ export default function CementSavingsModal({ onClose }: Props) {
                                 <span style={{ color: '#94A3B8', fontWeight: 500 }}>
                                   {' · '}{e.siloName}
                                   {' · '}
-                                  {e.reason === 'refill' ? 'при внесении' : 'при обнулении'}
+                                  {e.reason === 'refill'
+                                    ? 'при внесении'
+                                    : e.reason === 'meka_reconcile'
+                                      ? 'сверка MEKA'
+                                      : 'при обнулении'}
                                 </span>
                               </div>
                               <div style={{

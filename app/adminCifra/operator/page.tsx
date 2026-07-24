@@ -12,7 +12,12 @@ import { UserCog, ChevronDown, UserRound } from 'lucide-react';
 import ModalSelect from '../components/ModalSelect';
 import OperatorSilosBar from '../components/OperatorSilosBar';
 import OperatorMekaUploadCard from '../components/OperatorMekaUploadCard';
+import SiloSwitchVolumeModal, {
+  postCementSegment,
+  type SiloSwitchTrip,
+} from '../components/SiloSwitchVolumeModal';
 import { appAlert, appConfirm } from '../components/appDialog';
+import { siloNameById } from '@/lib/siloConfig';
 
 const LAB_MENU_ITEMS: { key: LabTab; label: string }[] = [
   { key: 'orders', label: 'Заявки' },
@@ -164,8 +169,13 @@ export default function OperatorBSUPage() {
     setShiftReminderDismissed(true);
   };
 
-  const handleActiveSiloChange = async (siloId: number) => {
-    const prev = activeSiloId;
+  const [siloSwitchModal, setSiloSwitchModal] = useState<{
+    fromSiloId: number;
+    toSiloId: number;
+    trips: SiloSwitchTrip[];
+  } | null>(null);
+
+  const persistActiveSilo = async (siloId: number, prev: number | null) => {
     setActiveSiloId(siloId);
     try {
       const res = await fetch('/api/adminCifra/operator-shift', {
@@ -181,6 +191,7 @@ export default function OperatorBSUPage() {
         title: 'Ошибка',
         variant: 'danger',
       });
+      throw err;
     }
   };
 
@@ -341,6 +352,93 @@ export default function OperatorBSUPage() {
     return () => clearInterval(interval);
   }, [loadingTrips]);
 
+  const handleActiveSiloChange = (siloId: number) => {
+    if (siloId === activeSiloId) return;
+
+    // Активные загрузки: статус «Загрузка» + таймер / loading_started_at
+    const activeLoading: SiloSwitchTrip[] = queueTrips
+      .filter((trip: any) => {
+        const id = Number(trip.id);
+        const started = !!(
+          loadingTrips[id]
+          || trip.loading_started_at
+          || trip.loadingStartedAt
+        );
+        return trip.status === 'Загрузка' && started;
+      })
+      .map((trip: any) => ({
+        id: Number(trip.id),
+        mixerName: String(trip.mixer_name || trip.number || `Миксер #${trip.id}`),
+        orderId: Number(trip.order_id || trip.orderId || 0),
+        grade: String(trip.grade || trip.orders?.grade || '—'),
+        volumeM3: Number(trip.volume || 0),
+      }))
+      .filter((t) => t.id > 0 && t.volumeM3 > 0);
+
+    // Без активного рейса в загрузке — просто меняем силос.
+    // Если рабочий силос ещё не выбран, а рейс в загрузке есть — тоже просто
+    // ставим новый (списывать mid_load не с чего: from неизвестен).
+    if (activeLoading.length === 0 || activeSiloId == null) {
+      if (activeLoading.length > 0 && activeSiloId == null) {
+        void appAlert(
+          'Рабочий силос ещё не был выбран — сменить «с какого» нельзя. '
+          + 'Ставлю новый силос; объём текущего рейса спишется с него при «В пути». '
+          + 'Если часть уже грузили с другого силоса — разнеси вручную на складе.',
+          { title: 'Силос без предыдущего', variant: 'warning' },
+        );
+      }
+      void persistActiveSilo(siloId, activeSiloId);
+      return;
+    }
+
+    setSiloSwitchModal({
+      fromSiloId: activeSiloId,
+      toSiloId: siloId,
+      trips: activeLoading,
+    });
+  };
+
+  const confirmSiloSwitch = async (result: { orderMixerId: number; volumeM3: number }) => {
+    if (!siloSwitchModal) return;
+    const { fromSiloId, toSiloId } = siloSwitchModal;
+    const prev = activeSiloId;
+
+    // Сначала сегмент (с активного силоса), потом смена active_silo_id.
+    // Если PUT силоса упадёт — сегмент уже записан: всё равно переключаем
+    // локально и предупреждаем, чтобы не списали тот же объём повторно.
+    const written = await postCementSegment({
+      orderMixerId: result.orderMixerId,
+      siloId: fromSiloId,
+      volumeM3: result.volumeM3,
+    });
+
+    let siloPersistFailed = false;
+    try {
+      await persistActiveSilo(toSiloId, prev);
+    } catch {
+      siloPersistFailed = true;
+      setActiveSiloId(toSiloId);
+    }
+
+    setSiloSwitchModal(null);
+
+    const writeNote = written.skipped
+      ? `Нового объёма с «${siloNameById(fromSiloId)}» не было (уже учтено).`
+      : `С «${siloNameById(fromSiloId)}» списано ${written.volumeM3} м³ (${written.cementKg} кг).`;
+
+    void appAlert(
+      `${writeNote} Дальше работаешь с «${siloNameById(toSiloId)}» — остаток `
+      + `${written.remainingM3} м³ спишется при «В пути».`
+      + (siloPersistFailed
+        ? '\n\nВнимание: сервер не подтвердил смену силоса — обнови страницу и проверь, какой силос активен.'
+        : ''),
+      {
+        title: siloPersistFailed ? 'Списано, силос проверь' : 'Силос переключён',
+        variant: siloPersistFailed ? 'warning' : 'success',
+      },
+    );
+  };
+
     // ==================== 1.0 ЗАГРУЗКА СОСТОЯНИЯ ЗАГРУЗКИ ПРИ СТАРТЕ ====================
   useEffect(() => {
     const loadLoadingState = async () => {
@@ -422,9 +520,33 @@ export default function OperatorBSUPage() {
   // мусорную запись в "Отгружено сегодня" (см. историю заявки #604, 18.07.2026).
   const FINAL_ORDER_STATUSES_RU: Record<string, string> = { completed: 'Выполнена', cancelled: 'Отменена' };
 
+  const refreshActiveSiloFromServer = async (): Promise<number | null> => {
+    try {
+      const res = await fetch('/api/adminCifra/operator-shift', { cache: 'no-store' });
+      if (!res.ok) return activeSiloId;
+      const data = await res.json();
+      const siloId = Number(data?.active_silo_id);
+      const fresh = [1, 2, 3].includes(siloId) ? siloId : null;
+      setActiveSiloId(fresh);
+      return fresh;
+    } catch {
+      return activeSiloId;
+    }
+  };
+
   const startLoading = async (trip: any) => {
     if (trip.order_status && FINAL_ORDER_STATUSES_RU[trip.order_status]) {
       alert(`❌ Заявка #${trip.order_id || trip.orderId} уже в статусе "${FINAL_ORDER_STATUSES_RU[trip.order_status]}" — начать загрузку нельзя. Обратитесь к диспетчеру/менеджеру.`);
+      return;
+    }
+
+    // Сверяем силос с сервером (автосброс нового дня МСК / устаревшая вкладка)
+    let siloOk = activeSiloId;
+    if (siloOk == null) {
+      siloOk = await refreshActiveSiloFromServer();
+    }
+    if (siloOk == null) {
+      alert('Сначала выбери рабочий силос 1/2/3 сверху — без него загрузку начать нельзя.');
       return;
     }
 
@@ -453,6 +575,7 @@ export default function OperatorBSUPage() {
         if (data?.conflict) {
           alert(`❌ Статус миксера уже изменён (диспетчер/менеджер успел вмешаться) — ${data?.message || ''}`);
         } else {
+          await refreshActiveSiloFromServer();
           alert(`❌ Не удалось начать загрузку: ${data?.message || `HTTP ${res.status}`}`);
         }
         return;
@@ -1692,6 +1815,14 @@ export default function OperatorBSUPage() {
             onActiveSiloChange={handleActiveSiloChange}
             highlightMissing={showSiloReminder}
             actorName={operatorName}
+          />
+          <SiloSwitchVolumeModal
+            open={!!siloSwitchModal}
+            fromSiloId={siloSwitchModal?.fromSiloId ?? 0}
+            toSiloId={siloSwitchModal?.toSiloId ?? 0}
+            trips={siloSwitchModal?.trips ?? []}
+            onCancel={() => setSiloSwitchModal(null)}
+            onConfirm={confirmSiloSwitch}
           />
           <OperatorMekaUploadCard
             onUploaded={() => {

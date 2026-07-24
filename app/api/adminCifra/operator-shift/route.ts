@@ -7,6 +7,7 @@
 // без правки кода.
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isSameMoscowDay } from '@/lib/operatorShiftSilo';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -14,10 +15,6 @@ const supabase = createClient(
 );
 
 const DEFAULT_NAMES = ['Семён', 'Максим'];
-
-function isSameLocalDay(a: Date, b: Date) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
 
 export async function GET() {
   const { data, error } = await supabase
@@ -43,12 +40,13 @@ export async function GET() {
   const now = new Date();
   const shiftSetAt = row.active_operator_set_at ? new Date(row.active_operator_set_at) : null;
   const siloSetAt = row.active_silo_set_at ? new Date(row.active_silo_set_at) : null;
-  const shiftStale = !!(row.active_operator_name && shiftSetAt && !isSameLocalDay(shiftSetAt, now));
+  // День смены/силоса — по Москве (сервер на Vercel в UTC).
+  const shiftStale = !!(row.active_operator_name && shiftSetAt && !isSameMoscowDay(shiftSetAt, now));
   // Силос без метки времени (старые данные) при выбранном id тоже сбрасываем утром —
   // иначе подсветка «выбери силос» не появится.
   const siloStale = !!(
     row.active_silo_id
-    && (!siloSetAt || !isSameLocalDay(siloSetAt, now))
+    && (!siloSetAt || !isSameMoscowDay(siloSetAt, now))
   );
 
   if (shiftStale || siloStale) {

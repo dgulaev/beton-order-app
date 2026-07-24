@@ -1,18 +1,20 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Globe } from 'lucide-react';
+import { useUserRole } from '@/app/providers/UserRoleProvider';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
 
-export default function OnlinePage({ isGuest }: { isGuest?: boolean }) {
+export default function OnlinePage() {
+  const { isAdmin, loading: roleLoading } = useUserRole();
   const [onlineUsers, setOnlineUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
 
-  const loadOnline = async () => {
-    if (!userId) return;
+  const loadOnline = useCallback(async () => {
+    if (!userId || !isAdmin) return;
 
     try {
       setLoading(true);
@@ -31,15 +33,21 @@ export default function OnlinePage({ isGuest }: { isGuest?: boolean }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [userId, isAdmin]);
 
   useEffect(() => {
+    if (roleLoading) return;
+    if (!isAdmin) {
+      setLoading(false);
+      setOnlineUsers([]);
+      return;
+    }
     loadOnline();
     const interval = setInterval(loadOnline, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [roleLoading, isAdmin, loadOnline]);
 
-  if (isGuest) {
+  if (!roleLoading && !isAdmin) {
     return (
       <div style={{ padding: '40px', textAlign: 'center', color: '#94A3B8' }}>
         У вас нет прав для просмотра этой страницы.

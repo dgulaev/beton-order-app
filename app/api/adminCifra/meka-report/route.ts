@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import {
+  compensateMekaCementDelta,
+  rollbackMekaCementCompensation,
+} from '@/lib/mekaCementCompensate';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -30,7 +34,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: 'Отчёт за этот день уже существует' }, { status: 409 });
     }
 
-    const { error } = await supabase
+    const { data: inserted, error } = await supabase
       .from('meka_reports')
       .insert({
         report_date,
@@ -42,14 +46,34 @@ export async function POST(request: NextRequest) {
         total_water: Number(total_water || 0),
         total_additive: Number(total_additive || 0),
         raw_data: raw_data || []
-      });
+      })
+      .select('id, report_date')
+      .maybeSingle();
 
     if (error) {
       console.error('Supabase insert error:', error);
       throw error;
     }
 
-    return NextResponse.json({ success: true, message: 'Отчёт успешно сохранён' });
+    const reportDate = String(inserted?.report_date || report_date).substring(0, 10);
+    const compensation = await compensateMekaCementDelta({
+      reportDate,
+      mekaReportId: inserted?.id != null ? Number(inserted.id) : null,
+      rawData: raw_data || [],
+      userName: 'Оператор MEKA',
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: 'Отчёт успешно сохранён',
+      compensation: {
+        status: compensation.status,
+        skipped: compensation.skipped,
+        deltaKg: compensation.deltaKg,
+        bySilo: compensation.bySilo,
+        message: compensation.message || null,
+      },
+    });
   } catch (error: any) {
     console.error('Ошибка POST /meka-report:', error);
     return NextResponse.json({ 
@@ -83,6 +107,32 @@ export async function DELETE(request: NextRequest) {
 
     if (!id) return NextResponse.json({ error: 'ID не указан' }, { status: 400 });
 
+    const { data: report, error: fetchError } = await supabase
+      .from('meka_reports')
+      .select('id, report_date')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+    if (!report) {
+      return NextResponse.json({ error: 'Отчёт не найден' }, { status: 404 });
+    }
+
+    const reportDate = String(report.report_date || '').substring(0, 10);
+    const rollback = await rollbackMekaCementCompensation({
+      reportDate,
+      mekaReportId: Number(report.id),
+    });
+
+    if (!rollback.ok) {
+      return NextResponse.json(
+        {
+          error: rollback.message || 'Не удалось откатить компенсацию MEKA — отчёт не удалён',
+        },
+        { status: 500 },
+      );
+    }
+
     const { error } = await supabase
       .from('meka_reports')
       .delete()
@@ -90,7 +140,10 @@ export async function DELETE(request: NextRequest) {
 
     if (error) throw error;
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      success: true,
+      compensationRollback: rollback,
+    });
   } catch (error: any) {
     console.error('Ошибка DELETE:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

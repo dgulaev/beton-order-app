@@ -66,17 +66,26 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const entries = (data || []).map((row) => ({
-      id: Number(row.id),
-      siloId: Number(row.silo_id),
-      siloName: siloNameById(Number(row.silo_id)),
-      amountKg: Math.round(Number(row.amount_kg || 0) * 10) / 10,
-      reason: row.reason === 'refill' ? 'refill' : 'reset',
-      balanceBeforeTons: Number(row.balance_before_tons || 0),
-      userName: row.user_name || null,
-      createdAt: row.created_at,
-      dateKey: moscowDateKey(String(row.created_at)),
-    }));
+    const entries = (data || []).map((row) => {
+      const rawReason = String(row.reason || '');
+      const reason =
+        rawReason === 'refill'
+          ? 'refill'
+          : rawReason === 'meka_reconcile'
+            ? 'meka_reconcile'
+            : 'reset';
+      return {
+        id: Number(row.id),
+        siloId: Number(row.silo_id),
+        siloName: siloNameById(Number(row.silo_id)),
+        amountKg: Math.round(Number(row.amount_kg || 0) * 10) / 10,
+        reason: reason as 'reset' | 'refill' | 'meka_reconcile',
+        balanceBeforeTons: Number(row.balance_before_tons || 0),
+        userName: row.user_name || null,
+        createdAt: row.created_at,
+        dateKey: moscowDateKey(String(row.created_at)),
+      };
+    });
 
     type DayAgg = {
       dateKey: string;

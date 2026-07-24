@@ -336,6 +336,11 @@ type ReconcileModalState = {
     nightKg: number;
     warehouseKg: number;
     bySilo: { siloId: number; name: string; kg: number }[];
+    compensation: {
+      status: string;
+      deltaKg: number;
+      bySilo: { siloId: number; kg: number; direction: 'writeoff' | 'return' }[];
+    } | null;
   } | null;
   loading: boolean;
   error: string | null;
@@ -928,12 +933,28 @@ export default function ReportsPage() {
       volumeAlertCheckedRef.current.add(String(report.id));
       setVolumeAlerts((prev) => ({ ...prev, [String(report.id)]: volumeAlert }));
 
-      let cementWarehouse = { totalKg: 0, bySilo: [] as { siloId: number; name: string; kg: number }[] };
+      let cementWarehouse = {
+        totalKg: 0,
+        bySilo: [] as { siloId: number; name: string; kg: number }[],
+        compensation: null as {
+          status: string;
+          deltaKg: number;
+          bySilo: { siloId: number; kg: number; direction: 'writeoff' | 'return' }[];
+        } | null,
+      };
       if (cementDayRes.ok) {
         const day = await cementDayRes.json();
+        const comp = day.compensation;
         cementWarehouse = {
           totalKg: Number(day.totalKg) || 0,
           bySilo: Array.isArray(day.bySilo) ? day.bySilo : [],
+          compensation: comp
+            ? {
+                status: String(comp.status || ''),
+                deltaKg: Number(comp.deltaKg) || 0,
+                bySilo: Array.isArray(comp.bySilo) ? comp.bySilo : [],
+              }
+            : null,
         };
       }
 
@@ -943,6 +964,7 @@ export default function ReportsPage() {
         nightKg: plantCement.nightKg,
         warehouseKg: cementWarehouse.totalKg,
         bySilo: cementWarehouse.bySilo,
+        compensation: cementWarehouse.compensation,
       };
 
       setReconcileModal((prev) => prev ? {
@@ -2228,28 +2250,28 @@ export default function ReportsPage() {
                     fontSize: '16px',
                     borderTop: '3px solid #10B981'
                   }}>
-                    <td style={{ padding: '16px 14px' }} colSpan={4}>
+                    <td style={{ padding: '16px 14px', whiteSpace: 'nowrap' }} colSpan={4}>
                       <strong>ИТОГО{selectedRecipes !== null ? ' ПО ФИЛЬТРУ' : ' ЗА ДЕНЬ'}</strong>
                     </td>
-                    <td style={{ padding: '16px 14px', textAlign: 'right', color: '#10B981' }}>
+                    <td style={{ padding: '16px 14px', textAlign: 'right', color: '#10B981', whiteSpace: 'nowrap' }}>
                       {formatVolumeM3(filteredReportData.reduce((sum, r) => sum + (r.qty || 0), 0))} м³
                     </td>
-                    <td style={{ padding: '16px 14px', textAlign: 'right' }}>
+                    <td style={{ padding: '16px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {Math.round(filteredReportData.reduce((sum, r) => sum + (r.cement || 0), 0)).toLocaleString('ru-RU')} кг
                     </td>
-                    <td style={{ padding: '16px 14px', textAlign: 'right' }}>
+                    <td style={{ padding: '16px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {Math.round(filteredReportData.reduce((sum, r) => sum + (r.sand || 0), 0)).toLocaleString('ru-RU')} кг
                     </td>
-                    <td style={{ padding: '16px 14px', textAlign: 'right' }}>
+                    <td style={{ padding: '16px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {Math.round(filteredReportData.reduce((sum, r) => sum + (r.gravel || 0), 0)).toLocaleString('ru-RU')} кг
                     </td>
-                    <td style={{ padding: '16px 14px', textAlign: 'right' }}>
+                    <td style={{ padding: '16px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {Math.round(filteredReportData.reduce((sum, r) => sum + (r.water || 0), 0)).toLocaleString('ru-RU')} кг
                     </td>
-                    <td style={{ padding: '16px 14px', textAlign: 'right' }}>
+                    <td style={{ padding: '16px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {filteredReportData.reduce((sum, r) => sum + (r.additive || 0), 0).toFixed(3)} кг
                     </td>
-                    <td style={{ padding: '16px 14px', textAlign: 'right' }}>
+                    <td style={{ padding: '16px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {filteredReportData.reduce((sum, r) => sum + (r.additive2 || 0), 0).toFixed(3)} кг
                     </td>
                   </tr>
@@ -2429,7 +2451,7 @@ export default function ReportsPage() {
                             </span>
                             {c.nightKg > 0.5 ? ` · в т.ч. ночь ${(c.nightKg / 1000).toFixed(2)} т` : ''}
                           </div>
-                          {c.bySilo.some((s) => s.kg > 0) && (
+                          {c.bySilo.some((s) => Math.abs(s.kg) > 0) && (
                             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12.5px' }}>
                               {c.bySilo.map((s) => (
                                 <div key={s.siloId} style={{ color: '#CBD5E1' }}>
@@ -2439,6 +2461,64 @@ export default function ReportsPage() {
                               ))}
                             </div>
                           )}
+                          {(() => {
+                            const comp = c.compensation;
+                            const statusLabel = !comp
+                              ? 'ещё нет'
+                              : comp.status === 'applied'
+                                ? 'выполнено'
+                                : comp.status === 'skipped_noise'
+                                  ? 'пропуск (дельта ~0)'
+                                  : comp.status === 'skipped_no_warehouse'
+                                    ? 'пропуск (нет списаний)'
+                                    : comp.status;
+                            const siloName = (id: number) =>
+                              c.bySilo.find((s) => s.siloId === id)?.name || `Силос ${id}`;
+                            return (
+                              <div style={{
+                                marginTop: '12px',
+                                paddingTop: '12px',
+                                borderTop: '1px solid rgba(148,163,184,0.18)',
+                              }}>
+                                <div style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  gap: 10,
+                                  marginBottom: comp?.bySilo?.length ? 8 : 0,
+                                  fontSize: '12.5px',
+                                }}>
+                                  <span style={{ color: '#94A3B8' }}>Скомпенсировано MEKA</span>
+                                  <span style={{ color: '#CBD5E1', fontWeight: 600 }}>{statusLabel}</span>
+                                </div>
+                                {comp?.status === 'applied' && comp.bySilo.length > 0 && (
+                                  <>
+                                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12.5px' }}>
+                                      {comp.bySilo.map((s) => {
+                                        const signed = s.direction === 'writeoff' ? s.kg : -s.kg;
+                                        return (
+                                          <div key={s.siloId} style={{ color: '#CBD5E1' }}>
+                                            <span style={{ color: '#94A3B8' }}>{siloName(s.siloId)}:</span>{' '}
+                                            <strong style={{ color: signed > 0 ? '#F59E0B' : '#34D399' }}>
+                                              {signed > 0 ? '+' : ''}{(signed / 1000).toFixed(2)} т
+                                            </strong>
+                                            <span style={{ color: '#64748B' }}>
+                                              {s.direction === 'writeoff' ? ' досписано' : ' возврат'}
+                                            </span>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                    <div style={{ marginTop: 6, fontSize: '12px', color: '#64748B' }}>
+                                      Итого дельта:{' '}
+                                      <span style={{ fontWeight: 600, color: dColor(comp.deltaKg) }}>
+                                        {comp.deltaKg > 0 ? '+' : ''}{(comp.deltaKg / 1000).toFixed(2)} т
+                                      </span>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     })()}

@@ -1,10 +1,15 @@
 // app/api/adminCifra/online/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { ADMIN_CIFRA_STAFF_ROLES } from '@/lib/adminCifraAuth';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+const STAFF_ROLE_SET = new Set(
+  ADMIN_CIFRA_STAFF_ROLES.map((r) => r.toLowerCase()).filter((r) => r !== 'guest'),
 );
 
 export async function GET(request: NextRequest) {
@@ -40,16 +45,27 @@ export async function GET(request: NextRequest) {
         ip,
         user_agent,
         last_active,
-        users!inner(full_name, role, organization_name, phone)
+        users!inner(full_name, role, organization_name, phone, force_logout_version)
       `)
       .gte('last_active', tenMinutesAgo)
       .order('last_active', { ascending: false });
 
     if (error) throw error;
 
+    // Не показываем guest, клиентов и уже выкинутых force-logout
+    // (на случай хвоста сессии, если delete не успел/упал).
+    const online = (data || []).filter((session: any) => {
+      const u = Array.isArray(session.users) ? session.users[0] : session.users;
+      if (!u) return false;
+      const role = String(u.role || '').toLowerCase();
+      if (!STAFF_ROLE_SET.has(role)) return false;
+      if (Number(u.force_logout_version || 0) > 0) return false;
+      return true;
+    });
+
     return NextResponse.json({ 
       success: true, 
-      online: data || [] 
+      online,
     });
 
   } catch (error: any) {

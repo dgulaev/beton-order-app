@@ -2,11 +2,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ORDER_MIXER_DELETE_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
-import {
-  formatSiloCementJournalActor,
-  siloNameById,
-  syncSiloLowRateAlert,
-} from '@/lib/siloConfig';
+import { listCementSegments, refundAllCementWriteoffs } from '@/lib/cementSegments';
+import { siloNameById } from '@/lib/siloConfig';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -234,10 +231,12 @@ export async function DELETE(request: NextRequest) {
     const orderStatus = (mixer as any).orders?.status as string | undefined;
     const orderIsFinal = !!(orderStatus && FINAL_STATUSES.includes(orderStatus));
 
+    const cementSegments = await listCementSegments(id);
     const mixerStatus = String(mixer.status || 'Загрузка');
     const needsAdmin = orderIsFinal
       || LOADED_STATUSES.includes(mixerStatus)
       || mixer.cement_write_off_kg != null
+      || cementSegments.length > 0
       || mixer.additive_write_off_liters != null
       || Boolean(body?.force);
 
@@ -264,77 +263,35 @@ export async function DELETE(request: NextRequest) {
       : (auth.user.full_name || 'Сотрудник');
     let actorRole: string | null = auth.user.role;
 
-    // ==================== ВОЗВРАТ ЦЕМЕНТА НА СИЛОС ====================
-    // Сначала CAS-claim: снимаем метку списания, потом возвращаем кг.
-    // Если DELETE ниже упадёт — повторный DELETE не вернёт цемент второй раз.
+    // ==================== ВОЗВРАТ ЦЕМЕНТА НА СИЛОС(Ы) ====================
     let cementReturnedKg: number | null = null;
-    let cementSiloId: number | null = null;
-    if (mixer.cement_write_off_kg != null && mixer.cement_write_off_silo_id != null) {
-      const kg = Number(mixer.cement_write_off_kg);
-      const siloId = Number(mixer.cement_write_off_silo_id);
-      const writeOffAt = (mixer as { cement_write_off_at?: string | null }).cement_write_off_at ?? null;
-
-      const { data: claimed, error: claimError } = await supabase
-        .from('order_mixers')
-        .update({
-          cement_write_off_silo_id: null,
-          cement_write_off_kg: null,
-          cement_write_off_at: null,
-        })
-        .eq('id', id)
-        .not('cement_write_off_kg', 'is', null)
-        .select('id')
-        .maybeSingle();
-
-      if (claimError) {
-        console.error('Не удалось снять метку списания цемента при удалении рейса:', claimError);
+    let cementReturnNote = '';
+    if (
+      cementSegments.length > 0
+      || (mixer.cement_write_off_kg != null && mixer.cement_write_off_silo_id != null)
+    ) {
+      const refund = await refundAllCementWriteoffs({
+        orderMixerId: id,
+        orderId: Number(mixer.order_id),
+        legacyKg: mixer.cement_write_off_kg,
+        legacySiloId: mixer.cement_write_off_silo_id,
+        actorName,
+        journalKind: 'delete_return',
+      });
+      if (!refund.ok) {
+        console.error('Не удалось вернуть цемент при удалении миксера:', refund.error);
         return NextResponse.json(
-          { error: `Не удалось подготовить возврат цемента: ${claimError.message}` },
+          { error: `Не удалось вернуть цемент на склад: ${refund.error}` },
           { status: 500 },
         );
       }
-
-      if (claimed) {
-        const { data: adjRows, error: rpcError } = await supabase.rpc('warehouse_silo_adjust', {
-          p_silo_id: siloId,
-          p_delta_tons: kg / 1000,
-        });
-        if (rpcError) {
-          await supabase
-            .from('order_mixers')
-            .update({
-              cement_write_off_silo_id: siloId,
-              cement_write_off_kg: kg,
-              cement_write_off_at: writeOffAt,
-            })
-            .eq('id', id);
-          console.error('Не удалось вернуть цемент на силос при удалении миксера:', rpcError);
-          return NextResponse.json(
-            { error: `Не удалось вернуть цемент на склад: ${rpcError.message}` },
-            { status: 500 },
-          );
-        }
-
-        cementReturnedKg = Math.round(kg * 10) / 10;
-        cementSiloId = siloId;
-        const adj = Array.isArray(adjRows) ? adjRows[0] : adjRows;
-        const oldKg = Number(adj?.old_current ?? 0) * 1000;
-        const newKg = Number(adj?.new_current ?? 0) * 1000;
-        const { error: histError } = await supabase.from('warehouse_operations').insert({
-          operation_type: 'add',
-          item_type: siloNameById(siloId),
-          amount: cementReturnedKg,
-          old_value: Math.round(oldKg * 10) / 10,
-          new_value: Math.round(newKg * 10) / 10,
-          unit: 'кг',
-          user_name: formatSiloCementJournalActor({
-            kind: 'delete_return',
-            orderId: Number(mixer.order_id),
-            actorName,
-          }),
-        });
-        if (histError) console.error('Не удалось записать историю возврата цемента:', histError);
-        await syncSiloLowRateAlert(supabase, siloId);
+      if (refund.returnedKg > 0) {
+        cementReturnedKg = refund.returnedKg;
+        cementReturnNote = refund.bySilo.length === 1
+          ? `; цемент ${refund.returnedKg} кг возвращён на ${siloNameById(refund.bySilo[0].siloId)}`
+          : `; цемент ${refund.returnedKg} кг возвращён по силосам: ${
+            refund.bySilo.map((s) => `${siloNameById(s.siloId)} ${s.kg} кг`).join(', ')
+          }`;
       }
     }
 
@@ -405,13 +362,9 @@ export async function DELETE(request: NextRequest) {
     const volLabel = Number.isFinite(vol)
       ? vol.toFixed(2).replace(/\.?0+$/, '')
       : String(mixer.volume ?? '');
-    const cementNote = cementReturnedKg != null && cementSiloId != null
-      ? `; цемент ${cementReturnedKg} кг возвращён на ${siloNameById(cementSiloId)}`
-      : '';
-
     const { error: historyError } = await supabase.from('order_history').insert({
       order_id: mixer.order_id,
-      action: `Удалил рейс ${mixer.mixer_name || 'миксер'} (${volLabel} м³, статус «${mixerStatus}»)${cementNote}`,
+      action: `Удалил рейс ${mixer.mixer_name || 'миксер'} (${volLabel} м³, статус «${mixerStatus}»)${cementReturnNote}`,
       user_name: actorName,
       user_role: actorRole,
     });
@@ -420,7 +373,6 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({
       success: true,
       cementReturnedKg,
-      cementSiloId,
     });
   } catch (error: any) {
     console.error('Delete mixer error:', error);

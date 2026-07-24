@@ -33,6 +33,43 @@ async function writeHistory(opts: {
   if (error) console.error('silo-mutate history:', error);
 }
 
+/**
+ * Страховка: если SQL-функция вернула saving_kg, но строку в таблицу
+ * не записала (старая версия RPC / сбой), допишем из API.
+ */
+async function ensureSavingRecord(opts: {
+  siloId: number;
+  savingKg: number;
+  reason: 'reset' | 'refill';
+  balanceBeforeTons: number;
+  userName: string | null;
+}) {
+  const savingKg = Math.round(Number(opts.savingKg || 0) * 10) / 10;
+  if (!(savingKg > 0)) return;
+
+  const since = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+  const { data: existing } = await supabase
+    .from('warehouse_cement_savings')
+    .select('id')
+    .eq('silo_id', opts.siloId)
+    .eq('reason', opts.reason)
+    .gte('created_at', since)
+    .limit(1);
+
+  if (existing && existing.length > 0) return;
+
+  const { error } = await supabase.from('warehouse_cement_savings').insert({
+    silo_id: opts.siloId,
+    amount_kg: savingKg,
+    reason: opts.reason,
+    balance_before_tons: opts.balanceBeforeTons,
+    user_name: opts.userName,
+  });
+  if (error) {
+    console.error('ensureSavingRecord:', error);
+  }
+}
+
 export async function POST(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request, WAREHOUSE_MUTATION_ROLES);
   if (auth.error) return auth.error;
@@ -78,7 +115,18 @@ export async function POST(request: NextRequest) {
 
       const oldTons = Number(row.old_current ?? 0);
       const newTons = Number(row.new_current ?? 0);
-      const savingKg = Math.round(Number(row.saving_kg || 0) * 10) / 10;
+      // Если RPC не посчитал экономию, но остаток был отрицательный — считаем сами
+      let savingKg = Math.round(Number(row.saving_kg || 0) * 10) / 10;
+      if (!(savingKg > 0) && oldTons < 0) {
+        savingKg = Math.round(Math.abs(oldTons) * 1000 * 10) / 10;
+      }
+      await ensureSavingRecord({
+        siloId,
+        savingKg,
+        reason: 'reset',
+        balanceBeforeTons: oldTons,
+        userName,
+      });
       await writeHistory({
         operation_type: 'reset',
         siloId,
@@ -136,7 +184,17 @@ export async function POST(request: NextRequest) {
 
       const oldTons = Number(row.old_current ?? 0);
       const newTons = Number(row.new_current ?? 0);
-      const savingKg = Math.round(Number(row.saving_kg || 0) * 10) / 10;
+      let savingKg = Math.round(Number(row.saving_kg || 0) * 10) / 10;
+      if (!(savingKg > 0) && oldTons < 0) {
+        savingKg = Math.round(Math.abs(oldTons) * 1000 * 10) / 10;
+      }
+      await ensureSavingRecord({
+        siloId,
+        savingKg,
+        reason: 'refill',
+        balanceBeforeTons: oldTons,
+        userName,
+      });
       await writeHistory({
         operation_type: 'add',
         siloId,

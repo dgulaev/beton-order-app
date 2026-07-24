@@ -84,6 +84,7 @@ export function siloIdFromItemType(itemType: string | null | undefined): number 
 
 export type SiloCementJournalKind =
   | 'auto_writeoff'
+  | 'silo_switch'
   | 'backfill'
   | 'rollback'
   | 'delete_return'
@@ -100,6 +101,8 @@ export function formatSiloCementJournalActor(opts: {
   /** Для kind=transfer: откуда → куда */
   fromSiloId?: number | null;
   toSiloId?: number | null;
+  /** Объём сегмента (м³) — для mid_load при смене силоса */
+  volumeM3?: number | null;
 }): string {
   const orderPart = `заявка #${opts.orderId}`;
   const shiftName = (opts.operatorName || '').trim();
@@ -111,6 +114,13 @@ export function formatSiloCementJournalActor(opts: {
   switch (opts.kind) {
     case 'auto_writeoff':
       return `Автосписание · ${orderPart} · ${who}`;
+    case 'silo_switch': {
+      const vol = Number(opts.volumeM3);
+      const volPart = Number.isFinite(vol) && vol > 0
+        ? ` · ${String(vol).replace(/\.?0+$/, '')} м³`
+        : '';
+      return `Автосписание (смена силоса)${volPart} · ${orderPart} · ${who}`;
+    }
     case 'backfill':
       return `Автосписание · ${orderPart} · ${who} (задним числом)`;
     case 'rollback':

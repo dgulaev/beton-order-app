@@ -13,6 +13,8 @@ import { appAlert, appConfirm } from './appDialog';
 
 type Trip = {
   id: number;
+  rowKey: string;
+  segmentId: number | null;
   orderId: number;
   mixerName: string;
   volume: number;
@@ -22,6 +24,7 @@ type Trip = {
   siloName: string;
   cementKg: number;
   writeOffAt: string | null;
+  segmentKind: string | null;
 };
 
 type Props = {
@@ -69,7 +72,7 @@ export default function CementTransferModal({ onClose, onDone }: Props) {
   const [orderFilter, setOrderFilter] = useState<number | null>(null);
   const [toSiloId, setToSiloId] = useState<number | null>(null);
   const [trips, setTrips] = useState<Trip[]>([]);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,9 +101,14 @@ export default function CementTransferModal({ onClose, onDone }: Props) {
         setSelected(new Set());
         return;
       }
-      const list: Trip[] = Array.isArray(data.trips) ? data.trips : [];
+      const list: Trip[] = (Array.isArray(data.trips) ? data.trips : []).map((t: any) => ({
+        ...t,
+        rowKey: String(t.rowKey || (t.segmentId != null ? `s${t.segmentId}` : `m${t.id}`)),
+        segmentId: t.segmentId != null ? Number(t.segmentId) : null,
+        segmentKind: t.segmentKind ?? null,
+      }));
       setTrips(list);
-      setSelected(new Set(list.map((t) => t.id)));
+      setSelected(new Set(list.map((t) => t.rowKey)));
     } catch (err) {
       console.error(err);
       setError('Не удалось загрузить рейсы');
@@ -115,10 +123,10 @@ export default function CementTransferModal({ onClose, onDone }: Props) {
     void load();
   }, [load]);
 
-  /** Рейсы, которые реально можно перенести на выбранный целевой силос. */
+  /** Рейсы/сегменты, которые реально можно перенести на выбранный целевой силос. */
   const transferableSelected = useMemo(
     () => trips.filter((t) => (
-      selected.has(t.id)
+      selected.has(t.rowKey)
       && (toSiloId == null || t.siloId !== toSiloId)
     )),
     [trips, selected, toSiloId],
@@ -140,35 +148,35 @@ export default function CementTransferModal({ onClose, onDone }: Props) {
     if (toSiloId == null) return;
     setSelected((prev) => {
       let changed = false;
-      const next = new Set<number>();
-      for (const id of prev) {
-        const trip = trips.find((t) => t.id === id);
+      const next = new Set<string>();
+      for (const key of prev) {
+        const trip = trips.find((t) => t.rowKey === key);
         if (trip && trip.siloId === toSiloId) {
           changed = true;
           continue;
         }
-        next.add(id);
+        next.add(key);
       }
       return changed ? next : prev;
     });
   }, [toSiloId, trips]);
 
-  const toggle = (id: number) => {
-    const trip = trips.find((t) => t.id === id);
+  const toggle = (rowKey: string) => {
+    const trip = trips.find((t) => t.rowKey === rowKey);
     if (trip && toSiloId != null && trip.siloId === toSiloId) return;
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(rowKey)) next.delete(rowKey);
+      else next.add(rowKey);
       return next;
     });
   };
 
   const toggleAll = () => {
     const eligible = trips.filter((t) => toSiloId == null || t.siloId !== toSiloId);
-    const allSelected = eligible.length > 0 && eligible.every((t) => selected.has(t.id));
+    const allSelected = eligible.length > 0 && eligible.every((t) => selected.has(t.rowKey));
     if (allSelected) setSelected(new Set());
-    else setSelected(new Set(eligible.map((t) => t.id)));
+    else setSelected(new Set(eligible.map((t) => t.rowKey)));
   };
 
   const handleSubmit = async () => {
@@ -176,7 +184,7 @@ export default function CementTransferModal({ onClose, onDone }: Props) {
 
     const fromLabels = [...new Set(transferableSelected.map((t) => t.siloName))].join(', ');
     const confirmed = await appConfirm(
-      `Перенести списание ${transferableSelected.length} рейс(ов), ${formatKg(selectedKg)} кг?\n\n`
+      `Перенести списание ${transferableSelected.length} запис(ей), ${formatKg(selectedKg)} кг?\n\n`
       + `С: ${fromLabels}\n`
       + `На: ${siloNameById(toSiloId)}\n\n`
       + 'Остатки силосов и метки на рейсах будут исправлены. В журнале появятся записи «Корректировка».',
@@ -195,7 +203,10 @@ export default function CementTransferModal({ onClose, onDone }: Props) {
         method: 'POST',
         headers: adminAuthHeaders(),
         body: JSON.stringify({
-          mixerIds: transferableSelected.map((t) => t.id),
+          items: transferableSelected.map((t) => ({
+            mixerId: t.id,
+            segmentId: t.segmentId,
+          })),
           toSiloId,
         }),
       });
@@ -435,7 +446,7 @@ export default function CementTransferModal({ onClose, onDone }: Props) {
                 >
                   {(() => {
                     const eligible = trips.filter((t) => toSiloId == null || t.siloId !== toSiloId);
-                    const allSelected = eligible.length > 0 && eligible.every((t) => selected.has(t.id));
+                    const allSelected = eligible.length > 0 && eligible.every((t) => selected.has(t.rowKey));
                     return allSelected ? 'Снять все' : 'Выбрать все';
                   })()}
                   {' · '}
@@ -448,11 +459,16 @@ export default function CementTransferModal({ onClose, onDone }: Props) {
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {trips.map((trip) => {
-                  const checked = selected.has(trip.id);
+                  const checked = selected.has(trip.rowKey);
                   const sameTarget = toSiloId != null && trip.siloId === toSiloId;
+                  const kindLabel = trip.segmentKind === 'mid_load'
+                    ? 'смена силоса'
+                    : trip.segmentKind === 'final'
+                      ? 'остаток'
+                      : null;
                   return (
                     <label
-                      key={trip.id}
+                      key={trip.rowKey}
                       style={volumeCardSoftStyle({
                         borderRadius: 12,
                         padding: '10px 12px',
@@ -472,7 +488,7 @@ export default function CementTransferModal({ onClose, onDone }: Props) {
                         type="checkbox"
                         checked={checked && !sameTarget}
                         disabled={sameTarget}
-                        onChange={() => toggle(trip.id)}
+                        onChange={() => toggle(trip.rowKey)}
                         style={{ width: 16, height: 16, accentColor: '#FBBF24' }}
                       />
                       <div style={{ minWidth: 0 }}>
@@ -481,6 +497,7 @@ export default function CementTransferModal({ onClose, onDone }: Props) {
                           <span style={{ color: '#94A3B8', fontWeight: 500 }}>
                             {' · '}{trip.mixerName}
                             {trip.grade ? ` · ${trip.grade}` : ''}
+                            {kindLabel ? ` · ${kindLabel}` : ''}
                           </span>
                         </div>
                         <div style={{ marginTop: 2, fontSize: 12, color: '#94A3B8' }}>
