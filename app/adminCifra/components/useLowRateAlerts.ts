@@ -35,8 +35,9 @@ function formatAlertMessage(alerts: LowRateAlertInfo[]): string {
 }
 
 /**
- * Показывает pending-алерты глубокого минуса и сразу помечает их ack в БД,
- * чтобы после обновления страницы они не всплывали снова.
+ * Показывает pending-алерты глубокого минуса, затем ack в БД.
+ * Ack после диалога: если вкладку закрыли до «Понятно», эпизод останется
+ * pending и всплывёт снова — для критичного алерта это правильнее.
  */
 export function useLowRateAlerts(alerts: LowRateAlertInfo[] | undefined | null) {
   useEffect(() => {
@@ -49,23 +50,26 @@ export function useLowRateAlerts(alerts: LowRateAlertInfo[] | undefined | null) 
 
     (async () => {
       try {
-        const res = await fetch('/api/adminCifra/warehouse/low-rate-alert', {
-          method: 'POST',
-          headers: authHeaders(),
-          body: JSON.stringify({ siloIds: pending.map((a) => a.siloId) }),
-        });
-        if (!res.ok) {
-          // Без успешного ack при F5 алерт может повториться — не спамим каждые 15с
-          console.error('low-rate ack failed:', res.status, await res.text().catch(() => ''));
-        }
         for (const a of pending) globalShownEpisodes.add(episodeKey(a));
         await appAlert(formatAlertMessage(pending), {
           title: 'Проверьте завод',
           variant: 'warning',
           okLabel: 'Понятно',
         });
+        const res = await fetch('/api/adminCifra/warehouse/low-rate-alert', {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({ siloIds: pending.map((a) => a.siloId) }),
+        });
+        if (!res.ok) {
+          // Уже показали — локально не снимаем episode, чтобы не спамить каждые 15с.
+          // После F5 (Set пустой) pending снова всплывёт, пока ack не пройдёт.
+          console.error('low-rate ack failed:', res.status, await res.text().catch(() => ''));
+        }
       } catch (err) {
         console.error('low-rate alert UI:', err);
+        // Диалог не показали / упали до ack — разрешим повтор
+        for (const a of pending) globalShownEpisodes.delete(episodeKey(a));
       } finally {
         globalLowRateBusy = false;
       }

@@ -246,6 +246,9 @@ export default function SiloJournalModal({ onClose }: Props) {
         map.set(key, group);
       }
       group.ops.push(op);
+      // Переносы между силосами — пары +/−; в дневные итоги не кладём,
+      // иначе «внесено/списано» раздувается без реального прихода с завода.
+      if (parseJournalActor(op.user_name).isTransfer) continue;
       const amount = Number(op.amount || 0);
       if (op.operation_type === 'add') group.addedKg += amount;
       else if (op.operation_type === 'subtract') group.subtractedKg += amount;

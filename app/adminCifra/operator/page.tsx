@@ -12,7 +12,7 @@ import { UserCog, ChevronDown, UserRound } from 'lucide-react';
 import ModalSelect from '../components/ModalSelect';
 import OperatorSilosBar from '../components/OperatorSilosBar';
 import OperatorMekaUploadCard from '../components/OperatorMekaUploadCard';
-import { appConfirm } from '../components/appDialog';
+import { appAlert, appConfirm } from '../components/appDialog';
 
 const LAB_MENU_ITEMS: { key: LabTab; label: string }[] = [
   { key: 'orders', label: 'Заявки' },
@@ -165,6 +165,7 @@ export default function OperatorBSUPage() {
   };
 
   const handleActiveSiloChange = async (siloId: number) => {
+    const prev = activeSiloId;
     setActiveSiloId(siloId);
     try {
       const res = await fetch('/api/adminCifra/operator-shift', {
@@ -175,6 +176,11 @@ export default function OperatorBSUPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch (err) {
       console.error('Не удалось сохранить рабочий силос:', err);
+      setActiveSiloId(prev);
+      void appAlert('Не удалось сохранить рабочий силос. Попробуй ещё раз.', {
+        title: 'Ошибка',
+        variant: 'danger',
+      });
     }
   };
 

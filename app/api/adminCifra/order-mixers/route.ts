@@ -221,6 +221,7 @@ export async function DELETE(request: NextRequest) {
         additive_write_off_liters,
         cement_write_off_silo_id,
         cement_write_off_kg,
+        cement_write_off_at,
         orders!inner(status)
       `)
       .eq('id', id)
@@ -261,59 +262,125 @@ export async function DELETE(request: NextRequest) {
       actorRole = auth.user.role;
     }
 
-    // ==================== ВОЗВРАТ ДОБАВКИ НА СКЛАД ====================
-    if (mixer.additive_write_off_liters != null && mixer.additive_write_off_id != null) {
-      const { error: rpcError } = await supabase.rpc('warehouse_additive_adjust', {
-        p_additive_id: mixer.additive_write_off_id,
-        p_delta_liters: Number(mixer.additive_write_off_liters),
-      });
-      if (rpcError) {
-        console.error('Не удалось вернуть добавку на склад при удалении миксера:', rpcError);
-        return NextResponse.json(
-          { error: `Не удалось вернуть добавку на склад: ${rpcError.message}` },
-          { status: 500 },
-        );
-      }
-    }
-
     // ==================== ВОЗВРАТ ЦЕМЕНТА НА СИЛОС ====================
+    // Сначала CAS-claim: снимаем метку списания, потом возвращаем кг.
+    // Если DELETE ниже упадёт — повторный DELETE не вернёт цемент второй раз.
     let cementReturnedKg: number | null = null;
     let cementSiloId: number | null = null;
     if (mixer.cement_write_off_kg != null && mixer.cement_write_off_silo_id != null) {
       const kg = Number(mixer.cement_write_off_kg);
       const siloId = Number(mixer.cement_write_off_silo_id);
-      const { data: adjRows, error: rpcError } = await supabase.rpc('warehouse_silo_adjust', {
-        p_silo_id: siloId,
-        p_delta_tons: kg / 1000,
-      });
-      if (rpcError) {
-        console.error('Не удалось вернуть цемент на силос при удалении миксера:', rpcError);
+      const writeOffAt = (mixer as { cement_write_off_at?: string | null }).cement_write_off_at ?? null;
+
+      const { data: claimed, error: claimError } = await supabase
+        .from('order_mixers')
+        .update({
+          cement_write_off_silo_id: null,
+          cement_write_off_kg: null,
+          cement_write_off_at: null,
+        })
+        .eq('id', id)
+        .not('cement_write_off_kg', 'is', null)
+        .select('id')
+        .maybeSingle();
+
+      if (claimError) {
+        console.error('Не удалось снять метку списания цемента при удалении рейса:', claimError);
         return NextResponse.json(
-          { error: `Не удалось вернуть цемент на склад: ${rpcError.message}` },
+          { error: `Не удалось подготовить возврат цемента: ${claimError.message}` },
           { status: 500 },
         );
       }
 
-      cementReturnedKg = Math.round(kg * 10) / 10;
-      cementSiloId = siloId;
-      const adj = Array.isArray(adjRows) ? adjRows[0] : adjRows;
-      const oldKg = Number(adj?.old_current ?? 0) * 1000;
-      const newKg = Number(adj?.new_current ?? 0) * 1000;
-      const { error: histError } = await supabase.from('warehouse_operations').insert({
-        operation_type: 'add',
-        item_type: siloNameById(siloId),
-        amount: cementReturnedKg,
-        old_value: Math.round(oldKg * 10) / 10,
-        new_value: Math.round(newKg * 10) / 10,
-        unit: 'кг',
-        user_name: formatSiloCementJournalActor({
-          kind: 'delete_return',
-          orderId: Number(mixer.order_id),
-          actorName,
-        }),
-      });
-      if (histError) console.error('Не удалось записать историю возврата цемента:', histError);
-      await syncSiloLowRateAlert(supabase, siloId);
+      if (claimed) {
+        const { data: adjRows, error: rpcError } = await supabase.rpc('warehouse_silo_adjust', {
+          p_silo_id: siloId,
+          p_delta_tons: kg / 1000,
+        });
+        if (rpcError) {
+          await supabase
+            .from('order_mixers')
+            .update({
+              cement_write_off_silo_id: siloId,
+              cement_write_off_kg: kg,
+              cement_write_off_at: writeOffAt,
+            })
+            .eq('id', id);
+          console.error('Не удалось вернуть цемент на силос при удалении миксера:', rpcError);
+          return NextResponse.json(
+            { error: `Не удалось вернуть цемент на склад: ${rpcError.message}` },
+            { status: 500 },
+          );
+        }
+
+        cementReturnedKg = Math.round(kg * 10) / 10;
+        cementSiloId = siloId;
+        const adj = Array.isArray(adjRows) ? adjRows[0] : adjRows;
+        const oldKg = Number(adj?.old_current ?? 0) * 1000;
+        const newKg = Number(adj?.new_current ?? 0) * 1000;
+        const { error: histError } = await supabase.from('warehouse_operations').insert({
+          operation_type: 'add',
+          item_type: siloNameById(siloId),
+          amount: cementReturnedKg,
+          old_value: Math.round(oldKg * 10) / 10,
+          new_value: Math.round(newKg * 10) / 10,
+          unit: 'кг',
+          user_name: formatSiloCementJournalActor({
+            kind: 'delete_return',
+            orderId: Number(mixer.order_id),
+            actorName,
+          }),
+        });
+        if (histError) console.error('Не удалось записать историю возврата цемента:', histError);
+        await syncSiloLowRateAlert(supabase, siloId);
+      }
+    }
+
+    // ==================== ВОЗВРАТ ДОБАВКИ НА СКЛАД ====================
+    // Тот же CAS-claim, чтобы повторный DELETE не начислил литры дважды.
+    if (mixer.additive_write_off_liters != null && mixer.additive_write_off_id != null) {
+      const additiveId = Number(mixer.additive_write_off_id);
+      const liters = Number(mixer.additive_write_off_liters);
+
+      const { data: claimedAdd, error: claimAddError } = await supabase
+        .from('order_mixers')
+        .update({
+          additive_write_off_id: null,
+          additive_write_off_liters: null,
+        })
+        .eq('id', id)
+        .not('additive_write_off_liters', 'is', null)
+        .select('id')
+        .maybeSingle();
+
+      if (claimAddError) {
+        console.error('Не удалось снять метку списания добавки при удалении рейса:', claimAddError);
+        return NextResponse.json(
+          { error: `Не удалось подготовить возврат добавки: ${claimAddError.message}` },
+          { status: 500 },
+        );
+      }
+
+      if (claimedAdd) {
+        const { error: rpcError } = await supabase.rpc('warehouse_additive_adjust', {
+          p_additive_id: additiveId,
+          p_delta_liters: liters,
+        });
+        if (rpcError) {
+          await supabase
+            .from('order_mixers')
+            .update({
+              additive_write_off_id: additiveId,
+              additive_write_off_liters: liters,
+            })
+            .eq('id', id);
+          console.error('Не удалось вернуть добавку на склад при удалении миксера:', rpcError);
+          return NextResponse.json(
+            { error: `Не удалось вернуть добавку на склад: ${rpcError.message}` },
+            { status: 500 },
+          );
+        }
+      }
     }
 
     // Лог «Отгружено сегодня» — иначе строка останется сиротой у оператора

@@ -410,6 +410,36 @@ const loadTodayConsumption = async () => {
     console.log('✅ WarehousePage загружен');
   }, []);
 
+  // Poll остатков/алертов (как OperatorSilosBar): realtime ловит смену статуса
+  // рейса, но глубокий минус после ручного списания/transfer на другой вкладке
+  // иначе мог не всплыть, пока не обновишь страницу.
+  useEffect(() => {
+    const refreshStock = async () => {
+      try {
+        const res = await fetch('/api/adminCifra/warehouse', {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setSilos(data.silos || []);
+        setLowRateAlerts(Array.isArray(data.lowRateAlerts) ? data.lowRateAlerts : []);
+        const loadedAdditives = (data.additives || data.warehouse_additives || []).map((a: any) => ({
+          ...a,
+          id: a.id || a.additive_id,
+          current: Number(a.current || 0),
+          max: Number(a.max || 9000),
+          name: a.name,
+        }));
+        setAdditives(loadedAdditives);
+      } catch {
+        // тихий poll
+      }
+    };
+    const t = setInterval(refreshStock, 15000);
+    return () => clearInterval(t);
+  }, []);
+
   // Рецепты в родителе (adminCifra/operator) грузятся отдельным запросом и
   // могут прилететь позже первого монтирования этой вкладки — пересчитываем
   // КПИ расхода, как только список рецептов действительно наполнился.
@@ -458,35 +488,40 @@ const loadTodayConsumption = async () => {
   }, [availableFBS, loadFBS]);
 
   // ==================== 3. СОХРАНЕНИЕ В БАЗУ ====================
+  // Важно: в payload попадают ТОЛЬКО явно переданные срезы.
+  // Раньше `saveToDatabase(undefined, additives)` всё равно слал силосы
+  // из стейта и мог затереть свежее автосписание устаревшим current.
 const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsToSave?: any[]) => {
   try {
-    const currentSilos = silosToSave || silos;
-    const currentAdditives = additivesToSave || additives;
-    const currentFBS = fbsToSave || fbsBlocks;
+    const payload: Record<string, unknown> = {};
 
-    const payload = {
-      silos: currentSilos.map((s: any) => ({
+    if (silosToSave !== undefined) {
+      payload.silos = silosToSave.map((s: any) => ({
         silo_id: Number(s.silo_id),
         current: Number(s.current || 0),
         max: Number(s.max || 0),
         name: s.name,
-      })),
-      additives: currentAdditives.map((add: any) => ({
+      }));
+    }
+    if (additivesToSave !== undefined) {
+      payload.additives = additivesToSave.map((add: any) => ({
         additive_id: Number(add.additive_id || add.id || 1),
         name: add.name,
         current: Number(add.current || 0),
-        max: Number(add.max || 9000)        // ← ДОБАВИЛИ max!
-      })),
-      fbs: currentFBS
+        max: Number(add.max || 9000),
+      }));
+    }
+    if (fbsToSave !== undefined) {
+      payload.fbs = fbsToSave
         .filter((block: any) => String(block.name || '') !== FBS_ORDER_META_NAME)
         .map((block: any) => ({
           id: Number(block.id),
           name: block.name || block.code || '',
-          current: Number(block.current || 0)
-        }))
-    };
+          current: Number(block.current || 0),
+        }));
+    }
 
-    // console.log('📤 Отправляем в warehouse (additives с max):', payload.additives);
+    if (Object.keys(payload).length === 0) return;
 
     const response = await fetch('/api/adminCifra/warehouse', {
       method: 'POST',
@@ -498,7 +533,6 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
     console.log('📥 Ответ от API:', result);
 
     if (response.ok) {
-      // console.log('✅ Данные успешно сохранены (включая ФБС)');
       await loadFBS();
     }
   } catch (err) {
@@ -543,10 +577,18 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
           if (s.silo_id !== id) return s;
           const oldCurrent = Number(s.current || 0);
           const newCurrent = Math.max(-50, oldCurrent + tons);
-          addToHistory('− Списано', s.name || `Силос №${id}`, kg, oldCurrent * 1000, newCurrent * 1000, 'кг');
+          const appliedKg = Math.round((newCurrent - oldCurrent) * 1000 * 10) / 10;
+          addToHistory(
+            '− Списано',
+            s.name || `Силос №${id}`,
+            appliedKg,
+            oldCurrent * 1000,
+            newCurrent * 1000,
+            'кг',
+          );
           return { ...s, current: newCurrent };
         });
-        saveToDatabase(updatedSilos);
+        void saveToDatabase(updatedSilos).then(() => loadWarehouse());
         return updatedSilos;
       });
       return;
@@ -604,21 +646,26 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
 
     const tons = kg / 1000;
 
-    setSilos(prev => {
-      const updatedSilos = prev.map(s => {
+    setSilos((prev) => {
+      const updatedSilos = prev.map((s) => {
         if (s.silo_id === id) {
           const oldCurrent = Number(s.current || 0);
-          // Минус разрешён — как при автосписании с рабочего силоса
-          const newCurrent = oldCurrent - tons;
-          
-          addToHistory('− Списано', s.name || `Силос №${id}`, kg, oldCurrent * 1000, newCurrent * 1000, 'кг');
-          
+          const newCurrent = Math.max(-50, oldCurrent - tons);
+          const appliedKg = Math.round((oldCurrent - newCurrent) * 1000 * 10) / 10;
+          addToHistory(
+            '− Списано',
+            s.name || `Силос №${id}`,
+            appliedKg,
+            oldCurrent * 1000,
+            newCurrent * 1000,
+            'кг',
+          );
           return { ...s, current: newCurrent };
         }
         return s;
       });
 
-      saveToDatabase(updatedSilos);
+      void saveToDatabase(updatedSilos).then(() => loadWarehouse());
       return updatedSilos;
     });
   };
