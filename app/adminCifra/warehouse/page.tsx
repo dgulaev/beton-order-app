@@ -38,6 +38,12 @@ import CementSavingsModal from './CementSavingsModal';
 /** Служебная строка в fbs_blocks: в code хранится JSON-массив имён (порядок карточки). */
 const FBS_ORDER_META_NAME = '__fbs_display_order__';
 
+/** Длительность наполнения одного кубика добавки (мс) при анимации входа. */
+const ADDITIVE_CUBE_FILL_MS = 300;
+
+/** Длительность наполнения одного силоса цемента (мс) при анимации входа. */
+const SILO_FILL_MS = 480;
+
 interface WarehousePageProps {
   recipes?: any[];
   /** Имя со смены оператора (Семён/Максим) или иное явное имя автора. */
@@ -95,6 +101,14 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
   const [operationHistory, setOperationHistory] = useState<any[]>([]);
   /** Плотности из настроек лаборатории (т→л / кг→л). */
   const [additiveDensities, setAdditiveDensities] = useState<AdditiveDensities>({});
+
+  /** Анимация кубиков добавок при заходе: idle → running → done (один раз). */
+  const [additiveCubesAnim, setAdditiveCubesAnim] = useState<'idle' | 'running' | 'done'>('idle');
+  const additiveCubesSectionRef = useRef<HTMLDivElement | null>(null);
+
+  /** Анимация наполнения силосов цемента при заходе: idle → running → done (один раз). */
+  const [siloFillAnim, setSiloFillAnim] = useState<'idle' | 'running' | 'done'>('idle');
+  const siloFillSectionRef = useRef<HTMLDivElement | null>(null);
 
   const isProcessingRef = useRef(false);
 
@@ -506,6 +520,113 @@ const loadTodayConsumption = async () => {
     }
   }, [availableFBS, loadFBS]);
 
+  // Кубики добавок: один раз наполняются по очереди, когда блок виден на экране.
+  const additivesRef = useRef(additives);
+  additivesRef.current = additives;
+  useEffect(() => {
+    if (additiveCubesAnim !== 'idle' || additives.length === 0) return;
+
+    const reduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) {
+      setAdditiveCubesAnim('done');
+      return;
+    }
+
+    const el = additiveCubesSectionRef.current;
+    if (!el) return;
+
+    let started = false;
+    let doneTimer: number | undefined;
+    const start = () => {
+      if (started) return;
+      started = true;
+      // Двойной rAF: сначала height=0 в DOM, затем target — чтобы transition сработал.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => setAdditiveCubesAnim('running'));
+      });
+      const maxActiveCubes = Math.max(
+        0,
+        ...additivesRef.current.map((a: any) => {
+          const current = Number(a?.current || 0);
+          if (current <= 0) return 0;
+          return Math.floor(current / 1000) + (current % 1000 > 0 ? 1 : 0);
+        })
+      );
+      doneTimer = window.setTimeout(
+        () => setAdditiveCubesAnim('done'),
+        Math.max(1, maxActiveCubes) * ADDITIVE_CUBE_FILL_MS + 80
+      );
+    };
+
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          start();
+          obs.disconnect();
+        }
+      },
+      { threshold: 0.25 }
+    );
+    obs.observe(el);
+    return () => {
+      obs.disconnect();
+      // Таймер done не трогаем после start — иначе cleanup при смене
+      // additiveCubesAnim на 'running' сорвёт переход в 'done'.
+      if (!started && doneTimer !== undefined) window.clearTimeout(doneTimer);
+    };
+  }, [additiveCubesAnim, additives.length]);
+
+  // Силосы цемента: по очереди наполняются до текущего уровня (один раз при видимости).
+  const silosRef = useRef(silos);
+  silosRef.current = silos;
+  useEffect(() => {
+    if (siloFillAnim !== 'idle' || silos.length === 0) return;
+
+    const reduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) {
+      setSiloFillAnim('done');
+      return;
+    }
+
+    const el = siloFillSectionRef.current;
+    if (!el) return;
+
+    let started = false;
+    let doneTimer: number | undefined;
+    const start = () => {
+      if (started) return;
+      started = true;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => setSiloFillAnim('running'));
+      });
+      // Сколько силосов реально наполняем (current > 0) — пустые/отрицательные не ждут.
+      const activeCount = silosRef.current.filter((s: any) => Number(s?.current || 0) > 0).length;
+      doneTimer = window.setTimeout(
+        () => setSiloFillAnim('done'),
+        Math.max(1, activeCount) * SILO_FILL_MS + 100
+      );
+    };
+
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          start();
+          obs.disconnect();
+        }
+      },
+      { threshold: 0.2 }
+    );
+    obs.observe(el);
+    return () => {
+      obs.disconnect();
+      if (!started && doneTimer !== undefined) window.clearTimeout(doneTimer);
+    };
+  }, [siloFillAnim, silos.length]);
+
   // ==================== 3. СОХРАНЕНИЕ В БАЗУ ====================
   // Важно: в payload попадают ТОЛЬКО явно переданные срезы.
   // Раньше `saveToDatabase(undefined, additives)` всё равно слал силосы
@@ -896,6 +1017,11 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
             if (idx < fullCubes) fillPercent = 100;
             else if (idx === fullCubes && remainder > 0) fillPercent = (remainder / capacity) * 100;
 
+            const animating = additiveCubesAnim === 'running';
+            const showFill = additiveCubesAnim === 'idle' ? 0 : fillPercent;
+            const delayMs =
+              animating && fillPercent > 0 ? idx * ADDITIVE_CUBE_FILL_MS : 0;
+
             return (
               <div
                 key={`${opts.title}-cube-${idx}`}
@@ -913,7 +1039,8 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
                   justifyContent: 'center',
                   fontSize: '11px',
                   fontWeight: 700,
-                  color: fillPercent > 30 ? '#fff' : '#64748B',
+                  color: showFill > 30 ? '#fff' : '#64748B',
+                  transition: animating ? `color ${ADDITIVE_CUBE_FILL_MS}ms ease ${delayMs}ms` : undefined,
                 }}
               >
                 <div
@@ -922,9 +1049,12 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
                     bottom: 0,
                     left: 0,
                     width: '100%',
-                    height: `${fillPercent}%`,
+                    height: `${showFill}%`,
                     background: opts.gradient,
-                    transition: 'height 0.4s ease',
+                    transition:
+                      additiveCubesAnim === 'done'
+                        ? 'height 0.35s ease'
+                        : `height ${ADDITIVE_CUBE_FILL_MS}ms cubic-bezier(0.33, 1, 0.45, 1) ${delayMs}ms`,
                   }}
                 />
                 <span style={{ position: 'relative', zIndex: 1 }}>{idx + 1}</span>
@@ -1633,6 +1763,7 @@ const removeLastCube = async (index: number) => {
               </div>
             </div>
             <div
+              ref={siloFillSectionRef}
               style={{
                 display: 'flex',
                 gap: '8px',
@@ -1641,10 +1772,25 @@ const removeLastCube = async (index: number) => {
                 flexWrap: 'nowrap',
               }}
             >
-              {silos.map((silo: any) => {
+              {(() => {
+                // Индекс в очереди анимации только среди силосов с цементом (current > 0).
+                let fillOrder = 0;
+                const siloFillOrder = new Map<number, number>();
+                for (const s of silos) {
+                  if (Number(s?.current || 0) > 0) {
+                    siloFillOrder.set(Number(s.silo_id), fillOrder);
+                    fillOrder += 1;
+                  }
+                }
+                return silos.map((silo: any) => {
                 const current = Number(silo.current || 0);
                 const max = Number(silo.max || 1);
                 const percent = Math.min(Math.max((current / max) * 100, 0), 100);
+                const animating = siloFillAnim === 'running';
+                const showFill = siloFillAnim === 'idle' ? 0 : percent;
+                const order = siloFillOrder.get(Number(silo.silo_id));
+                const delayMs =
+                  animating && order !== undefined ? order * SILO_FILL_MS : 0;
 
                 let fillColor = '#22c55e';
                 let textColor = '#34D399';
@@ -1754,9 +1900,12 @@ const removeLastCube = async (index: number) => {
                             bottom: 0,
                             left: 0,
                             width: '100%',
-                            height: `${percent}%`,
+                            height: `${showFill}%`,
                             background: fillColor,
-                            transition: 'height 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                            transition:
+                              siloFillAnim === 'done'
+                                ? 'height 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)'
+                                : `height ${SILO_FILL_MS}ms cubic-bezier(0.33, 1, 0.45, 1) ${delayMs}ms`,
                           }}
                         />
                       </div>
@@ -1847,7 +1996,8 @@ const removeLastCube = async (index: number) => {
                     </div>
                   </div>
                 );
-              })}
+              });
+              })()}
             </div>
           </div>
 
@@ -2401,6 +2551,7 @@ const removeLastCube = async (index: number) => {
               Ёмкости добавок
             </h2>
             <div
+              ref={additiveCubesSectionRef}
               style={{
                 display: 'flex',
                 flexDirection: 'column',

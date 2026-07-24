@@ -6,6 +6,11 @@ import {
   PieChart, Pie, Cell 
 } from 'recharts';
 import { calculateCementUsageKg, findRecipeByGrade, getAdditiveDosage, type RecipeLike } from '@/lib/recipeAdditives';
+import {
+  canonicalGradeKey,
+  isMekaServiceGrade,
+  resolveMekaToRecipeCode,
+} from '@/lib/mekaGradeMap';
 import { CARD_BORDER, modalCloseButtonStyle, modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import ModalDateInput from '../components/ModalDateInput';
 import { appConfirm } from '../components/appDialog';
@@ -157,16 +162,6 @@ function getNormativeAdditivesFromShipments(
   };
 }
 
-/** Нормализация марки/рецепта для сопоставления MEKA ↔ приложение. */
-function normalizeGradeKey(value: string): string {
-  return String(value || '')
-    .trim()
-    .toUpperCase()
-    .replace(/Ё/g, 'Е')
-    .replace(/\s+/g, '')
-    .replace(/M(?=\d)/g, 'М'); // латинская M перед цифрой → кириллическая М
-}
-
 /** План по маркам (м³) из строк отчёта MEKA: recipe → Σ qty (+ ночной объём). */
 function getPlanGrades(rawData: any[] | null | undefined): {
   grade: string;
@@ -177,16 +172,19 @@ function getPlanGrades(rawData: any[] | null | undefined): {
   (Array.isArray(rawData) ? rawData : []).forEach((row: any) => {
     const recipe = String(row?.recipe || '').trim();
     if (!recipe || recipe === 'Неизвестно' || recipe.includes('ИТОГО')) return;
-    const key = normalizeGradeKey(recipe);
+    if (isMekaServiceGrade(recipe)) return;
+    // Группируем по каноническому коду рецепта (MEKA «тр м150» → ТР М150).
+    const key = canonicalGradeKey(recipe);
     if (!key) return;
     const qty = Number(row.qty) || 0;
     const nightQty = isMekaNightBatch(row) ? qty : 0;
+    const label = resolveMekaToRecipeCode(recipe) || recipe;
     const prev = groups.get(key);
     if (prev) {
       prev.volumeM3 += qty;
       prev.nightM3 += nightQty;
     } else {
-      groups.set(key, { grade: recipe, volumeM3: qty, nightM3: nightQty });
+      groups.set(key, { grade: label, volumeM3: qty, nightM3: nightQty });
     }
   });
   return Array.from(groups.values()).map((g) => ({
@@ -201,7 +199,7 @@ function getActualGradesFromLogs(logs: any[]): { grade: string; volumeM3: number
   const groups = new Map<string, { grade: string; volumeM3: number }>();
   (Array.isArray(logs) ? logs : []).forEach((log: any) => {
     const grade = String(log?.concrete_grade || '').trim() || '—';
-    const key = normalizeGradeKey(grade);
+    const key = canonicalGradeKey(grade);
     if (!key) return;
     const prev = groups.get(key);
     const vol = Number(log.volume) || 0;
@@ -216,58 +214,53 @@ function getActualGradesFromLogs(logs: any[]): { grade: string; volumeM3: number
 
 /**
  * Сводит план (MEKA recipe) и факт (concrete_grade) в общие строки.
- * Сопоставление: точный ключ → без хвостового «И» → вхождение одной строки в другую.
+ * Сопоставление по каноническому ключу словаря MEKA→рецепт.
  * nightM3 — объём партий MEKA с 00:00 до 06:00 (могут быть заявки вчера).
  */
 function mergeGradeRows(
   plan: { grade: string; volumeM3: number; nightM3?: number }[],
   actual: { grade: string; volumeM3: number }[]
 ): { grade: string; planM3: number; actualM3: number; nightM3: number }[] {
-  const actualByKey = new Map(
-    actual.map((a) => [normalizeGradeKey(a.grade), { ...a }])
-  );
-  const usedActual = new Set<string>();
-
-  const findActualKey = (planKey: string): string | null => {
-    if (actualByKey.has(planKey)) return planKey;
-    const withoutI = planKey.replace(/И$/, '');
-    if (withoutI && actualByKey.has(withoutI)) return withoutI;
-    if (withoutI) {
-      for (const key of actualByKey.keys()) {
-        if (key.replace(/И$/, '') === withoutI) return key;
-      }
-    }
-    for (const key of actualByKey.keys()) {
-      if (key.includes(planKey) || planKey.includes(key)) return key;
-    }
-    return null;
-  };
-
-  const rows: { grade: string; planM3: number; actualM3: number; nightM3: number }[] = [];
+  type Acc = { grade: string; planM3: number; actualM3: number; nightM3: number };
+  const byKey = new Map<string, Acc>();
 
   plan.forEach((p) => {
-    const planKey = normalizeGradeKey(p.grade);
-    const actualKey = findActualKey(planKey);
-    let actualM3 = 0;
-    if (actualKey && !usedActual.has(actualKey)) {
-      actualM3 = actualByKey.get(actualKey)?.volumeM3 ?? 0;
-      usedActual.add(actualKey);
+    const key = canonicalGradeKey(p.grade);
+    if (!key) return;
+    const prev = byKey.get(key);
+    const nightM3 = Number(p.nightM3) > 0 ? Math.round(Number(p.nightM3) * 10) / 10 : 0;
+    if (prev) {
+      prev.planM3 = Math.round((prev.planM3 + p.volumeM3) * 10) / 10;
+      prev.nightM3 = Math.round((prev.nightM3 + nightM3) * 10) / 10;
+    } else {
+      byKey.set(key, {
+        grade: resolveMekaToRecipeCode(p.grade) || p.grade,
+        planM3: p.volumeM3,
+        actualM3: 0,
+        nightM3,
+      });
     }
-    rows.push({
-      grade: p.grade,
-      planM3: p.volumeM3,
-      actualM3,
-      nightM3: Number(p.nightM3) > 0 ? Math.round(Number(p.nightM3) * 10) / 10 : 0,
-    });
   });
 
   actual.forEach((a) => {
-    const key = normalizeGradeKey(a.grade);
-    if (usedActual.has(key)) return;
-    rows.push({ grade: a.grade, planM3: 0, actualM3: a.volumeM3, nightM3: 0 });
+    const key = canonicalGradeKey(a.grade);
+    if (!key) return;
+    const prev = byKey.get(key);
+    if (prev) {
+      prev.actualM3 = Math.round((prev.actualM3 + a.volumeM3) * 10) / 10;
+    } else {
+      byKey.set(key, {
+        grade: a.grade,
+        planM3: 0,
+        actualM3: a.volumeM3,
+        nightM3: 0,
+      });
+    }
   });
 
-  return rows.sort((a, b) => (b.planM3 + b.actualM3) - (a.planM3 + a.actualM3));
+  return Array.from(byKey.values()).sort(
+    (a, b) => b.planM3 + b.actualM3 - (a.planM3 + a.actualM3)
+  );
 }
 
 /**

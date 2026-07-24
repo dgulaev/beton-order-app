@@ -10,6 +10,12 @@
 // Плотность (кг/л) задаётся в lab_settings (настройки лаборатории) и передаётся
 // сюда через AdditiveDensities; константы ниже — только fallback.
 
+import {
+  isMekaServiceGrade,
+  normalizeGradeKey,
+  resolveMekaToRecipeCode,
+} from '@/lib/mekaGradeMap';
+
 export interface RecipeLike {
   code?: string | null;
   name?: string | null;
@@ -85,23 +91,59 @@ export function tonsToAdditiveLiters(
   return (tons * 1000) / density;
 }
 
+function recipeCodeKey(code: string | null | undefined): string {
+  return normalizeGradeKey(String(code || '').trim());
+}
+
 /**
- * Поиск рецепта по марке — тот же порядок проверок, что уже проверен в
- * /adminCifra/zayavki (плановый расчёт добавок на день): точное совпадение
- * кода, код без хвостового «и» (доломит), вхождение кода марки в строку,
- * вхождение марки в название рецепта.
+ * Поиск рецепта по марке заявки / MEKA / отгрузки.
+ * Порядок: служебные MEKA → словарь MEKA→код → точный code →
+ * нормализованный code → доломит «и» → самое длинное вхождение code → name.
  */
 export function findRecipeByGrade<T extends RecipeLike>(recipes: T[], grade: string | null | undefined): T | null {
   if (!grade || !Array.isArray(recipes) || recipes.length === 0) return null;
   const trimmed = grade.trim();
   if (!trimmed) return null;
+  if (isMekaServiceGrade(trimmed)) return null;
 
-  let recipe = recipes.find((r) => r.code === trimmed);
-  if (!recipe) recipe = recipes.find((r) => r.code === trimmed.replace(/и$/, ''));
-  if (!recipe) recipe = recipes.find((r) => r.code && trimmed.includes(r.code));
-  if (!recipe) recipe = recipes.find((r) => r.name?.toLowerCase().includes(trimmed.toLowerCase()));
+  const byExactCode = (code: string) =>
+    recipes.find((r) => String(r.code || '').trim() === code) || null;
 
-  return recipe || null;
+  const byCodeKey = (key: string) => {
+    if (!key) return null;
+    return recipes.find((r) => recipeCodeKey(r.code) === key) || null;
+  };
+
+  const mapped = resolveMekaToRecipeCode(trimmed);
+  if (mapped) {
+    const hit = byExactCode(mapped) || byCodeKey(normalizeGradeKey(mapped));
+    if (hit) return hit;
+  }
+
+  let recipe = byExactCode(trimmed);
+  if (recipe) return recipe;
+
+  const gradeKey = normalizeGradeKey(trimmed);
+  recipe = byCodeKey(gradeKey);
+  if (recipe) return recipe;
+
+  // доломит: М100И / «м100 и» → М100и (если словарь не сработал)
+  if (/И$/.test(gradeKey)) {
+    const dolomiteKey = gradeKey; // М100И
+    recipe = byCodeKey(dolomiteKey);
+    if (recipe) return recipe;
+    // code в каталоге с маленькой «и»: ключ всё равно М100И после normalize
+  }
+
+  // Самое длинное вхождение кода в марку (ТР М150 раньше М150)
+  const graded = recipes
+    .map((r) => ({ r, key: recipeCodeKey(r.code) }))
+    .filter(({ key }) => key.length >= 3 && gradeKey.includes(key))
+    .sort((a, b) => b.key.length - a.key.length);
+  if (graded[0]) return graded[0].r;
+
+  recipe = recipes.find((r) => r.name?.toLowerCase().includes(trimmed.toLowerCase())) || null;
+  return recipe;
 }
 
 /**

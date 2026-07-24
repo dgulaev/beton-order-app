@@ -4,6 +4,7 @@
  */
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 import { SILO_SPEC, siloNameById, syncSiloLowRateAlert } from '@/lib/siloConfig';
+import { canonicalGradeKey, isMekaServiceGrade } from '@/lib/mekaGradeMap';
 
 const NOISE_KG = 0.5;
 const MATCH_WINDOW_MIN = 180; // ±3 часа
@@ -41,15 +42,6 @@ type TripWriteoff = {
   bySilo: Map<number, number>;
   used: boolean;
 };
-
-function normalizeGradeKey(value: string): string {
-  return String(value || '')
-    .trim()
-    .toUpperCase()
-    .replace(/Ё/g, 'Е')
-    .replace(/\s+/g, '')
-    .replace(/M(?=\d)/g, 'М');
-}
 
 function parseTimeMinutes(time: string | null | undefined): number | null {
   const m = String(time || '').trim().match(/^(\d{1,2})\s*:\s*(\d{2})/);
@@ -93,11 +85,12 @@ function parseMekaBatches(rawData: unknown): { batches: MekaBatch[]; totalKg: nu
   for (const row of rows) {
     const recipe = String((row as any)?.recipe || '').trim();
     if (!recipe || recipe === 'Неизвестно' || recipe.includes('ИТОГО')) continue;
+    if (isMekaServiceGrade(recipe)) continue;
     const cementKg = Number((row as any)?.cement || 0);
     if (!(cementKg > 0)) continue;
     const minutes = parseTimeMinutes((row as any)?.time);
     if (minutes == null) continue;
-    const gradeKey = normalizeGradeKey(recipe);
+    const gradeKey = canonicalGradeKey(recipe);
     if (!gradeKey) continue;
     batches.push({ gradeKey, minutes, cementKg });
     totalKg += cementKg;
@@ -161,7 +154,7 @@ async function loadDayTrips(dateKey: string): Promise<{
     const totalKg = roundKg(Number(row.cement_write_off_kg || 0));
     if (!(totalKg > 0)) continue;
 
-    const gradeKey = normalizeGradeKey(String((row as any).orders?.grade || ''));
+    const gradeKey = canonicalGradeKey(String((row as any).orders?.grade || ''));
     const minutes = moscowMinutesFromIso(row.cement_write_off_at as string) ?? 12 * 60;
     const bySilo = new Map<number, number>();
 

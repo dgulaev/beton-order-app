@@ -24,6 +24,9 @@
 .DS_Store
 *.pem
 
+# локальные снимки БД (точки восстановления)
+/backups/
+
 # debug
 npm-debug.log*
 yarn-debug.log*
