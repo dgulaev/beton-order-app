@@ -1,6 +1,8 @@
 // app/api/adminCifra/order-mixers/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { siloNameById } from '@/lib/siloConfig';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -8,6 +10,7 @@ const supabase = createClient(
 );
 
 const FINAL_STATUSES = ['completed', 'cancelled'];
+const LOADED_STATUSES = ['В пути', 'На объекте', 'Разгружен', 'Возврат', 'Проблема'];
 const STATUS_LABELS_RU: Record<string, string> = {
   new: 'Новая',
   processing: 'В работе',
@@ -191,40 +194,125 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE — удалить миксер
+// DELETE — удалить миксер/рейс (+ возврат списаний на склад, чистка production_logs).
+// Рейсы уже уехавшие («В пути» и дальше) может удалять только admin.
 export async function DELETE(request: NextRequest) {
   try {
-    const { id } = await request.json();
-    if (!id) return NextResponse.json({ error: 'id обязателен' }, { status: 400 });
+    const body = await request.json();
+    const id = Number(body?.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      return NextResponse.json({ error: 'id обязателен' }, { status: 400 });
+    }
 
-    // ==================== ПРОВЕРКА ФИНАЛЬНОГО СТАТУСА ЗАЯВКИ ====================
     const { data: mixer, error: mixerFetchError } = await supabase
       .from('order_mixers')
-      .select('id, order_id, additive_write_off_id, additive_write_off_liters, orders!inner(status)')
+      .select(`
+        id,
+        order_id,
+        mixer_name,
+        volume,
+        status,
+        time,
+        additive_write_off_id,
+        additive_write_off_liters,
+        cement_write_off_silo_id,
+        cement_write_off_kg,
+        orders!inner(status)
+      `)
       .eq('id', id)
       .single();
 
-    if (!mixerFetchError && mixer) {
-      const orderStatus = (mixer as any).orders?.status;
-      if (FINAL_STATUSES.includes(orderStatus)) {
-        return NextResponse.json({
-          error: `Заявка уже в финальном статусе "${STATUS_LABELS_RU[orderStatus] || orderStatus}" — удаление миксеров запрещено`
-        }, { status: 400 });
+    if (mixerFetchError || !mixer) {
+      return NextResponse.json({ error: 'Рейс не найден' }, { status: 404 });
+    }
+
+    const orderStatus = (mixer as any).orders?.status as string | undefined;
+    if (orderStatus && FINAL_STATUSES.includes(orderStatus)) {
+      return NextResponse.json({
+        error: `Заявка уже в финальном статусе "${STATUS_LABELS_RU[orderStatus] || orderStatus}" — удаление миксеров запрещено`
+      }, { status: 400 });
+    }
+
+    const mixerStatus = String(mixer.status || 'Загрузка');
+    const needsAdmin = LOADED_STATUSES.includes(mixerStatus)
+      || mixer.cement_write_off_kg != null
+      || mixer.additive_write_off_liters != null
+      || Boolean(body?.force);
+
+    let actorName = typeof body?.userName === 'string' && body.userName.trim()
+      ? body.userName.trim()
+      : 'Администратор';
+    let actorRole: string | null = typeof body?.userRole === 'string' ? body.userRole : null;
+
+    if (needsAdmin) {
+      const auth = await requireAdminCifraStaff(request, ['admin']);
+      if (auth.error) {
+        return NextResponse.json(
+          { error: 'Удаление уже отгруженного рейса доступно только администратору' },
+          { status: 403 },
+        );
       }
+      actorName = auth.user.full_name || actorName;
+      actorRole = auth.user.role;
     }
 
     // ==================== ВОЗВРАТ ДОБАВКИ НА СКЛАД ====================
-    // Если по этому рейсу уже было реальное списание добавки (см.
-    // lib/orderMixers.ts) — при удалении самой записи о рейсе нужно вернуть
-    // остаток на склад, иначе он "потеряется" безвозвратно.
-    if (mixer && (mixer as any).additive_write_off_liters != null) {
+    if (mixer.additive_write_off_liters != null && mixer.additive_write_off_id != null) {
       const { error: rpcError } = await supabase.rpc('warehouse_additive_adjust', {
-        p_additive_id: (mixer as any).additive_write_off_id,
-        p_delta_liters: Number((mixer as any).additive_write_off_liters),
+        p_additive_id: mixer.additive_write_off_id,
+        p_delta_liters: Number(mixer.additive_write_off_liters),
       });
       if (rpcError) {
         console.error('Не удалось вернуть добавку на склад при удалении миксера:', rpcError);
+        return NextResponse.json(
+          { error: `Не удалось вернуть добавку на склад: ${rpcError.message}` },
+          { status: 500 },
+        );
       }
+    }
+
+    // ==================== ВОЗВРАТ ЦЕМЕНТА НА СИЛОС ====================
+    let cementReturnedKg: number | null = null;
+    let cementSiloId: number | null = null;
+    if (mixer.cement_write_off_kg != null && mixer.cement_write_off_silo_id != null) {
+      const kg = Number(mixer.cement_write_off_kg);
+      const siloId = Number(mixer.cement_write_off_silo_id);
+      const { data: adjRows, error: rpcError } = await supabase.rpc('warehouse_silo_adjust', {
+        p_silo_id: siloId,
+        p_delta_tons: kg / 1000,
+      });
+      if (rpcError) {
+        console.error('Не удалось вернуть цемент на силос при удалении миксера:', rpcError);
+        return NextResponse.json(
+          { error: `Не удалось вернуть цемент на склад: ${rpcError.message}` },
+          { status: 500 },
+        );
+      }
+
+      cementReturnedKg = Math.round(kg * 10) / 10;
+      cementSiloId = siloId;
+      const adj = Array.isArray(adjRows) ? adjRows[0] : adjRows;
+      const oldKg = Number(adj?.old_current ?? 0) * 1000;
+      const newKg = Number(adj?.new_current ?? 0) * 1000;
+      const { error: histError } = await supabase.from('warehouse_operations').insert({
+        operation_type: 'add',
+        item_type: siloNameById(siloId),
+        amount: cementReturnedKg,
+        old_value: Math.round(oldKg * 10) / 10,
+        new_value: Math.round(newKg * 10) / 10,
+        unit: 'кг',
+        user_name: actorName,
+      });
+      if (histError) console.error('Не удалось записать историю возврата цемента:', histError);
+    }
+
+    // Лог «Отгружено сегодня» — иначе строка останется сиротой у оператора
+    const { error: logDeleteError } = await supabase
+      .from('production_logs')
+      .delete()
+      .eq('order_mixer_id', id);
+    if (logDeleteError) {
+      console.error('Не удалось удалить production_logs при удалении рейса:', logDeleteError);
     }
 
     const { error } = await supabase
@@ -233,7 +321,28 @@ export async function DELETE(request: NextRequest) {
       .eq('id', id);
 
     if (error) throw error;
-    return NextResponse.json({ success: true });
+
+    const vol = Number(mixer.volume || 0);
+    const volLabel = Number.isFinite(vol)
+      ? vol.toFixed(2).replace(/\.?0+$/, '')
+      : String(mixer.volume ?? '');
+    const cementNote = cementReturnedKg != null && cementSiloId != null
+      ? `; цемент ${cementReturnedKg} кг возвращён на ${siloNameById(cementSiloId)}`
+      : '';
+
+    const { error: historyError } = await supabase.from('order_history').insert({
+      order_id: mixer.order_id,
+      action: `Удалил рейс ${mixer.mixer_name || 'миксер'} (${volLabel} м³, статус «${mixerStatus}»)${cementNote}`,
+      user_name: actorName,
+      user_role: actorRole,
+    });
+    if (historyError) console.error('Не удалось записать историю удаления рейса:', historyError);
+
+    return NextResponse.json({
+      success: true,
+      cementReturnedKg,
+      cementSiloId,
+    });
   } catch (error: any) {
     console.error('Delete mixer error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

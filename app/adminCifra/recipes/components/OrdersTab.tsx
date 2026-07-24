@@ -793,34 +793,50 @@ export default function OrdersTab({
                   <div
                     key={o.id}
                     style={{
-                      display: 'flex',
+                      display: 'grid',
+                      gridTemplateColumns: '58px minmax(0, 1fr) 78px 112px 168px',
                       alignItems: 'center',
-                      gap: '16px',
+                      columnGap: '12px',
                       padding: '11px 18px',
                       borderBottom: idx < dayOrders.length - 1 ? `1px solid ${COLORS.border}` : 'none',
                       borderLeft: isNew ? `3px solid ${COLORS.accent}` : '3px solid transparent',
                       background: isNew ? 'rgba(74,222,128,0.06)' : 'transparent',
                     }}
                   >
-                    <div style={{ width: '58px', fontWeight: 700, fontSize: '14px' }}>{fmtTime(o.delivery_time) || '—'}</div>
-                    <div style={{ flex: 1, minWidth: 0, lineHeight: 1.3 }}>
+                    <div style={{ fontWeight: 700, fontSize: '14px', whiteSpace: 'nowrap' }}>{fmtTime(o.delivery_time) || '—'}</div>
+                    <div style={{ minWidth: 0, lineHeight: 1.3 }}>
                       <div className="lab-clamp1" style={{ fontWeight: 600, fontSize: '14.5px' }}>
                         №{o.id} — {client}
                         {isNew && <span className="lab-new-dot" style={{ color: COLORS.accent, marginLeft: '8px', fontSize: '12px' }}>● Новая</span>}
                       </div>
                       <div style={{ color: COLORS.muted, fontSize: '13px' }}>{o.grade || '—'} • {o.volume ?? '—'} м³</div>
                     </div>
-                    {/* Бейджи испытаний в строке */}
-                    {tests && (
-                      <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }}>
-                        {tests['7']  && <TestBadge days="7"  result={tests['7']}  onClick={() => onOpenTests?.(Number(o.id), '7')} />}
-                        {tests['28'] && <TestBadge days="28" result={tests['28']} onClick={() => onOpenTests?.(Number(o.id), '28')} />}
-                      </div>
-                    )}
-                    <span style={{ ...pillStyle(sm.bg, sm.color), padding: '4px 12px', fontSize: '12.5px', flexShrink: 0 }}>{sm.label}</span>
-                    <div style={{ flexShrink: 0 }}>
+                    {/* Колонка испытаний всегда на месте — иначе статус/кнопка съезжают */}
+                    <div style={{ display: 'flex', gap: '5px', justifyContent: 'flex-end', minHeight: '26px' }}>
+                      {tests?.['7']  && <TestBadge days="7"  result={tests['7']}  onClick={() => onOpenTests?.(Number(o.id), '7')} />}
+                      {tests?.['28'] && <TestBadge days="28" result={tests['28']} onClick={() => onOpenTests?.(Number(o.id), '28')} />}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'center' }}>
+                      <span
+                        style={{
+                          ...pillStyle(sm.bg, sm.color),
+                          padding: '4px 10px',
+                          fontSize: '12.5px',
+                          width: '100%',
+                          boxSizing: 'border-box',
+                          textAlign: 'center',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {sm.label}
+                      </span>
+                    </div>
+                    <div style={{ position: 'relative', width: '100%' }}>
                       {pCount === 0 ? (
-                        <button onClick={() => createNewPassport(o)} style={{ ...primaryButton(), padding: '8px 16px', fontSize: '13.5px' }}>
+                        <button
+                          onClick={() => createNewPassport(o)}
+                          style={{ ...primaryButton(), width: '100%', justifyContent: 'center', padding: '8px 10px', fontSize: '13.5px', boxSizing: 'border-box' }}
+                        >
                           Оформить паспорт
                         </button>
                       ) : (
@@ -830,7 +846,7 @@ export default function OrdersTab({
                             else passportBtnRefs.current.delete(oid);
                           }}
                           onClick={() => setPassportDropdownFor(prev => prev === oid ? null : oid)}
-                          style={{ ...primaryButton(), padding: '8px 16px', fontSize: '13.5px' }}
+                          style={{ ...primaryButton(), width: '100%', justifyContent: 'center', padding: '8px 10px', fontSize: '13.5px', boxSizing: 'border-box' }}
                         >
                           Паспорта ({pCount}) ▾
                         </button>

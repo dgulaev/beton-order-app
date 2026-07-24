@@ -8,8 +8,10 @@ import { OWN_UNLOAD_ALLOWANCE_MIN, ORDER_MIXER_STATUSES, type OrderMixerStatus }
 import {
   findRecipeByGrade,
   calculateAdditiveUsage,
+  calculateCementUsageKg,
   densitiesFromLabSettings,
 } from '@/lib/recipeAdditives';
+import { siloNameById } from '@/lib/siloConfig';
 
 const FINAL_ORDER_STATUSES = ['completed', 'cancelled'];
 const STATUS_LABELS_RU: Record<string, string> = {
@@ -341,6 +343,152 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   if (Object.keys(additivePatch).length > 0) {
     const { error: additiveUpdateError } = await supabase.from('order_mixers').update(additivePatch).eq('id', id);
     if (additiveUpdateError) console.error('Не удалось сохранить поля списания добавки:', additiveUpdateError);
+  }
+
+  // ==================== РЕАЛЬНОЕ СПИСАНИЕ ЦЕМЕНТА С СИЛОСА ====================
+  // Цемент списываем в момент «загружен» (= бетон уже в миксере), а не на
+  // «Разгружен»: операторы вечером правят остатки силосов и уходят, пока
+  // миксеры ещё едут на объекты — вечерние списания портили бы сверку.
+  //
+  // В статусах миксера кнопке оператора «Загружен» соответствует переход в
+  // «В пути». Диспетчер может поставить «В пути» / «На объекте» / «Разгружен»
+  // вручную — списание срабатывает при первом входе в любой из этих статусов
+  // (идемпотентно по cement_write_off_kg). Добавки по-прежнему на «Разгружен».
+  //
+  // Силос — operator_shift_settings.active_silo_id. Не выбран — пропускаем
+  // (карточка силосов подсвечивается у оператора).
+  const CEMENT_LOADED_STATUSES = new Set(['В пути', 'На объекте', 'Разгружен', 'Возврат']);
+  const enteringLoadedForCement =
+    !!status && CEMENT_LOADED_STATUSES.has(status) && mixer.cement_write_off_kg == null;
+  const rollingBackToLoading =
+    !!status && status === 'Загрузка' && oldStatus !== 'Загрузка'
+    && mixer.cement_write_off_kg != null && mixer.cement_write_off_silo_id != null;
+
+  if (enteringLoadedForCement) {
+    try {
+      const { data: shift } = await supabase
+        .from('operator_shift_settings')
+        .select('active_silo_id')
+        .eq('id', 1)
+        .maybeSingle();
+
+      const siloId = Number(shift?.active_silo_id);
+      if (![1, 2, 3].includes(siloId)) {
+        console.warn(`Рейс #${id}: силос не выбран — цемент не списан`);
+      } else {
+        const { data: recipes } = await supabase
+          .from('recipes')
+          .select('code, name, type, cement, additive, additive2');
+        const recipe = findRecipeByGrade(recipes || [], mixer.orders?.grade);
+        const kg = calculateCementUsageKg(recipe, Number(mixer.volume || 0));
+
+        if (kg > 0) {
+          const tons = kg / 1000;
+          const { data: adjRows, error: rpcError } = await supabase.rpc('warehouse_silo_adjust', {
+            p_silo_id: siloId,
+            p_delta_tons: -tons,
+          });
+
+          if (rpcError) {
+            console.error('Не удалось списать цемент с силоса:', rpcError);
+          } else {
+            const writtenKg = Math.round(kg * 10) / 10;
+            // Метка на рейсе — только если ещё не списано (защита от гонки/повтора).
+            const { data: patched, error: patchError } = await supabase
+              .from('order_mixers')
+              .update({
+                cement_write_off_silo_id: siloId,
+                cement_write_off_kg: writtenKg,
+                cement_write_off_at: now,
+              })
+              .eq('id', id)
+              .is('cement_write_off_kg', null)
+              .select('id')
+              .maybeSingle();
+
+            if (patchError || !patched) {
+              await supabase.rpc('warehouse_silo_adjust', {
+                p_silo_id: siloId,
+                p_delta_tons: tons,
+              });
+              if (patchError) {
+                console.error('Не удалось сохранить поля списания цемента:', patchError);
+              }
+            } else {
+              const adj = Array.isArray(adjRows) ? adjRows[0] : adjRows;
+              const oldKg = Number(adj?.old_current ?? 0) * 1000;
+              const newKg = Number(adj?.new_current ?? 0) * 1000;
+              const { error: histError } = await supabase.from('warehouse_operations').insert({
+                operation_type: 'subtract',
+                item_type: siloNameById(siloId),
+                amount: writtenKg,
+                old_value: Math.round(oldKg * 10) / 10,
+                new_value: Math.round(newKg * 10) / 10,
+                unit: 'кг',
+                user_name: userName || (userRole === 'driver' ? 'Водитель' : 'Диспетчер'),
+              });
+              if (histError) console.error('Не удалось записать историю списания цемента:', histError);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Ошибка списания цемента со склада:', err);
+    }
+  } else if (rollingBackToLoading) {
+    // Откат только в «Загрузка» — цемент ещё не должен был уйти с завода.
+    // «Проблема» / смена маршрута после «В пути» остаток не возвращает.
+    try {
+      const kg = Number(mixer.cement_write_off_kg);
+      const siloId = Number(mixer.cement_write_off_silo_id);
+      const tons = kg / 1000;
+      const { data: adjRows, error: rpcError } = await supabase.rpc('warehouse_silo_adjust', {
+        p_silo_id: siloId,
+        p_delta_tons: tons,
+      });
+
+      if (rpcError) {
+        console.error('Не удалось вернуть цемент на силос при откате статуса:', rpcError);
+      } else {
+        const { data: cleared, error: clearError } = await supabase
+          .from('order_mixers')
+          .update({
+            cement_write_off_silo_id: null,
+            cement_write_off_kg: null,
+            cement_write_off_at: null,
+          })
+          .eq('id', id)
+          .not('cement_write_off_kg', 'is', null)
+          .select('id')
+          .maybeSingle();
+
+        if (clearError || !cleared) {
+          // Не удалось снять метку — возвращаем списание обратно на силос
+          await supabase.rpc('warehouse_silo_adjust', {
+            p_silo_id: siloId,
+            p_delta_tons: -tons,
+          });
+          if (clearError) {
+            console.error('Не удалось очистить поля списания цемента при откате:', clearError);
+          }
+        } else {
+          const adj = Array.isArray(adjRows) ? adjRows[0] : adjRows;
+          const oldKg = Number(adj?.old_current ?? 0) * 1000;
+          const newKg = Number(adj?.new_current ?? 0) * 1000;
+          await supabase.from('warehouse_operations').insert({
+            operation_type: 'add',
+            item_type: siloNameById(siloId),
+            amount: Math.round(kg * 10) / 10,
+            old_value: Math.round(oldKg * 10) / 10,
+            new_value: Math.round(newKg * 10) / 10,
+            unit: 'кг',
+            user_name: userName || (userRole === 'driver' ? 'Водитель' : 'Диспетчер'),
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Ошибка возврата цемента на склад при откате статуса:', err);
+    }
   }
 
   // ==================== ИСТОРИЯ: СМЕНА СТАТУСА МИКСЕРА ====================

@@ -28,28 +28,53 @@ export async function GET() {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const row = data || { id: 1, active_operator_name: null, available_names: DEFAULT_NAMES, active_operator_set_at: null };
+  const row = data || {
+    id: 1,
+    active_operator_name: null,
+    available_names: DEFAULT_NAMES,
+    active_operator_set_at: null,
+    active_silo_id: null,
+    active_silo_set_at: null,
+  };
 
   // ==================== АВТОСБРОС В НАЧАЛЕ НОВОГО ДНЯ ====================
-  // Выбор "кто на смене" сделан вчера (или раньше) — считаем его неактуальным
-  // и сбрасываем прямо здесь, при первом обращении в новый день (без
-  // отдельного cron/задачи). Это "ленивый" сброс: до первого GET в новый день
-  // строка в базе формально хранит вчерашнее имя, но как только кто-то
-  // откроет страницу оператора — вернём и сохраним null, чтобы обе стороны
-  // (страница оператора и карточка в Стаффе) увидели одинаковую картину.
-  const setAt = row.active_operator_set_at ? new Date(row.active_operator_set_at) : null;
-  const isStale = row.active_operator_name && setAt && !isSameLocalDay(setAt, new Date());
+  // Выбор "кто на смене" и рабочего силоса сделан вчера (или раньше) —
+  // сбрасываем при первом GET в новый день (ленивый сброс без cron).
+  const now = new Date();
+  const shiftSetAt = row.active_operator_set_at ? new Date(row.active_operator_set_at) : null;
+  const siloSetAt = row.active_silo_set_at ? new Date(row.active_silo_set_at) : null;
+  const shiftStale = !!(row.active_operator_name && shiftSetAt && !isSameLocalDay(shiftSetAt, now));
+  // Силос без метки времени (старые данные) при выбранном id тоже сбрасываем утром —
+  // иначе подсветка «выбери силос» не появится.
+  const siloStale = !!(
+    row.active_silo_id
+    && (!siloSetAt || !isSameLocalDay(siloSetAt, now))
+  );
 
-  if (isStale) {
+  if (shiftStale || siloStale) {
+    const clearUpdate: Record<string, any> = {};
+    if (shiftStale) {
+      clearUpdate.active_operator_name = null;
+      clearUpdate.active_operator_set_at = null;
+    }
+    if (siloStale) {
+      clearUpdate.active_silo_id = null;
+      clearUpdate.active_silo_set_at = null;
+    }
+
     const { data: cleared, error: clearError } = await supabase
       .from('operator_shift_settings')
-      .update({ active_operator_name: null, active_operator_set_at: null })
+      .update(clearUpdate)
       .eq('id', 1)
       .select()
       .maybeSingle();
 
     if (!clearError && cleared) return NextResponse.json(cleared);
-    return NextResponse.json({ ...row, active_operator_name: null, active_operator_set_at: null });
+    return NextResponse.json({
+      ...row,
+      ...(shiftStale ? { active_operator_name: null, active_operator_set_at: null } : {}),
+      ...(siloStale ? { active_silo_id: null, active_silo_set_at: null } : {}),
+    });
   }
 
   return NextResponse.json(row);
@@ -75,6 +100,20 @@ export async function PUT(request: NextRequest) {
         ? body.available_names.map((n: any) => String(n).trim()).filter(Boolean)
         : [];
       update.available_names = names;
+    }
+    if ('active_silo_id' in body) {
+      const raw = body.active_silo_id;
+      if (raw === null || raw === '' || raw === undefined) {
+        update.active_silo_id = null;
+        update.active_silo_set_at = null;
+      } else {
+        const id = Number(raw);
+        if (![1, 2, 3].includes(id)) {
+          return NextResponse.json({ error: 'active_silo_id должен быть 1, 2 или 3' }, { status: 400 });
+        }
+        update.active_silo_id = id;
+        update.active_silo_set_at = new Date().toISOString();
+      }
     }
 
     const { data, error } = await supabase

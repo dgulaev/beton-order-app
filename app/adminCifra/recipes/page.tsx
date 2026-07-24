@@ -606,14 +606,40 @@ export default function LaboratoryPage({
           ) : (
             <div ref={recipeListRef} style={volumeCardStyle({ borderRadius: 16, overflow: 'hidden', padding: 0 })}>
               {pagedRecipes.map((recipe) => (
-                <div key={recipe.id} data-lab-row style={{ display: 'flex', alignItems: 'center', padding: '12px 20px', borderBottom: `1px solid ${COLORS.border}` }}>
-                  <div style={{ width: '200px', fontWeight: 700, fontSize: '17px' }}>{recipe.code}</div>
-                  <div style={{ flex: 1, color: '#CBD5E1', fontSize: '15px' }}>
+                <div
+                  key={recipe.id}
+                  data-lab-row
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '200px minmax(0, 1fr) 140px 140px auto',
+                    alignItems: 'center',
+                    columnGap: '16px',
+                    padding: '12px 20px',
+                    borderBottom: `1px solid ${COLORS.border}`,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, fontSize: '17px', whiteSpace: 'nowrap' }}>{recipe.code}</div>
+                  <div className="lab-clamp1" style={{ color: '#CBD5E1', fontSize: '15px', minWidth: 0 }} title={recipe.name}>
                     {recipe.name}
-                    {recipe.strength_class && <span style={{ color: COLORS.blue, marginLeft: '8px' }}>({recipe.strength_class}{recipe.slump ? ` ${recipe.slump}` : ''})</span>}
                   </div>
-                  <div style={{ width: '140px', fontSize: '15px', fontWeight: 700, color: COLORS.blue, textAlign: 'right' }}>{Number(recipe.price || 0).toLocaleString()} ₽</div>
-                  <div style={{ display: 'flex', gap: '8px', marginLeft: '40px' }}>
+                  <div
+                    style={{
+                      color: COLORS.blue,
+                      fontSize: '15px',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                    title={recipe.strength_class ? `${recipe.strength_class}${recipe.slump ? ` ${recipe.slump}` : ''}` : undefined}
+                  >
+                    {recipe.strength_class
+                      ? `(${recipe.strength_class}${recipe.slump ? ` ${recipe.slump}` : ''})`
+                      : ''}
+                  </div>
+                  <div style={{ fontSize: '15px', fontWeight: 700, color: COLORS.blue, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {Number(recipe.price || 0).toLocaleString()} ₽
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                     <button onClick={() => { setChangeNote(''); setEditingRecipe(recipe); }} style={ghostButton}>Изм.</button>
                     {recipe.id && <button onClick={() => setVersionsFor(recipe)} style={ghostButton}>История</button>}
                     <button onClick={() => deleteRecipe(recipe.id)} style={ghostButton}>Удал.</button>

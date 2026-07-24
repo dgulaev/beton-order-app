@@ -5,10 +5,11 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell 
 } from 'recharts';
-import { findRecipeByGrade, getAdditiveDosage, type RecipeLike } from '@/lib/recipeAdditives';
+import { calculateCementUsageKg, findRecipeByGrade, getAdditiveDosage, type RecipeLike } from '@/lib/recipeAdditives';
 import { CARD_BORDER, modalCloseButtonStyle, modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import ModalDateInput from '../components/ModalDateInput';
 import { appConfirm } from '../components/appDialog';
+import AdminPagination from '../components/AdminPagination';
 
 const COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
 
@@ -57,17 +58,46 @@ function getReportDateIso(report: any): string | null {
   return String(raw).substring(0, 10);
 }
 
+/** Час партии MEKA из поля time («0:10:03», «17:18:40»). */
+function mekaBatchHour(row: any): number | null {
+  const m = String(row?.time || '').trim().match(/^(\d{1,2})\s*:/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  return Number.isFinite(h) && h >= 0 && h <= 23 ? h : null;
+}
+
+/** Ночная партия: после полуночи до 06:00 — часто относится к заявкам вчера. */
+function isMekaNightBatch(row: any): boolean {
+  const h = mekaBatchHour(row);
+  return h != null && h < 6;
+}
+
 /**
  * Расход добавок по отчёту MEKA (кг) — колонки «Добавка 1 ПФМ» / «Добавка 2 Линомикс».
  * Склад и ручные операции не участвуют.
+ * night* — партии с 00:00 до 06:00 (часто заявки вчера, в «отгрузки×рецепт» за сегодня не входят).
  */
 function getMekaPlantAdditives(rawData: any[] | null | undefined) {
   const rows = Array.isArray(rawData) ? rawData : [];
-  const pfmKg = rows.reduce((sum, r) => sum + (Number(r.additive) || 0), 0);
-  const linomixKg = rows.reduce((sum, r) => sum + (Number(r.additive2) || 0), 0);
+  let pfmKg = 0;
+  let linomixKg = 0;
+  let nightPfmKg = 0;
+  let nightLinomixKg = 0;
+  rows.forEach((r) => {
+    const pfm = Number(r.additive) || 0;
+    const lin = Number(r.additive2) || 0;
+    pfmKg += pfm;
+    linomixKg += lin;
+    if (isMekaNightBatch(r)) {
+      nightPfmKg += pfm;
+      nightLinomixKg += lin;
+    }
+  });
   return {
     pfmKg: Math.round(pfmKg * 10) / 10,
     linomixKg: Math.round(linomixKg * 10) / 10,
+    nightPfmKg: Math.round(nightPfmKg * 10) / 10,
+    nightLinomixKg: Math.round(nightLinomixKg * 10) / 10,
   };
 }
 
@@ -76,6 +106,35 @@ function getMekaPlantAdditives(rawData: any[] | null | undefined) {
  * Пример: м300 10 м³ × 3.8 кг/м³ = 38 кг.
  * Объёмы — из отгрузок (production_logs), как у сверки марок; не из MEKA qty.
  */
+function getMekaPlantCement(rawData: any[] | null | undefined) {
+  const rows = Array.isArray(rawData) ? rawData : [];
+  let cementKg = 0;
+  let nightKg = 0;
+  rows.forEach((r) => {
+    const c = Number(r.cement) || 0;
+    cementKg += c;
+    if (isMekaNightBatch(r)) nightKg += c;
+  });
+  return {
+    cementKg: Math.round(cementKg * 10) / 10,
+    nightKg: Math.round(nightKg * 10) / 10,
+  };
+}
+
+function getNormativeCementFromShipments(
+  shipments: { grade: string; volumeM3: number }[],
+  recipes: RecipeLike[],
+) {
+  let cementKg = 0;
+  (Array.isArray(shipments) ? shipments : []).forEach((row) => {
+    const volumeM3 = Number(row?.volumeM3) || 0;
+    if (volumeM3 <= 0) return;
+    const recipe = findRecipeByGrade(recipes, row?.grade);
+    cementKg += calculateCementUsageKg(recipe, volumeM3);
+  });
+  return Math.round(cementKg * 10) / 10;
+}
+
 function getNormativeAdditivesFromShipments(
   shipments: { grade: string; volumeM3: number }[],
   recipes: RecipeLike[]
@@ -106,20 +165,6 @@ function normalizeGradeKey(value: string): string {
     .replace(/Ё/g, 'Е')
     .replace(/\s+/g, '')
     .replace(/M(?=\d)/g, 'М'); // латинская M перед цифрой → кириллическая М
-}
-
-/** Час партии MEKA из поля time («0:10:03», «17:18:40»). */
-function mekaBatchHour(row: any): number | null {
-  const m = String(row?.time || '').trim().match(/^(\d{1,2})\s*:/);
-  if (!m) return null;
-  const h = Number(m[1]);
-  return Number.isFinite(h) && h >= 0 && h <= 23 ? h : null;
-}
-
-/** Ночная партия: после полуночи до 06:00 — часто относится к заявкам вчера. */
-function isMekaNightBatch(row: any): boolean {
-  const h = mekaBatchHour(row);
-  return h != null && h < 6;
 }
 
 /** План по маркам (м³) из строк отчёта MEKA: recipe → Σ qty (+ ночной объём). */
@@ -277,9 +322,21 @@ type ReconcileModalState = {
   dateLabel: string;
   fileName: string;
   plan: { pfmKg: number; linomixKg: number };
-  actual: { pfmKg: number; linomixKg: number } | null;
+  actual: {
+    pfmKg: number;
+    linomixKg: number;
+    nightPfmKg?: number;
+    nightLinomixKg?: number;
+  } | null;
   trips: number | null;
   grades: { grade: string; planM3: number; actualM3: number; nightM3: number }[];
+  cement: {
+    planKg: number;
+    mekaKg: number;
+    nightKg: number;
+    warehouseKg: number;
+    bySilo: { siloId: number; name: string; kg: number }[];
+  } | null;
   loading: boolean;
   error: string | null;
 };
@@ -357,10 +414,325 @@ const PERIOD_PRESETS: { key: PeriodPreset; label: string }[] = [
   { key: 'custom', label: 'Период' },
 ];
 
+const CHART_INITIAL_DIMENSION = { width: 400, height: 300 };
+
+type TopRecipeSlice = { name: string; value: number; fill: string };
+
+function TopRecipesPieTooltip({ active, payload }: any) {
+  if (!active || !payload?.length) return null;
+  const data = payload[0].payload;
+  return (
+    <div style={{
+      backgroundColor: '#1E2937',
+      padding: '12px 18px',
+      borderRadius: '12px',
+      border: '1px solid #475569',
+      color: '#fff',
+      fontSize: '14px',
+      boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+    }}>
+      <div style={{ fontWeight: 700, color: payload[0].fill, marginBottom: '4px' }}>
+        {data.name}
+      </div>
+      <div style={{ fontSize: '18px', fontWeight: 700, color: '#10B981' }}>
+        {Math.round(data.value)} м³
+      </div>
+    </div>
+  );
+}
+
+/** Пончик: анимация «веером» через endAngle (масштабировать value нельзя —
+ *  доли сегментов остаются теми же, визуально ничего не меняется). */
+function TopRecipesDonut({ recipes }: { recipes: TopRecipeSlice[] }) {
+  const START_ANGLE = 90;
+  const [endAngle, setEndAngle] = useState(START_ANGLE);
+
+  useEffect(() => {
+    if (recipes.length === 0) {
+      setEndAngle(START_ANGLE);
+      return;
+    }
+
+    // Дольше и мягче, чем у столбцов: плавный «прокрут» кольца.
+    const durationMs = 980;
+    const easeInOutCubic = (t: number) =>
+      t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2;
+    let rafId = 0;
+    const startedAt = performance.now();
+
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - startedAt) / durationMs);
+      const e = easeInOutCubic(t);
+      // По часовой от верха: 90 → 90 - 360
+      setEndAngle(START_ANGLE - 360 * e);
+      if (t < 1) rafId = requestAnimationFrame(tick);
+      else setEndAngle(START_ANGLE - 360);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [recipes]);
+
+  return (
+    <div style={{
+      width: '100%',
+      height: '100%',
+      maxWidth: 'min(100%, 220px)',
+      maxHeight: 'min(100%, 220px)',
+      aspectRatio: '1',
+    }}>
+      <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
+        <PieChart>
+          <Pie
+            data={recipes}
+            cx="50%"
+            cy="50%"
+            innerRadius="52%"
+            outerRadius="80%"
+            startAngle={START_ANGLE}
+            endAngle={endAngle}
+            paddingAngle={recipes.length > 1 ? 2 : 0}
+            dataKey="value"
+            nameKey="name"
+            isAnimationActive={false}
+            stroke="none"
+          >
+            {recipes.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={entry.fill} />
+            ))}
+          </Pie>
+          <Tooltip content={<TopRecipesPieTooltip />} />
+        </PieChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 function formatRuDateShort(iso: string): string {
   if (!iso || iso.length < 10) return iso;
   const [y, m, d] = iso.split('-');
   return `${d}.${m}.${y.slice(2)}`;
+}
+
+type MaterialSlice = { name: string; value: number; fill: string };
+
+function niceAxisMax(max: number): number {
+  if (!Number.isFinite(max) || max <= 0) return 1000;
+  const pow = 10 ** Math.floor(Math.log10(max));
+  return Math.ceil(max / pow) * pow;
+}
+
+type ChartEaseFn = (t: number) => number;
+
+/** Плавный рост 0→1 через rAF (без сломанной анимации Recharts 3). */
+function useChartGrowProgress(
+  dataKey: string,
+  durationMs: number,
+  ease: ChartEaseFn,
+): number {
+  const [progress, setProgress] = useState(0);
+  useEffect(() => {
+    if (!dataKey) {
+      setProgress(0);
+      return;
+    }
+    let rafId = 0;
+    const startedAt = performance.now();
+    setProgress(0);
+
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - startedAt) / durationMs);
+      setProgress(ease(t));
+      if (t < 1) rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [dataKey, durationMs, ease]);
+  return progress;
+}
+
+/** Столбцы: быстрее старт, мягкое торможение в конце (отличный от пончика характер). */
+const BAR_GROW_EASE: ChartEaseFn = (t) => 1 - (1 - t) ** 4;
+const BAR_GROW_MS = 780;
+
+function MaterialTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
+  const entry = payload[0];
+  const kg = Number(entry.payload?.targetValue ?? entry.value) || 0;
+  return (
+    <div style={{
+      backgroundColor: '#1E2937',
+      padding: '14px 20px',
+      borderRadius: '12px',
+      border: '1px solid #475569',
+      color: '#fff',
+      fontSize: '15px',
+      boxShadow: '0 10px 30px rgba(0,0,0,0.6)',
+      minWidth: '220px',
+    }}>
+      <div style={{ fontWeight: 700, color: '#94A3B8', marginBottom: '8px' }}>{label}</div>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        color: entry.fill || '#10B981',
+      }}>
+        <span style={{ fontWeight: 600 }}>{entry.name}</span>
+        <span style={{ fontWeight: 700, fontSize: '17px' }}>
+          {Math.round(kg).toLocaleString('ru-RU')} кг
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function VolumeTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null;
+  const m3 = Number(payload[0].payload?.targetValue ?? payload[0].value) || 0;
+  return (
+    <div style={{
+      background: '#1E2937',
+      padding: '12px 16px',
+      borderRadius: '12px',
+      border: '1px solid #475569',
+      color: '#fff',
+      fontSize: '14px',
+    }}>
+      <div style={{ marginBottom: '6px', color: '#94A3B8' }}>
+        {label}{payload[0].payload?.fullDate ? ` • ${payload[0].payload.fullDate}` : ''}
+      </div>
+      <div style={{ fontWeight: 700, color: '#10B981' }}>
+        {Math.round(m3)} м³
+      </div>
+    </div>
+  );
+}
+
+/** Столбцы расхода: свой рост высоты + фиксированная ось Y. */
+function MaterialsBarChart({
+  data,
+  scaleMode,
+}: {
+  data: MaterialSlice[];
+  scaleMode: 'linear' | 'log';
+}) {
+  const dataKey = `${scaleMode}|${data.map((d) => `${d.name}:${d.value}`).join('|')}`;
+  const progress = useChartGrowProgress(dataKey, BAR_GROW_MS, BAR_GROW_EASE);
+  const yMax = useMemo(() => niceAxisMax(Math.max(0, ...data.map((d) => d.value))), [data]);
+  const animData = useMemo(
+    () => data.map((d) => ({
+      ...d,
+      targetValue: d.value,
+      value: d.value * progress,
+    })),
+    [data, progress],
+  );
+
+  return (
+    <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
+      <BarChart
+        data={animData}
+        barCategoryGap="22%"
+        margin={{ top: 8, right: 8, left: 4, bottom: 0 }}
+      >
+        <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+        <XAxis
+          dataKey="name"
+          stroke="#94A3B8"
+          tickLine={false}
+          axisLine={false}
+          tick={{ fontSize: 11 }}
+          interval={0}
+        />
+        <YAxis
+          stroke="#94A3B8"
+          tickLine={false}
+          axisLine={false}
+          width={52}
+          scale={scaleMode === 'log' ? 'log' : 'linear'}
+          domain={scaleMode === 'log' ? [1, Math.max(yMax, 1)] : [0, yMax]}
+          allowDataOverflow={false}
+          tickCount={5}
+          tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`}
+          tick={{ fontSize: 11 }}
+        />
+        <Tooltip content={<MaterialTooltip />} cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }} />
+        <Bar
+          dataKey="value"
+          radius={[6, 6, 0, 0]}
+          isAnimationActive={false}
+          activeBar={{ stroke: 'none' }}
+        >
+          {animData.map((entry, index) => (
+            <Cell key={`mat-${entry.name}-${index}`} fill={entry.fill} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+type VolumeSlice = { label: string; value: number; fullDate?: string };
+
+/** Столбцы объёма производства — тот же плавный рост, что у расхода. */
+function VolumeBarChart({
+  data,
+  viewMode,
+}: {
+  data: VolumeSlice[];
+  viewMode: 'month' | 'day';
+}) {
+  const dataKey = `${viewMode}|${data.map((d) => `${d.label}:${d.value}`).join('|')}`;
+  const progress = useChartGrowProgress(dataKey, BAR_GROW_MS, BAR_GROW_EASE);
+  const yMax = useMemo(() => niceAxisMax(Math.max(0, ...data.map((d) => d.value))), [data]);
+  const animData = useMemo(
+    () => data.map((d) => ({
+      ...d,
+      targetValue: d.value,
+      value: d.value * progress,
+    })),
+    [data, progress],
+  );
+
+  return (
+    <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
+      <BarChart
+        data={animData}
+        barCategoryGap={viewMode === 'month' ? '40%' : '18%'}
+        barGap={4}
+        margin={{ top: 8, right: 8, left: 4, bottom: 0 }}
+      >
+        <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+        <XAxis
+          dataKey="label"
+          stroke="#94A3B8"
+          tickLine={false}
+          axisLine={false}
+          interval="preserveStartEnd"
+          minTickGap={viewMode === 'day' ? 12 : 8}
+          tick={{ fontSize: 11 }}
+        />
+        <YAxis
+          stroke="#94A3B8"
+          tickLine={false}
+          axisLine={false}
+          width={48}
+          domain={[0, yMax]}
+          allowDataOverflow={false}
+          tickCount={5}
+        />
+        <Tooltip content={<VolumeTooltip />} cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }} />
+        <Bar
+          dataKey="value"
+          fill="#10B981"
+          radius={[6, 6, 0, 0]}
+          isAnimationActive={false}
+          activeBar={{ fill: '#34D399', stroke: 'none' }}
+        />
+      </BarChart>
+    </ResponsiveContainer>
+  );
 }
 
 export default function ReportsPage() {
@@ -399,17 +771,8 @@ export default function ReportsPage() {
   const historyListRef = useRef<HTMLDivElement>(null);
   const [itemsPerPage, setItemsPerPage] = useState(8);
 
-  // Recharts <ResponsiveContainer> ДО первого измерения родителя (через
-  // ResizeObserver) держит служебные значения width/height = -1 — и именно в
-  // этот момент, на самом первом рендере, печатает предупреждение "width(-1)
-  // and height(-1) of chart should be greater than 0..." — это баг самого
-  // Recharts (recharts/recharts#6716), возникает всегда при монтировании
-  // компонента независимо от готовности раскладки страницы, поэтому просто
-  // "подождать кадр" перед рендером не помогает. Официальный обходной путь —
-  // передать `initialDimension`, тогда на первом рендере используются эти
-  // значения вместо -1, и предупреждение не возникает. Сам график всё равно
-  // корректно пересчитается на реальный размер сразу после измерения.
-  const CHART_INITIAL_DIMENSION = { width: 400, height: 300 };
+  // Recharts <ResponsiveContainer>: initialDimension — см. CHART_INITIAL_DIMENSION
+  // выше (обход width/height = -1 на первом кадре, recharts#6716).
 
   // Подбираем itemsPerPage напрямую по ФАКТИЧЕСКИ отрендеренной высоте одной
   // строки — так учитывается зум браузера, масштабирование экрана (DPI),
@@ -529,6 +892,7 @@ export default function ReportsPage() {
     const planGrades = getPlanGrades(report.raw_data);
     // Факт добавок — сразу из MEKA (завод). Склад/ручные списания не трогаем.
     const plantAdditives = getMekaPlantAdditives(report.raw_data);
+    const plantCement = getMekaPlantCement(report.raw_data);
     const mekaBatches = Array.isArray(report.raw_data) ? report.raw_data.length : 0;
 
     setReconcileLoadingId(report.id);
@@ -545,14 +909,16 @@ export default function ReportsPage() {
         actualM3: 0,
         nightM3: g.nightM3 || 0,
       })),
+      cement: null,
       loading: true,
       error: null,
     });
 
     try {
-      const [recipes, gradesActual] = await Promise.all([
+      const [recipes, gradesActual, cementDayRes] = await Promise.all([
         loadRecipesForReconcile(),
         fetchGradesActualForDate(dateIso),
+        fetch(`/api/adminCifra/warehouse/cement-day?date=${dateIso}`, { cache: 'no-store' }),
       ]);
 
       // Добавки: MEKA (колонки ПФМ/Линомикс) vs отгрузки × рецепт — как у марок
@@ -562,12 +928,30 @@ export default function ReportsPage() {
       volumeAlertCheckedRef.current.add(String(report.id));
       setVolumeAlerts((prev) => ({ ...prev, [String(report.id)]: volumeAlert }));
 
+      let cementWarehouse = { totalKg: 0, bySilo: [] as { siloId: number; name: string; kg: number }[] };
+      if (cementDayRes.ok) {
+        const day = await cementDayRes.json();
+        cementWarehouse = {
+          totalKg: Number(day.totalKg) || 0,
+          bySilo: Array.isArray(day.bySilo) ? day.bySilo : [],
+        };
+      }
+
+      const cement = {
+        planKg: getNormativeCementFromShipments(gradesActual, recipes),
+        mekaKg: plantCement.cementKg,
+        nightKg: plantCement.nightKg,
+        warehouseKg: cementWarehouse.totalKg,
+        bySilo: cementWarehouse.bySilo,
+      };
+
       setReconcileModal((prev) => prev ? {
         ...prev,
         plan,
         actual: plantAdditives,
         trips: mekaBatches,
         grades,
+        cement,
         loading: false,
       } : prev);
     } catch (err) {
@@ -754,8 +1138,8 @@ export default function ReportsPage() {
   );
 
   // Фоновый расчёт индикатора на кнопке «Сверка» для видимых строк истории.
-  // В checked попадают только успешно посчитанные id — иначе при отмене эффекта
-  // из‑за ре-рендера строка навсегда осталась бы без индикатора.
+  // id помечаем в checked ДО await — иначе при рестарте эффекта один и тот же
+  // отчёт мог уйти в параллельные setState и раздуть update depth.
   const visibleReportKey = currentReports.map((r: any) => r.id).join(',');
   useEffect(() => {
     let cancelled = false;
@@ -772,13 +1156,26 @@ export default function ReportsPage() {
           continue;
         }
 
+        volumeAlertCheckedRef.current.add(id);
         try {
           const gradesActual = await fetchGradesActualForDate(dateIso);
           if (cancelled) return;
           const info = computeVolumeAlert(report.raw_data, gradesActual);
-          volumeAlertCheckedRef.current.add(id);
-          setVolumeAlerts((prev) => ({ ...prev, [id]: info }));
+          setVolumeAlerts((prev) => {
+            const old = prev[id];
+            if (
+              old
+              && old.over === info.over
+              && old.percent === info.percent
+              && old.planM3 === info.planM3
+              && old.actualM3 === info.actualM3
+            ) {
+              return prev;
+            }
+            return { ...prev, [id]: info };
+          });
         } catch (err) {
+          volumeAlertCheckedRef.current.delete(id);
           console.error(`Не удалось проверить расхождение объёма для отчёта #${id}:`, err);
         }
       }
@@ -856,30 +1253,6 @@ export default function ReportsPage() {
         .slice(-60);
     }, [filteredHistory]);
 
-      // ==================== КАСТОМНЫЙ TOOLTIP ====================
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{
-          background: '#1E2937',
-          padding: '12px 16px',
-          borderRadius: '12px',
-          border: '1px solid #475569',
-          color: '#fff',
-          fontSize: '14px'
-        }}>
-          <div style={{ marginBottom: '6px', color: '#94A3B8' }}>
-            {label} • {payload[0].payload.fullDate}
-          </div>
-          <div style={{ fontWeight: '700', color: '#10B981' }}>
-            {payload[0].value} м³
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
-
   // ==================== ТОП РЕЦЕПТОВ ====================
   const topRecipes = useMemo(() => {
     const groups: any = {};
@@ -900,36 +1273,6 @@ export default function ReportsPage() {
         fill: COLORS[index % COLORS.length]
       }));
   }, [filteredHistory]);
-
-    // ==================== КАСТОМНЫЙ TOOLTIP ДЛЯ PIE CHART ====================
-  const CustomPieTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div style={{
-          backgroundColor: '#1E2937',
-          padding: '12px 18px',
-          borderRadius: '12px',
-          border: '1px solid #475569',
-          color: '#fff',
-          fontSize: '14px',
-          boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
-        }}>
-          <div style={{ 
-            fontWeight: '700', 
-            color: payload[0].fill,
-            marginBottom: '4px'
-          }}>
-            {data.name}
-          </div>
-          <div style={{ fontSize: '18px', fontWeight: '700', color: '#10B981' }}>
-            {Math.round(data.value)} м³
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
 
     // ==================== РАСХОД МАТЕРИАЛОВ (ПЕРЕСТРОЕННЫЕ ДАННЫЕ) ====================
   const materialConsumption = useMemo(() => {
@@ -952,42 +1295,6 @@ export default function ReportsPage() {
       { name: 'Добавка', value: Math.round(additive), fill: '#EF4444' },
     ];
   }, [filteredHistory]);
-
-           // ==================== TOOLTIP ДЛЯ РАСХОДА МАТЕРИАЛОВ ====================
-  const MaterialTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length > 0) {
-      const entry = payload[0];
-
-      return (
-        <div style={{
-          backgroundColor: '#1E2937',
-          padding: '14px 20px',
-          borderRadius: '12px',
-          border: '1px solid #475569',
-          color: '#fff',
-          fontSize: '15px',
-          boxShadow: '0 10px 30px rgba(0,0,0,0.6)',
-          minWidth: '220px'
-        }}>
-          <div style={{ fontWeight: '700', color: '#94A3B8', marginBottom: '8px' }}>
-            {label}
-          </div>
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: 'space-between', 
-            alignItems: 'center',
-            color: entry.fill || '#10B981'
-          }}>
-            <span style={{ fontWeight: '600' }}>{entry.name}</span>
-            <span style={{ fontWeight: '700', fontSize: '17px' }}>
-              {Math.round(entry.value).toLocaleString('ru-RU')} кг
-            </span>
-          </div>
-        </div>
-      );
-    }
-    return null;
-  };
 
     // ==================== СТАТИСТИКА (по выбранному периоду фильтра) ====================
   const stats = useMemo(() => {
@@ -1278,40 +1585,11 @@ export default function ReportsPage() {
                 </div>
               </div>
 
-              <div style={{ flex: 1, minHeight: 0 }}>
-              <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
-                <BarChart
+              <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
+                <VolumeBarChart
                   data={viewMode === 'month' ? monthlyVolume : dailyVolume}
-                  // Доля зазора от ширины категории — столбцы заполняют слот и при
-                  // редких днях месяца (раньше maxBarSize=28 оставлял «иголки»).
-                  barCategoryGap={viewMode === 'month' ? '40%' : '18%'}
-                  barGap={4}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-                  <XAxis
-                    dataKey="label"
-                    stroke="#94A3B8"
-                    tickLine={false}
-                    axisLine={false}
-                    interval="preserveStartEnd"
-                    minTickGap={viewMode === 'day' ? 12 : 8}
-                    tick={{ fontSize: 11 }}
-                  />
-                  <YAxis stroke="#94A3B8" tickLine={false} axisLine={false} width={40} />
-                  <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }} />
-                  <Bar
-                    dataKey="value"
-                    fill="#10B981"
-                    radius={[6, 6, 0, 0]}
-                    // Без жёсткого maxBarSize: иначе при 8–12 днях в месяце
-                    // слот широкий, а столбец остаётся тонкой линией.
-                    isAnimationActive
-                    animationDuration={450}
-                    animationEasing="ease-out"
-                    activeBar={{ fill: '#34D399', stroke: 'none' }}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
+                  viewMode={viewMode}
+                />
               </div>
             </div>
 
@@ -1349,41 +1627,10 @@ export default function ReportsPage() {
         opacity: 0.6,
       }} />
     ) : (
-      <div style={{
-        width: '100%',
-        height: '100%',
-        maxWidth: 'min(100%, 220px)',
-        maxHeight: 'min(100%, 220px)',
-        aspectRatio: '1',
-        animation: topRecipes.length > 0
-          ? 'chartReveal 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards'
-          : 'none',
-        transformOrigin: 'center',
-      }}>
-        <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
-          <PieChart>
-            <Pie
-              data={topRecipes}
-              cx="50%"
-              cy="50%"
-              innerRadius="52%"
-              outerRadius="80%"
-              paddingAngle={topRecipes.length > 1 ? 2 : 0}
-              dataKey="value"
-              nameKey="name"
-              isAnimationActive
-              animationDuration={500}
-              animationEasing="ease-out"
-              stroke="none"
-            >
-              {topRecipes.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={entry.fill} />
-              ))}
-            </Pie>
-            <Tooltip content={<CustomPieTooltip />} />
-          </PieChart>
-        </ResponsiveContainer>
-      </div>
+      <TopRecipesDonut
+        key={topRecipes.map((r) => `${r.name}:${r.value}`).join('|')}
+        recipes={topRecipes}
+      />
     )}
   </div>
 
@@ -1479,39 +1726,8 @@ export default function ReportsPage() {
     </div>
   </div>
   
-  <div style={{ flex: 1, minHeight: 0, maxWidth: '100%' }}>
-  <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
-    <BarChart
-      data={materialConsumption}
-      barCategoryGap="22%"
-      margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
-    >
-      <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-      <XAxis dataKey="name" stroke="#94A3B8" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
-      <YAxis
-        stroke="#94A3B8"
-        tickLine={false}
-        axisLine={false}
-        width={36}
-        scale={scaleMode === 'log' ? 'log' : 'linear'}
-        domain={scaleMode === 'log' ? [1, 'dataMax'] : [0, 'dataMax']}
-        tickFormatter={(value) => (value / 1000).toFixed(0) + 'k'}
-        tick={{ fontSize: 11 }}
-      />
-      <Tooltip content={<MaterialTooltip />} cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }} />
-      <Bar
-        dataKey="value"
-        radius={[6, 6, 0, 0]}
-        isAnimationActive
-        animationDuration={450}
-        animationEasing="ease-out"
-      >
-        {materialConsumption.map((entry, index) => (
-          <Cell key={`mat-${index}`} fill={entry.fill} />
-        ))}
-      </Bar>
-    </BarChart>
-  </ResponsiveContainer>
+  <div style={{ flex: 1, minHeight: 0, maxWidth: '100%', minWidth: 0 }}>
+    <MaterialsBarChart data={materialConsumption} scaleMode={scaleMode} />
   </div>
 
   {/* Легенда — цвета как у столбцов */}
@@ -1658,45 +1874,12 @@ export default function ReportsPage() {
           </div>
 
           {/* Пагинация */}
-          {totalPages > 1 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexShrink: 0 }}>
-              <div style={{ color: '#94A3B8' }}>
-                Страница {safeCurrentPage} из {totalPages}
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button 
-                  onClick={() => setCurrentPage(Math.max(1, safeCurrentPage - 1))}
-                  disabled={safeCurrentPage === 1}
-                  style={{ 
-                    padding: '8px 16px', 
-                    borderRadius: '9999px', 
-                    backgroundColor: '#334155', 
-                    border: 'none', 
-                    color: 'white', 
-                    cursor: safeCurrentPage === 1 ? 'not-allowed' : 'pointer',
-                    opacity: safeCurrentPage === 1 ? 0.5 : 1 
-                  }}
-                >
-                  ← Назад
-                </button>
-                <button 
-                  onClick={() => setCurrentPage(Math.min(totalPages, safeCurrentPage + 1))}
-                  disabled={safeCurrentPage === totalPages}
-                  style={{ 
-                    padding: '8px 16px', 
-                    borderRadius: '9999px', 
-                    backgroundColor: '#334155', 
-                    border: 'none', 
-                    color: 'white', 
-                    cursor: safeCurrentPage === totalPages ? 'not-allowed' : 'pointer',
-                    opacity: safeCurrentPage === totalPages ? 0.5 : 1 
-                  }}
-                >
-                  Вперёд →
-                </button>
-              </div>
-            </div>
-          )}
+          <AdminPagination
+            page={safeCurrentPage}
+            totalPages={totalPages}
+            onPage={setCurrentPage}
+            style={{ marginBottom: '10px' }}
+          />
 
           {/* Список не скроллится — количество строк (itemsPerPage) подстраивается
               под реально доступную высоту через ResizeObserver на этом контейнере. */}
@@ -2211,12 +2394,74 @@ export default function ReportsPage() {
                 ) : (
                   <>
                     <div style={{ color: '#94A3B8', fontSize: '12.5px', fontWeight: 600, marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Цемент
+                    </div>
+                    {reconcileModal.cement && (() => {
+                      const c = reconcileModal.cement;
+                      const deltaMekaPlan = Math.round((c.mekaKg - c.planKg) * 10) / 10;
+                      const deltaMekaWh = Math.round((c.mekaKg - c.warehouseKg) * 10) / 10;
+                      const dColor = (d: number) => Math.abs(d) < 0.5 ? '#10B981' : d > 0 ? '#F59E0B' : '#F87171';
+                      return (
+                        <div style={volumeCardSoftStyle({ borderRadius: 14, padding: '14px 18px', marginBottom: '18px' })}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '8px', fontSize: '13.5px', marginBottom: '10px' }}>
+                            <div>
+                              <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '2px' }}>Отгрузки×рецепт</div>
+                              <div style={{ fontWeight: 600 }}>{(c.planKg / 1000).toFixed(2)} т</div>
+                            </div>
+                            <div>
+                              <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '2px' }}>MEKA</div>
+                              <div style={{ fontWeight: 600 }}>{(c.mekaKg / 1000).toFixed(2)} т</div>
+                            </div>
+                            <div>
+                              <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '2px' }}>Склад (списано)</div>
+                              <div style={{ fontWeight: 600 }}>{(c.warehouseKg / 1000).toFixed(2)} т</div>
+                            </div>
+                            <div>
+                              <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '2px' }}>MEKA − склад</div>
+                              <div style={{ fontWeight: 700, color: dColor(deltaMekaWh) }}>
+                                {deltaMekaWh > 0 ? '+' : ''}{(deltaMekaWh / 1000).toFixed(2)} т
+                              </div>
+                            </div>
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#64748B', marginBottom: c.bySilo.some((s) => s.kg > 0) ? '8px' : 0 }}>
+                            MEKA − норма: <span style={{ color: dColor(deltaMekaPlan), fontWeight: 600 }}>
+                              {deltaMekaPlan > 0 ? '+' : ''}{(deltaMekaPlan / 1000).toFixed(2)} т
+                            </span>
+                            {c.nightKg > 0.5 ? ` · в т.ч. ночь ${(c.nightKg / 1000).toFixed(2)} т` : ''}
+                          </div>
+                          {c.bySilo.some((s) => s.kg > 0) && (
+                            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12.5px' }}>
+                              {c.bySilo.map((s) => (
+                                <div key={s.siloId} style={{ color: '#CBD5E1' }}>
+                                  <span style={{ color: '#94A3B8' }}>{s.name}:</span>{' '}
+                                  <strong>{(s.kg / 1000).toFixed(2)} т</strong>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    <div style={{ color: '#94A3B8', fontSize: '12.5px', fontWeight: 600, marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                       Добавки
                     </div>
                     {(
                       [
-                        { key: 'pfm', label: 'ПФМ-НЛК', plan: reconcileModal.plan.pfmKg, actual: reconcileModal.actual?.pfmKg ?? 0 },
-                        { key: 'linomix', label: 'Линомикс ТипР', plan: reconcileModal.plan.linomixKg, actual: reconcileModal.actual?.linomixKg ?? 0 },
+                        {
+                          key: 'pfm',
+                          label: 'ПФМ-НЛК',
+                          plan: reconcileModal.plan.pfmKg,
+                          actual: reconcileModal.actual?.pfmKg ?? 0,
+                          nightKg: reconcileModal.actual?.nightPfmKg ?? 0,
+                        },
+                        {
+                          key: 'linomix',
+                          label: 'Линомикс ТипР',
+                          plan: reconcileModal.plan.linomixKg,
+                          actual: reconcileModal.actual?.linomixKg ?? 0,
+                          nightKg: reconcileModal.actual?.nightLinomixKg ?? 0,
+                        },
                       ] as const
                     ).map((row) => {
                       const delta = Math.round((row.actual - row.plan) * 10) / 10;
@@ -2247,6 +2492,20 @@ export default function ReportsPage() {
                               </div>
                             </div>
                           </div>
+                          {Number(row.nightKg) > 0.05 ? (
+                            <div
+                              style={{
+                                marginTop: 8,
+                                fontSize: 11,
+                                fontWeight: 500,
+                                color: '#FBBF24',
+                                lineHeight: 1.35,
+                              }}
+                              title="Добавка в партиях MEKA с 00:00 до 06:00 часто относится к заявкам с датой доставки вчера и не входит в «отгрузки×рецепт» за сегодня"
+                            >
+                              в т.ч. ночь {Number(row.nightKg).toFixed(1)} кг (заявки вчера)
+                            </div>
+                          ) : null}
                         </div>
                       );
                     })}

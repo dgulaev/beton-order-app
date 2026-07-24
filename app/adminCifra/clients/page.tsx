@@ -11,6 +11,7 @@ import { adminCifraFetch } from '@/lib/adminCifraFetch';
 import { Users } from 'lucide-react';
 import { CARD_BORDER, CARD_VOLUME_SOFT, modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import { appConfirm } from '../components/appDialog';
+import AdminPagination from '../components/AdminPagination';
 import { nowTimeHHMM } from '../components/modalPickerShared';
 
 type ClientsGridFit = { cols: number; rows: number; perPage: number };
@@ -2451,35 +2452,12 @@ const changeStaffPassword = async (staffMember: any) => {
 
 {/* ==================== ПАГИНАЦИЯ — всегда резервируем место, чтобы сетка не прыгала ==================== */}
 {activeTab === 'clients' && (
-  <div style={{ 
-    display: 'flex', 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    gap: '16px',
-    flexShrink: 0,
-    height: 56,
-    visibility: totalPages > 1 ? 'visible' : 'hidden',
-  }}>
-    <button 
-      onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-      disabled={currentPage === 1}
-      style={{ padding: '10px 22px', background: currentPage === 1 ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
-    >
-      ← Назад
-    </button>
-
-    <div style={{ fontSize: '17px', fontWeight: '600' }}>
-      Страница <span style={{ color: '#10B981' }}>{currentPage}</span> из {totalPages}
-    </div>
-
-    <button 
-      onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-      disabled={currentPage === totalPages}
-      style={{ padding: '10px 22px', background: currentPage === totalPages ? '#334155' : '#1E2937', color: '#fff', border: 'none', borderRadius: '12px', cursor: currentPage === totalPages ? 'not-allowed' : 'pointer' }}
-    >
-      Вперед →
-    </button>
-  </div>
+  <AdminPagination
+    page={currentPage}
+    totalPages={totalPages}
+    onPage={setCurrentPage}
+    reserveSpace
+  />
 )}
 
      {/* ==================== 9. БОКОВАЯ ПАНЕЛЬ ==================== */}

@@ -8,8 +8,10 @@ import WarehousePage from '../warehouse/page';
 import ReportsPage, { preloadReportsData } from '../reports/page';
 import RecipesPage, { type LabTab } from '../recipes/page';
 import { CARD_VOLUME_SOFT, MODAL_VOLUME_GLOW, modalCloseButtonStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
-import { UserCog, ChevronDown } from 'lucide-react';
+import { UserCog, ChevronDown, UserRound } from 'lucide-react';
 import ModalSelect from '../components/ModalSelect';
+import OperatorSilosBar from '../components/OperatorSilosBar';
+import OperatorMekaUploadCard from '../components/OperatorMekaUploadCard';
 import { appConfirm } from '../components/appDialog';
 
 const LAB_MENU_ITEMS: { key: LabTab; label: string }[] = [
@@ -84,6 +86,7 @@ export default function OperatorBSUPage() {
   // текущей активной сменой.
   const [operatorShiftNames, setOperatorShiftNames] = useState<string[]>(['Семён', 'Максим']);
   const [activeOperatorName, setActiveOperatorName] = useState<string | null>(null);
+  const [activeSiloId, setActiveSiloId] = useState<number | null>(null);
   const [shiftLoading, setShiftLoading] = useState(false);
   // До первого ответа сервера не знаем, выбрана ли смена — не показываем
   // напоминание, чтобы оно не "мигало" на долю секунды при каждой загрузке.
@@ -102,6 +105,8 @@ export default function OperatorBSUPage() {
         const data = await res.json();
         if (cancelled) return;
         setActiveOperatorName(data?.active_operator_name || null);
+        const siloId = Number(data?.active_silo_id);
+        setActiveSiloId([1, 2, 3].includes(siloId) ? siloId : null);
         if (Array.isArray(data?.available_names) && data.available_names.length > 0) {
           setOperatorShiftNames(data.available_names);
         }
@@ -158,6 +163,20 @@ export default function OperatorBSUPage() {
     setShiftReminderDismissed(true);
   };
 
+  const handleActiveSiloChange = async (siloId: number) => {
+    setActiveSiloId(siloId);
+    try {
+      const res = await fetch('/api/adminCifra/operator-shift', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active_silo_id: siloId }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      console.error('Не удалось сохранить рабочий силос:', err);
+    }
+  };
+
   // ==================== ИДЕНТИЧНОСТЬ ОПЕРАТОРА (для записи в историю) ====================
   // Реальное имя того, кто сейчас на смене (Семён/Максим), приоритетнее
   // обезличенного имени общей учётки — так в истории заявки и логе
@@ -165,6 +184,7 @@ export default function OperatorBSUPage() {
   const { user } = useUserRole();
   const operatorName = activeOperatorName || user?.full_name || user?.username || 'Оператор';
   const operatorRole = user?.role || 'operator';
+  const showSiloReminder = shiftDataLoaded && activeSiloId == null;
 
     // ==================== 0. УПРАВЛЕНИЕ ДАТОЙ ====================
   const [selectedDate, setSelectedDate] = useState(() => {
@@ -1159,32 +1179,113 @@ export default function OperatorBSUPage() {
         </div>
 
         {/* ==================== ЧАСЫ РЕАЛЬНОГО ВРЕМЕНИ ==================== */}
-        <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            backgroundColor: '#25334A',
-            border: '1px solid #334155',
-            borderRadius: '16px',
-            padding: '6px 26px'
-          }}>
-            <div style={{
+        <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
+          <div
+            style={{
               display: 'flex',
-              alignItems: 'baseline',
-              gap: '2px',
-              fontFamily: "'SF Mono', 'Consolas', 'Menlo', monospace",
-              lineHeight: 1
-            }}>
-              <span style={{ fontSize: '30px', fontWeight: '700', color: '#fff', letterSpacing: '0.5px' }}>
-                {clockHours}:{clockMinutes}
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '8px',
+              minWidth: '300px',
+              maxWidth: '420px',
+              width: '100%',
+              padding: '2px 8px',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                justifyContent: 'center',
+                gap: '2px',
+                fontFamily: "ui-monospace, 'SF Mono', 'Consolas', 'Menlo', monospace",
+                fontVariantNumeric: 'tabular-nums',
+                lineHeight: 1,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: '38px',
+                  fontWeight: 600,
+                  color: '#F8FAFC',
+                  letterSpacing: '0.12em',
+                  textShadow: '0 0 24px rgba(148, 163, 184, 0.22)',
+                }}
+              >
+                {clockHours}
               </span>
-              <span style={{ fontSize: '16px', fontWeight: '600', color: '#10B981', marginLeft: '4px' }}>
+              <span
+                style={{
+                  fontSize: '34px',
+                  fontWeight: 500,
+                  color: '#64748B',
+                  margin: '0 4px',
+                  letterSpacing: 0,
+                  opacity: Number(clockSeconds) % 2 === 0 ? 1 : 0.35,
+                  transition: 'opacity 0.25s ease',
+                }}
+              >
+                :
+              </span>
+              <span
+                style={{
+                  fontSize: '38px',
+                  fontWeight: 600,
+                  color: '#F8FAFC',
+                  letterSpacing: '0.12em',
+                  textShadow: '0 0 24px rgba(148, 163, 184, 0.22)',
+                }}
+              >
+                {clockMinutes}
+              </span>
+              <span
+                style={{
+                  fontSize: '18px',
+                  fontWeight: 600,
+                  color: '#34D399',
+                  marginLeft: '14px',
+                  letterSpacing: '0.08em',
+                  textShadow: '0 0 14px rgba(52, 211, 153, 0.35)',
+                }}
+              >
                 {clockSeconds}
               </span>
             </div>
-            <div style={{ fontSize: '11.5px', color: '#94A3B8', marginTop: '2px', textTransform: 'capitalize' }}>
-              {clockDateLabel}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '14px',
+                width: '100%',
+                maxWidth: '340px',
+              }}
+            >
+              <span
+                style={{
+                  flex: 1,
+                  height: '1px',
+                  background: 'linear-gradient(90deg, transparent, #475569 40%, #64748B)',
+                }}
+              />
+              <div
+                style={{
+                  fontSize: '12px',
+                  color: '#94A3B8',
+                  letterSpacing: '0.06em',
+                  textTransform: 'capitalize',
+                  whiteSpace: 'nowrap',
+                  fontWeight: 500,
+                }}
+              >
+                {clockDateLabel}
+              </div>
+              <span
+                style={{
+                  flex: 1,
+                  height: '1px',
+                  background: 'linear-gradient(90deg, #64748B, #475569 60%, transparent)',
+                }}
+              />
             </div>
           </div>
         </div>
@@ -1196,38 +1297,97 @@ export default function OperatorBSUPage() {
         <div
           title="Кто сейчас за пультом — влияет на подпись в истории заявок"
           style={{
-            backgroundColor: '#25334A',
-            padding: '10px 16px 10px 20px',
-            borderRadius: '9999px',
-            fontSize: '15px',
             display: 'flex',
             alignItems: 'center',
-            gap: '6px',
+            gap: '10px',
+            padding: '8px 14px 8px 10px',
+            borderRadius: '9999px',
+            fontSize: '15px',
+            background: activeOperatorName
+              ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.18) 0%, rgba(15, 23, 42, 0.95) 42%, #0F172A 100%)'
+              : 'linear-gradient(135deg, #1E2937 0%, #0F172A 100%)',
+            border: activeOperatorName
+              ? '1px solid rgba(52, 211, 153, 0.45)'
+              : '1px solid #334155',
+            boxShadow: activeOperatorName
+              ? '0 0 0 1px rgba(16, 185, 129, 0.08), 0 8px 22px rgba(2, 6, 23, 0.45), 0 0 28px rgba(16, 185, 129, 0.12)'
+              : '0 6px 16px rgba(2, 6, 23, 0.35)',
             opacity: shiftLoading ? 0.7 : 1,
+            transition: 'border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease',
           }}
         >
-          Смена:
-          <ModalSelect
-            value={activeOperatorName || ''}
-            onChange={(name) => handleShiftOperatorChange(name)}
-            placeholder="Выбрать…"
-            chevronColor={activeOperatorName ? '#10B981' : '#94A3B8'}
-            minPopupWidth={160}
-            triggerStyle={{
-              background: 'transparent',
-              border: 'none',
-              color: activeOperatorName ? '#10B981' : '#94A3B8',
-              fontWeight: 600,
-              fontSize: 15,
-              padding: 0,
-              boxShadow: 'none',
+          <div
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              background: activeOperatorName
+                ? 'radial-gradient(circle at 30% 25%, rgba(52, 211, 153, 0.35), rgba(16, 185, 129, 0.12) 55%, rgba(15, 23, 42, 0.9))'
+                : 'radial-gradient(circle at 30% 25%, #334155, #1E2937)',
+              border: activeOperatorName
+                ? '1px solid rgba(52, 211, 153, 0.4)'
+                : '1px solid #475569',
+              boxShadow: activeOperatorName ? 'inset 0 0 10px rgba(16, 185, 129, 0.15)' : undefined,
+              position: 'relative',
             }}
-            options={operatorShiftNames.map((name) => ({
-              value: name,
-              label: name,
-              text: name,
-            }))}
-          />
+          >
+            <UserRound size={16} color={activeOperatorName ? '#6EE7B7' : '#94A3B8'} strokeWidth={2.2} />
+            <span
+              style={{
+                position: 'absolute',
+                right: 1,
+                bottom: 1,
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: activeOperatorName ? '#34D399' : '#64748B',
+                boxShadow: activeOperatorName
+                  ? '0 0 0 2px #0F172A, 0 0 8px rgba(52, 211, 153, 0.7)'
+                  : '0 0 0 2px #0F172A',
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', minWidth: 0 }}>
+            <span
+              style={{
+                fontSize: '10px',
+                fontWeight: 600,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: '#94A3B8',
+                lineHeight: 1.1,
+              }}
+            >
+              Смена
+            </span>
+            <ModalSelect
+              value={activeOperatorName || ''}
+              onChange={(name) => handleShiftOperatorChange(name)}
+              placeholder="Выбрать…"
+              chevronColor={activeOperatorName ? '#34D399' : '#94A3B8'}
+              minPopupWidth={160}
+              triggerStyle={{
+                background: 'transparent',
+                border: 'none',
+                color: activeOperatorName ? '#6EE7B7' : '#94A3B8',
+                fontWeight: 700,
+                fontSize: 16,
+                padding: 0,
+                boxShadow: 'none',
+                letterSpacing: '0.01em',
+                textShadow: activeOperatorName ? '0 0 14px rgba(52, 211, 153, 0.25)' : undefined,
+              }}
+              options={operatorShiftNames.map((name) => ({
+                value: name,
+                label: name,
+                text: name,
+              }))}
+            />
+          </div>
         </div>
       </div>
 
@@ -1404,38 +1564,99 @@ export default function OperatorBSUPage() {
           </div>
         </div>
 
-        {/* ==================== 3. БЛОК СТАТИСТИКИ (только на вкладке Заявки) ==================== */}
-        {activeTab === 'zayavki' && (
-          <div style={{ 
-            display: 'grid', 
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', 
-            gap: '14px',
-            marginBottom: '14px',
-            flexShrink: 0
-          }}>
-            {stats.map((stat, index) => (
-              <div key={index} style={volumeCardStyle({
-                borderRadius: 18,
-                padding: '14px 18px',
-              })}>
-                <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '6px' }}>
-                  {stat.label}
-                </div>
-                <div style={{ 
-                  fontSize: '26px', 
-                  fontWeight: '700', 
-                  color: stat.color,
-                  marginBottom: '2px'
-                }}>
-                  {stat.value}
-                </div>
-                <div style={{ color: '#64748B', fontSize: '15px' }}>
-                  {stat.unit}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* ==================== 3. СТАТИСТИКА | СИЛОСЫ | MEKA ==================== */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: activeTab === 'zayavki'
+            ? 'minmax(0, 1.05fr) minmax(260px, 0.85fr) minmax(148px, 168px)'
+            : 'minmax(0, 1fr) minmax(148px, 168px)',
+          gap: '12px',
+          marginBottom: '14px',
+          flexShrink: 0,
+          alignItems: 'stretch',
+        }}>
+          {activeTab === 'zayavki' && (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+              gap: '10px',
+              minWidth: 0,
+              height: '100%',
+              alignItems: 'stretch',
+            }}>
+              {stats.map((stat, index) => {
+                const valueText = String(stat.value ?? '');
+                const compactValue = valueText.length > 6;
+                return (
+                  <div key={index} style={volumeCardStyle({
+                    borderRadius: 16,
+                    padding: '14px 14px 12px',
+                    minWidth: 0,
+                    height: '100%',
+                    boxSizing: 'border-box',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                  })}>
+                    <div style={{
+                      color: '#CBD5E1',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      lineHeight: 1.25,
+                      letterSpacing: '0.01em',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {stat.label}
+                    </div>
+                    <div>
+                      <div
+                        title={valueText}
+                        style={{
+                          fontSize: compactValue ? '26px' : '36px',
+                          fontWeight: 800,
+                          color: stat.color,
+                          lineHeight: 1.05,
+                          fontVariantNumeric: 'tabular-nums',
+                          letterSpacing: '-0.02em',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {stat.value}
+                      </div>
+                      {stat.unit ? (
+                        <div style={{
+                          marginTop: '4px',
+                          color: '#94A3B8',
+                          fontSize: '13px',
+                          fontWeight: 500,
+                        }}>
+                          {stat.unit}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <OperatorSilosBar
+            activeSiloId={activeSiloId}
+            onActiveSiloChange={handleActiveSiloChange}
+            highlightMissing={showSiloReminder}
+            actorName={operatorName}
+          />
+          <OperatorMekaUploadCard
+            onUploaded={() => {
+              // Сброс кеша отчётов — следующий заход на вкладку подтянет свежий список
+              void preloadReportsData();
+            }}
+          />
+        </div>
 
         {/* ==================== 4. ОСНОВНОЙ КОНТЕНТ ==================== */}
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -2162,9 +2383,23 @@ export default function OperatorBSUPage() {
             <div style={{ fontSize: '21px', fontWeight: '700', marginBottom: '8px' }}>
               Доброе утро! Кто сегодня на смене?
             </div>
-            <div style={{ color: '#94A3B8', fontSize: '14.5px', marginBottom: '26px', lineHeight: 1.5 }}>
+            <div style={{ color: '#94A3B8', fontSize: '14.5px', marginBottom: '18px', lineHeight: 1.5 }}>
               Выберите себя — все ваши действия будут подписаны вашим именем
               в истории заявок.
+            </div>
+            <div style={{
+              color: '#FBBF24',
+              fontSize: '13.5px',
+              marginBottom: '26px',
+              lineHeight: 1.45,
+              padding: '10px 12px',
+              borderRadius: 12,
+              background: 'rgba(245, 158, 11, 0.12)',
+              border: '1px solid rgba(245, 158, 11, 0.35)',
+              textAlign: 'left',
+            }}>
+              После выбора смены укажи <strong style={{ color: '#FDE68A' }}>рабочий силос</strong> справа
+              вверху — с него будет списываться цемент при «Загружен».
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '18px' }}>

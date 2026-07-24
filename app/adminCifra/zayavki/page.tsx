@@ -30,6 +30,7 @@ import ModalDateInput from '@/app/adminCifra/components/ModalDateInput';
 import ModalTimeInput from '@/app/adminCifra/components/ModalTimeInput';
 import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import ModalSelect from '@/app/adminCifra/components/ModalSelect';
+import { InstantFieldHint, VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
@@ -68,6 +69,28 @@ type WeekChartDay = {
 
 function localDayKey(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Скруглённый SVG path (Catmull-Rom → cubic Bezier). points: [[x,y], ...] */
+function smoothPath(points: [number, number][]): string {
+  if (points.length === 0) return '';
+  if (points.length === 1) return `M ${points[0][0]},${points[0][1]}`;
+  if (points.length === 2) {
+    return `M ${points[0][0]},${points[0][1]} L ${points[1][0]},${points[1][1]}`;
+  }
+  let d = `M ${points[0][0]},${points[0][1]}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i - 1] ?? points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] ?? p2;
+    const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2[0]},${p2[1]}`;
+  }
+  return d;
 }
 
 /** SVG-график недели. compact — одна линия плана; expanded — все серии в модалке. */
@@ -120,7 +143,15 @@ function WeekVolumeChartSvg({
     const right = plans[i + 1] ?? 0;
     return maxV >= avgPlan * 1.35 && v >= maxV * 0.92 && v >= left && v >= right;
   };
-  const poly = (vals: number[]) => vals.map((v, i) => `${xOf(i)},${yOf(v)}`).join(' ');
+  const ptsOf = (vals: number[]): [number, number][] =>
+    vals.map((v, i) => [xOf(i), yOf(v)]);
+  const linePath = (vals: number[]) => smoothPath(ptsOf(vals));
+  const areaPath = (vals: number[]) => {
+    const line = linePath(vals);
+    if (!line) return '';
+    const baseY = padT + chartH;
+    return `${line} L ${xOf(n - 1)},${baseY} L ${xOf(0)},${baseY} Z`;
+  };
   const gridYs = (expanded ? [0, 0.25, 0.5, 0.75, 1] : [0, 0.5, 1]).map((t) => padT + chartH * (1 - t));
   const fillId = `${idPrefix}-fill`;
   const glowId = `${idPrefix}-glow`;
@@ -182,8 +213,8 @@ function WeekVolumeChartSvg({
       })}
 
       {expanded && (
-        <polyline
-          points={poly(prevPlans)}
+        <path
+          d={linePath(prevPlans)}
           fill="none"
           stroke="#94A3B8"
           strokeWidth={2}
@@ -197,12 +228,12 @@ function WeekVolumeChartSvg({
 
       {plans.some((v) => v > 0) && (
         <path
-          d={`M ${xOf(0)},${padT + chartH} L ${plans.map((v, i) => `${xOf(i)},${yOf(v)}`).join(' L ')} L ${xOf(n - 1)},${padT + chartH} Z`}
+          d={areaPath(plans)}
           fill={`url(#${fillId})`}
         />
       )}
-      <polyline
-        points={poly(plans)}
+      <path
+        d={linePath(plans)}
         fill="none"
         stroke="#60A5FA"
         strokeWidth={expanded ? 2.75 : 2.5}
@@ -212,8 +243,8 @@ function WeekVolumeChartSvg({
       />
 
       {expanded && (
-        <polyline
-          points={poly(shipped)}
+        <path
+          d={linePath(shipped)}
           fill="none"
           stroke="#10B981"
           strokeWidth={2.75}
@@ -303,17 +334,17 @@ function WeekVolumeChartSvg({
 
 function WeekChartLegend() {
   return (
-    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '11px', color: '#64748B' }}>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-        <span style={{ width: 14, height: 2, background: '#60A5FA', borderRadius: 2, display: 'inline-block' }} />
+    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', fontSize: 13, fontWeight: 600 }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: '#60A5FA' }}>
+        <span style={{ width: 18, height: 3, background: '#60A5FA', borderRadius: 2, display: 'inline-block' }} />
         План
       </span>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-        <span style={{ width: 14, height: 2, background: '#10B981', borderRadius: 2, display: 'inline-block' }} />
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: '#34D399' }}>
+        <span style={{ width: 18, height: 3, background: '#34D399', borderRadius: 2, display: 'inline-block' }} />
         Отгружено
       </span>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-        <span style={{ width: 14, height: 0, borderTop: '2px dashed #94A3B8', display: 'inline-block' }} />
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, color: '#CBD5E1' }}>
+        <span style={{ width: 18, height: 0, borderTop: '2.5px dashed #CBD5E1', display: 'inline-block' }} />
         Прошлая неделя
       </span>
     </div>
@@ -1172,28 +1203,61 @@ ${order.customer_type?.includes('Юридическое')
     // console.log(`📅 Выбранная дата: ${selectedDateStr} | Найдено заявок: ${dayOrders.length}`);
 
   // ==================== KPI ====================
-  // Исключаем отменённые заявки из всех расчётов
+  // Исключаем отменённые заявки из плана и факта (рейсы по отменённым тоже не считаем).
   const activeOrders = dayOrders.filter((o: Order) => o.status !== 'cancelled');
 
-  const dayOrderIds = useMemo(
-    () => new Set(dayOrders.map((o: Order) => String(o.id))),
-    [dayOrders]
-  );
-  const dayOrderIdsKey = useMemo(
-    () => dayOrders.map((o: Order) => o.id).join(','),
-    [dayOrders]
+  const activeOrderIds = useMemo(
+    () => new Set(activeOrders.map((o: Order) => String(o.id))),
+    [activeOrders]
   );
 
-  // Подгрузка рейсов дня для KPI (отдельно от orderMixers открытой модалки).
-  // Мержим с текущим стейтом: иначе поздний ответ fetch затирает свежий broadcast.
+  // Пн–вс вокруг selectedDate — и для сайдбара, и для fetch рейсов недели.
+  const weekDays = useMemo(() => {
+    const current = new Date(selectedDate);
+    const dayOfWeek = current.getDay();
+    const diff = current.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+    const monday = new Date(current);
+    monday.setDate(diff);
+    monday.setHours(12, 0, 0, 0);
+    const days: Date[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      days.push(d);
+    }
+    return days;
+  }, [selectedDate]);
+
+  const weekDateSet = useMemo(
+    () => new Set(weekDays.map((d) => getLocalDateString(d))),
+    [weekDays]
+  );
+
+  // Все заявки недели (включая отменённые — нужны в списке дня; в KPI/график фильтруем отдельно).
+  const weekOrderIdsKey = useMemo(() => {
+    const orderDateStr = (o: any) => {
+      if (!o?.delivery_date) return '';
+      return typeof o.delivery_date === 'string'
+        ? o.delivery_date.substring(0, 10)
+        : getLocalDateString(new Date(o.delivery_date));
+    };
+    return allOrders
+      .filter((o) => weekDateSet.has(orderDateStr(o)))
+      .map((o) => o.id)
+      .join(',');
+  }, [allOrders, weekDateSet]);
+
+  // Рейсы на всю неделю: KPI дня фильтрует по activeOrderIds, график — по дню заявки.
+  // Для заявок из ответа API источник истины — fetch (иначе удалённые рейсы
+  // остаются «призраками»). Свежее updated_at из prev — только для той же id.
   useEffect(() => {
     let cancelled = false;
-    if (!dayOrderIdsKey) {
+    if (!weekOrderIdsKey) {
       setDayMixerAssignments([]);
       return;
     }
-    const idSet = new Set(dayOrderIdsKey.split(',').map(String));
-    fetch(`/api/adminCifra/order-mixers?orderIds=${dayOrderIdsKey}`)
+    const idSet = new Set(weekOrderIdsKey.split(',').map(String));
+    fetch(`/api/adminCifra/order-mixers?orderIds=${weekOrderIdsKey}`)
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (cancelled || !Array.isArray(data)) return;
@@ -1202,13 +1266,13 @@ ${order.customer_type?.includes('Юридическое')
           for (const m of data) byId.set(String(m.id), m);
           for (const m of prev) {
             const oid = String(m.orderId ?? m.order_id);
-            if (!idSet.has(oid)) continue;
             const id = String(m.id);
-            const incoming = byId.get(id);
-            if (!incoming) {
-              byId.set(id, m);
+            if (!idSet.has(oid)) {
+              // Рейсы вне текущей недели — не тащим в пул (смена недели).
               continue;
             }
+            const incoming = byId.get(id);
+            if (!incoming) continue; // в БД уже нет — не держим призрака
             const tPrev = new Date(m.updated_at || 0).getTime();
             const tIn = new Date(incoming.updated_at || 0).getTime();
             if (tPrev > tIn) byId.set(id, m);
@@ -1218,13 +1282,14 @@ ${order.customer_type?.includes('Юридическое')
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [dayOrderIdsKey]);
+  }, [weekOrderIdsKey]);
 
+  // KPI выбранного дня — только активные заявки этого дня (не вся неделя).
   const dayMixerTrips = useMemo(
     () => dayMixerAssignments.filter((m: any) =>
-      dayOrderIds.has(String(m.orderId ?? m.order_id))
+      activeOrderIds.has(String(m.orderId ?? m.order_id))
     ),
-    [dayMixerAssignments, dayOrderIds]
+    [dayMixerAssignments, activeOrderIds]
   );
 
   const planVolume = activeOrders.reduce((sum: number, o: Order) =>
@@ -1292,28 +1357,6 @@ ${order.customer_type?.includes('Юридическое')
       : completionPct >= 50
         ? 'linear-gradient(90deg, #F59E0B, #FACC15)'
         : 'linear-gradient(90deg, #3B82F6, #60A5FA)';
-
-              // ==================== НЕДЕЛЯ (ПН - ВС) ====================
-  const getWeekDays = () => {
-    const days = [];
-    const current = new Date(selectedDate);
-    
-    // Находим понедельник текущей недели
-    const dayOfWeek = current.getDay(); // 0 = воскресенье, 1 = понедельник...
-    const diff = current.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // сдвиг к понедельнику
-    const monday = new Date(current);
-    monday.setDate(diff);
-    monday.setHours(12, 0, 0, 0);
-
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(monday);
-      d.setDate(monday.getDate() + i);
-      days.push(d);
-    }
-    return days;
-  };
-
-  const weekDays = getWeekDays();
 
   // ==================== 4. ПОДСЧЁТ ЗАЯВОК НА ДЕНЬ ====================
   const getOrdersCountForDate = (date: Date) => {
@@ -1515,7 +1558,18 @@ ${order.customer_type?.includes('Юридическое')
     weekDays.map((d: Date) => getOrdersCountForDate(d))
   , [allOrders, weekDays]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Серии для бокового графика: план / отгрузка / прошлая неделя + счётчики заявок
+  // Разгрузка по заявке (для графика недели) — растёт в течение дня по рейсам.
+  const unloadedByOrderIdWeek = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of dayMixerAssignments) {
+      if (m.status !== 'Разгружен') continue;
+      const oid = String(m.orderId ?? m.order_id);
+      map.set(oid, (map.get(oid) || 0) + Number(m.volume || 0));
+    }
+    return map;
+  }, [dayMixerAssignments]);
+
+  // Серии для бокового графика: план / отгрузка (разгружено) / прошлая неделя
   const weekChartSeries = useMemo((): WeekChartDay[] => {
     const orderDateStr = (o: any) => {
       if (!o?.delivery_date) return '';
@@ -1533,17 +1587,25 @@ ${order.customer_type?.includes('Юридическое')
       const dayActive = allOrders.filter((o) => orderDateStr(o) === dateStr && o.status !== 'cancelled');
       const prevActive = allOrders.filter((o) => orderDateStr(o) === prevStr && o.status !== 'cancelled');
 
+      let shipped = 0;
+      let shippedOrders = 0;
+      for (const o of dayActive) {
+        const u = unloadedByOrderIdWeek.get(String(o.id)) || 0;
+        if (u > 0) {
+          shipped += u;
+          shippedOrders += 1;
+        }
+      }
+
       return {
         plan: dayActive.reduce((s, o) => s + Number(o.volume || 0), 0),
-        shipped: dayActive
-          .filter((o) => o.status === 'completed')
-          .reduce((s, o) => s + Number(o.volume || 0), 0),
+        shipped,
         prevPlan: prevActive.reduce((s, o) => s + Number(o.volume || 0), 0),
         orders: dayActive.length,
-        shippedOrders: dayActive.filter((o) => o.status === 'completed').length,
+        shippedOrders,
       };
     });
-  }, [allOrders, weekDays]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allOrders, weekDays, unloadedByOrderIdWeek]);
 
   // П5: memoизированные значения для рендера (факт — от разгруженного объёма)
   const cementCompletedMemo  = useMemo(() => calculateCementNeeded('unloaded'), [dayOrders, recipes, unloadedByOrderId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1954,24 +2016,32 @@ ${order.customer_type?.includes('Юридическое')
       <div
         key={dateStr}
         onClick={() => setSelectedDate(d)}
-        style={volumeCardSoftStyle({
+        style={{
           flex: 1,
           minHeight: 0,
           maxHeight: '58px',
           padding: '0 16px',
-          background: isSelected
-            ? 'linear-gradient(165deg, rgba(59,130,246,0.22) 0%, rgba(30,41,55,0.95) 100%)'
-            : undefined,
           borderRadius: 10,
           cursor: 'pointer',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          border: isSelected ? '2px solid #3B82F6' : undefined,
           transition: 'all 0.2s ease',
           userSelect: 'none',
           overflow: 'hidden',
-        })}
+          boxSizing: 'border-box',
+          // Без тёмного градиента карточки — иначе плашки сливаются с панелью.
+          // Мягкая обводка + лёгкое сланцевое свечение, чтобы дни читались.
+          background: isSelected
+            ? 'linear-gradient(165deg, rgba(59,130,246,0.28) 0%, rgba(30,58,95,0.45) 100%)'
+            : 'rgba(148, 163, 184, 0.07)',
+          border: isSelected
+            ? '1.5px solid rgba(96, 165, 250, 0.85)'
+            : '1px solid rgba(148, 163, 184, 0.38)',
+          boxShadow: isSelected
+            ? '0 0 0 1px rgba(59,130,246,0.25), 0 0 18px rgba(59,130,246,0.28), inset 0 1px 0 rgba(255,255,255,0.12)'
+            : '0 0 0 1px rgba(148,163,184,0.08), 0 0 14px rgba(148,163,184,0.14), inset 0 1px 0 rgba(255,255,255,0.1)',
+        }}
       >
         <div style={{ fontWeight: '600', fontSize: '14px', whiteSpace: 'nowrap' }}>
           {d.toLocaleDateString('ru-RU', { 
@@ -2068,22 +2138,11 @@ ${order.customer_type?.includes('Юридическое')
                   </strong>
                 </div>
 
-                {/* 3. Отгружено */}
+                {/* 3. Отгружено — те же м³, что зелёная линия графика (разгруженные рейсы) */}
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ fontSize: '15px' }}>Отгружено:</span>
                   <strong style={{ fontSize: '17px', color: '#10B981' }}>
-                    {Math.round(weekDays.reduce((sum, d) => {
-                      const dateStr = getLocalDateString(d);
-                      return sum + allOrders
-                        .filter(o => {
-                          if (!o?.delivery_date) return false;
-                          const orderDate = typeof o.delivery_date === 'string' 
-                            ? o.delivery_date.substring(0, 10) 
-                            : getLocalDateString(new Date(o.delivery_date));
-                          return orderDate === dateStr && o.status === 'completed';
-                        })
-                        .reduce((v, o) => v + Number(o.volume || 0), 0);
-                    }, 0))} м³
+                    {Math.round(weekChartSeries.reduce((sum, s) => sum + s.shipped, 0))} м³
                   </strong>
                 </div>
               </div>
@@ -2685,22 +2744,28 @@ ${order.customer_type?.includes('Юридическое')
               />
 
               <div style={{ color: '#94A3B8' }}>Объём</div>
-              <input 
-                type="number" 
-                step="0.01"
-                min="0.01"
-                value={selectedOrder.volume || ''} 
-                disabled={selectedOrder.status === 'completed'}
-                title={selectedOrder.status === 'completed' ? 'Объём нельзя менять у заявки в статусе «Выполнена»' : undefined}
-                onChange={(e) => setSelectedOrder({ ...selectedOrder, volume: e.target.value })}
-                style={modalFieldStyle({
-                  padding: '6px 10px',
-                  borderRadius: 8,
-                  fontSize: '14px',
-                  opacity: selectedOrder.status === 'completed' ? 0.55 : 1,
-                  cursor: selectedOrder.status === 'completed' ? 'not-allowed' : undefined,
-                })}
-              />
+              <InstantFieldHint
+                active={selectedOrder.status === 'completed'}
+                message={VOLUME_LOCKED_HINT}
+              >
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={selectedOrder.volume || ''}
+                  disabled={selectedOrder.status === 'completed'}
+                  onChange={(e) => setSelectedOrder({ ...selectedOrder, volume: e.target.value })}
+                  style={modalFieldStyle({
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                    fontSize: '14px',
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    opacity: selectedOrder.status === 'completed' ? 0.55 : 1,
+                    cursor: selectedOrder.status === 'completed' ? 'not-allowed' : undefined,
+                  })}
+                />
+              </InstantFieldHint>
 
               <div style={{ color: '#94A3B8' }}>Дата доставки</div>
               <ModalDateInput

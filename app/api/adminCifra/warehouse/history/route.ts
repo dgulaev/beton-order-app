@@ -6,13 +6,24 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const { data, error } = await supabase
+    const scope = request.nextUrl.searchParams.get('scope');
+    const limitRaw = Number(request.nextUrl.searchParams.get('limit') || 40);
+    const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 40, 1), 1000);
+
+    let query = supabase
       .from('warehouse_operations')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(40);
+      .limit(limit);
+
+    // Журнал силосов: только операции по цементным силосам
+    if (scope === 'silos') {
+      query = query.ilike('item_type', '%Силос%');
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.error('GET history error:', error);

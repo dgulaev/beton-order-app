@@ -1,13 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { SILO_SPEC } from '@/lib/siloConfig';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+/** Гарантируем 3 силоса с правильными max (85 / 85 / 170). */
+async function ensureSilos() {
+  const { data: existing } = await supabase.from('warehouse_silos').select('silo_id, max, name');
+  const byId = new Map((existing || []).map((s: any) => [Number(s.silo_id), s]));
+
+  for (const spec of SILO_SPEC) {
+    const row = byId.get(spec.silo_id);
+    if (!row) {
+      await supabase.from('warehouse_silos').insert({
+        silo_id: spec.silo_id,
+        name: spec.name,
+        current: 0,
+        max: spec.max,
+        nominal: spec.max,
+        updated_at: new Date().toISOString(),
+      });
+    } else if (Number(row.max) !== spec.max || row.name !== spec.name) {
+      await supabase
+        .from('warehouse_silos')
+        .update({
+          max: spec.max,
+          nominal: spec.max,
+          name: spec.name,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('silo_id', spec.silo_id);
+    }
+  }
+}
+
 export async function GET() {
   try {
+    await ensureSilos();
+
     const [silosRes, additivesRes] = await Promise.all([
       supabase.from('warehouse_silos').select('*').order('silo_id'),
       supabase.from('warehouse_additives').select('*').order('additive_id')
@@ -70,12 +103,15 @@ export async function POST(request: NextRequest) {
     // Силосы
     if (silos && Array.isArray(silos)) {
       for (const s of silos) {
+        const updateData: Record<string, unknown> = {
+          current: Number(s.current),
+          updated_at: new Date().toISOString(),
+        };
+        if (s.max !== undefined) updateData.max = Number(s.max);
+        if (s.name !== undefined) updateData.name = String(s.name);
         await supabase
           .from('warehouse_silos')
-          .update({ 
-            current: Number(s.current), 
-            updated_at: new Date().toISOString() 
-          })
+          .update(updateData)
           .eq('silo_id', Number(s.silo_id));
       }
     }

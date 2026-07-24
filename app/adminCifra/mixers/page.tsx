@@ -8,6 +8,7 @@ import { useUserRole } from '../../providers/UserRoleProvider';
 import { Truck } from 'lucide-react';
 import { modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import { appConfirm } from '../components/appDialog';
+import AdminPagination from '../components/AdminPagination';
 
 interface MixerDriver {
   id: number;
@@ -689,54 +690,13 @@ export default function MixersPage() {
           {/* ==================== РЕЖИМ СПИСКА — строки вмещаются в экран ==================== */}
           {viewMode === 'list' && (
             <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {totalPages > 1 && (
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: '10px',
-                  flexShrink: 0,
-                }}>
-                  <span style={{ color: '#94A3B8', fontSize: '13px', fontWeight: 600 }}>
-                    Страница {safeCurrentPage} из {totalPages}
-                    <span style={{ color: '#64748B', fontWeight: 500 }}> · {filteredMixers.length} миксеров</span>
-                  </span>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                      type="button"
-                      onClick={() => setCurrentPage(Math.max(1, safeCurrentPage - 1))}
-                      disabled={safeCurrentPage === 1}
-                      style={volumeCardSoftStyle({
-                        padding: '7px 14px',
-                        borderRadius: 10,
-                        color: safeCurrentPage === 1 ? '#64748B' : '#E2E8F0',
-                        fontSize: '13px',
-                        fontWeight: 600,
-                        cursor: safeCurrentPage === 1 ? 'not-allowed' : 'pointer',
-                        opacity: safeCurrentPage === 1 ? 0.55 : 1,
-                      })}
-                    >
-                      ← Назад
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCurrentPage(Math.min(totalPages, safeCurrentPage + 1))}
-                      disabled={safeCurrentPage === totalPages}
-                      style={volumeCardSoftStyle({
-                        padding: '7px 14px',
-                        borderRadius: 10,
-                        color: safeCurrentPage === totalPages ? '#64748B' : '#E2E8F0',
-                        fontSize: '13px',
-                        fontWeight: 600,
-                        cursor: safeCurrentPage === totalPages ? 'not-allowed' : 'pointer',
-                        opacity: safeCurrentPage === totalPages ? 0.55 : 1,
-                      })}
-                    >
-                      Вперёд →
-                    </button>
-                  </div>
-                </div>
-              )}
+              <AdminPagination
+                page={safeCurrentPage}
+                totalPages={totalPages}
+                onPage={setCurrentPage}
+                suffix={`· ${filteredMixers.length} миксеров`}
+                style={{ marginBottom: '10px' }}
+              />
 
               {/* Список не скроллится — itemsPerPage подстраивается через ResizeObserver */}
               <div

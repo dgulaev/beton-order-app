@@ -15,6 +15,8 @@ export interface RecipeLike {
   name?: string | null;
   type?: string | null;
   cement?: number | null;
+  sand?: number | null;       // кг на 1 м³
+  gravel?: number | null;     // щебень, кг на 1 м³
   additive?: number | null;   // Добавка 1 — ПФМ-НЛК, кг на 1 м³
   additive2?: number | null;  // Добавка 2 — Линомикс ТипР, кг на 1 м³
 }
@@ -157,4 +159,16 @@ export function calculateAdditiveUsage(
 export function calculateCementUsageKg(recipe: RecipeLike | null | undefined, volumeM3: number): number {
   if (!recipe || !volumeM3 || volumeM3 <= 0) return 0;
   return volumeM3 * Number(recipe.cement || 0);
+}
+
+/** Расход песка (кг) по дозировке рецепта. */
+export function calculateSandUsageKg(recipe: RecipeLike | null | undefined, volumeM3: number): number {
+  if (!recipe || !volumeM3 || volumeM3 <= 0) return 0;
+  return volumeM3 * Number(recipe.sand || 0);
+}
+
+/** Расход щебня (кг) по дозировке рецепта. */
+export function calculateGravelUsageKg(recipe: RecipeLike | null | undefined, volumeM3: number): number {
+  if (!recipe || !volumeM3 || volumeM3 <= 0) return 0;
+  return volumeM3 * Number(recipe.gravel || 0);
 }

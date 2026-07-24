@@ -951,15 +951,33 @@ const deleteMixer = async (mixerId: number | string, index: number) => {
 
   const mixerName = mixerToDelete.mixerName || mixerToDelete.number || mixerToDelete.mixer_name || 'Миксер';
   const currentStatus = mixerToDelete.status || 'Загрузка';
+  const volume = Number(mixerToDelete.volume || 0);
+  const isAdminUser = (userRole || '').toLowerCase() === 'admin';
 
-  // ====================28.1  ЗАПРЕЩЁННЫЕ СТАТУСЫ ====================
+  // ====================28.1  ЗАПРЕЩЁННЫЕ СТАТУСЫ (кроме admin) ====================
   const forbiddenStatuses = ['В пути', 'На объекте', 'Разгружен', 'Возврат', 'Проблема'];
+  const isLoadedTrip = forbiddenStatuses.includes(currentStatus);
 
-  if (forbiddenStatuses.includes(currentStatus)) {
+  if (isLoadedTrip && !isAdminUser) {
     alert(`❌ Невозможно удалить миксер ${mixerName}.\n\n`
         + `Рейс уже в статусе "${currentStatus}".\n`
-        + `Удаление возможно только для рейсов со статусом "Загрузка".`);
+        + `Удаление отгруженных рейсов доступно только администратору.`);
     return;
+  }
+
+  if (isLoadedTrip) {
+    const confirmed = await appConfirm(
+      `Удалить рейс ${mixerName} (${volume} м³) по заявке #${mixerToDelete.orderId || selectedOrder?.id}?\n\n`
+        + `Статус: «${currentStatus}».\n`
+        + `Списание цемента/добавок вернётся на склад, запись исчезнет у оператора и из базы.`,
+      {
+        title: 'Удалить отгруженный рейс',
+        okLabel: 'Удалить',
+        cancelLabel: 'Отмена',
+        variant: 'danger',
+      },
+    );
+    if (!confirmed) return;
   }
 
   // Оптимистическое удаление
@@ -967,20 +985,25 @@ const deleteMixer = async (mixerId: number | string, index: number) => {
   setMixerAssignments(prev => prev.filter(m => String(m.id) !== String(mixerId)));
 
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (userId) headers['x-user-id'] = String(userId);
+
     const res = await fetch('/api/adminCifra/order-mixers', {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: mixerId })
+      headers,
+      body: JSON.stringify({
+        id: mixerId,
+        force: isLoadedTrip,
+        userName: userFullName || (typeof window !== 'undefined' ? localStorage.getItem('userName') : null) || 'Администратор',
+        userRole: userRole || undefined,
+      }),
     });
 
     const data = await res.json();
 
     if (res.ok && (data.success || !data.error)) {
       console.log(`🗑️ Миксер ${mixerName} успешно удалён`);
-
-      if (typeof addToHistory === 'function') {
-        await addToHistory(`Удалил миксер ${mixerName} (статус: ${currentStatus})`);
-      }
+      // Историю удаления пишет API (order_history) вместе с возвратом склада.
     } else {
       throw new Error(data.error || data.message || 'Не удалось удалить');
     }

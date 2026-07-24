@@ -891,7 +891,8 @@ const formatVolume = (value: number | string) => {
           </div>
 
           <button 
-            onClick={() => deleteMixer(mixer.id, index)} 
+            onClick={() => deleteMixer(mixer.id, index)}
+            title="Удалить рейс (отгруженные — только admin, с возвратом списания)"
             style={{ 
               color: '#EF4444', 
               background: 'none', 

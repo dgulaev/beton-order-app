@@ -12,6 +12,7 @@ import {
   volumeCardSoftStyle,
   volumeModalStyle,
 } from '@/app/adminCifra/cardStyles';
+import { VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 
 interface MobileOrderDetailModalProps {
   isOpen: boolean;
@@ -430,8 +431,12 @@ export default function MobileOrderDetailModal({
                   type="number"
                   step="0.01"
                   disabled={editedOrder.status === 'completed'}
-                  title={editedOrder.status === 'completed' ? 'Объём нельзя менять у заявки в статусе «Выполнена»' : undefined}
                 />
+                {editedOrder.status === 'completed' ? (
+                  <div style={{ marginTop: 6, fontSize: 11.5, color: '#FBBF24', lineHeight: 1.35, fontWeight: 500 }}>
+                    {VOLUME_LOCKED_HINT}
+                  </div>
+                ) : null}
               </FieldBlock>
               <FieldBlock icon={<Clock size={15} />} label="Время">
                 <input

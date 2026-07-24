@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, type RefObject } from 'react';
-import { COLORS } from './labStyles';
+import AdminPagination from '../components/AdminPagination';
 
 // Высота (visual) для пагинации снизу + небольшой отступ от края экрана.
 const BOTTOM_RESERVE = 84;
@@ -95,18 +95,7 @@ export function useAutoGrid(
   return perPage;
 }
 
-const pageBtnStyle = (disabled: boolean): React.CSSProperties => ({
-  padding: '10px 20px',
-  background: disabled ? '#334155' : '#1E2937',
-  color: '#fff',
-  border: 'none',
-  borderRadius: '12px',
-  fontSize: '15px',
-  fontWeight: 600,
-  cursor: disabled ? 'not-allowed' : 'pointer',
-});
-
-// Пагинация в стиле остальных страниц админки (клиенты/отчёты).
+/** Пагинация лаборатории — единый AdminPagination. */
 export function LabPagination({
   page,
   totalPages,
@@ -116,18 +105,12 @@ export function LabPagination({
   totalPages: number;
   onPage: (p: number) => void;
 }) {
-  if (totalPages <= 1) return null;
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', marginTop: '16px' }}>
-      <button onClick={() => onPage(Math.max(1, page - 1))} disabled={page === 1} style={pageBtnStyle(page === 1)}>
-        ← Назад
-      </button>
-      <div style={{ fontSize: '15px', fontWeight: 600, color: '#E2E8F0' }}>
-        Страница <span style={{ color: COLORS.accent }}>{page}</span> из {totalPages}
-      </div>
-      <button onClick={() => onPage(Math.min(totalPages, page + 1))} disabled={page === totalPages} style={pageBtnStyle(page === totalPages)}>
-        Вперёд →
-      </button>
-    </div>
+    <AdminPagination
+      page={page}
+      totalPages={totalPages}
+      onPage={onPage}
+      style={{ marginTop: '16px' }}
+    />
   );
 }

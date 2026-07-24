@@ -10,6 +10,8 @@ import {
   findRecipeByGrade,
   calculateAdditiveUsage,
   calculateCementUsageKg,
+  calculateSandUsageKg,
+  calculateGravelUsageKg,
   tonsToAdditiveLiters,
   getAdditiveDensity,
   densitiesFromLabSettings,
@@ -24,9 +26,10 @@ import {
   modalFieldStyle,
   volumeModalStyle,
 } from '../cardStyles';
-import { appConfirm, appPrompt } from '../components/appDialog';
-import { FileText, GripVertical, Plus, Trash2, X } from 'lucide-react';
+import { appAlert, appConfirm, appPrompt } from '../components/appDialog';
+import { FileText, GripVertical, Plus, ScrollText, Trash2, X } from 'lucide-react';
 import FbsPassportModal from './FbsPassportModal';
+import SiloJournalModal from './SiloJournalModal';
 
 /** Служебная строка в fbs_blocks: в code хранится JSON-массив имён (порядок карточки). */
 const FBS_ORDER_META_NAME = '__fbs_display_order__';
@@ -70,10 +73,13 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
     open: false,
     record: null,
   });
-  const [todayConsumption, setTodayConsumption] = useState({ 
-    cement: 0, 
-    pfm: 0, 
-    linomix: 0 
+  const [siloJournalOpen, setSiloJournalOpen] = useState(false);
+  const [todayConsumption, setTodayConsumption] = useState({
+    cement: 0,
+    sand: 0,
+    gravel: 0,
+    pfm: 0,
+    linomix: 0,
   });
   /** Средний расход добавок за 7 дней (л/день) — для «хватит на ~N дней». */
   const [avgDailyLiters, setAvgDailyLiters] = useState({ pfm: 0, linomix: 0 });
@@ -264,7 +270,7 @@ const loadTodayConsumption = async () => {
 
     if (!res.ok) {
       // API пока не существует или возвращает ошибку — тихо ставим нули
-      setTodayConsumption({ cement: 0, pfm: 0, linomix: 0 });
+      setTodayConsumption({ cement: 0, sand: 0, gravel: 0, pfm: 0, linomix: 0 });
       return;
     }
 
@@ -272,6 +278,8 @@ const loadTodayConsumption = async () => {
     const logs = data.logs || data || [];
 
     let totalCementKg = 0;
+    let totalSandKg = 0;
+    let totalGravelKg = 0;
     let totalPfmKg = 0;
     let totalLinomixKg = 0;
 
@@ -283,6 +291,8 @@ const loadTodayConsumption = async () => {
       if (!recipe) return; // рецепт не нашли — расход по нему не учитываем (лучше 0, чем случайная оценка)
 
       totalCementKg += calculateCementUsageKg(recipe, volume);
+      totalSandKg += calculateSandUsageKg(recipe, volume);
+      totalGravelKg += calculateGravelUsageKg(recipe, volume);
 
       const usage = calculateAdditiveUsage(recipe, volume);
       if (usage?.additiveId === 1) totalPfmKg += usage.kg;
@@ -291,8 +301,10 @@ const loadTodayConsumption = async () => {
 
     const newConsumption = {
       cement: Math.round(totalCementKg / 1000),
+      sand: Math.round((totalSandKg / 1000) * 10) / 10,
+      gravel: Math.round((totalGravelKg / 1000) * 10) / 10,
       pfm: Math.round(totalPfmKg),
-      linomix: Math.round(totalLinomixKg)
+      linomix: Math.round(totalLinomixKg),
     };
 
     setTodayConsumption(newConsumption);
@@ -305,7 +317,7 @@ const loadTodayConsumption = async () => {
     if (err.name !== 'AbortError' && err.name !== 'TypeError') {
       console.error('Ошибка загрузки расхода сегодня:', err);
     }
-    setTodayConsumption({ cement: 0, pfm: 0, linomix: 0 });
+    setTodayConsumption({ cement: 0, sand: 0, gravel: 0, pfm: 0, linomix: 0 });
   }
 };
 
@@ -426,7 +438,8 @@ const loadTodayConsumption = async () => {
   useRealtimeBroadcast({
     topic: 'order_mixers:all',
     onUpdate: (record: any) => {
-      if (record?.status === 'Разгружен') loadWarehouse();
+      // Цемент списывается при «В пути» (кнопка «Загружен»), добавки — при «Разгружен»
+      if (record?.status === 'В пути' || record?.status === 'Разгружен') loadWarehouse();
     },
   });
 
@@ -447,7 +460,9 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
     const payload = {
       silos: currentSilos.map((s: any) => ({
         silo_id: Number(s.silo_id),
-        current: Number(s.current || 0)
+        current: Number(s.current || 0),
+        max: Number(s.max || 0),
+        name: s.name,
       })),
       additives: currentAdditives.map((add: any) => ({
         additive_id: Number(add.additive_id || add.id || 1),
@@ -486,13 +501,21 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
 
 
   // ==================== 4. ВНЕСТИ ЦЕМЕНТ ====================
-  const handleAddCement = (id: number) => {
-    const input = prompt(`Введите количество цемента (в килограммах) для силоса №${id}:`);
+  const handleAddCement = async (id: number) => {
+    const input = await appPrompt(`Введите количество цемента для силоса №${id}:`, {
+      title: 'Внесение цемента',
+      okLabel: 'Внести',
+      cancelLabel: 'Отмена',
+      variant: 'info',
+      placeholder: '0',
+      inputMode: 'decimal',
+      unit: 'кг',
+    });
     if (input === null) return;
 
-    const kg = parseFloat(input);
+    const kg = parseFloat(String(input).replace(',', '.'));
     if (isNaN(kg)) {
-      alert('❌ Введите корректное число');
+      await appAlert('Введите корректное число', { title: 'Ошибка', variant: 'danger' });
       return;
     }
 
@@ -519,13 +542,21 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
   };
 
   // ==================== 4.1 СПИСАТЬ ЦЕМЕНТ ====================
-  const handleSubtractCement = (id: number) => {
-    const input = prompt(`Введите количество цемента (в килограммах) для списания из силоса №${id}:`);
+  const handleSubtractCement = async (id: number) => {
+    const input = await appPrompt(`Введите количество цемента для списания из силоса №${id}:`, {
+      title: 'Списание цемента',
+      okLabel: 'Списать',
+      cancelLabel: 'Отмена',
+      variant: 'danger',
+      placeholder: '0',
+      inputMode: 'decimal',
+      unit: 'кг',
+    });
     if (input === null) return;
 
-    const kg = parseFloat(input);
+    const kg = parseFloat(String(input).replace(',', '.'));
     if (isNaN(kg)) {
-      alert('❌ Введите корректное число');
+      await appAlert('Введите корректное число', { title: 'Ошибка', variant: 'danger' });
       return;
     }
 
@@ -535,7 +566,8 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
       const updatedSilos = prev.map(s => {
         if (s.silo_id === id) {
           const oldCurrent = Number(s.current || 0);
-          const newCurrent = Math.max(0, oldCurrent - tons);
+          // Минус разрешён — как при автосписании с рабочего силоса
+          const newCurrent = oldCurrent - tons;
           
           addToHistory('− Списано', s.name || `Силос №${id}`, kg, oldCurrent * 1000, newCurrent * 1000, 'кг');
           
@@ -800,17 +832,29 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
  // ==================== 6.1 РАБОТА С ДОБАВКАМИ ====================
   // Поступление: тонны → литры (плотность в recipeAdditives).
   // Ручное списание / обнуление: литры. Автосписание с рейса — отдельно (кг→л).
-  const handleAddAdditive = (index: number) => {
+  const handleAddAdditive = async (index: number) => {
     const additiveId = (index === 0 ? 1 : 2) as 1 | 2;
     const name = ADDITIVE_NAMES[additiveId];
     const density = getAdditiveDensity(additiveId, additiveDensities);
     const litersPerTon = Math.round(tonsToAdditiveLiters(additiveId, 1, additiveDensities));
-    const input = prompt(
-      `Сколько тонн добавить в ${name}?\n(1 т ≈ ${litersPerTon} л при плотности ${density} кг/л — из настроек лаборатории)`
+    const input = await appPrompt(
+      `Сколько тонн добавить в ${name}?\n(1 т ≈ ${litersPerTon} л при плотности ${density} кг/л — из настроек лаборатории)`,
+      {
+        title: `Внесение · ${name}`,
+        okLabel: 'Внести',
+        cancelLabel: 'Отмена',
+        variant: 'info',
+        placeholder: '0',
+        inputMode: 'decimal',
+        unit: 'т',
+      }
     );
     if (input === null) return;
-    const tons = parseFloat(input.replace(',', '.'));
-    if (isNaN(tons) || tons <= 0) return alert('Введите положительное число (тонны)');
+    const tons = parseFloat(String(input).replace(',', '.'));
+    if (isNaN(tons) || tons <= 0) {
+      await appAlert('Введите положительное число (тонны)', { title: 'Ошибка', variant: 'danger' });
+      return;
+    }
 
     const liters = Math.round(tonsToAdditiveLiters(additiveId, tons, additiveDensities) * 10) / 10;
 
@@ -839,13 +883,24 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
     });
   };
 
-  const handleSubtractAdditive = (index: number) => {
+  const handleSubtractAdditive = async (index: number) => {
     const additiveId = (index === 0 ? 1 : 2) as 1 | 2;
     const name = ADDITIVE_NAMES[additiveId];
-    const input = prompt(`Сколько литров списать из ${name}?`);
+    const input = await appPrompt(`Сколько литров списать из ${name}?`, {
+      title: `Списание · ${name}`,
+      okLabel: 'Списать',
+      cancelLabel: 'Отмена',
+      variant: 'danger',
+      placeholder: '0',
+      inputMode: 'decimal',
+      unit: 'л',
+    });
     if (input === null) return;
-    const liters = parseFloat(input.replace(',', '.'));
-    if (isNaN(liters) || liters <= 0) return alert('Введите положительное число (литры)');
+    const liters = parseFloat(String(input).replace(',', '.'));
+    if (isNaN(liters) || liters <= 0) {
+      await appAlert('Введите положительное число (литры)', { title: 'Ошибка', variant: 'danger' });
+      return;
+    }
 
     setAdditives(prev => {
       const updated = prev.map((add, i) => {
@@ -892,12 +947,17 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
     const length_cm = Number(newFbsForm.length_cm) || 0;
     const width_cm = Number(newFbsForm.width_cm) || 0;
     const height_cm = Number(newFbsForm.height_cm) || 0;
-    if (!name) return alert('Укажи название вида ФБС');
+    if (!name) {
+      await appAlert('Укажи название вида ФБС', { title: 'Проверка', variant: 'warning' });
+      return;
+    }
     if (length_cm <= 0 || width_cm <= 0 || height_cm <= 0) {
-      return alert('Укажи размеры блока (см)');
+      await appAlert('Укажи размеры блока (см)', { title: 'Проверка', variant: 'warning' });
+      return;
     }
     if (availableFBS.some((r: any) => String(r.name || '').trim().toLowerCase() === name.toLowerCase())) {
-      return alert('Такой вид ФБС уже есть');
+      await appAlert('Такой вид ФБС уже есть', { title: 'Проверка', variant: 'warning' });
+      return;
     }
 
     // Код вида: 240×30×60 → 24-3-6 (как в каталоге лаборатории).
@@ -923,7 +983,10 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
       });
       if (!res.ok) {
         const errText = await res.text();
-        alert(`Не удалось создать вид ФБС: ${res.status} ${errText}`);
+        await appAlert(`Не удалось создать вид ФБС: ${res.status} ${errText}`, {
+          title: 'Ошибка',
+          variant: 'danger',
+        });
         return;
       }
       const created = await res.json();
@@ -947,7 +1010,7 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
       setNewFbsForm({ name: '', length_cm: 240, width_cm: 30, height_cm: 60 });
     } catch (err) {
       console.error('Ошибка создания ФБС:', err);
-      alert('Ошибка соединения при создании вида ФБС');
+      await appAlert('Ошибка соединения при создании вида ФБС', { title: 'Ошибка', variant: 'danger' });
     } finally {
       setSavingNewFbs(false);
     }
@@ -1007,7 +1070,7 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
       const res = await fetch(`/api/adminCifra/warehouse?${qs}`, { method: 'DELETE' });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert(json.error || 'Не удалось удалить вид ФБС');
+        await appAlert(json.error || 'Не удалось удалить вид ФБС', { title: 'Ошибка', variant: 'danger' });
         return;
       }
 
@@ -1024,7 +1087,7 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
       await loadFBS(nextAvailable);
     } catch (err) {
       console.error('Ошибка удаления вида ФБС:', err);
-      alert('Ошибка соединения при удалении вида ФБС');
+      await appAlert('Ошибка соединения при удалении вида ФБС', { title: 'Ошибка', variant: 'danger' });
     }
   };
 
@@ -1093,18 +1156,23 @@ const handleAddFBSBlock = async (id: number) => {
 
 
  // ==================== 6.4 ДОБАВИТЬ НОВЫЙ ПУСТОЙ КУБИК ====================
+ // index 0 = ПФМ-НЛК (мин. 9 кубов), index 1 = Линомикс ТипР (мин. 1 куб).
+const minAdditiveCubes = (index: number) => (index === 0 ? 9 : 1);
+const minAdditiveMaxLiters = (index: number) => minAdditiveCubes(index) * 1000;
+const additiveNameByIndex = (index: number) =>
+  ADDITIVE_NAMES[(index === 0 ? 1 : 2) as 1 | 2];
+
 const addNewCube = (index: number) => {
-  if (index !== 0) {
-    alert('Пока добавление кубиков работает только для ПФМ-НЛК');
-    return;
-  }
+  if (index !== 0 && index !== 1) return;
 
   const additive = additives[index];
   if (!additive) return;
 
-  const oldMax = Number(additive.max || 9000);
+  const defaultMax = minAdditiveMaxLiters(index);
+  const oldMax = Number(additive.max || defaultMax);
   const newMax = oldMax + 1000;
   const current = Number(additive.current || 0);
+  const name = additiveNameByIndex(index);
 
   // Защита от двойного клика
   const now = Date.now();
@@ -1116,36 +1184,51 @@ const addNewCube = (index: number) => {
 
   setAdditives(prev => {
     const updated = prev.map((add, i) =>
-      i === index 
-        ? { ...add, max: newMax, current: current } 
+      i === index
+        ? { ...add, max: newMax, current: current }
         : add
     );
 
-    console.log(`✅ +1 пустой кубик → max = ${newMax} л (current = ${current} л)`);
+    console.log(`✅ +1 пустой кубик (${name}) → max = ${newMax} л (current = ${current} л)`);
 
     saveToDatabase(undefined, updated);
-    addToHistory('+ Кубик', 'ПФМ-НЛК', 1000, oldMax, newMax, 'л (ёмкость)');
+    addToHistory('+ Кубик', name, 1000, oldMax, newMax, 'л (ёмкость)');
 
     return updated;
   });
 };
 
 // ==================== 6.5 УДАЛИТЬ ПОСЛЕДНИЙ КУБИК ====================
-const removeLastCube = (index: number) => {
-  if (index !== 0) return;
+const removeLastCube = async (index: number) => {
+  if (index !== 0 && index !== 1) return;
 
   const additive = additives[index];
   if (!additive) return;
 
-  const oldMax = Number(additive.max || 9000);
-  const current = Number(additive.current || 0);
+  const minCubes = minAdditiveCubes(index);
+  const minMax = minAdditiveMaxLiters(index);
+  const oldMax = Number(additive.max || minMax);
+  const name = additiveNameByIndex(index);
 
-  if (oldMax <= 9000) {
-    alert('Нельзя удалить кубик — уже минимальное количество (9 кубиков)');
+  if (oldMax <= minMax) {
+    await appAlert(
+      `Нельзя удалить кубик — уже минимальное количество (${minCubes} ${
+        minCubes === 1 ? 'куб' : minCubes < 5 ? 'куба' : 'кубов'
+      })`,
+      { title: 'Кубики', variant: 'warning' },
+    );
     return;
   }
 
   const newMax = oldMax - 1000;
+  const current = Number(additive.current || 0);
+  if (current > newMax) {
+    await appAlert(
+      `Нельзя удалить кубик — в ёмкости ${formatLiters(current)} л, а после удаления максимум будет ${formatLiters(newMax)} л. Сначала спишите лишнее.`,
+      { title: 'Кубики', variant: 'warning' },
+    );
+    return;
+  }
 
   // Защита от двойного клика
   const now = Date.now();
@@ -1157,15 +1240,15 @@ const removeLastCube = (index: number) => {
 
   setAdditives(prev => {
     const updated = prev.map((add, i) =>
-      i === index 
-        ? { ...add, max: newMax } 
+      i === index
+        ? { ...add, max: newMax }
         : add
     );
 
-    console.log(`🗑 -1 кубик → max = ${newMax} л`);
+    console.log(`🗑 -1 кубик (${name}) → max = ${newMax} л`);
 
     saveToDatabase(undefined, updated);
-    addToHistory('− Кубик', 'ПФМ-НЛК', 1000, oldMax, newMax, 'л (ёмкость)');
+    addToHistory('− Кубик', name, 1000, oldMax, newMax, 'л (ёмкость)');
 
     return updated;
   });
@@ -1260,67 +1343,72 @@ const removeLastCube = (index: number) => {
       display: 'flex',
       flexDirection: 'column',
       justifyContent: 'flex-start',
-      gap: '14px',
       paddingBottom: '16px',
       boxSizing: 'border-box',
       fontFamily: 'system-ui, sans-serif'
     }}>
 
-      {/* ==================== МЕТРИКИ РАСХОДА СЕГОДНЯ ==================== */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '16px', flexShrink: 0 }}>
-        
-        {/* Цемент */}
-        <div style={{ 
-          background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 72%, #0B1220 100%)', 
-          padding: '14px 18px', 
-          borderRadius: '18px',
-          border: CARD_BORDER,
-          boxShadow: CARD_VOLUME,
-        }}>
-          <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '6px' }}>
-            Расход цемента сегодня
+      {/* Слева: KPI + силосы/ФБС/добавки. Справа: лента от линии табов до низа левого блока. */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'stretch',
+          gap: '16px',
+          flexShrink: 0,
+          minHeight: 0,
+        }}
+      >
+      <div
+        style={{
+          flex: '1 1 auto',
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '14px',
+        }}
+      >
+      {/* ==================== МЕТРИКИ РАСХОДА СЕГОДНЯ (только над левой колонкой) ==================== */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', gap: '12px', flexShrink: 0 }}>
+        {([
+          { label: 'Расход цемента сегодня', value: todayConsumption.cement, unit: 'т', color: '#10B981' },
+          { label: 'Расход щебня сегодня', value: todayConsumption.gravel, unit: 'т', color: '#38BDF8' },
+          { label: 'Расход песка сегодня', value: todayConsumption.sand, unit: 'т', color: '#F59E0B' },
+          { label: 'Расход ПФМ-НЛК сегодня', value: todayConsumption.pfm, unit: 'кг', color: '#C084FC' },
+          { label: 'Расход Линомикс ТипР сегодня', value: todayConsumption.linomix, unit: 'кг', color: '#60A5FA' },
+        ] as const).map((card) => (
+          <div
+            key={card.label}
+            style={{
+              background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 72%, #0B1220 100%)',
+              padding: '12px 14px',
+              borderRadius: '18px',
+              border: CARD_BORDER,
+              boxShadow: CARD_VOLUME,
+              minWidth: 0,
+            }}
+          >
+            <div
+              style={{
+                color: '#94A3B8',
+                fontSize: '11px',
+                marginBottom: '6px',
+                lineHeight: 1.25,
+                overflow: 'hidden',
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+              }}
+            >
+              {card.label}
+            </div>
+            <div style={{ fontSize: '24px', fontWeight: 700, color: card.color, lineHeight: 1 }}>
+              {card.value} <span style={{ fontSize: '13px', color: '#64748B' }}>{card.unit}</span>
+            </div>
           </div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: '#10B981', lineHeight: 1 }}>
-            {todayConsumption.cement} <span style={{ fontSize: '14px', color: '#64748B' }}>т</span>
-          </div>
-        </div>
-
-        {/* ПФМ-НЛК */}
-        <div style={{ 
-          background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 72%, #0B1220 100%)', 
-          padding: '14px 18px', 
-          borderRadius: '18px',
-          border: CARD_BORDER,
-          boxShadow: CARD_VOLUME,
-        }}>
-          <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '6px' }}>
-            Расход ПФМ-НЛК сегодня
-          </div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: '#C084FC', lineHeight: 1 }}>
-            {todayConsumption.pfm} <span style={{ fontSize: '14px', color: '#64748B' }}>кг</span>
-          </div>
-        </div>
-
-        {/* Линомикс ТипР */}
-        <div style={{ 
-          background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 72%, #0B1220 100%)', 
-          padding: '14px 18px', 
-          borderRadius: '18px',
-          border: CARD_BORDER,
-          boxShadow: CARD_VOLUME,
-        }}>
-          <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '6px' }}>
-            Расход Линомикс ТипР сегодня
-          </div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: '#60A5FA', lineHeight: 1 }}>
-            {todayConsumption.linomix} <span style={{ fontSize: '14px', color: '#64748B' }}>кг</span>
-          </div>
-        </div>
-
+        ))}
       </div>
 
-      {/* ==================== 8. СИЛОСЫ + ФБС | ДОБАВКИ (на всю высоту левой колонки) ==================== */}
-      {/* Сетка: добавки занимают оба ряда слева — нижний край = низ ФБС. История ниже — на всю ширину. */}
+      {/* ==================== СИЛОСЫ + ФБС | ДОБАВКИ ==================== */}
       <div
         style={{
           display: 'grid',
@@ -1345,9 +1433,40 @@ const removeLastCube = (index: number) => {
               boxSizing: 'border-box',
             }}
           >
-            <h2 style={{ fontSize: '18px', margin: '0 0 16px', color: '#E2E8F0', fontWeight: 700 }}>
-              Силосы цемента
-            </h2>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+                marginBottom: '16px',
+              }}
+            >
+              <h2 style={{ fontSize: '18px', margin: 0, color: '#E2E8F0', fontWeight: 700 }}>
+                Силосы цемента
+              </h2>
+              <button
+                type="button"
+                onClick={() => setSiloJournalOpen(true)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '7px 12px',
+                  borderRadius: 10,
+                  border: '1px solid rgba(251, 191, 36, 0.4)',
+                  background: 'rgba(251, 191, 36, 0.12)',
+                  color: '#FBBF24',
+                  fontSize: '12.5px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <ScrollText size={14} />
+                Журнал
+              </button>
+            </div>
             <div
               style={{
                 display: 'flex',
@@ -2002,7 +2121,10 @@ const removeLastCube = (index: number) => {
                                 const res = await fetch(`/api/adminCifra/fbs-passports?${qs}`, { method: 'DELETE' });
                                 const json = await res.json().catch(() => ({}));
                                 if (!res.ok) {
-                                  alert(json.error || 'Не удалось удалить');
+                                  await appAlert(json.error || 'Не удалось удалить', {
+                                    title: 'Ошибка',
+                                    variant: 'danger',
+                                  });
                                   return;
                                 }
                                 await loadFbsPassports();
@@ -2010,7 +2132,7 @@ const removeLastCube = (index: number) => {
                                 await loadOperationHistory();
                               } catch (err) {
                                 console.error(err);
-                                alert('Ошибка удаления');
+                                await appAlert('Ошибка удаления', { title: 'Ошибка', variant: 'danger' });
                               }
                             }}
                             style={{
@@ -2039,7 +2161,7 @@ const removeLastCube = (index: number) => {
           </div>
           </div>
 
-          {/* Добавки — колонка 2, на оба ряда: низ = низ ФБС. Историю не сдвигает. */}
+          {/* Добавки — колонка 2, на оба ряда: низ = низ ФБС. */}
           <div
             style={{
               gridColumn: 2,
@@ -2087,145 +2209,170 @@ const removeLastCube = (index: number) => {
                 todayKg: todayConsumption.linomix,
                 avgLitersPerDay: avgDailyLiters.linomix,
                 defaultMax: 1000,
+                showCubeButtons: true,
                 minCubes: 1,
               })}
             </div>
           </div>
       </div>
+      </div>
 
-      {/* ==================== ЛЕНТА ОПЕРАЦИЙ — на всю ширину под сеткой ==================== */}
-      <div
-        style={{
-          flexShrink: 0,
-          width: '100%',
-          background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 72%, #0B1220 100%)',
-          border: CARD_BORDER,
-          borderRadius: '16px',
-          padding: '10px 12px',
-          boxShadow: CARD_VOLUME,
-          maxHeight: '150px',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          boxSizing: 'border-box',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '10px',
-            marginBottom: '6px',
-            flexShrink: 0,
-          }}
-        >
-          <h2 style={{ fontSize: '14px', margin: 0, color: '#E2E8F0', fontWeight: 700 }}>
-            Лента операций
-          </h2>
-          <span style={{ fontSize: '11px', color: '#64748B' }}>
-            последние {Math.min(operationHistory.length, 40)}
-          </span>
-        </div>
-
-        {operationHistory.length === 0 ? (
-          <div style={{ color: '#64748B', fontSize: '12px', padding: '8px 2px' }}>
-            Пока нет операций — внесения и списания появятся здесь
-          </div>
-        ) : (
+          {/* Лента справа: от верха (линия табов/KPI) до низа левого блока. */}
           <div
-            className="scroll-hidden"
             style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '4px',
-              flex: 1,
-              minHeight: 0,
-              overflowY: 'auto',
+              flex: '0 0 300px',
+              width: 300,
+              alignSelf: 'stretch',
+              position: 'relative',
             }}
           >
-            {operationHistory.map((op, index) => {
-              const type = op.operation_type || resolveOperationType(op.action || '');
-              const isAdd = type === 'add';
-              const isSub = type === 'subtract';
-              const accent = isAdd ? '#34D399' : isSub ? '#F87171' : '#94A3B8';
-              const bg = isAdd
-                ? 'rgba(16, 185, 129, 0.10)'
-                : isSub
-                  ? 'rgba(239, 68, 68, 0.10)'
-                  : 'rgba(100, 116, 139, 0.12)';
-              const sign = isAdd ? '+' : isSub ? '−' : '';
-              const unit = op.unit || 'л';
-              const when = formatHistoryTime(op.created_at || op.time);
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 72%, #0B1220 100%)',
+                border: CARD_BORDER,
+                borderRadius: '22px',
+                padding: '16px 14px',
+                boxShadow: CARD_VOLUME,
+                display: 'flex',
+                flexDirection: 'column',
+                boxSizing: 'border-box',
+                overflow: 'hidden',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                  marginBottom: '12px',
+                  flexShrink: 0,
+                }}
+              >
+                <h2 style={{ fontSize: '16px', margin: 0, color: '#E2E8F0', fontWeight: 700 }}>
+                  Лента операций
+                </h2>
+                <span style={{ fontSize: '11px', color: '#64748B', whiteSpace: 'nowrap' }}>
+                  {Math.min(operationHistory.length, 40)}
+                </span>
+              </div>
 
-              return (
+              {operationHistory.length === 0 ? (
+                <div style={{ color: '#64748B', fontSize: '12px', padding: '8px 2px' }}>
+                  Пока нет операций — внесения и списания появятся здесь
+                </div>
+              ) : (
                 <div
-                  key={op.id || `op-${index}-${when}`}
+                  className="scroll-hidden"
                   style={{
                     display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '10px',
-                    padding: '5px 8px',
-                    borderRadius: '8px',
-                    background: bg,
-                    border: '1px solid #33415566',
-                    flexShrink: 0,
+                    flexDirection: 'column',
+                    gap: '6px',
+                    flex: 1,
+                    minHeight: 0,
+                    overflowY: 'auto',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
-                    <div
-                      style={{
-                        width: '7px',
-                        height: '7px',
-                        borderRadius: '50%',
-                        background: accent,
-                        flexShrink: 0,
-                      }}
-                    />
-                    <div
-                      style={{
-                        minWidth: 0,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        fontSize: '12px',
-                        color: '#F1F5F9',
-                        fontWeight: 600,
-                      }}
-                    >
-                      {historyLabel(op)}
-                      <span style={{ color: '#94A3B8', fontWeight: 500 }}> · {op.item_type || '—'}</span>
-                      <span style={{ color: '#CBD5E1', fontWeight: 600 }}> · {op.user_name || '—'}</span>
-                      <span style={{ color: '#64748B', fontWeight: 500 }}> · {when}</span>
-                    </div>
-                  </div>
+                  {operationHistory.map((op, index) => {
+                    const type = op.operation_type || resolveOperationType(op.action || '');
+                    const isAdd = type === 'add';
+                    const isSub = type === 'subtract';
+                    const accent = isAdd ? '#34D399' : isSub ? '#F87171' : '#94A3B8';
+                    const bg = isAdd
+                      ? 'rgba(16, 185, 129, 0.10)'
+                      : isSub
+                        ? 'rgba(239, 68, 68, 0.10)'
+                        : 'rgba(100, 116, 139, 0.12)';
+                    const sign = isAdd ? '+' : isSub ? '−' : '';
+                    const unit = op.unit || 'л';
+                    const when = formatHistoryTime(op.created_at || op.time);
 
-                  <div
-                    style={{
-                      textAlign: 'right',
-                      flex: '0 0 auto',
-                      whiteSpace: 'nowrap',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      color: accent,
-                      fontVariantNumeric: 'tabular-nums',
-                    }}
-                  >
-                    {sign}
-                    {formatHistoryAmount(op.amount, unit)}
-                    <span style={{ color: '#64748B', fontWeight: 500, marginLeft: '8px' }}>
-                      {Number(op.old_value ?? 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })}
-                      →
-                      {Number(op.new_value ?? 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })}
-                    </span>
-                  </div>
+                    return (
+                      <div
+                        key={op.id || `op-${index}-${when}`}
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '4px',
+                          padding: '8px 10px',
+                          borderRadius: '10px',
+                          background: bg,
+                          border: '1px solid #33415566',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0 }}>
+                          <div
+                            style={{
+                              width: '7px',
+                              height: '7px',
+                              borderRadius: '50%',
+                              background: accent,
+                              flexShrink: 0,
+                              marginTop: '5px',
+                            }}
+                          />
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div
+                              style={{
+                                fontSize: '12.5px',
+                                color: '#F1F5F9',
+                                fontWeight: 600,
+                                lineHeight: 1.35,
+                              }}
+                            >
+                              {historyLabel(op)}
+                              <span style={{ color: '#94A3B8', fontWeight: 500 }}>
+                                {' '}
+                                · {op.item_type || '—'}
+                              </span>
+                            </div>
+                            <div
+                              style={{
+                                marginTop: '2px',
+                                fontSize: '11px',
+                                color: '#94A3B8',
+                                lineHeight: 1.35,
+                              }}
+                            >
+                              <span style={{ color: '#CBD5E1', fontWeight: 600 }}>
+                                {op.user_name || '—'}
+                              </span>
+                              <span style={{ color: '#64748B' }}> · {when}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div
+                          style={{
+                            paddingLeft: '15px',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            color: accent,
+                            fontVariantNumeric: 'tabular-nums',
+                          }}
+                        >
+                          {sign}
+                          {formatHistoryAmount(op.amount, unit)}
+                          <span style={{ color: '#64748B', fontWeight: 500, marginLeft: '8px' }}>
+                            {Number(op.old_value ?? 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })}
+                            →
+                            {Number(op.new_value ?? 0).toLocaleString('ru-RU', { maximumFractionDigits: 0 })}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              )}
+            </div>
           </div>
-        )}
       </div>
+
+      {siloJournalOpen && (
+        <SiloJournalModal onClose={() => setSiloJournalOpen(false)} />
+      )}
 
       {fbsPassportModal.open && (
         <FbsPassportModal
