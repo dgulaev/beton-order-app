@@ -81,6 +81,8 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
   const [cementSavingsOpen, setCementSavingsOpen] = useState(false);
   const [lowRateAlerts, setLowRateAlerts] = useState<LowRateAlertInfo[]>([]);
   useLowRateAlerts(lowRateAlerts);
+  /** Рабочий силос смены оператора (operator_shift_settings.active_silo_id). */
+  const [activeSiloId, setActiveSiloId] = useState<number | null>(null);
   const [todayConsumption, setTodayConsumption] = useState({
     cement: 0,
     sand: 0,
@@ -211,7 +213,7 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
    // ==================== 2. ЗАГРУЗКА ДАННЫХ ====================
 const loadWarehouse = async () => {
   try {
-    const [warehouseRes, recipesRes, labRes] = await Promise.all([
+    const [warehouseRes, recipesRes, labRes, shiftRes] = await Promise.all([
       fetch('/api/adminCifra/warehouse', {
         cache: 'no-store',
         headers: { 'Cache-Control': 'no-cache' },
@@ -221,6 +223,7 @@ const loadWarehouse = async () => {
         headers: { 'Cache-Control': 'no-cache' },
       }),
       fetch('/api/adminCifra/lab-settings', { cache: 'no-store' }),
+      fetch('/api/adminCifra/operator-shift', { cache: 'no-store' }),
     ]);
     void loadFbsPassports();
 
@@ -253,6 +256,12 @@ const loadWarehouse = async () => {
     if (labRes.ok) {
       const lab = await labRes.json();
       setAdditiveDensities(densitiesFromLabSettings(lab));
+    }
+
+    if (shiftRes.ok) {
+      const shift = await shiftRes.json();
+      const sid = shift?.active_silo_id != null ? Number(shift.active_silo_id) : null;
+      setActiveSiloId(Number.isFinite(sid as number) ? sid : null);
     }
   } catch (err) {
     console.error('Ошибка загрузки склада:', err);
@@ -417,22 +426,31 @@ const loadTodayConsumption = async () => {
   useEffect(() => {
     const refreshStock = async () => {
       try {
-        const res = await fetch('/api/adminCifra/warehouse', {
-          cache: 'no-store',
-          headers: { 'Cache-Control': 'no-cache' },
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        setSilos(data.silos || []);
-        setLowRateAlerts(Array.isArray(data.lowRateAlerts) ? data.lowRateAlerts : []);
-        const loadedAdditives = (data.additives || data.warehouse_additives || []).map((a: any) => ({
-          ...a,
-          id: a.id || a.additive_id,
-          current: Number(a.current || 0),
-          max: Number(a.max || 9000),
-          name: a.name,
-        }));
-        setAdditives(loadedAdditives);
+        const [res, shiftRes] = await Promise.all([
+          fetch('/api/adminCifra/warehouse', {
+            cache: 'no-store',
+            headers: { 'Cache-Control': 'no-cache' },
+          }),
+          fetch('/api/adminCifra/operator-shift', { cache: 'no-store' }),
+        ]);
+        if (res.ok) {
+          const data = await res.json();
+          setSilos(data.silos || []);
+          setLowRateAlerts(Array.isArray(data.lowRateAlerts) ? data.lowRateAlerts : []);
+          const loadedAdditives = (data.additives || data.warehouse_additives || []).map((a: any) => ({
+            ...a,
+            id: a.id || a.additive_id,
+            current: Number(a.current || 0),
+            max: Number(a.max || 9000),
+            name: a.name,
+          }));
+          setAdditives(loadedAdditives);
+        }
+        if (shiftRes.ok) {
+          const shift = await shiftRes.json();
+          const sid = shift?.active_silo_id != null ? Number(shift.active_silo_id) : null;
+          setActiveSiloId(Number.isFinite(sid as number) ? sid : null);
+        }
       } catch {
         // тихий poll
       }
@@ -1554,9 +1572,20 @@ const removeLastCube = async (index: number) => {
                 marginBottom: '16px',
               }}
             >
-              <h2 style={{ fontSize: '18px', margin: 0, color: '#E2E8F0', fontWeight: 700 }}>
-                Силосы цемента
-              </h2>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                <h2 style={{ fontSize: '18px', margin: 0, color: '#E2E8F0', fontWeight: 700 }}>
+                  Силосы цемента
+                </h2>
+                {activeSiloId == null ? (
+                  <span style={{ fontSize: 12, color: '#FBBF24', fontWeight: 600 }}>
+                    Рабочий силос смены не выбран — автосписание при «В пути» не сработает
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 12, color: '#6EE7B7', fontWeight: 600 }}>
+                    Автосписание идёт с силоса №{activeSiloId}
+                  </span>
+                )}
+              </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 {isAdmin ? (
                   <button
@@ -1630,11 +1659,30 @@ const removeLastCube = async (index: number) => {
                 const isLargeSilo = silo.silo_id === 3 || String(silo.name || '').toLowerCase().includes('3');
                 const barrelWidth = isLargeSilo ? 200 : 172;
                 const barrelHeight = isLargeSilo ? 340 : 320;
+                const isActive = Number(silo.silo_id) === activeSiloId;
+                const rimColor = isActive ? '#34D399' : '#64748B';
+                const capColor = isActive ? '#059669' : '#475569';
 
                 return (
                   <div
                     key={silo.silo_id}
-                    style={{ textAlign: 'center', flex: '1 1 0', minWidth: 0 }}
+                    style={{
+                      textAlign: 'center',
+                      flex: '1 1 0',
+                      minWidth: 0,
+                      padding: isActive ? '14px 10px 12px' : '10px 6px 8px',
+                      borderRadius: 20,
+                      border: isActive
+                        ? '1px solid rgba(52, 211, 153, 0.55)'
+                        : '1px solid transparent',
+                      background: isActive
+                        ? 'linear-gradient(180deg, rgba(16, 185, 129, 0.18) 0%, rgba(15, 23, 42, 0.35) 55%, rgba(15, 23, 42, 0.1) 100%)'
+                        : 'transparent',
+                      boxShadow: isActive
+                        ? '0 0 0 1px rgba(52, 211, 153, 0.12), 0 12px 40px rgba(16, 185, 129, 0.18)'
+                        : 'none',
+                      transition: 'box-shadow 0.25s ease, background 0.25s ease, border-color 0.25s ease',
+                    }}
                   >
                     <div
                       style={{
@@ -1643,9 +1691,34 @@ const removeLastCube = async (index: number) => {
                         maxWidth: '100%',
                         height: `${barrelHeight}px`,
                         position: 'relative',
-                        filter: 'drop-shadow(0 18px 28px rgba(0,0,0,0.55))',
+                        filter: isActive
+                          ? 'drop-shadow(0 0 18px rgba(52, 211, 153, 0.35)) drop-shadow(0 18px 28px rgba(0,0,0,0.55))'
+                          : 'drop-shadow(0 18px 28px rgba(0,0,0,0.55))',
                       }}
                     >
+                      {isActive && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: 28,
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            zIndex: 5,
+                            padding: '4px 12px',
+                            borderRadius: 999,
+                            background: 'linear-gradient(135deg, #059669 0%, #10B981 100%)',
+                            color: '#ECFDF5',
+                            fontSize: 11,
+                            fontWeight: 800,
+                            letterSpacing: '0.08em',
+                            textTransform: 'uppercase',
+                            boxShadow: '0 4px 14px rgba(16, 185, 129, 0.45)',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          Рабочий
+                        </div>
+                      )}
                       <div
                         style={{
                           position: 'absolute',
@@ -1654,10 +1727,10 @@ const removeLastCube = async (index: number) => {
                           transform: 'translateX(-50%)',
                           width: isLargeSilo ? '130px' : '114px',
                           height: '40px',
-                          background: '#475569',
+                          background: capColor,
                           borderRadius: '50% 50% 0 0',
                           zIndex: 3,
-                          border: '4px solid #64748B',
+                          border: `4px solid ${rimColor}`,
                         }}
                       />
                       <div
@@ -1667,10 +1740,12 @@ const removeLastCube = async (index: number) => {
                           width: '100%',
                           height: `${barrelHeight - 18}px`,
                           background: '#1E2937',
-                          border: '6px solid #64748B',
+                          border: `6px solid ${rimColor}`,
                           borderRadius: '24px 24px 10px 10px',
                           overflow: 'hidden',
-                          boxShadow: 'inset 0 0 40px rgba(0,0,0,0.7)',
+                          boxShadow: isActive
+                            ? 'inset 0 0 40px rgba(0,0,0,0.7), 0 0 24px rgba(52, 211, 153, 0.25)'
+                            : 'inset 0 0 40px rgba(0,0,0,0.7)',
                         }}
                       >
                         <div
@@ -1699,12 +1774,20 @@ const removeLastCube = async (index: number) => {
                       />
                     </div>
 
-                    <h3 style={{ fontSize: '18px', marginBottom: '4px', fontWeight: 700 }}>{silo.name}</h3>
+                    <h3 style={{
+                      fontSize: '18px',
+                      marginBottom: '4px',
+                      fontWeight: 700,
+                      color: isActive ? '#A7F3D0' : '#E2E8F0',
+                    }}>
+                      {silo.name}
+                    </h3>
                     <div style={{ fontSize: '21px', fontWeight: 700, color: textColor }}>
                       {formatCement(current)} / {silo.max} т
                     </div>
-                    <div style={{ fontSize: '13px', color: '#64748B', marginTop: '2px' }}>
+                    <div style={{ fontSize: '13px', color: isActive ? '#6EE7B7' : '#64748B', marginTop: '2px' }}>
                       {percent.toFixed(0)}% заполнено
+                      {isActive ? ' · с него списывается' : ''}
                     </div>
 
                     <div

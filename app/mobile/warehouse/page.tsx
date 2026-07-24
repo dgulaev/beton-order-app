@@ -475,13 +475,21 @@ export default function MobileWarehousePage() {
 
       {/* СИЛОСЫ ЦЕМЕНТА */}
       <SectionTitle>Силосы цемента</SectionTitle>
-      {activeSiloId == null && (
+      {activeSiloId == null ? (
         <div style={{
           marginBottom: '12px', padding: '10px 12px', borderRadius: 12,
           background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)',
           color: '#FBBF24', fontSize: '13px', lineHeight: 1.35,
         }}>
           Рабочий силос сегодня не выбран — автосписание цемента при «В пути» не сработает. Выбери силос на десктопе у оператора.
+        </div>
+      ) : (
+        <div style={{
+          marginBottom: '12px', padding: '10px 12px', borderRadius: 12,
+          background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(52,211,153,0.35)',
+          color: '#6EE7B7', fontSize: '13px', lineHeight: 1.35, fontWeight: 600,
+        }}>
+          Автосписание идёт с силоса №{activeSiloId}
         </div>
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '28px' }}>
@@ -499,28 +507,53 @@ export default function MobileWarehousePage() {
               style={volumeCardStyle({
                 padding: '16px',
                 borderRadius: 16,
+                position: 'relative' as const,
+                overflow: 'hidden',
                 border: isActive ? '1px solid rgba(52,211,153,0.55)' : undefined,
+                background: isActive
+                  ? 'linear-gradient(135deg, rgba(16,185,129,0.22) 0%, rgba(15,23,42,0.92) 55%)'
+                  : undefined,
+                boxShadow: isActive
+                  ? '0 0 0 1px rgba(52,211,153,0.12), 0 10px 28px rgba(16,185,129,0.2)'
+                  : undefined,
               })}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
-                <span style={{ fontWeight: '600', fontSize: '16px', color: '#E2E8F0' }}>
+              {isActive && (
+                <div
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: 4,
+                    background: 'linear-gradient(180deg, #34D399 0%, #059669 100%)',
+                  }}
+                />
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', gap: 8 }}>
+                <span style={{ fontWeight: '600', fontSize: '16px', color: isActive ? '#A7F3D0' : '#E2E8F0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   {silo.name}
                   {isActive && (
                     <span style={{
-                      marginLeft: 8, fontSize: 11, fontWeight: 700, color: '#34D399',
-                      textTransform: 'uppercase', letterSpacing: '0.04em',
+                      fontSize: 10, fontWeight: 800, color: '#ECFDF5',
+                      textTransform: 'uppercase', letterSpacing: '0.08em',
+                      padding: '3px 9px', borderRadius: 999,
+                      background: 'linear-gradient(135deg, #059669 0%, #10B981 100%)',
+                      boxShadow: '0 3px 10px rgba(16,185,129,0.4)',
                     }}>
-                      рабочий
+                      Рабочий
                     </span>
                   )}
                 </span>
-                <span style={{ fontSize: '18px', fontWeight: '700', color: negative ? '#F87171' : low ? '#FBBF24' : '#34D399' }}>
+                <span style={{ fontSize: '18px', fontWeight: '700', color: negative ? '#F87171' : low ? '#FBBF24' : '#34D399', flexShrink: 0 }}>
                   {current.toFixed(2)} <span style={{ fontSize: '13px', color: '#64748B' }}>/ {silo.max} т</span>
                 </span>
               </div>
               <ProgressBar current={current} max={max} color="#34D399" />
-              <div style={{ fontSize: '12px', color: '#64748B', marginTop: '4px', textAlign: 'right' }}>
+              <div style={{ fontSize: '12px', color: isActive ? '#6EE7B7' : '#64748B', marginTop: '4px', textAlign: 'right' }}>
                 {pct.toFixed(0)}%
+                {isActive && <span style={{ marginLeft: '8px' }}>· с него списывается</span>}
                 {low && <span style={{ color: '#F59E0B', marginLeft: '8px' }}>⚠ Низкий уровень</span>}
               </div>
               <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>

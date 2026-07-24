@@ -285,6 +285,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
 
       if (data.success && data.userId) {
         localStorage.setItem('userId', data.userId.toString());
+        localStorage.setItem('lastForceLogoutVersion', '0');
         refreshRole();
         resetLoginFlow();
       } else {

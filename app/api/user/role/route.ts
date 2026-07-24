@@ -42,12 +42,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (!userId) {
-      return NextResponse.json({ 
-        success: true, 
+      return NextResponse.json({
+        success: false,
         role: 'client',
         full_name: 'Сотрудник',
-        forceLogoutVersion: 0 
-      });
+        force_logout_version: 0,
+      }, { status: 401 });
     }
 
     const parsedUserId = userId;
@@ -88,11 +88,10 @@ export async function POST(request: NextRequest) {
 
   } catch (e: any) {
     console.error('💥 Role API crash:', e);
-    return NextResponse.json({ 
-      success: true, 
-      role: 'client', 
-      full_name: 'Сотрудник',
-      force_logout_version: 0 
-    });
+    // Не отдаём success + version:0 — иначе клиент мог бы «проглотить» force-logout
+    return NextResponse.json({
+      success: false,
+      message: e?.message || 'Ошибка проверки роли',
+    }, { status: 500 });
   }
 }

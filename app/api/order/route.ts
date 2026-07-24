@@ -1,7 +1,14 @@
 // app/api/order/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { normalizePhone, toStoredPhone } from '@/lib/phone';
+import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import {
+  findAnyUserByPhone,
+  findClientByInn,
+  findClientByOrganizationExact,
+  findClientByPhone,
+} from '@/lib/clientUsers';
+import { phonesMatch, toStoredPhone } from '@/lib/phone';
 
 const BOT_TOKEN = process.env.MAX_BOT_TOKEN;
 const CHAT_ID = process.env.MANAGER_CHAT_ID;
@@ -37,130 +44,180 @@ export async function POST(request: NextRequest) {
     const isFromAdmin = !!(payload.isFromAdmin === true || payload.source === 'admin');
     console.log(`📍 [Order API] Источник заявки: ${isFromAdmin ? 'АДМИНКА ЦИФРА' : 'МИНИ-ПРИЛОЖЕНИЕ МАКС'}`);
 
-// ================================================
-// 3. ЛОГИКА СОЗДАНИЯ/ПОИСКА КЛИЕНТА ИЗ АДМИНКИ
-// ================================================
-let finalUserId = userId;
-
-if (isFromAdmin) {
-  console.log('👮 Заявка из админки — ищем/создаём клиента...');
-
-  let phoneRaw = (payload.phone || payload.client_phone || payload.userPhone || '').trim();
-  const fullName = (payload.fullName || payload.full_name || payload.client_name || '').trim();
-  const organizationName = (payload.organizationName || payload.organization_name || payload.client_organization || '').trim();
-  const inn = (payload.inn || '').trim();
-
-  if (!phoneRaw) {
-    return NextResponse.json({ success: false, message: 'Телефон обязателен при создании заявки из админки' }, { status: 400 });
-  }
-
-  const phoneWithPlus = toStoredPhone(phoneRaw);
-  if (!phoneWithPlus) {
-    return NextResponse.json(
-      { success: false, message: 'Некорректный телефон (нужен полный номер РФ)' },
-      { status: 400 }
-    );
-  }
-  const phoneNormalized = normalizePhone(phoneRaw);
-
-  const supabase = getSupabaseClient();
-
-  let existingClient = null;
-
-  // 1. Поиск по телефону (самый надёжный)
-  const { data: phoneClient } = await supabase
-    .from('users')
-    .select('user_id, phone, organization_name, full_name, role')
-    .or(`phone.eq.${phoneWithPlus},phone.eq.${phoneRaw},phone.ilike.%${phoneNormalized}%`)
-    .maybeSingle();
-
-  if (phoneClient && phoneClient.role === 'client') {
-    existingClient = phoneClient;
-    console.log(`✅ Найден клиент по телефону: ${phoneClient.user_id}`);
-  }
-
-  // 2. Поиск по ИНН
-  if (!existingClient && inn) {
-    const { data: innClient } = await supabase
-      .from('users')
-      .select('user_id, phone, organization_name, full_name')
-      .eq('inn', inn)
-      .maybeSingle();
-
-    if (innClient) existingClient = innClient;
-  }
-
-  // 3. Поиск по названию организации
-  if (!existingClient && organizationName) {
-    const { data: orgClient } = await supabase
-      .from('users')
-      .select('user_id, phone, organization_name, full_name')
-      .ilike('organization_name', `%${organizationName}%`)
-      .limit(1)
-      .maybeSingle();
-
-    if (orgClient) existingClient = orgClient;
-  }
-
-  if (existingClient) {
-    finalUserId = existingClient.user_id;
-    console.log(`👤 Используем существующего клиента: ${finalUserId}`);
-  } else {
-    // ================================================
-    // СОЗДАНИЕ НОВОГО КЛИЕНТА С КУРАТОРОМ
-    // ================================================
-    const newUserId = Date.now() + Math.floor(Math.random() * 1000000);
-
-    // Получаем данные текущего сотрудника из payload (из фронта)
-    const createdByStaff = payload.created_by || 1777619517739; // fallback на тебя
-    const curatorName = payload.curator_name || payload.userName || 'Сотрудник';
-
-    const { data: newClient, error: createError } = await supabase
-      .from('users')
-      .insert({
-        user_id: newUserId,
-        role: 'client',
-        phone: phoneWithPlus,
-        full_name: organizationName ? null : fullName,
-        organization_name: organizationName || fullName || null,
-        inn: inn || null,
-        balance: 0,
-        referral_code: 'R' + Math.random().toString(36).substring(2, 10).toUpperCase(),
-        
-        // ==================== НОВЫЕ ПОЛЯ (по твоей просьбе) ====================
-        created_by: createdByStaff,      // Кто создал клиента
-        curator_id: createdByStaff,      // Назначаем создателя куратором
-        curator_name: curatorName,       // Имя куратора
-
-        created_at: new Date().toISOString()
-      })
-      .select('user_id')
-      .single();
-
-    if (createError) {
-      console.error('❌ Ошибка создания клиента:', createError);
-    } else if (newClient) {
-      finalUserId = newClient.user_id;
-      console.log(`✅ Создан новый клиент: ${finalUserId} | created_by: ${createdByStaff} | curator: ${curatorName}`);
+    // Для админки — только авторизованный сотрудник; created_by берём с сервера,
+    // не из body и не из хардкода «главного» user_id.
+    let staffActorId: number | null = null;
+    let staffActorName: string | null = null;
+    if (isFromAdmin) {
+      const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+      if (auth.error) {
+        return NextResponse.json(
+          { success: false, message: 'Нет доступа. Войди в систему заново.' },
+          { status: 403 },
+        );
+      }
+      staffActorId = auth.user.user_id;
+      staffActorName =
+        (typeof payload.curator_name === 'string' && payload.curator_name.trim())
+        || (typeof payload.userName === 'string' && payload.userName.trim())
+        || auth.user.full_name
+        || 'Сотрудник';
     }
-  }
-}
 
-console.log(`🔑 Финальный user_id заказа: ${finalUserId} (изначально было ${userId})`);
+    // ================================================
+    // 3. ПОИСК / СОЗДАНИЕ КЛИЕНТА
+    // ================================================
+    // Важно: никогда не оставляем finalUserId = id сотрудника из payload.
+    const supabase = getSupabaseClient();
+    let finalUserId: number | null = null;
 
-// ================================================
-// 3.1 АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ КОНТАКТОВ КЛИЕНТА (УЛУЧШЕННЫЙ)
-// ================================================
-const supabase = getSupabaseClient();
-const now = new Date().toISOString();
+    const phoneRaw = String(payload.phone || payload.client_phone || payload.userPhone || '').trim();
+    const clientFullName = String(payload.fullName || payload.full_name || payload.client_name || '').trim();
+    const clientOrgName = String(
+      payload.organizationName || payload.organization_name || payload.client_organization || '',
+    ).trim();
+    const clientInn = String(payload.inn || '').trim();
+    const phoneWithPlus = toStoredPhone(phoneRaw);
 
-console.log(`🔄 [3.1] Обновление контактов для userId: ${finalUserId}`);
+    if (isFromAdmin) {
+      console.log('👮 Заявка из админки — ищем/создаём клиента...');
 
-// Обновляем last_contact (для карточки клиента)
-await supabase
-  .from('users')
-  .update({ last_contact: now })
-  .eq('user_id', finalUserId);
+      if (!phoneRaw || !phoneWithPlus) {
+        return NextResponse.json(
+          { success: false, message: 'Некорректный телефон (нужен полный номер РФ)' },
+          { status: 400 },
+        );
+      }
+
+      let existingClient =
+        (await findClientByPhone(supabase, phoneRaw))
+        || (clientInn ? await findClientByInn(supabase, clientInn) : null)
+        || (clientOrgName ? await findClientByOrganizationExact(supabase, clientOrgName) : null);
+
+      if (existingClient) {
+        finalUserId = Number(existingClient.user_id);
+        console.log(`👤 Используем существующего клиента: ${finalUserId}`);
+      } else {
+        const newUserId = Date.now() + Math.floor(Math.random() * 1000000);
+        const createdByStaff = staffActorId!;
+        const curatorName = staffActorName || 'Сотрудник';
+
+        const { data: newClient, error: createError } = await supabase
+          .from('users')
+          .insert({
+            user_id: newUserId,
+            role: 'client',
+            phone: phoneWithPlus,
+            full_name: clientOrgName ? null : clientFullName || null,
+            organization_name: clientOrgName || clientFullName || null,
+            inn: clientInn || null,
+            balance: 0,
+            referral_code: 'R' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+            created_by: createdByStaff,
+            curator_id: createdByStaff,
+            curator_name: curatorName,
+            created_at: new Date().toISOString(),
+          })
+          .select('user_id')
+          .single();
+
+        if (createError || !newClient?.user_id) {
+          console.error('❌ Ошибка создания клиента:', createError);
+          return NextResponse.json(
+            { success: false, message: 'Не удалось создать клиента. Заявка не создана.' },
+            { status: 500 },
+          );
+        }
+        finalUserId = Number(newClient.user_id);
+        console.log(`✅ Создан новый клиент: ${finalUserId} | created_by: ${createdByStaff}`);
+      }
+    } else {
+      // Публичная заявка: резолвим клиента по телефону, не доверяем Telegram/localStorage id вслепую.
+      if (!phoneRaw || !phoneWithPlus) {
+        return NextResponse.json(
+          { success: false, message: 'Укажите корректный телефон' },
+          { status: 400 },
+        );
+      }
+
+      const byPhone = await findClientByPhone(supabase, phoneRaw);
+      if (byPhone) {
+        finalUserId = Number(byPhone.user_id);
+      } else {
+        const anyUser = await findAnyUserByPhone(supabase, phoneRaw);
+        if (anyUser && String(anyUser.role || '').toLowerCase() !== 'client') {
+          return NextResponse.json(
+            { success: false, message: 'Этот номер занят учётной записью сотрудника. Используй другой телефон.' },
+            { status: 409 },
+          );
+        }
+
+        const payloadUserId = userId != null ? Number(userId) : NaN;
+        if (Number.isFinite(payloadUserId) && payloadUserId > 0) {
+          const { data: claimed } = await supabase
+            .from('users')
+            .select('user_id, phone, role')
+            .eq('user_id', payloadUserId)
+            .eq('role', 'client')
+            .maybeSingle();
+          // Принимаем payload.userId только если телефон совпадает
+          if (claimed && phonesMatch(claimed.phone, phoneRaw)) {
+            finalUserId = Number(claimed.user_id);
+          }
+        }
+
+        if (finalUserId == null) {
+          const newUserId = Date.now() + Math.floor(Math.random() * 1000000);
+          const referredByNum = referredBy != null && Number.isFinite(Number(referredBy))
+            ? Number(referredBy)
+            : null;
+          const { data: newClient, error: createError } = await supabase
+            .from('users')
+            .insert({
+              user_id: newUserId,
+              role: 'client',
+              phone: phoneWithPlus,
+              full_name: clientOrgName ? null : clientFullName || null,
+              organization_name: clientOrgName || null,
+              inn: clientInn || null,
+              balance: 0,
+              referral_code: 'R' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+              referred_by: referredByNum,
+              created_at: new Date().toISOString(),
+            })
+            .select('user_id')
+            .single();
+
+          if (createError || !newClient?.user_id) {
+            console.error('❌ Ошибка создания публичного клиента:', createError);
+            return NextResponse.json(
+              { success: false, message: 'Не удалось зарегистрировать клиента' },
+              { status: 500 },
+            );
+          }
+          finalUserId = Number(newClient.user_id);
+        }
+      }
+    }
+
+    if (finalUserId == null || !Number.isFinite(finalUserId) || finalUserId <= 0) {
+      return NextResponse.json(
+        { success: false, message: 'Не удалось определить клиента для заявки' },
+        { status: 400 },
+      );
+    }
+
+    console.log(`🔑 Финальный user_id заказа: ${finalUserId}`);
+
+    // ================================================
+    // 3.1 ОБНОВЛЕНИЕ last_contact
+    // ================================================
+    const now = new Date().toISOString();
+    await supabase
+      .from('users')
+      .update({ last_contact: now })
+      .eq('user_id', finalUserId)
+      .eq('role', 'client');
 
     // ================================================
     // 4. НОРМАЛИЗАЦИЯ ПОЛЕЙ
@@ -231,8 +288,11 @@ await supabase
     // ================================================
     // 7. СОЗДАНИЕ ЗАКАЗА
     // ================================================
-    const createdByStaff = payload.created_by || null;
-    const curatorName = payload.curator_name || payload.userName || null;
+    // Админка: только auth.user_id. Публичная заявка: без куратора-сотрудника.
+    const createdByStaff = isFromAdmin ? staffActorId : null;
+    const curatorName = isFromAdmin
+      ? staffActorName
+      : (payload.curator_name || payload.userName || null);
 
     const { data: orderData, error: insertError } = await supabase
       .from('orders')

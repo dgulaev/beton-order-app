@@ -240,34 +240,17 @@ export default function ClientsPage() {
     address: '',
   });
 
-   // ==================== АВТООПРЕДЕЛЕНИЕ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ ====================
-useEffect(() => {
-  const savedUserId = localStorage.getItem('userId');
-  
-  if (savedUserId) {
-    setCurrentUserId(savedUserId);
-    console.log('✅ Текущий userId:', savedUserId);
-
-    if (savedUserId === '1777619517739') {
-      localStorage.setItem('currentUserRole', 'admin');
-      setCurrentUserRole('admin');
-      console.log('✅ Главный администратор');
+  // ==================== АВТООПРЕДЕЛЕНИЕ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ ====================
+  // Роль — из loadRoleAndName / currentRole (см. ниже). Без сессии не подставляем
+  // чужой «главный» user_id — иначе заявки/клиенты вешаются не на того куратора.
+  useEffect(() => {
+    const savedUserId = localStorage.getItem('userId');
+    if (savedUserId) {
+      setCurrentUserId(savedUserId);
     } else {
-      const savedRole = localStorage.getItem('currentUserRole');
-      if (savedRole) {
-        setCurrentUserRole(savedRole);
-        console.log('✅ Роль из localStorage:', savedRole);
-      } else {
-        setCurrentUserRole('manager');
-        localStorage.setItem('currentUserRole', 'manager');
-        console.log('✅ Установлена роль по умолчанию: manager');
-      }
+      setCurrentUserId('');
     }
-  } else {
-    setCurrentUserId('1777619517739');
-    setCurrentUserRole('admin');
-  }
-}, []);
+  }, []);
 
     // ==================== 2. ЗАГРУЗКА КЛИЕНТОВ С ПАГИНАЦИЕЙ ====================
     const fetchClientsPage = async (page: number = 1) => {
@@ -1177,6 +1160,12 @@ const createNewClient = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+
+    if (res.status === 409) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || 'Клиент с таким телефоном уже есть');
+      return;
+    }
 
     if (res.ok) {
       alert(`✅ Новый клиент успешно создан и привязан к куратору: ${userFullName}`);

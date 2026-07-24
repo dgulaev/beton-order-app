@@ -42,10 +42,12 @@ export async function requireAdminCifraStaff(
     .maybeSingle();
 
   const role = (user?.role || '').toLowerCase();
+  // Любая ненулевая версия = сессия принудительно завершена (логин сбрасывает в 0)
+  const forcedOut = Number(user?.force_logout_version || 0) > 0;
   if (
-    !user ||
-    !allowedRoles.map((r) => r.toLowerCase()).includes(role) ||
-    (user.force_logout_version != null && user.force_logout_version >= 9999)
+    !user
+    || !allowedRoles.map((r) => r.toLowerCase()).includes(role)
+    || forcedOut
   ) {
     return {
       error: NextResponse.json({ error: 'Доступ запрещён' }, { status: 403 }),

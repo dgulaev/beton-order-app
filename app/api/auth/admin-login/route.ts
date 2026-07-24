@@ -58,13 +58,20 @@ export async function POST(request: NextRequest) {
       }, { status: 403 });
     }
 
-    // === АВТОМАТИЧЕСКИЙ СБРОС force_logout_version ===
-    if (user.force_logout_version && user.force_logout_version >= 9999) {
-      await supabase
+    // === СБРОС force_logout_version — иначе повторный вход сразу выкинет ===
+    if (Number(user.force_logout_version || 0) > 0) {
+      const { error: resetError } = await supabase
         .from('users')
         .update({ force_logout_version: 0 })
         .eq('user_id', user.user_id);
-      
+
+      if (resetError) {
+        console.error('Не удалось сбросить force_logout_version:', resetError);
+        return NextResponse.json({
+          success: false,
+          message: 'Не удалось восстановить сессию. Попробуй ещё раз.',
+        }, { status: 500 });
+      }
       console.log(`🔄 Сброшен force_logout_version для пользователя ${user.user_id}`);
     }
 
@@ -76,7 +83,8 @@ export async function POST(request: NextRequest) {
       role: user.role,
       name: user.full_name || user.organization_name || user.phone,
       phone: user.phone,
-      message: 'Вход выполнен успешно'
+      force_logout_version: 0,
+      message: 'Вход выполнен успешно',
     });
 
   } catch (error: any) {

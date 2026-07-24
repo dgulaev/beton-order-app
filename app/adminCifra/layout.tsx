@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, FlaskConical, Truck, Package, Users, UserCog, Menu, X, Bell, CheckCircle, LogOut, Globe, Smartphone } from 'lucide-react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, Menu, X, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
 import Image from 'next/image';
 import { useUserRole } from '../providers/UserRoleProvider';
@@ -302,6 +302,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
       if (data.success && data.userId) {
         localStorage.setItem('userId', data.userId.toString());
+        // После сброса force_logout_version на сервере синхронизируем локальный маркер
+        localStorage.setItem('lastForceLogoutVersion', '0');
         refreshRole(); // подхватываем роль сразу, без перезагрузки страницы
       } else {
         setLoginError(data.message || 'Неверный телефон или пароль');
@@ -638,18 +640,27 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     }
 
     try {
-      const res = await fetch('/api/adminCifra/force-logout-all', { 
+      const userId = typeof window !== 'undefined' ? localStorage.getItem('userId') : null;
+      if (!userId) {
+        alert('Сессия не найдена — войди заново');
+        return;
+      }
+
+      const res = await fetch('/api/adminCifra/force-logout-all', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: 1777619517739 })
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': userId,
+        },
+        body: JSON.stringify({}),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
-      if (data.success) {
-        alert('✅ Все сотрудники успешно выкинуты из системы!');
+      if (res.ok && data.success) {
+        alert(`✅ Выкинуто сотрудников: ${data.kicked ?? 'все'}. Ты остаёшься в системе.`);
       } else {
-        alert('Ошибка: ' + (data.message || 'Неизвестная ошибка'));
+        alert('Ошибка: ' + (data.message || `HTTP ${res.status}`));
       }
     } catch (err) {
       alert('Ошибка соединения с сервером');
@@ -940,30 +951,28 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
             {/* ==================== БЛОК 13 ССЫЛКА "ВЫКИНУТЬ ВСЕХ" ==================== */}
             {(userRole === 'admin') && (
-              <Link 
-                href="#" 
+              <Link
+                href="#"
                 onClick={(e) => { e.preventDefault(); forceLogoutAll(); }}
                 style={navLinkStyle(false, isCollapsed)}
               >
-                <LogOut size={22} />
+                <UserX size={22} />
                 <span style={navTextStyle(isCollapsed)}>Разлогинить всех</span>
               </Link>
             )}
 
             {/* ==================== БЛОК 13.1 ЛИЧНЫЙ ВЫХОД ==================== */}
-            {userRole !== 'admin' && (
-              <Link
-                href="#"
-                onClick={async (e) => {
-                  e.preventDefault();
-                  if (await appConfirm('Выйти из системы?', { title: 'Выход', okLabel: 'Выйти' })) logout();
-                }}
-                style={navLinkStyle(false, isCollapsed)}
-              >
-                <LogOut size={22} />
-                <span style={navTextStyle(isCollapsed)}>Выйти</span>
-              </Link>
-            )}
+            <Link
+              href="#"
+              onClick={async (e) => {
+                e.preventDefault();
+                if (await appConfirm('Выйти из системы?', { title: 'Выход', okLabel: 'Выйти' })) logout();
+              }}
+              style={navLinkStyle(false, isCollapsed)}
+            >
+              <LogOut size={22} />
+              <span style={navTextStyle(isCollapsed)}>Выйти</span>
+            </Link>
           </nav>
         </div>
 

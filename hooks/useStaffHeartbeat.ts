@@ -23,11 +23,17 @@ export function useStaffHeartbeat(enabled: boolean) {
 
     const sendHeartbeat = async () => {
       try {
-        await fetch('/api/adminCifra/heartbeat', {
+        const res = await fetch('/api/adminCifra/heartbeat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId }),
         });
+        if (res.status === 403) {
+          // Force-logout на сервере — подтолкнём проверку роли (kick в UserRoleProvider)
+          try {
+            window.dispatchEvent(new Event('visibilitychange'));
+          } catch { /* ignore */ }
+        }
       } catch (e) {
         console.warn('Heartbeat failed:', e);
       }

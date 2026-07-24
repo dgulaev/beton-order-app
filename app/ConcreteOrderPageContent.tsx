@@ -383,16 +383,21 @@ const registerByPhone = async (phoneNumber: string) => {
     wa.expand();
     wa.enableClosingConfirmation();
 
-    const uid = wa.initDataUnsafe?.user?.id || wa.initData?.user?.id;
-    if (uid) {
-      setUserId(uid);
-      console.log('✅ Telegram userId:', uid);
-    }
+    // Telegram user.id ≠ users.user_id в БД — не подставляем его в заказ.
+    // userId появится только после /api/user/register по телефону.
 
     wa.MainButton.setText('Отправить заявку');
-    wa.MainButton.show();
     wa.MainButton.onClick(handleSubmit);
+    // Показываем кнопку только после верификации телефона (см. эффект ниже)
+    wa.MainButton.hide();
   }, []);
+
+  useEffect(() => {
+    const wa = (window as any).WebApp;
+    if (!wa?.MainButton) return;
+    if (isVerified) wa.MainButton.show();
+    else wa.MainButton.hide();
+  }, [isVerified]);
 
   // Ловим ref из URL
 useEffect(() => {
@@ -525,6 +530,11 @@ const loadReferrals = async () => {
   const handleSubmit = async () => {
   const wa = (window as any).WebApp;
   const showAlert = wa?.showAlert || alert;
+
+  if (!isVerified) {
+    showAlert('Сначала подтверди номер телефона');
+    return;
+  }
 
   // ================================================
   // 1. ВАЛИДАЦИЯ ВВОДА

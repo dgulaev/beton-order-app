@@ -18,13 +18,9 @@ interface UserRoleContextType {
   logout: () => void;
 }
 
-// Как часто проверяем force_logout_version, пока пользователь активен на
-// странице (плюс проверка при возврате на вкладку и сразу после входа).
-// Это лишь страховка на случай, если вкладка держится открытой и активной
-// без переключений весь день (обычная проверка при возврате на вкладку
-// покрывает все остальные случаи мгновенно). 1 час — достаточно редко, чтобы
-// не нагружать сервер лишними запросами.
-const FORCE_LOGOUT_POLL_MS = 60 * 60_000;
+// Проверка force-logout: при возврате на вкладку + poll.
+// 30 с — компромисс: быстрый kick без лишней нагрузки.
+const FORCE_LOGOUT_POLL_MS = 30_000;
 
 // Сколько ждём ответ /api/user/role, прежде чем сдаться — без этого при
 // холодном старте сервера (Vercel cold start) или плохой мобильной сети
@@ -58,6 +54,12 @@ function readCachedUser(): UserRole | null {
   } catch {
     return null;
   }
+}
+
+function clearStaffSessionKeys() {
+  localStorage.removeItem('userId');
+  localStorage.removeItem('userPhone');
+  localStorage.removeItem('userRoleCache');
 }
 
 export function UserRoleProvider({ children }: { children: ReactNode }) {
@@ -98,6 +100,26 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const data = await res.json();
+      if (data?.success === false) throw new Error(data?.message || 'Role check failed');
+
+      // Проверка принудительного выхода — ДО записи кэша роли
+      const currentVersion = Number(data?.force_logout_version || 0);
+      const lastVersion = parseInt(localStorage.getItem('lastForceLogoutVersion') || '0', 10) || 0;
+
+      if (currentVersion > lastVersion) {
+        // Запоминаем версию kick, чтобы после логина (version=0) не было ложного
+        // сравнения и чтобы повторный kick с той же константой 9999 (legacy) не
+        // «залипал» при рассинхроне.
+        localStorage.setItem('lastForceLogoutVersion', String(currentVersion));
+        clearStaffSessionKeys();
+        setUser(null);
+        alert('Ваш сеанс был завершён администратором. Пожалуйста, войдите заново.');
+        // Перезагружаем текущую страницу, а не уводим на "/" — layout сам
+        // покажет форму входа на нужном пути (/adminCifra или /mobile).
+        window.location.reload();
+        return;
+      }
+
       setUser(data);
       setError(null);
       try {
@@ -106,23 +128,7 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
         // localStorage может быть недоступен (приватный режим) — не критично.
       }
 
-      // Проверка принудительного выхода
-      const currentVersion = data?.force_logout_version || 0;
-      const lastVersion = parseInt(localStorage.getItem('lastForceLogoutVersion') || '0');
-
-      if (currentVersion > lastVersion) {
-        localStorage.removeItem('userId');
-        localStorage.removeItem('userPhone');
-        localStorage.removeItem('userRoleCache');
-        alert('Ваш сеанс был завершён администратором. Пожалуйста, войдите заново.');
-        // Перезагружаем текущую страницу, а не уводим на "/" — layout сам
-        // покажет форму входа на нужном пути (/adminCifra или /mobile).
-        window.location.reload();
-        return;
-      }
-
-      localStorage.setItem('lastForceLogoutVersion', currentVersion.toString());
-
+      localStorage.setItem('lastForceLogoutVersion', String(currentVersion));
     } catch (err: any) {
       // fetch кидает TypeError ("Failed to fetch"), когда сервер временно
       // недоступен (перезапуск дев-сервера, потеря сети, уход со страницы), а
@@ -134,6 +140,8 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
       // Важно: НЕ обнуляем user при сетевом сбое — если роль уже была
       // известна (из кэша или предыдущего успешного запроса), пусть
       // приложение продолжает работать с ней, а не выкидывает на экран входа.
+      // И НЕ трогаем lastForceLogoutVersion при ошибке — иначе fail-open
+      // мог бы «съесть» pending force-logout.
       if (!(err instanceof TypeError) && err?.name !== 'AbortError') {
         console.warn('Role fetch error:', err);
       }
@@ -144,9 +152,7 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('userId');
-    localStorage.removeItem('userPhone');
-    localStorage.removeItem('userRoleCache');
+    clearStaffSessionKeys();
     localStorage.removeItem('lastForceLogoutVersion');
     setUser(null);
     // Перезагружаем ТЕКУЩУЮ страницу (а не уводим на "/") — сами layout'ы
@@ -177,11 +183,6 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Единая периодическая проверка force_logout_version — гарантирует, что
-    // после "Разлогинить всех" сотрудник будет выкинут максимум через
-    // FORCE_LOGOUT_POLL_MS, даже если не переключал вкладку. Это единственное
-    // место в приложении, где выполняется такой опрос (раньше было 2-3
-    // дублирующих независимых интервала в разных layout'ах).
     const pollInterval = setInterval(() => {
       if (localStorage.getItem('userId')) fetchRole(true);
     }, FORCE_LOGOUT_POLL_MS);

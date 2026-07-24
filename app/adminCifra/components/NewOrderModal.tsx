@@ -12,6 +12,7 @@ import ModalDateInput from './ModalDateInput';
 import ModalTimeInput from './ModalTimeInput';
 import { nowTimeHHMM } from './modalPickerShared';
 import ModalSelect from './ModalSelect';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 interface NewOrderModalProps {
   isOpen: boolean;                    // ← обязательно
@@ -44,7 +45,6 @@ export default function NewOrderModal({
 }: NewOrderModalProps) {
 
   // ==================== 1. СОСТОЯНИЯ ====================
-  const [adminUserId, setAdminUserId] = useState<number>(1);
   const [recipes, setRecipes] = useState<any[]>([]);
   
   const [orderCreated, setOrderCreated] = useState<any>(null);
@@ -96,18 +96,6 @@ export default function NewOrderModal({
       }));
     }
   }, [initialData, defaultDeliveryDate]);
-
-  // ==================== 3. ЗАГРУЗКА USER_ID АДМИНА ====================
-  useEffect(() => {
-    const savedId = localStorage.getItem('userId');
-    if (savedId) {
-      const id = parseInt(savedId);
-      if (!isNaN(id)) {
-        setAdminUserId(id);
-        console.log('👤 Админ userId загружен:', id);
-      }
-    }
-  }, []);
 
   // ==================== 4. ЗАГРУЗКА РЕЦЕПТОВ ====================
   useEffect(() => {
@@ -298,15 +286,21 @@ const handleSubmit = async (e: React.FormEvent) => {
     return;
   }
 
-  // Получаем ID текущего сотрудника
+  // Получаем ID текущего сотрудника — без сессии заявку не создаём
   const savedUserId = localStorage.getItem('userId');
-  const createdByStaff = savedUserId ? parseInt(savedUserId) : 1777619517739;
+  const createdByStaff = savedUserId ? parseInt(savedUserId, 10) : NaN;
+  if (!Number.isFinite(createdByStaff) || createdByStaff <= 0) {
+    alert('Сессия не найдена. Войди в систему заново.');
+    setIsSubmitting(false);
+    return;
+  }
 
   // ================================================
   // 2. ПОДГОТОВКА PAYLOAD
   // ================================================
   const payload = {
-    userId: adminUserId,                    // ID клиента (если есть)
+    // Клиента сервер резолвит по телефону/ИНН/орг — id сотрудника сюда не кладём
+    userId: null,
     grade: form.grade,
     volume: parseFloat(form.volume),
     delivery_date: form.deliveryDate,
@@ -323,13 +317,13 @@ const handleSubmit = async (e: React.FormEvent) => {
     comment: form.comment?.trim() || null,
 
     // ==================== НОВЫЕ ПОЛЯ ДЛЯ ЕДИНООБРАЗИЯ ====================
-    created_by: createdByStaff,             // ← Кто создал заявку
+    created_by: createdByStaff,             // ← Кто создал заявку (сервер всё равно берёт из auth)
     curator_name: currentUserName || 'Сотрудник', // ← Имя куратора
 
     // ==================== ДАННЫЕ ДЛЯ ИСТОРИИ ====================
     isFromAdmin: true,
     source: 'admin',
-    userRole: currentRole || 'admin',
+    userRole: currentRole || '',
     userName: currentUserName || localStorage.getItem('userName') || 'Сотрудник',
   };
 
@@ -338,7 +332,7 @@ const handleSubmit = async (e: React.FormEvent) => {
 
     const response = await fetch('/api/order', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     });
 

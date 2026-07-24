@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { findClientByPhone } from '@/lib/clientUsers';
 import { toStoredPhone } from '@/lib/phone';
 
 export async function GET(request: NextRequest) {
@@ -151,7 +152,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const userId = Date.now();
+    const existing = await findClientByPhone(supabase, storedPhone);
+    if (existing) {
+      return NextResponse.json(
+        {
+          error: 'Клиент с таким телефоном уже есть',
+          existingClientId: existing.user_id,
+          client: existing,
+        },
+        { status: 409 },
+      );
+    }
+
+    const userId = Date.now() + Math.floor(Math.random() * 1000);
     const createdBy = payload.created_by != null
       ? Number(payload.created_by)
       : auth.user.user_id;

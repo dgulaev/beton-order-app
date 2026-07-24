@@ -14,6 +14,7 @@ import {
   volumeModalStyle,
 } from '@/app/adminCifra/cardStyles';
 import { nowTimeHHMM } from '@/app/adminCifra/components/modalPickerShared';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 const INPUT: React.CSSProperties = modalFieldStyle({
   padding: '11px 14px',
@@ -209,6 +210,14 @@ export default function MobileNewOrderModal({
       return;
     }
 
+    const savedUserId = localStorage.getItem('userId');
+    const createdByStaff = savedUserId ? parseInt(savedUserId, 10) : NaN;
+    if (!Number.isFinite(createdByStaff) || createdByStaff <= 0) {
+      alert('Сессия не найдена. Войди в систему заново.');
+      setIsSubmitting(false);
+      return;
+    }
+
     const payload = {
       grade: form.grade,
       volume: parseFloat(form.volume),
@@ -224,16 +233,18 @@ export default function MobileNewOrderModal({
       concreteCost: concreteCost || 0,
       deliveryCost: deliveryCost || 0,
       totalPrice: totalPrice || 0,
-      created_by: localStorage.getItem('userId') ? parseInt(localStorage.getItem('userId')!) : 1777619517739,
+      created_by: createdByStaff,
       curator_name: currentUserName,
-      userRole: currentRole,
+      userRole: currentRole || '',
       userName: currentUserName,
+      isFromAdmin: true,
+      source: 'admin',
     };
 
     try {
       const response = await fetch('/api/order', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
       });
 
