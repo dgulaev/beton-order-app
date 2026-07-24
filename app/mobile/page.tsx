@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import MobileDashboardOrderModal from './components/MobileDashboardOrderModal';
 import MobileCalendar from './components/MobileCalendar';
 import MobileExitButton from './components/MobileExitButton';
@@ -17,6 +17,7 @@ import {
 import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { CARD_BORDER, CARD_GRADIENT_SOFT, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
+import { appAlert, appConfirm } from '@/app/adminCifra/components/appDialog';
 
 export default function MobileDashboard() {
   // ==================== 1. СТАТУСЫ И СОСТОЯНИЯ ====================
@@ -484,6 +485,87 @@ useWakeRefresh(() => {
     });
     return { ownActive: own, rentedActive: rented };
   }, [uniqueDayMixers, allMixersList]);
+
+  /** Удаление рейса в мобильной админке — только admin (в т.ч. уже отгруженные). */
+  const deleteMixer = useCallback(async (mixerId: number, _index: number) => {
+    if (!mixerId) return;
+
+    const isAdminUser = (userRole || '').toLowerCase() === 'admin';
+    if (!isAdminUser) {
+      await appAlert('Удаление рейсов доступно только администратору', {
+        title: 'Удаление рейса',
+        variant: 'danger',
+      });
+      return;
+    }
+
+    const mixerToDelete = mixerAssignments.find((m) => String(m.id) === String(mixerId));
+    if (!mixerToDelete) return;
+
+    const mixerName = mixerToDelete.mixerName || mixerToDelete.number || mixerToDelete.mixer_name || 'Миксер';
+    const currentStatus = mixerToDelete.status || 'Загрузка';
+    const volume = Number(mixerToDelete.volume || 0);
+    const orderId = mixerToDelete.orderId || mixerToDelete.order_id || selectedOrder?.id;
+    const forbiddenStatuses = ['В пути', 'На объекте', 'Разгружен', 'Возврат', 'Проблема'];
+    const isLoadedTrip = forbiddenStatuses.includes(currentStatus);
+    const orderStatus = String(selectedOrder?.status || '');
+    const orderIsFinal = orderStatus === 'completed' || orderStatus === 'cancelled';
+
+    const confirmed = await appConfirm(
+      `Удалить рейс ${mixerName} (${volume} м³) по заявке #${orderId}?\n\n`
+        + `Статус рейса: «${currentStatus}»`
+        + (orderIsFinal ? `\nЗаявка: «${orderStatus === 'completed' ? 'Выполнена' : 'Отменена'}».` : '.')
+        + '\n'
+        + (isLoadedTrip || orderIsFinal
+          ? 'Списание цемента/добавок вернётся на склад, запись исчезнет у оператора и из базы.'
+          : 'Рейс будет удалён из заявки и базы.'),
+      {
+        title: 'Удалить рейс',
+        okLabel: 'Удалить',
+        cancelLabel: 'Отмена',
+        variant: 'danger',
+      },
+    );
+    if (!confirmed) return;
+
+    const previousState = [...mixerAssignments];
+    setMixerAssignments((prev) => prev.filter((m) => String(m.id) !== String(mixerId)));
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (userId) headers['x-user-id'] = String(userId);
+
+      const res = await fetch('/api/adminCifra/order-mixers', {
+        method: 'DELETE',
+        headers,
+        body: JSON.stringify({
+          id: mixerId,
+          force: isLoadedTrip || orderIsFinal,
+          userName: user?.full_name || user?.username || 'Администратор',
+          userRole: userRole || 'admin',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) {
+        throw new Error(data.error || data.message || 'Не удалось удалить');
+      }
+
+      const cementNote = data.cementReturnedKg != null
+        ? `\nЦемент возвращён: ${data.cementReturnedKg} кг`
+        : '';
+      await appAlert(`Рейс удалён.${cementNote}`, {
+        title: 'Готово',
+        variant: 'success',
+        okLabel: 'Ок',
+      });
+    } catch (err: any) {
+      setMixerAssignments(previousState);
+      await appAlert(err?.message || 'Ошибка удаления', {
+        title: 'Удаление рейса',
+        variant: 'danger',
+      });
+    }
+  }, [userRole, mixerAssignments, selectedOrder?.id, userId, user?.full_name, user?.username]);
 
   // ==============================================
   // return (продолжение файла)
@@ -1211,7 +1293,7 @@ useWakeRefresh(() => {
           allMixers={activeMixers}
           currentUser={{ id: userId || 0, name: user?.full_name || '', role: userRole }}
           handleStatusChange={() => {}}
-          deleteMixer={() => {}}
+          deleteMixer={deleteMixer}
           history={[]}
           addToHistory={async () => {}}
           getStatusConfig={() => ({ label: '', color: '', bg: '', final: false })}

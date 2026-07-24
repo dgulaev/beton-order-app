@@ -11,7 +11,7 @@ import {
   calculateCementUsageKg,
   densitiesFromLabSettings,
 } from '@/lib/recipeAdditives';
-import { siloNameById } from '@/lib/siloConfig';
+import { formatSiloCementJournalActor, siloNameById } from '@/lib/siloConfig';
 
 const FINAL_ORDER_STATUSES = ['completed', 'cancelled'];
 const STATUS_LABELS_RU: Record<string, string> = {
@@ -368,11 +368,13 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
     try {
       const { data: shift } = await supabase
         .from('operator_shift_settings')
-        .select('active_silo_id')
+        .select('active_silo_id, active_operator_name')
         .eq('id', 1)
         .maybeSingle();
 
       const siloId = Number(shift?.active_silo_id);
+      const shiftOperatorName =
+        typeof shift?.active_operator_name === 'string' ? shift.active_operator_name : null;
       if (![1, 2, 3].includes(siloId)) {
         console.warn(`Рейс #${id}: силос не выбран — цемент не списан`);
       } else {
@@ -425,7 +427,12 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
                 old_value: Math.round(oldKg * 10) / 10,
                 new_value: Math.round(newKg * 10) / 10,
                 unit: 'кг',
-                user_name: userName || (userRole === 'driver' ? 'Водитель' : 'Диспетчер'),
+                user_name: formatSiloCementJournalActor({
+                  kind: 'auto_writeoff',
+                  orderId: Number(orderId),
+                  operatorName: shiftOperatorName,
+                  actorName: userName || (userRole === 'driver' ? 'Водитель' : 'Диспетчер'),
+                }),
               });
               if (histError) console.error('Не удалось записать историю списания цемента:', histError);
             }
@@ -475,6 +482,20 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
           const adj = Array.isArray(adjRows) ? adjRows[0] : adjRows;
           const oldKg = Number(adj?.old_current ?? 0) * 1000;
           const newKg = Number(adj?.new_current ?? 0) * 1000;
+          let rollbackOperatorName: string | null = null;
+          try {
+            const { data: shiftRow } = await supabase
+              .from('operator_shift_settings')
+              .select('active_operator_name')
+              .eq('id', 1)
+              .maybeSingle();
+            rollbackOperatorName =
+              typeof shiftRow?.active_operator_name === 'string'
+                ? shiftRow.active_operator_name
+                : null;
+          } catch {
+            // имя смены необязательно для возврата
+          }
           await supabase.from('warehouse_operations').insert({
             operation_type: 'add',
             item_type: siloNameById(siloId),
@@ -482,7 +503,12 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
             old_value: Math.round(oldKg * 10) / 10,
             new_value: Math.round(newKg * 10) / 10,
             unit: 'кг',
-            user_name: userName || (userRole === 'driver' ? 'Водитель' : 'Диспетчер'),
+            user_name: formatSiloCementJournalActor({
+              kind: 'rollback',
+              orderId: Number(orderId),
+              operatorName: rollbackOperatorName,
+              actorName: userName || (userRole === 'driver' ? 'Водитель' : 'Диспетчер'),
+            }),
           });
         }
       }

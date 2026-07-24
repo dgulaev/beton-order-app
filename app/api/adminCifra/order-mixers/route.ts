@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
-import { siloNameById } from '@/lib/siloConfig';
+import { formatSiloCementJournalActor, siloNameById } from '@/lib/siloConfig';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -227,14 +227,11 @@ export async function DELETE(request: NextRequest) {
     }
 
     const orderStatus = (mixer as any).orders?.status as string | undefined;
-    if (orderStatus && FINAL_STATUSES.includes(orderStatus)) {
-      return NextResponse.json({
-        error: `Заявка уже в финальном статусе "${STATUS_LABELS_RU[orderStatus] || orderStatus}" — удаление миксеров запрещено`
-      }, { status: 400 });
-    }
+    const orderIsFinal = !!(orderStatus && FINAL_STATUSES.includes(orderStatus));
 
     const mixerStatus = String(mixer.status || 'Загрузка');
-    const needsAdmin = LOADED_STATUSES.includes(mixerStatus)
+    const needsAdmin = orderIsFinal
+      || LOADED_STATUSES.includes(mixerStatus)
       || mixer.cement_write_off_kg != null
       || mixer.additive_write_off_liters != null
       || Boolean(body?.force);
@@ -248,7 +245,11 @@ export async function DELETE(request: NextRequest) {
       const auth = await requireAdminCifraStaff(request, ['admin']);
       if (auth.error) {
         return NextResponse.json(
-          { error: 'Удаление уже отгруженного рейса доступно только администратору' },
+          {
+            error: orderIsFinal
+              ? `Заявка в статусе "${STATUS_LABELS_RU[orderStatus!] || orderStatus}" — удаление рейсов только для администратора`
+              : 'Удаление уже отгруженного рейса доступно только администратору',
+          },
           { status: 403 },
         );
       }
@@ -301,7 +302,11 @@ export async function DELETE(request: NextRequest) {
         old_value: Math.round(oldKg * 10) / 10,
         new_value: Math.round(newKg * 10) / 10,
         unit: 'кг',
-        user_name: actorName,
+        user_name: formatSiloCementJournalActor({
+          kind: 'delete_return',
+          orderId: Number(mixer.order_id),
+          actorName,
+        }),
       });
       if (histError) console.error('Не удалось записать историю возврата цемента:', histError);
     }

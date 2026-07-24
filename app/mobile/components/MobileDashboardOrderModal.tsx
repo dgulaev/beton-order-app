@@ -57,6 +57,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
     mixerAssignments,
     setAllOrders,
     currentUser,
+    deleteMixer,
     history: initialHistory,
     setHistory,
   } = props;
@@ -68,6 +69,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
   const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(order?.address);
 
   const role = (currentUser?.role || '').toLowerCase().trim();
+  const isAdmin = role === 'admin';
   const canManageQuestionable = ['admin', 'manager', 'dispatcher', 'logist'].includes(role);
 
   useBodyScrollLock(!!order);
@@ -331,7 +333,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
             </div>
             {currentMixers.length === 0 ? (
               <div style={{ color: '#64748B', fontSize: '14px', textAlign: 'center', padding: '24px 0' }}>Миксеры не назначены</div>
-            ) : <div style={{ maxHeight: '260px', overflowY: 'auto' }}>{currentMixers.map(mixer => {
+            ) : <div style={{ maxHeight: '320px', overflowY: 'auto' }}>{currentMixers.map((mixer, index) => {
               const onSite = formatOnSite(mixer);
               const hasDowntime = Number(mixer.downtimeMinutes) > 0;
               const st = mixer.status || 'Загрузка';
@@ -343,10 +345,19 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
                 st === 'Проблема' ? '#EF4444' :
                 st === 'Возврат' ? '#94A3B8' : '#64748B';
               return (
-                <div key={mixer.id} style={volumeCardSoftStyle({ borderRadius: 12, padding: '12px 14px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', borderLeft: `3px solid ${statusColor}` })}>
-                  <div>
+                <div key={mixer.id} style={volumeCardSoftStyle({
+                  borderRadius: 12,
+                  padding: '12px 10px',
+                  marginBottom: '8px',
+                  display: 'grid',
+                  gridTemplateColumns: isAdmin ? '1fr auto auto' : '1fr auto',
+                  alignItems: 'center',
+                  gap: '8px',
+                  borderLeft: `3px solid ${statusColor}`,
+                })}>
+                  <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: '14px', color: '#E2E8F0' }}>{mixer.mixerName || mixer.number || 'Миксер'}</div>
-                    <div style={{ color: '#475569', fontSize: '12px', marginTop: '2px' }}>{mixer.time}</div>
+                    <div style={{ color: '#64748B', fontSize: '12px', marginTop: '2px' }}>{mixer.time}</div>
                     {onSite && (
                       <div style={{ marginTop: '6px', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '9999px', background: hasDowntime ? '#F9731615' : 'rgba(51,65,85,0.15)', color: hasDowntime ? '#F97316' : '#64748B', fontSize: '12px' }}>
                         <Clock size={10} /> {onSite}{st === 'Разгружен' && hasDowntime ? ` (простой ${mixer.downtimeMinutes} мин)` : ''}
@@ -364,6 +375,36 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
                       {st}
                     </div>
                   </div>
+                  {isAdmin ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void deleteMixer(Number(mixer.id), index);
+                      }}
+                      aria-label="Удалить рейс"
+                      title="Удалить рейс (admin)"
+                      style={{
+                        width: 22,
+                        height: 22,
+                        border: 'none',
+                        background: 'transparent',
+                        color: '#EF4444',
+                        fontSize: '15px',
+                        fontWeight: 600,
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                        padding: 0,
+                        opacity: 0.85,
+                      }}
+                    >
+                      ✕
+                    </button>
+                  ) : null}
                 </div>
               );
             })}</div>}

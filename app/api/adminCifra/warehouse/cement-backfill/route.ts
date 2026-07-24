@@ -3,7 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { calculateCementUsageKg, findRecipeByGrade } from '@/lib/recipeAdditives';
-import { siloNameById } from '@/lib/siloConfig';
+import { formatSiloCementJournalActor, siloNameById } from '@/lib/siloConfig';
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 
 const LOADED_STATUSES = ['В пути', 'На объекте', 'Разгружен', 'Возврат'] as const;
@@ -27,14 +27,23 @@ type Candidate = {
   cementKg: number;
 };
 
-async function resolveActiveSiloId(): Promise<number | null> {
+async function resolveActiveShift(): Promise<{
+  siloId: number | null;
+  operatorName: string | null;
+}> {
   const { data: shift } = await supabase
     .from('operator_shift_settings')
-    .select('active_silo_id')
+    .select('active_silo_id, active_operator_name')
     .eq('id', 1)
     .maybeSingle();
   const siloId = Number(shift?.active_silo_id);
-  return [1, 2, 3].includes(siloId) ? siloId : null;
+  return {
+    siloId: [1, 2, 3].includes(siloId) ? siloId : null,
+    operatorName:
+      typeof shift?.active_operator_name === 'string' && shift.active_operator_name.trim()
+        ? shift.active_operator_name.trim()
+        : null,
+  };
 }
 
 async function loadCandidates(dateIso: string): Promise<{
@@ -114,7 +123,7 @@ export async function GET(request: NextRequest) {
       ? dateParam
       : moscowDateStr();
 
-    const siloId = await resolveActiveSiloId();
+    const { siloId } = await resolveActiveShift();
     if (siloId == null) {
       return NextResponse.json(
         { error: 'Сначала выбери активный силос' },
@@ -167,7 +176,7 @@ export async function POST(request: NextRequest) {
       // тело опционально
     }
 
-    const siloId = await resolveActiveSiloId();
+    const { siloId, operatorName } = await resolveActiveShift();
     if (siloId == null) {
       return NextResponse.json(
         { error: 'Сначала выбери активный силос' },
@@ -250,7 +259,12 @@ export async function POST(request: NextRequest) {
         old_value: Math.round(oldKg * 10) / 10,
         new_value: Math.round(newKg * 10) / 10,
         unit: 'кг',
-        user_name: `${actorName} (задним числом)`,
+        user_name: formatSiloCementJournalActor({
+          kind: 'backfill',
+          orderId: trip.orderId,
+          operatorName,
+          actorName,
+        }),
       });
 
       writtenOff += 1;

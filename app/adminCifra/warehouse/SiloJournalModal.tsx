@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { ScrollText, X } from 'lucide-react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { ChevronLeft, ChevronRight, ScrollText, X } from 'lucide-react';
 import { SILO_SPEC } from '@/lib/siloConfig';
 import {
   CARD_BORDER,
@@ -20,6 +20,7 @@ type Op = {
   unit?: string;
   user_name?: string | null;
   created_at?: string;
+  order_id?: number | null;
 };
 
 type DayGroup = {
@@ -47,14 +48,22 @@ function moscowDateKey(iso: string | undefined): string {
   }).format(d);
 }
 
+function todayMoscowKey(): string {
+  return moscowDateKey(new Date().toISOString());
+}
+
+/** Сдвиг календарного дня YYYY-MM-DD в Europe/Moscow. */
+function shiftMoscowDate(dateKey: string, deltaDays: number): string {
+  const ms = Date.parse(`${dateKey}T12:00:00+03:00`) + deltaDays * 86400000;
+  return moscowDateKey(new Date(ms).toISOString());
+}
+
 function formatDayLabel(dateKey: string): string {
   if (dateKey === 'unknown') return 'Без даты';
   const [y, m, d] = dateKey.split('-').map(Number);
   const date = new Date(y, (m || 1) - 1, d || 1);
-  const todayKey = moscowDateKey(new Date().toISOString());
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayKey = moscowDateKey(yesterday.toISOString());
+  const todayKey = todayMoscowKey();
+  const yesterdayKey = shiftMoscowDate(todayKey, -1);
 
   const base = date.toLocaleDateString('ru-RU', {
     weekday: 'short',
@@ -64,6 +73,15 @@ function formatDayLabel(dateKey: string): string {
   if (dateKey === todayKey) return `Сегодня · ${base}`;
   if (dateKey === yesterdayKey) return `Вчера · ${base}`;
   return base;
+}
+
+function formatChipLabel(dateKey: string): string {
+  const todayKey = todayMoscowKey();
+  if (dateKey === todayKey) return 'Сегодня';
+  if (dateKey === shiftMoscowDate(todayKey, -1)) return 'Вчера';
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const date = new Date(y, (m || 1) - 1, d || 1);
+  return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
 
 function formatTime(iso: string | undefined): string {
@@ -81,13 +99,72 @@ function formatKg(n: number): string {
   return Math.abs(n).toLocaleString('ru-RU', { maximumFractionDigits: 1 });
 }
 
+function parseJournalActor(userName: string | null | undefined): {
+  headline: string | null;
+  detail: string;
+  backfill: boolean;
+  isAuto: boolean;
+  isReturn: boolean;
+  isTransfer: boolean;
+} {
+  const raw = String(userName || '').trim();
+  const backfill = /задним числом/i.test(raw);
+  const cleaned = raw.replace(/\s*\(задним числом\)\s*$/i, '').trim();
+  const isAuto = /^Автосписание\b/i.test(cleaned);
+  const isReturn = /^Возврат\b/i.test(cleaned);
+  const isTransfer = /^Корректировка\b/i.test(cleaned);
+
+  if (isAuto || isReturn || isTransfer) {
+    const parts = cleaned.split(/\s*·\s*/).map((p) => p.trim()).filter(Boolean);
+    const headline = parts[0] || null;
+    const detail = parts.slice(1).join(' · ') || cleaned;
+    return { headline, detail, backfill, isAuto, isReturn, isTransfer };
+  }
+
+  return {
+    headline: null,
+    detail: cleaned || '—',
+    backfill,
+    isAuto: false,
+    isReturn: false,
+    isTransfer: false,
+  };
+}
+
 function opMeta(op: Op) {
+  const actor = parseJournalActor(op.user_name);
   const type = op.operation_type || 'unknown';
+  if (actor.isTransfer) {
+    if (type === 'add') {
+      return {
+        label: 'Корректировка',
+        accent: '#FBBF24',
+        bg: 'rgba(251, 191, 36, 0.10)',
+        sign: '+',
+      };
+    }
+    return {
+      label: 'Корректировка',
+      accent: '#FBBF24',
+      bg: 'rgba(251, 191, 36, 0.10)',
+      sign: type === 'subtract' ? '−' : '',
+    };
+  }
   if (type === 'add') {
-    return { label: 'Внесено', accent: '#34D399', bg: 'rgba(16, 185, 129, 0.10)', sign: '+' };
+    return {
+      label: actor.isReturn ? 'Возврат' : 'Внесено',
+      accent: '#34D399',
+      bg: 'rgba(16, 185, 129, 0.10)',
+      sign: '+',
+    };
   }
   if (type === 'subtract') {
-    return { label: 'Списано', accent: '#F87171', bg: 'rgba(239, 68, 68, 0.10)', sign: '−' };
+    return {
+      label: actor.isAuto ? 'Автосписание' : 'Списано',
+      accent: '#F87171',
+      bg: 'rgba(239, 68, 68, 0.10)',
+      sign: '−',
+    };
   }
   if (type === 'reset') {
     return { label: 'Обнулено', accent: '#94A3B8', bg: 'rgba(100, 116, 139, 0.14)', sign: '' };
@@ -109,6 +186,12 @@ export default function SiloJournalModal({ onClose }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [siloFilter, setSiloFilter] = useState<'all' | '1' | '2' | '3'>('all');
+  const [selectedDate, setSelectedDate] = useState(todayMoscowKey);
+
+  const quickDates = useMemo(() => {
+    const today = todayMoscowKey();
+    return Array.from({ length: 7 }, (_, i) => shiftMoscowDate(today, -i));
+  }, [selectedDate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,7 +199,12 @@ export default function SiloJournalModal({ onClose }: Props) {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch('/api/adminCifra/warehouse/history?scope=silos&limit=500', {
+        const qs = new URLSearchParams({
+          scope: 'silos',
+          limit: '500',
+          date: selectedDate,
+        });
+        const res = await fetch(`/api/adminCifra/warehouse/history?${qs}`, {
           cache: 'no-store',
         });
         const data = res.ok ? await res.json() : [];
@@ -129,7 +217,7 @@ export default function SiloJournalModal({ onClose }: Props) {
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [selectedDate]);
 
   const days = useMemo(() => {
     const filtered = ops.filter((op) => matchesSiloFilter(op.item_type, siloFilter));
@@ -174,6 +262,9 @@ export default function SiloJournalModal({ onClose }: Props) {
       count,
     };
   }, [days]);
+
+  const todayKey = todayMoscowKey();
+  const canGoNext = selectedDate < todayKey;
 
   return (
     <div
@@ -220,12 +311,123 @@ export default function SiloJournalModal({ onClose }: Props) {
               </h2>
             </div>
             <div style={{ fontSize: '12.5px', color: '#94A3B8' }}>
-              Внесения, списания и обнуления по дням · до 500 последних операций
+              Внесения, списания и обнуления · по выбранному дню
             </div>
           </div>
           <button type="button" onClick={onClose} style={modalCloseButtonStyle()} aria-label="Закрыть">
             <X size={18} />
           </button>
+        </div>
+
+        {/* Навигация по дням */}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px',
+            padding: '12px 20px',
+            borderBottom: '1px solid rgba(148, 163, 184, 0.12)',
+            flexShrink: 0,
+          }}
+        >
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            flexWrap: 'wrap',
+          }}>
+            <button
+              type="button"
+              onClick={() => setSelectedDate((d) => shiftMoscowDate(d, -1))}
+              style={navBtnStyle}
+              aria-label="Предыдущий день"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <div style={{
+              flex: '1 1 auto',
+              minWidth: 0,
+              textAlign: 'center',
+              fontSize: '14px',
+              fontWeight: 700,
+              color: '#F1F5F9',
+            }}>
+              {formatDayLabel(selectedDate)}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedDate((d) => shiftMoscowDate(d, 1))}
+              disabled={!canGoNext}
+              style={{
+                ...navBtnStyle,
+                opacity: canGoNext ? 1 : 0.35,
+                cursor: canGoNext ? 'pointer' : 'default',
+              }}
+              aria-label="Следующий день"
+            >
+              <ChevronRight size={16} />
+            </button>
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                marginLeft: 'auto',
+                fontSize: 12,
+                color: '#94A3B8',
+                cursor: 'pointer',
+              }}
+            >
+              <span>Перейти</span>
+              <input
+                type="date"
+                value={selectedDate}
+                max={todayKey}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (/^\d{4}-\d{2}-\d{2}$/.test(v) && v <= todayKey) {
+                    setSelectedDate(v);
+                  }
+                }}
+                style={{
+                  background: 'rgba(15, 23, 42, 0.75)',
+                  border: '1px solid rgba(148, 163, 184, 0.28)',
+                  borderRadius: 8,
+                  color: '#E2E8F0',
+                  fontSize: 12.5,
+                  padding: '5px 8px',
+                  colorScheme: 'dark',
+                }}
+              />
+            </label>
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {quickDates.map((key) => {
+              const active = selectedDate === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSelectedDate(key)}
+                  style={{
+                    padding: '5px 10px',
+                    borderRadius: 999,
+                    border: active
+                      ? '1px solid rgba(251, 191, 36, 0.55)'
+                      : '1px solid rgba(148, 163, 184, 0.22)',
+                    background: active ? 'rgba(251, 191, 36, 0.14)' : 'rgba(15, 23, 42, 0.45)',
+                    color: active ? '#FBBF24' : '#94A3B8',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {formatChipLabel(key)}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <div
@@ -291,7 +493,7 @@ export default function SiloJournalModal({ onClose }: Props) {
             <div style={{ color: '#F87171', padding: '28px 0', textAlign: 'center' }}>{error}</div>
           ) : days.length === 0 ? (
             <div style={{ color: '#64748B', padding: '28px 0', textAlign: 'center' }}>
-              Пока нет операций по силосам
+              Нет операций по силосам за этот день
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -321,8 +523,8 @@ export default function SiloJournalModal({ onClose }: Props) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     {day.ops.map((op, index) => {
                       const meta = opMeta(op);
+                      const actor = parseJournalActor(op.user_name);
                       const unit = op.unit || 'кг';
-                      const backfill = String(op.user_name || '').includes('задним числом');
                       return (
                         <div
                           key={op.id ?? `${day.dateKey}-${index}`}
@@ -353,7 +555,7 @@ export default function SiloJournalModal({ onClose }: Props) {
                                 <span style={{ color: '#94A3B8', fontWeight: 500 }}>
                                   {' · '}{op.item_type || 'Силос'}
                                 </span>
-                                {backfill ? (
+                                {actor.backfill ? (
                                   <span style={{
                                     marginLeft: 8,
                                     fontSize: 11,
@@ -366,7 +568,7 @@ export default function SiloJournalModal({ onClose }: Props) {
                               </div>
                               <div style={{ marginTop: 3, fontSize: '12px', color: '#94A3B8' }}>
                                 <span style={{ color: '#CBD5E1', fontWeight: 600 }}>
-                                  {op.user_name?.replace(/\s*\(задним числом\)\s*$/, '') || '—'}
+                                  {actor.detail}
                                 </span>
                                 <span style={{ color: '#64748B' }}>
                                   {' · '}
@@ -397,3 +599,17 @@ export default function SiloJournalModal({ onClose }: Props) {
     </div>
   );
 }
+
+const navBtnStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 32,
+  height: 32,
+  borderRadius: 8,
+  border: '1px solid rgba(148, 163, 184, 0.28)',
+  background: 'rgba(15, 23, 42, 0.65)',
+  color: '#E2E8F0',
+  cursor: 'pointer',
+  flexShrink: 0,
+};

@@ -5,6 +5,7 @@ import { useUserRole } from '@/app/providers/UserRoleProvider';
 import { SILO_SPEC } from '@/lib/siloConfig';
 import { CARD_BORDER, volumeCardSoftStyle } from '../cardStyles';
 import { appAlert, appConfirm, appPrompt } from './appDialog';
+import CementTransferModal from './CementTransferModal';
 
 type SiloRow = {
   silo_id: number;
@@ -42,6 +43,7 @@ export default function OperatorSilosBar({
   const [silos, setSilos] = useState<SiloRow[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [backfillBusy, setBackfillBusy] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
 
   const loadSilos = useCallback(async () => {
     try {
@@ -289,168 +291,216 @@ export default function OperatorSilosBar({
       </div>
 
       <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-        gap: '8px',
+        display: 'flex',
+        gap: 8,
         flex: 1,
         minHeight: 0,
+        alignItems: 'stretch',
       }}>
-        {silos.map((silo) => {
-          const active = activeSiloId === silo.silo_id;
-          const pct = silo.max > 0 ? Math.min(100, Math.max(0, (silo.current / silo.max) * 100)) : 0;
-          const negative = silo.current < 0;
-          const low = !negative && pct < 30;
-          const stockColor = negative ? '#F87171' : low ? '#FBBF24' : '#34D399';
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+          gap: 8,
+          flex: 1,
+          minWidth: 0,
+        }}>
+          {silos.map((silo) => {
+            const active = activeSiloId === silo.silo_id;
+            const pct = silo.max > 0 ? Math.min(100, Math.max(0, (silo.current / silo.max) * 100)) : 0;
+            const negative = silo.current < 0;
+            const low = !negative && pct < 30;
+            const stockColor = negative ? '#F87171' : low ? '#FBBF24' : '#34D399';
 
-          return (
+            return (
+              <button
+                key={silo.silo_id}
+                type="button"
+                onClick={() => onActiveSiloChange(silo.silo_id)}
+                disabled={busyId === silo.silo_id}
+                style={{
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  borderRadius: 12,
+                  padding: '8px 9px',
+                  border: active
+                    ? '1px solid rgba(52, 211, 153, 0.55)'
+                    : '1px solid rgba(148, 163, 184, 0.22)',
+                  background: active
+                    ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.16) 0%, rgba(15, 23, 42, 0.95) 55%)'
+                    : 'rgba(15, 23, 42, 0.55)',
+                  boxShadow: active ? '0 0 16px rgba(16, 185, 129, 0.12)' : 'none',
+                  color: '#E2E8F0',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '5px',
+                  minWidth: 0,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 14,
+                      height: 14,
+                      borderRadius: '50%',
+                      border: active ? '2px solid #34D399' : '2px solid #64748B',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {active ? (
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#34D399' }} />
+                    ) : null}
+                  </span>
+                  <span style={{ fontWeight: 700, fontSize: '12px', whiteSpace: 'nowrap' }}>
+                    {`Силос ${silo.silo_id}`}
+                  </span>
+                  <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#64748B' }}>
+                    /{silo.max}
+                  </span>
+                </div>
+
+                <div style={{
+                  fontSize: '16px',
+                  fontWeight: 700,
+                  color: stockColor,
+                  fontVariantNumeric: 'tabular-nums',
+                  lineHeight: 1.1,
+                }}>
+                  {silo.current.toFixed(2)} т
+                </div>
+
+                <div style={{
+                  height: 4,
+                  borderRadius: 999,
+                  background: '#1E2937',
+                  overflow: 'hidden',
+                }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${negative ? 100 : pct}%`,
+                    background: stockColor,
+                    transition: 'width 0.35s ease',
+                  }} />
+                </div>
+
+                <div
+                  style={{ display: 'flex', gap: '4px' }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleAdd(silo.silo_id)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(silo.silo_id); }}
+                    style={{
+                      flex: 1,
+                      textAlign: 'center',
+                      padding: '4px 4px',
+                      borderRadius: 7,
+                      background: 'rgba(59, 130, 246, 0.2)',
+                      color: '#93C5FD',
+                      fontSize: '10.5px',
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    + Внести
+                  </span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleReset(silo.silo_id)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleReset(silo.silo_id); }}
+                    style={{
+                      flex: 1,
+                      textAlign: 'center',
+                      padding: '4px 4px',
+                      borderRadius: 7,
+                      background: 'rgba(100, 116, 139, 0.25)',
+                      color: '#CBD5E1',
+                      fontSize: '10.5px',
+                      fontWeight: 600,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Обнул.
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {isAdmin ? (
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            flex: '0 0 72px',
+            width: 72,
+            minWidth: 72,
+          }}>
             <button
-              key={silo.silo_id}
               type="button"
-              onClick={() => onActiveSiloChange(silo.silo_id)}
-              disabled={busyId === silo.silo_id}
+              onClick={() => { void handleCementBackfill(); }}
+              disabled={backfillBusy || activeSiloId == null || busyId != null}
+              title={activeSiloId == null
+                ? 'Сначала выбери активный силос'
+                : 'Списать цемент по сегодняшним рейсам без списания'}
               style={{
-                textAlign: 'left',
-                cursor: 'pointer',
-                borderRadius: 12,
-                padding: '8px 9px',
-                border: active
-                  ? '1px solid rgba(52, 211, 153, 0.55)'
-                  : '1px solid rgba(148, 163, 184, 0.22)',
-                background: active
-                  ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.16) 0%, rgba(15, 23, 42, 0.95) 55%)'
-                  : 'rgba(15, 23, 42, 0.55)',
-                boxShadow: active ? '0 0 16px rgba(16, 185, 129, 0.12)' : 'none',
-                color: '#E2E8F0',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '5px',
-                minWidth: 0,
+                flex: 1,
+                minHeight: 0,
+                padding: '6px 4px',
+                borderRadius: 10,
+                border: '1px solid rgba(251, 191, 36, 0.4)',
+                background: backfillBusy || activeSiloId == null
+                  ? 'rgba(251, 191, 36, 0.08)'
+                  : 'rgba(251, 191, 36, 0.16)',
+                color: activeSiloId == null ? '#64748B' : '#FBBF24',
+                fontSize: 10.5,
+                fontWeight: 700,
+                lineHeight: 1.2,
+                cursor: backfillBusy || activeSiloId == null ? 'not-allowed' : 'pointer',
+                opacity: backfillBusy ? 0.75 : 1,
+                textAlign: 'center',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span
-                  aria-hidden
-                  style={{
-                    width: 14,
-                    height: 14,
-                    borderRadius: '50%',
-                    border: active ? '2px solid #34D399' : '2px solid #64748B',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                  }}
-                >
-                  {active ? (
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#34D399' }} />
-                  ) : null}
-                </span>
-                <span style={{ fontWeight: 700, fontSize: '12px', whiteSpace: 'nowrap' }}>
-                  {silo.name.replace('Силос ', 'С')}
-                </span>
-                <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#64748B' }}>
-                  /{silo.max}
-                </span>
-              </div>
-
-              <div style={{
-                fontSize: '16px',
-                fontWeight: 700,
-                color: stockColor,
-                fontVariantNumeric: 'tabular-nums',
-                lineHeight: 1.1,
-              }}>
-                {silo.current.toFixed(2)} т
-              </div>
-
-              <div style={{
-                height: 4,
-                borderRadius: 999,
-                background: '#1E2937',
-                overflow: 'hidden',
-              }}>
-                <div style={{
-                  height: '100%',
-                  width: `${negative ? 100 : pct}%`,
-                  background: stockColor,
-                  transition: 'width 0.35s ease',
-                }} />
-              </div>
-
-              <div
-                style={{ display: 'flex', gap: '4px' }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <span
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => handleAdd(silo.silo_id)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(silo.silo_id); }}
-                  style={{
-                    flex: 1,
-                    textAlign: 'center',
-                    padding: '4px 4px',
-                    borderRadius: 7,
-                    background: 'rgba(59, 130, 246, 0.2)',
-                    color: '#93C5FD',
-                    fontSize: '10.5px',
-                    fontWeight: 600,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  + Внести
-                </span>
-                <span
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => handleReset(silo.silo_id)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleReset(silo.silo_id); }}
-                  style={{
-                    flex: 1,
-                    textAlign: 'center',
-                    padding: '4px 4px',
-                    borderRadius: 7,
-                    background: 'rgba(100, 116, 139, 0.25)',
-                    color: '#CBD5E1',
-                    fontSize: '10.5px',
-                    fontWeight: 600,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  Обнул.
-                </span>
-              </div>
+              {backfillBusy ? '…' : 'Списать'}
             </button>
-          );
-        })}
+            <button
+              type="button"
+              onClick={() => setTransferOpen(true)}
+              disabled={backfillBusy || busyId != null}
+              title="Перенести ошибочное списание цемента на другой силос"
+              style={{
+                flex: 1,
+                minHeight: 0,
+                padding: '6px 4px',
+                borderRadius: 10,
+                border: '1px solid rgba(148, 163, 184, 0.35)',
+                background: 'rgba(15, 23, 42, 0.55)',
+                color: '#CBD5E1',
+                fontSize: 10.5,
+                fontWeight: 700,
+                lineHeight: 1.2,
+                cursor: backfillBusy || busyId != null ? 'not-allowed' : 'pointer',
+                textAlign: 'center',
+              }}
+            >
+              Исправить
+            </button>
+          </div>
+        ) : null}
       </div>
 
-      {isAdmin ? (
-        <button
-          type="button"
-          onClick={() => { void handleCementBackfill(); }}
-          disabled={backfillBusy || activeSiloId == null || busyId != null}
-          title={activeSiloId == null
-            ? 'Сначала выбери активный силос'
-            : 'Списать цемент по сегодняшним рейсам без списания'}
-          style={{
-            marginTop: '8px',
-            width: '100%',
-            padding: '7px 10px',
-            borderRadius: 10,
-            border: '1px solid rgba(251, 191, 36, 0.4)',
-            background: backfillBusy || activeSiloId == null
-              ? 'rgba(251, 191, 36, 0.08)'
-              : 'rgba(251, 191, 36, 0.16)',
-            color: activeSiloId == null ? '#64748B' : '#FBBF24',
-            fontSize: '11.5px',
-            fontWeight: 700,
-            cursor: backfillBusy || activeSiloId == null ? 'not-allowed' : 'pointer',
-            opacity: backfillBusy ? 0.75 : 1,
-          }}
-        >
-          {backfillBusy ? 'Списание…' : 'Списать задним числом'}
-        </button>
+      {transferOpen ? (
+        <CementTransferModal
+          onClose={() => setTransferOpen(false)}
+          onDone={() => { void loadSilos(); }}
+        />
       ) : null}
     </div>
   );

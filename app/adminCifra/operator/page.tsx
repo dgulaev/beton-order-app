@@ -95,6 +95,7 @@ export default function OperatorBSUPage() {
   // проверить данные) — но только на текущую вкладку/до следующей перезагрузки,
   // при новой загрузке страницы оно появится снова, пока смена не выбрана.
   const [shiftReminderDismissed, setShiftReminderDismissed] = useState(false);
+  const [shiftHintOpen, setShiftHintOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1295,7 +1296,11 @@ export default function OperatorBSUPage() {
             только подписывает будущие действия реальным именем и переключает
             одну строку в БД (см. handleShiftOperatorChange выше). */}
         <div
-          title="Кто сейчас за пультом — влияет на подпись в истории заявок"
+          style={{ position: 'relative' }}
+          onMouseEnter={() => setShiftHintOpen(true)}
+          onMouseLeave={() => setShiftHintOpen(false)}
+        >
+        <div
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -1388,6 +1393,31 @@ export default function OperatorBSUPage() {
               }))}
             />
           </div>
+        </div>
+        {shiftHintOpen ? (
+          <div
+            role="tooltip"
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 10px)',
+              right: 0,
+              zIndex: 90,
+              width: 260,
+              padding: '10px 12px',
+              borderRadius: 12,
+              background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 100%)',
+              border: '1px solid rgba(52, 211, 153, 0.35)',
+              boxShadow: '0 10px 28px rgba(2, 6, 23, 0.55), 0 0 20px rgba(16, 185, 129, 0.12)',
+              color: '#E2E8F0',
+              fontSize: 12.5,
+              lineHeight: 1.4,
+              fontWeight: 500,
+              pointerEvents: 'none',
+            }}
+          >
+            Кто сейчас за пультом — влияет на подпись в истории заявок
+          </div>
+        ) : null}
         </div>
       </div>
 
@@ -1564,18 +1594,16 @@ export default function OperatorBSUPage() {
           </div>
         </div>
 
-        {/* ==================== 3. СТАТИСТИКА | СИЛОСЫ | MEKA ==================== */}
+        {/* ==================== 3. СТАТИСТИКА | СИЛОСЫ | MEKA (только «Заявки») ==================== */}
+        {activeTab === 'zayavki' && (
         <div style={{
           display: 'grid',
-          gridTemplateColumns: activeTab === 'zayavki'
-            ? 'minmax(0, 1.05fr) minmax(260px, 0.85fr) minmax(148px, 168px)'
-            : 'minmax(0, 1fr) minmax(148px, 168px)',
+          gridTemplateColumns: 'minmax(0, 1.05fr) minmax(260px, 0.85fr) minmax(148px, 168px)',
           gap: '12px',
           marginBottom: '14px',
           flexShrink: 0,
           alignItems: 'stretch',
         }}>
-          {activeTab === 'zayavki' && (
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
@@ -1590,14 +1618,16 @@ export default function OperatorBSUPage() {
                 return (
                   <div key={index} style={volumeCardStyle({
                     borderRadius: 16,
-                    padding: '14px 14px 12px',
+                    padding: '14px 12px',
                     minWidth: 0,
                     height: '100%',
                     boxSizing: 'border-box',
                     display: 'flex',
                     flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    gap: '8px',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '10px',
+                    textAlign: 'center',
                   })}>
                     <div style={{
                       color: '#CBD5E1',
@@ -1608,42 +1638,49 @@ export default function OperatorBSUPage() {
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
+                      maxWidth: '100%',
                     }}>
                       {stat.label}
                     </div>
-                    <div>
-                      <div
-                        title={valueText}
-                        style={{
-                          fontSize: compactValue ? '26px' : '36px',
-                          fontWeight: 800,
-                          color: stat.color,
-                          lineHeight: 1.05,
-                          fontVariantNumeric: 'tabular-nums',
-                          letterSpacing: '-0.02em',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
+                    <div
+                      title={stat.unit ? `${valueText} ${stat.unit}` : valueText}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'baseline',
+                        justifyContent: 'center',
+                        gap: '6px',
+                        maxWidth: '100%',
+                        minWidth: 0,
+                      }}
+                    >
+                      <span style={{
+                        fontSize: compactValue ? '26px' : '36px',
+                        fontWeight: 800,
+                        color: stat.color,
+                        lineHeight: 1.05,
+                        fontVariantNumeric: 'tabular-nums',
+                        letterSpacing: '-0.02em',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>
                         {stat.value}
-                      </div>
+                      </span>
                       {stat.unit ? (
-                        <div style={{
-                          marginTop: '4px',
+                        <span style={{
                           color: '#94A3B8',
-                          fontSize: '13px',
-                          fontWeight: 500,
+                          fontSize: '14px',
+                          fontWeight: 600,
+                          whiteSpace: 'nowrap',
                         }}>
                           {stat.unit}
-                        </div>
+                        </span>
                       ) : null}
                     </div>
                   </div>
                 );
               })}
             </div>
-          )}
           <OperatorSilosBar
             activeSiloId={activeSiloId}
             onActiveSiloChange={handleActiveSiloChange}
@@ -1657,6 +1694,7 @@ export default function OperatorBSUPage() {
             }}
           />
         </div>
+        )}
 
         {/* ==================== 4. ОСНОВНОЙ КОНТЕНТ ==================== */}
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
