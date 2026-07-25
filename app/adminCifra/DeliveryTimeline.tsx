@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useCalendarOrders, Order } from './hooks/useCalendarOrders';
+import { pluralWord } from '@/lib/ruLocale';
 
 export default function DeliveryTimeline() {
   const today = new Date().toISOString().split('T')[0];
@@ -36,7 +37,7 @@ export default function DeliveryTimeline() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#fff' }}>График отгрузок на сегодня</h3>
         <div style={{ fontSize: '14px', color: '#94A3B8' }}>
-          {todayOrders.length} заказов
+          {pluralWord(todayOrders.length, 'заказ', 'заказа', 'заказов')}
         </div>
       </div>
 

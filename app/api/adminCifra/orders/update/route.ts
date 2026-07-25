@@ -176,6 +176,9 @@ export async function PUT(request: NextRequest) {
           const newStatusName = statusNames[newStr] || newStr;
           actionText = `Изменил статус заявки с "${oldStatusName}" на "${newStatusName}"`;
         } 
+        else if (field === 'grade') {
+          actionText = `Изменил марку бетона с ${oldStr || '—'} на ${newStr || '—'}`;
+        }
         else if (field === 'volume') {
           actionText = `Изменил объём с ${oldStr} на ${newStr} м³`;
         } 

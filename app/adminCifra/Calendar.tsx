@@ -5,6 +5,7 @@ import { X } from 'lucide-react';
 import { Order } from './hooks/useCalendarOrders';
 import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
 import { CARD_VOLUME_SOFT, modalCloseButtonStyle, volumeCardSoftStyle, volumeModalStyle } from './cardStyles';
+import { formatRuDateWithWeekday, pluralRu } from '@/lib/ruLocale';
 
 interface StatusConfig {
   label: string;
@@ -27,14 +28,8 @@ interface CalendarProps {
   onViewMonthChange?: (year: number, month: number) => void;
 }
 
-// Корректное склонение русского слова «заказ» по числу (1 заказ, 2 заказа, 5 заказов...)
-const pluralizeOrders = (count: number): string => {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'заказ';
-  if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) return 'заказа';
-  return 'заказов';
-};
+const pluralizeOrders = (count: number): string =>
+  pluralRu(count, 'заказ', 'заказа', 'заказов');
 
 // Официальные нерабочие праздничные дни РФ (фиксированные даты по ТК РФ).
 // [месяц (0-индекс), день]. Переносы выходных из-за совпадения с праздником
@@ -402,8 +397,8 @@ export default function Calendar({ onClose, orders: externalOrders, onSelectOrde
         <div style={volumeCardSoftStyle({ width: '540px', borderRadius: 20, padding: '28px', display: 'flex', flexDirection: 'column', minHeight: 0 })}>
           <h3 style={{ fontSize: '22px', marginBottom: '20px', color: '#fff', flexShrink: 0 }}>
             {selectedDay
-              // day+month вместе даёт корректный родительный падеж («15 июля», а не «15 июль»)
-              ? `Заказы на ${new Date(year, month, selectedDay).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })} (${dayOrders.length})`
+              // «на субботу, 15 июля» — винительный день недели + род. падеж месяца
+              ? `Заказы на ${formatRuDateWithWeekday(new Date(year, month, selectedDay), 'accusative')} (${dayOrders.length})`
               : 'Выберите день'}
           </h3>
 

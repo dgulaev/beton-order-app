@@ -14,6 +14,7 @@ import { CARD_BORDER, CARD_VOLUME_SOFT, modalFieldStyle, volumeCardSoftStyle, vo
 import { appConfirm } from '../components/appDialog';
 import AdminPagination from '../components/AdminPagination';
 import { nowTimeHHMM } from '../components/modalPickerShared';
+import { pluralRu } from '@/lib/ruLocale';
 
 type ClientsGridFit = { cols: number; rows: number; perPage: number };
 
@@ -2543,7 +2544,7 @@ const changeStaffPassword = async (staffMember: any) => {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
                       <div style={{ fontSize: '18px', fontWeight: '700' }}>{row.name}</div>
                       <div style={{ fontSize: '13px', color: '#94A3B8' }}>
-                        {row.trips} {row.trips === 1 ? 'рейс' : 'рейсов'}
+                        {row.trips} {pluralRu(row.trips, 'рейс', 'рейса', 'рейсов')}
                       </div>
                     </div>
 

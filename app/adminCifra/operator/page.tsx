@@ -18,6 +18,7 @@ import SiloSwitchVolumeModal, {
 } from '../components/SiloSwitchVolumeModal';
 import { appAlert, appConfirm } from '../components/appDialog';
 import { siloNameById } from '@/lib/siloConfig';
+import { formatRuDateWithWeekday, pluralRu } from '@/lib/ruLocale';
 
 const LAB_MENU_ITEMS: { key: LabTab; label: string }[] = [
   { key: 'orders', label: 'Заявки' },
@@ -78,7 +79,7 @@ export default function OperatorBSUPage() {
   const clockHours = String(clockNow.getHours()).padStart(2, '0');
   const clockMinutes = String(clockNow.getMinutes()).padStart(2, '0');
   const clockSeconds = String(clockNow.getSeconds()).padStart(2, '0');
-  const clockDateLabel = clockNow.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+  const clockDateLabel = formatRuDateWithWeekday(clockNow, 'nominative');
 
   // ==================== КТО СЕЙЧАС НА СМЕНЕ (общая учётка на двоих) ====================
   // За пультом БСУ работают Семён и Максим под одной общей учёткой "Операторы"
@@ -2009,7 +2010,7 @@ export default function OperatorBSUPage() {
                         const total = progress?.total ?? 1;
                         return (
                           <div
-                            title={`Отгружено ${dispatched} из ~${total} рейсов по заявке #${orderId} (оценка по объёму, на текущий момент)`}
+                            title={`Отгружено ${dispatched} из ~${total} ${pluralRu(total, 'рейса', 'рейсов', 'рейсов')} по заявке #${orderId} (оценка по объёму, на текущий момент)`}
                             style={{
                               fontSize: '13.5px',
                               fontWeight: '600',

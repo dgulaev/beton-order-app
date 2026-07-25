@@ -7,12 +7,19 @@ import { useRealtimeOrders, useRealtimeOrderMixers, formatOrderMixer } from '../
 import OrderDetailModal from '../components/OrderDetailModal';
 import NewOrderModal from '../components/NewOrderModal';
 import Image from 'next/image';
-import { Home, LayoutList, AlignJustify, X, User, CalendarDays } from 'lucide-react';
+import { Home, LayoutList, AlignJustify, X, User, CalendarDays, Truck, FileText } from 'lucide-react';
 import VerticalTimelinePanel from '../components/VerticalTimelinePanel';
 import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
+import {
+  buildDailyMixerReportGroups,
+  buildDailyMixerReportText,
+  formatDailyReportDateLabel,
+} from '@/lib/dailyMixerReport';
+import { formatRuDateWithWeekday, pluralRu, pluralWord } from '@/lib/ruLocale';
 import { CARD_BORDER, modalCloseButtonStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import ModalSelect from '../components/ModalSelect';
-import { appConfirm } from '../components/appDialog';
+import DailyMixerReportModal from '../components/DailyMixerReportModal';
+import { appAlert, appConfirm } from '../components/appDialog';
 
 export default function AdminCifraDashboard() {
 
@@ -54,6 +61,7 @@ export default function AdminCifraDashboard() {
  const [showPlanModal, setShowPlanModal] = useState(false);
  const [showOrdersModal, setShowOrdersModal] = useState(false);
  const [showDelaysModal, setShowDelaysModal] = useState(false);
+ const [showDailyReportModal, setShowDailyReportModal] = useState(false);
  // Быстрое создание заявки на конкретную дату (ПКМ / долгое нажатие на день в календаре)
  const [showQuickNewOrder, setShowQuickNewOrder] = useState(false);
  const [quickNewOrderDate, setQuickNewOrderDate] = useState<string | undefined>(undefined);
@@ -549,6 +557,7 @@ const fmtDelayMins = (mins: number) =>
       orderId: number | string;
       client: string;
       deliveryTime: string;
+      grade: string;
       mixers: any[];
     }> = [];
 
@@ -566,6 +575,7 @@ const fmtDelayMins = (mins: number) =>
           orderId: order.id,
           client: order.organization_name || order.full_name || '—',
           deliveryTime: order.delivery_time || '—',
+          grade: String((order as any).grade || '').trim() || '—',
           mixers: mixersForOrder
         });
       }
@@ -610,6 +620,26 @@ const dayMixerTrips = useMemo(
     todayOrderIds.has(String(m.orderId ?? m.order_id))
   ),
   [mixerAssignments, todayOrderIds]
+);
+
+/** Планирование отгрузки: все заявки + все рейсы назначений (не только «на линии»). */
+const dailyReportGroups = useMemo(
+  () =>
+    buildDailyMixerReportGroups({
+      orders: todayOrders,
+      mixers: dayMixerTrips,
+    }),
+  [todayOrders, dayMixerTrips]
+);
+
+const dailyReportAutoText = useMemo(
+  () =>
+    buildDailyMixerReportText({
+      dateLabel: formatDailyReportDateLabel(selectedDate),
+      groups: dailyReportGroups,
+      onLineCount: activeMixersToday.length,
+    }),
+  [selectedDate, dailyReportGroups, activeMixersToday.length]
 );
 
 const volumeByStatus = useMemo(() => {
@@ -1134,7 +1164,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
       })}
     >
       <CalendarDays size={15} strokeWidth={2} color="#F87171" />
-      {new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
+      {formatRuDateWithWeekday(new Date(), 'nominative')}
     </div>
   </div>
 
@@ -1374,7 +1404,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
           {delayedOrders.length}
         </span>
         <span style={{ color: '#F87171', fontSize: '13px' }}>
-          {delayedOrders.length === 1 ? 'заявка' : delayedOrders.length <= 4 ? 'заявки' : 'заявок'}
+          {pluralRu(delayedOrders.length, 'заявка', 'заявки', 'заявок')}
         </span>
       </div>
 
@@ -1504,10 +1534,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
       margin: 0,
       color: '#F1F5F9'
     }}>
-      График отгрузок на {selectedDate.toLocaleDateString('ru-RU', { 
-        day: 'numeric', 
-        month: 'long' 
-      })}
+      График отгрузок на {formatRuDateWithWeekday(selectedDate, 'accusative')}
     </h2>
 
     {/* Кнопки переключения дней */}
@@ -1812,49 +1839,6 @@ const isLogisticsReady = assignedVolume >= orderVolume && assignedVolume > 0;
 // Процент отгрузки — только для "В работе" имеет смысл: у "Новой" отгрузок
 // заведомо 0%, у "Выполненной" заведомо 100%, показывать нечего.
 const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVolume / orderVolume) * 100)) : 0;
-// ==================== 43. ГЕНЕРАЦИЯ ОТЧЁТА ДЛЯ МЕССЕНДЖЕРА ====================
-const generateDailyReport = () => {
-  if (groupedMixers.length === 0) {
-    alert('На выбранный день нет активных заявок');
-    return;
-  }
-
-  let report = `📋 Планирование на ${selectedDate.toLocaleDateString('ru-RU', { 
-    weekday: 'long', 
-    day: 'numeric', 
-    month: 'long' 
-  })}\n\n`;
-
-  groupedMixers.forEach((group, index) => {
-    const totalVol = group.mixers.reduce((sum, m) => sum + Number(m.volume || 0), 0);
-    
-    report += `${index + 1}) Заявка #${group.orderId} — ${group.client || '—'}\n`;
-    report += `   Время: ${group.deliveryTime || '—'} • ${totalVol} м³\n`;
-
-    sortMixersByLogisticsTime(group.mixers).forEach((mixer, i) => {
-      report += `   ${i+1}) ${mixer.number || mixer.mixer_name} — ${mixer.time || '—'} • ${mixer.volume} м³\n`;
-    });
-    report += `\n`;
-  });
-
-  report += `Всего на линии: ${activeMixersToday.length} миксеров\n`;
-
-  const win = window.open('', '_blank', 'width=850,height=780');
-  if (win) {
-    win.document.write(`
-      <html><head><title>Отчёт</title>
-      <style>body{font-family:Arial,sans-serif;padding:30px;line-height:1.8;font-size:15.5px;} pre{white-space:pre-wrap;}</style>
-      </head><body>
-      <h2>Отчёт на ${selectedDate.toLocaleDateString('ru-RU')}</h2>
-      <pre>${report}</pre>
-      <button onclick="navigator.clipboard.writeText(document.body.innerText).then(()=>alert('Отчёт скопирован!'))">📋 Скопировать</button>
-      </body></html>
-    `);
-  } else {
-    navigator.clipboard.writeText(report).then(() => alert('✅ Отчёт скопирован!'));
-  }
-};
-
 
   {/* Плашка перекрывает текст если leftPercent мал (ранние заказы).
       Порог ~33% ≈ 08:00. Ниже — полупрозрачная плашка, текст просвечивает.
@@ -2144,11 +2128,7 @@ const generateDailyReport = () => {
       gap: '12px',
       color: 'white'
     }}>
-      <img 
-        src="/icons/mixer-truck.png" 
-        alt="Миксер" 
-        style={{ width: '32px', height: '32px', objectFit: 'contain' }} 
-      />
+      <Truck size={26} color="#E2E8F0" strokeWidth={2} />
       Миксеры в работе
     </h3>
 
@@ -2199,7 +2179,7 @@ const generateDailyReport = () => {
               </div>
             </div>
             <div style={{ color: '#60A5FA', fontSize: '15px', whiteSpace: 'nowrap', flexShrink: 0 }}>
-              {group.mixers.length} миксеров
+              {pluralWord(group.mixers.length, 'миксер', 'миксера', 'миксеров')}
             </div>
           </div>
 
@@ -2247,7 +2227,7 @@ const generateDailyReport = () => {
                    alignItems: 'center',
                    justifyContent: 'center',
                    fontWeight: '600',
-                   color: '#94A3B8',
+                   color: '#CBD5E1',
                    fontSize: '11px',
                    flexShrink: 0
                  }}>
@@ -2255,13 +2235,19 @@ const generateDailyReport = () => {
                  </div>
 
                  {/* Номер миксера */}
-                 <div style={{ fontWeight: '700', fontSize: '13px', minWidth: '100px', whiteSpace: 'nowrap' }}>
+                 <div style={{
+                   fontWeight: '700',
+                   fontSize: '13px',
+                   minWidth: '100px',
+                   whiteSpace: 'nowrap',
+                   color: '#F1F5F9',
+                 }}>
                    {mixer.number || mixer.mixer_name}
                  </div>
 
                  {/* ==================== 46. ВРЕМЯ + ОБЪЁМ (в одну строку, nowrap) ==================== */}
                  <div style={{ 
-                   color: '#94A3B8', 
+                   color: '#CBD5E1', 
                    fontSize: '12.5px',
                    flex: 1,
                    whiteSpace: 'nowrap',
@@ -2274,12 +2260,13 @@ const generateDailyReport = () => {
                  {/* Статус — кастомный select с цветом по статусу */}
                  {(() => {
                    const st = mixer.status || 'Загрузка';
+                   // Ярче, чем в остальных местах дашборда — строки иначе «тонут» на тёмном фоне
                    const stColor =
-                     st === 'В пути' ? '#60A5FA' :
-                     st === 'На объекте' ? '#10B981' :
-                     st === 'Разгружен' ? '#34D399' :
-                     st === 'Возврат' ? '#94A3B8' :
-                     st === 'Проблема' ? '#EF4444' : '#FACC15';
+                     st === 'В пути' ? '#93C5FD' :
+                     st === 'На объекте' ? '#34D399' :
+                     st === 'Разгружен' ? '#6EE7B7' :
+                     st === 'Возврат' ? '#CBD5E1' :
+                     st === 'Проблема' ? '#F87171' : '#FDE047';
                    return (
                      <ModalSelect
                        value={st}
@@ -2289,12 +2276,12 @@ const generateDailyReport = () => {
                        triggerStyle={{
                          padding: '3px 8px',
                          borderRadius: 9999,
-                         background: `${stColor}18`,
+                         background: `${stColor}28`,
                          color: stColor,
-                         border: `1px solid ${stColor}55`,
+                         border: `1px solid ${stColor}70`,
                          fontSize: 12,
                          minWidth: 110,
-                         fontWeight: 500,
+                         fontWeight: 600,
                        }}
                        options={[
                          { value: 'Загрузка', label: '🟡 Загрузка', text: '🟡 Загрузка' },
@@ -2342,135 +2329,60 @@ const generateDailyReport = () => {
 
   </div>
 
-{/* ==================== 47. КНОПКА СФОРМИРОВАТЬ ОТЧЁТ ==================== */}
-<button 
-  onClick={() => {
-    const dateKey = selectedDate.toISOString().split('T')[0];
-    const editedKey = `dailyReport_${dateKey}`;
-    const autoKey = `dailyReport_auto_${dateKey}`;
-
-    // Генерируем свежий отчёт
-    const sortedGroups = [...groupedMixers].sort((a, b) => 
-      (a.deliveryTime || '00:00').localeCompare(b.deliveryTime || '00:00')
-    );
-
-    let autoReport = `📋 ПЛАНИРОВАНИЕ НА ${selectedDate.toLocaleDateString('ru-RU', { 
-      weekday: 'long', 
-      day: 'numeric', 
-      month: 'long' 
-    })}\n\n`;
-
-    sortedGroups.forEach((group, index) => {
-      const totalVol = group.mixers.reduce((sum, m) => sum + Number(m.volume || 0), 0);
-      
-      const concreteGrade = 
-        (group as any).grade || 
-        (group as any).concrete_grade || 
-        ((group as any).mixers?.[0]?.grade) || 
-        ((group as any).mixers?.[0]?.concrete_grade) || 
-        '—';
-
-      autoReport += `${index + 1}) Заявка #${group.orderId} — ${group.client || '—'}\n`;
-      autoReport += `   Бетон: ${concreteGrade} • Время: ${group.deliveryTime || '—'} • ${totalVol} м³\n`;
-
-      const sortedMixers = sortMixersByLogisticsTime(group.mixers);
-
-      sortedMixers.forEach((mixer, i) => {
-        autoReport += `   ${i+1}) ${mixer.number || mixer.mixer_name} — ${mixer.time || '—'} • ${mixer.volume} м³\n`;
+{/* ==================== 47. ПЛАНИРОВАНИЕ ОТГРУЗКИ ==================== */}
+<button
+  type="button"
+  onClick={async () => {
+    if (dailyReportGroups.length === 0) {
+      await appAlert('На выбранный день нет заявок', {
+        title: 'Планирование отгрузки',
+        variant: 'info',
       });
-      autoReport += `\n`;
-    });
-
-    autoReport += `Всего на линии: ${activeMixersToday.length} миксеров\n`;
-
-    localStorage.setItem(autoKey, autoReport);
-
-    let report = localStorage.getItem(editedKey) || autoReport;
-
-    // Модальное окно — твои размеры
-    const modal = document.createElement('div');
-    modal.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.82);z-index:10000;display:flex;align-items:center;justify-content:center;`;
-
-    modal.innerHTML = `
-      <div style="background:linear-gradient(165deg,#1E2937 0%,#0F172A 72%,#0B1220 100%);border:1px solid rgba(148,163,184,0.28);width:820px;max-width:80%;border-radius:16px;padding:25px;height:1400px;max-height:100vh;overflow:auto;box-shadow:0 12px 28px rgba(0,0,0,0.34),0 3px 8px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.12),inset 0 -10px 22px rgba(0,0,0,0.16),0 0 0 1px rgba(148,163,184,0.12),0 0 48px rgba(148,163,184,0.22),0 0 110px rgba(148,163,184,0.12),0 40px 100px rgba(0,0,0,0.55);">
-        <h2 style="margin-top:0;color:#60A5FA;text-align:center;">Отчёт на ${selectedDate.toLocaleDateString('ru-RU')}</h2>
-        <textarea id="reportText" style="width:96%;height:1200px;font-size:15.2px;padding:15px;font-family:monospace;background:#0F172A;color:#E2E8F0;border:1px solid #475569;border-radius:8px;resize:vertical;">${report}</textarea>
-        
-        <div style="text-align:center;margin-top:20px;">
-          <button id="refreshBtn" style="padding:14px 32px;background:#475569;color:white;border:none;border-radius:12px;font-size:16px;cursor:pointer;margin-right:12px;">🔄 Обновить до свежих данных</button>
-          <button id="copyBtn" style="padding:14px 32px;background:#10B981;color:white;border:none;border-radius:12px;font-size:16px;cursor:pointer;">📋 Скопировать отчёт</button>
-          <button id="closeBtn" style="padding:14px 32px;background:#475569;color:white;border:none;border-radius:12px;font-size:16px;cursor:pointer;margin-left:12px;">Закрыть</button>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(modal);
-
-    setTimeout(() => {
-      const textArea = document.getElementById('reportText') as HTMLTextAreaElement;
-      const refreshBtn = document.getElementById('refreshBtn');
-      const copyBtn = document.getElementById('copyBtn');
-      const closeBtn = document.getElementById('closeBtn');
-
-      if (textArea) {
-        textArea.addEventListener('input', () => {
-          localStorage.setItem(editedKey, textArea.value);
-        });
-      }
-
-      if (refreshBtn && textArea) {
-        refreshBtn.addEventListener('click', async () => {
-          if (await appConfirm('Загрузить свежие данные? Ваши правки будут потеряны.')) {
-            textArea.value = autoReport;
-            localStorage.setItem(editedKey, autoReport);
-          }
-        });
-      }
-
-      if (copyBtn && textArea) {
-        copyBtn.addEventListener('click', () => {
-          textArea.select();
-          document.execCommand('copy');
-          alert('✅ Отчёт скопирован!');
-        });
-      }
-
-      if (closeBtn && textArea) {
-        closeBtn.addEventListener('click', () => {
-          localStorage.setItem(editedKey, textArea.value);
-          modal.remove();
-        });
-      }
-    }, 100);
+      return;
+    }
+    setShowDailyReportModal(true);
   }}
   style={{
     marginTop: '16px',
     width: '100%',
-    padding: '10px 16px',
-    background: 'rgba(99,102,241,0.15)',
-    color: '#A5B4FC',
-    border: '1px solid rgba(99,102,241,0.35)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    padding: '11px 16px',
+    background: 'rgba(96, 165, 250, 0.12)',
+    color: '#93C5FD',
+    border: '1px solid rgba(96, 165, 250, 0.4)',
     borderRadius: '12px',
     fontSize: '14px',
-    fontWeight: '500',
+    fontWeight: 700,
     cursor: 'pointer',
-    transition: 'background 0.2s, color 0.2s',
-    letterSpacing: '0.01em',
+    transition: 'background 0.2s, border-color 0.2s',
+    boxSizing: 'border-box',
   }}
-  onMouseEnter={e => {
-    e.currentTarget.style.background = 'rgba(99,102,241,0.28)';
-    e.currentTarget.style.color = '#C7D2FE';
+  onMouseEnter={(e) => {
+    e.currentTarget.style.background = 'rgba(96, 165, 250, 0.22)';
+    e.currentTarget.style.borderColor = 'rgba(147, 197, 253, 0.55)';
   }}
-  onMouseLeave={e => {
-    e.currentTarget.style.background = 'rgba(99,102,241,0.15)';
-    e.currentTarget.style.color = '#A5B4FC';
+  onMouseLeave={(e) => {
+    e.currentTarget.style.background = 'rgba(96, 165, 250, 0.12)';
+    e.currentTarget.style.borderColor = 'rgba(96, 165, 250, 0.4)';
   }}
 >
-  📋 Сформировать отчёт за день
+  <FileText size={16} />
+  Планирование отгрузки
 </button>
 
 </div>
 </div>
+
+      <DailyMixerReportModal
+        open={showDailyReportModal}
+        onClose={() => setShowDailyReportModal(false)}
+        dateKey={selectedDateStr}
+        dateLabel={formatRuDateWithWeekday(selectedDate, 'nominative')}
+        autoReport={dailyReportAutoText}
+      />
 
      {/* ==================== 48. МОДАЛЬНОЕ ОКНО ЗАКАЗА ==================== */}
 {selectedOrder && (
@@ -2542,11 +2454,7 @@ const generateDailyReport = () => {
                   Заявки сегодня
                 </div>
                 <div style={{ fontSize: '13px', color: '#64748B', marginTop: '2px' }}>
-                  {selectedDate.toLocaleDateString('ru-RU', {
-                    weekday: 'long',
-                    day: 'numeric',
-                    month: 'long',
-                  })}
+                  {formatRuDateWithWeekday(selectedDate, 'nominative')}
                 </div>
               </div>
               <button
@@ -2569,7 +2477,7 @@ const generateDailyReport = () => {
                   {totalToday}
                 </div>
                 <div style={{ color: '#94A3B8', fontSize: '14px', marginTop: '6px' }}>
-                  заявок · {fmtM3(volOf(todayOrders))} м³
+                  {pluralRu(totalToday, 'заявка', 'заявки', 'заявок')} · {fmtM3(volOf(todayOrders))} м³
                 </div>
               </div>
 
@@ -2743,11 +2651,7 @@ const generateDailyReport = () => {
                   Выполнение плана
                 </div>
                 <div style={{ fontSize: '13px', color: '#64748B', marginTop: '2px' }}>
-                  {selectedDate.toLocaleDateString('ru-RU', {
-                    weekday: 'long',
-                    day: 'numeric',
-                    month: 'long',
-                  })}
+                  {formatRuDateWithWeekday(selectedDate, 'nominative')}
                 </div>
               </div>
               <button
@@ -2856,7 +2760,7 @@ const generateDailyReport = () => {
                   По заявкам
                 </div>
                 <div style={{ fontSize: '12px', color: '#64748B' }}>
-                  {planOrdersDetail.length} заявок
+                  {pluralWord(planOrdersDetail.length, 'заявка', 'заявки', 'заявок')}
                 </div>
               </div>
 
@@ -3106,8 +3010,7 @@ const generateDailyReport = () => {
                       Проблемные заявки
                     </div>
                     <div style={{ fontSize: '13px', color: '#F87171', fontWeight: 600 }}>
-                      {delayedOrders.length}{' '}
-                      {delayedOrders.length === 1 ? 'заявка' : delayedOrders.length <= 4 ? 'заявки' : 'заявок'}
+                      {pluralWord(delayedOrders.length, 'заявка', 'заявки', 'заявок')}
                     </div>
                   </div>
 

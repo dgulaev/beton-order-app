@@ -31,6 +31,7 @@ import { useLowRateAlerts } from '../components/useLowRateAlerts';
 import { FileText, GripVertical, Plus, ScrollText, Trash2, X } from 'lucide-react';
 import type { LowRateAlertInfo } from '@/lib/siloConfig';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { pluralAdditiveCubes } from '@/lib/ruLocale';
 import FbsPassportModal from './FbsPassportModal';
 import SiloJournalModal from './SiloJournalModal';
 import CementSavingsModal from './CementSavingsModal';
@@ -858,7 +859,7 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
   const formatLiters = (n: number) =>
     Math.round(n).toLocaleString('ru-RU');
 
-  /** Карточка добавки: крупные цифры, прогресс, плотность, запас дней, мини-кубы. */
+  /** Карточка добавки: крупные цифры, прогресс, плотность, запас дней, мини-кубики. */
   const renderAdditiveCard = (
     index: number,
     opts: {
@@ -951,7 +952,7 @@ const saveToDatabase = async (silosToSave?: any[], additivesToSave?: any[], fbsT
           </div>
           <div style={{ marginTop: '4px', fontSize: '13px', color: '#94A3B8' }}>
             из {formatLiters(max)} · {cubeCount}{' '}
-            {cubeCount === 1 ? 'куб' : cubeCount < 5 ? 'куба' : 'кубов'}
+            {pluralAdditiveCubes(cubeCount)}
           </div>
         </div>
 
@@ -1415,7 +1416,7 @@ const handleAddFBSBlock = async (id: number) => {
 
 
  // ==================== 6.4 ДОБАВИТЬ НОВЫЙ ПУСТОЙ КУБИК ====================
- // index 0 = ПФМ-НЛК (мин. 9 кубов), index 1 = Линомикс ТипР (мин. 1 куб).
+ // index 0 = ПФМ-НЛК (мин. 9 кубиков), index 1 = Линомикс ТипР (мин. 1 кубик).
 const minAdditiveCubes = (index: number) => (index === 0 ? 9 : 1);
 const minAdditiveMaxLiters = (index: number) => minAdditiveCubes(index) * 1000;
 const additiveNameByIndex = (index: number) =>
@@ -1472,7 +1473,7 @@ const removeLastCube = async (index: number) => {
   if (oldMax <= minMax) {
     await appAlert(
       `Нельзя удалить кубик — уже минимальное количество (${minCubes} ${
-        minCubes === 1 ? 'куб' : minCubes < 5 ? 'куба' : 'кубов'
+        pluralAdditiveCubes(minCubes)
       })`,
       { title: 'Кубики', variant: 'warning' },
     );

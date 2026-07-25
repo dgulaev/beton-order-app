@@ -7,6 +7,7 @@ import { CARD_BORDER, volumeCardSoftStyle } from '../cardStyles';
 import { appAlert, appConfirm, appPrompt } from './appDialog';
 import CementTransferModal from './CementTransferModal';
 import { useLowRateAlerts } from './useLowRateAlerts';
+import { pluralWord } from '@/lib/ruLocale';
 
 type SiloRow = {
   silo_id: number;
@@ -232,7 +233,7 @@ export default function OperatorSilosBar({
         ? `\n\nОшибки:\n${result.errors.slice(0, 5).join('\n')}`
         : '';
       await appAlert(
-        `Списано: ${result.writtenOff || 0} рейсов, ${result.totalKg || 0} кг\n`
+        `Списано: ${pluralWord(result.writtenOff || 0, 'рейс', 'рейса', 'рейсов')}, ${result.totalKg || 0} кг\n`
           + `Силос: ${result.siloName || preview.siloName}${errNote}`,
         {
           title: 'Готово',

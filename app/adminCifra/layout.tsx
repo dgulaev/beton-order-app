@@ -412,7 +412,11 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   }, []);
 
   // ==================== 4.2.1 ВЫСОКОУРОВНЕВАЯ ФУНКЦИЯ — ПРИШЛО НОВОЕ СОБЫТИЕ ====================
-  const showVisualNotification = (type: 'new' | 'status' | 'volume' | 'datetime', orderData?: any, oldData?: any) => {
+  const showVisualNotification = (
+    type: 'new' | 'status' | 'volume' | 'datetime' | 'grade',
+    orderData?: any,
+    oldData?: any,
+  ) => {
     const orderId = orderData?.id || '—';
 
     let title = '';
@@ -468,6 +472,18 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
         message += ` ${orderData.delivery_time}`;
       }
     }
+    else if (type === 'grade') {
+      icon = 'refresh';
+      const oldGrade = String(oldData?.grade ?? '').trim() || '—';
+      const newGrade = String(orderData?.grade ?? '').trim() || '—';
+      title = `Изменение марки с ${oldGrade} на ${newGrade}`;
+      const deliveryStr = formatDate(orderData?.delivery_date);
+      message = `№${orderId}`;
+      if (orderData?.volume != null && orderData?.volume !== '') {
+        message += ` — ${orderData.volume} м³`;
+      }
+      if (deliveryStr) message += ` — на ${deliveryStr}`;
+    }
 
     // Сохраняем в localStorage — переживёт перезагрузку страницы
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -507,6 +523,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     onDateTimeChange: (order) => {
       playNotificationSound();
       showVisualNotification('datetime', order);
+    },
+    onGradeChange: (order, oldOrder) => {
+      playNotificationSound();
+      showVisualNotification('grade', order, oldOrder);
     },
   });
 

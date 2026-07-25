@@ -10,6 +10,7 @@ import { modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle
 import { appConfirm } from '../components/appDialog';
 import AdminPagination from '../components/AdminPagination';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { pluralWord } from '@/lib/ruLocale';
 
 interface MixerDriver {
   id: number;
@@ -695,7 +696,7 @@ export default function MixersPage() {
                 page={safeCurrentPage}
                 totalPages={totalPages}
                 onPage={setCurrentPage}
-                suffix={`· ${filteredMixers.length} миксеров`}
+                suffix={`· ${pluralWord(filteredMixers.length, 'миксер', 'миксера', 'миксеров')}`}
                 style={{ marginBottom: '10px' }}
               />
 

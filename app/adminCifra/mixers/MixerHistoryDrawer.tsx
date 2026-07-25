@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { X, Clock, MapPin, Package, Phone, Calendar, BarChart3, ChevronDown, ChevronUp } from 'lucide-react';
+import { pluralWord } from '@/lib/ruLocale';
 
 interface MixerTrip {
   id: number;
@@ -292,7 +293,7 @@ export default function MixerHistoryDrawer({ mixer, onClose }: Props) {
                 }}>
                   {formatDate(day)}
                   <span style={{ color: '#334155', marginLeft: '8px', textTransform: 'none', letterSpacing: 0 }}>
-                    {dayTrips.length} {dayTrips.length === 1 ? 'рейс' : dayTrips.length < 5 ? 'рейса' : 'рейсов'}
+                    {pluralWord(dayTrips.length, 'рейс', 'рейса', 'рейсов')}
                   </span>
                 </div>
 

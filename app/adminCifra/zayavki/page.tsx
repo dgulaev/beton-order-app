@@ -32,6 +32,7 @@ import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import ModalSelect from '@/app/adminCifra/components/ModalSelect';
 import { InstantFieldHint, VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { formatRuDateWithWeekday, pluralWord } from '@/lib/ruLocale';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
@@ -610,7 +611,7 @@ function WeekVolumeChart({
                   <div>
                     <div style={{ color: '#64748B', fontSize: 12 }}>День</div>
                     <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>
-                      {focusDay.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' })}
+                      {formatRuDateWithWeekday(focusDay, 'nominative')}
                     </div>
                   </div>
                   <div>
@@ -2182,7 +2183,7 @@ ${order.customer_type?.includes('Юридическое')
     {/* Заголовок */}
     <h2 style={{ margin: 0, flexShrink: 0, fontSize: '18px' }}>
       {searchMode
-        ? <><span style={{ color: '#3B82F6' }}>«{searchQuery}»</span> <span style={{ color: '#64748B', fontSize: '14px', fontWeight: 400 }}>{searchResults.length} заявок</span></>
+        ? <><span style={{ color: '#3B82F6' }}>«{searchQuery}»</span> <span style={{ color: '#64748B', fontSize: '14px', fontWeight: 400 }}>{pluralWord(searchResults.length, 'заявка', 'заявки', 'заявок')}</span></>
         : selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
     </h2>
 
@@ -3172,7 +3173,7 @@ ${order.customer_type?.includes('Юридическое')
                     return `${fmt(weekAdditiveForecast.dateFrom)} — ${fmt(weekAdditiveForecast.dateTo)}`;
                   })()}
                   {' · '}
-                  {weekAdditiveForecast.totalOrders} заявок, {weekAdditiveForecast.totalVolume} м³
+                  {pluralWord(weekAdditiveForecast.totalOrders, 'заявка', 'заявки', 'заявок')}, {weekAdditiveForecast.totalVolume} м³
                 </div>
               </div>
               <button

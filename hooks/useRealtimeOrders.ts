@@ -697,6 +697,7 @@ export function useOrderChangeNotifications(options: {
   onStatusChange?: (order: any) => void;
   onVolumeChange?: (order: any, oldOrder: any) => void;
   onDateTimeChange?: (order: any) => void;
+  onGradeChange?: (order: any, oldOrder: any) => void;
 }) {
   return useRealtimeBroadcast({
     topic: 'orders:all',
@@ -712,6 +713,9 @@ export function useOrderChangeNotifications(options: {
       ) {
         options.onDateTimeChange?.(newRecord);
       }
+      const oldGrade = String(oldRecord.grade ?? '').trim();
+      const newGrade = String(newRecord.grade ?? '').trim();
+      if (oldGrade !== newGrade) options.onGradeChange?.(newRecord, oldRecord);
     },
   });
 }
