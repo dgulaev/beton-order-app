@@ -442,15 +442,20 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     return false;
   };
 
+  type ActorResolve =
+    | { kind: 'human'; name: string }
+    | { kind: 'system' }
+    | { kind: 'none' };
+
   /**
-   * Имя сотрудника из истории заявки.
+   * Автор изменения из истории заявки.
    * История пишется сразу после UPDATE — поэтому короткие ретраи.
-   * Берём только запись по нужному полю, не «последнего кто угодно».
+   * Берём только запись по нужному полю; «Система» = автосмена.
    */
-  const resolveOrderActorName = async (
+  const resolveOrderActor = async (
     orderId: string | number,
     type: OrderNotifType,
-  ): Promise<string | null> => {
+  ): Promise<ActorResolve> => {
     const delays = [80, 200, 400, 700];
     for (const delay of delays) {
       await new Promise((r) => setTimeout(r, delay));
@@ -463,14 +468,20 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
         for (const row of rows) {
           if (!historyRowMatchesNotif(row, type)) continue;
           const name = String(row?.user_name || '').trim();
-          if (!isUsableActorName(name, row?.user_role)) continue;
-          return name;
+          const role = String(row?.user_role || '').toLowerCase();
+          const action = String(row?.action || '');
+          if (name === 'Система' || role === 'system' || action.startsWith('Автоматически')) {
+            return { kind: 'system' };
+          }
+          if (isUsableActorName(name, row?.user_role)) {
+            return { kind: 'human', name };
+          }
         }
       } catch {
         /* ретрай */
       }
     }
-    return null;
+    return { kind: 'none' };
   };
 
   const showVisualNotification = async (
@@ -494,18 +505,18 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       return `${day}-${month}-${year}`;
     };
 
-    // Автор сначала — имя идёт в заголовок: «Дмитрий Гулаев изменил …»
-    let actor: string | null = null;
+    let actor: ActorResolve = { kind: 'none' };
     if (orderId !== '—') {
-      actor = await resolveOrderActorName(orderId, type);
+      actor = await resolveOrderActor(orderId, type);
     }
-    if (!actor && type === 'new') {
+    if (actor.kind === 'none' && type === 'new') {
       const curator = String(orderData?.curator_name || '').trim();
-      if (isUsableActorName(curator)) actor = curator;
+      if (isUsableActorName(curator)) actor = { kind: 'human', name: curator };
     }
-    const who = actor || 'Сотрудник';
-    const created = ruPastByName(who, 'создал', 'создала');
-    const changed = ruPastByName(who, 'изменил', 'изменила');
+
+    const who = actor.kind === 'human' ? actor.name : '';
+    const created = who ? ruPastByName(who, 'создал', 'создала') : 'создал';
+    const changed = who ? ruPastByName(who, 'изменил', 'изменила') : 'изменил';
 
     let title = '';
     let message = '';
@@ -513,7 +524,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
     if (type === 'new') {
       icon = 'package';
-      title = `${who} ${created} заявку`;
+      title = who ? `${who} ${created} заявку` : 'Новая заявка';
       const deliveryStr = formatDate(orderData?.delivery_date);
       message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} м³`;
       if (deliveryStr) message += ` — на ${deliveryStr}`;
@@ -534,15 +545,27 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       const rawStatus = (orderData?.status || '').toString().toLowerCase();
       icon = statusIcon[rawStatus] || 'refresh';
       const statusText = statusMap[rawStatus] || orderData?.status || '—';
-      title = `${who} ${changed} статус`;
+      if (actor.kind === 'system') {
+        // Автозавершение при разгрузке всех рейсов и др. системные смены статуса
+        title =
+          rawStatus === 'completed'
+            ? 'Заявка выполнена автоматически'
+            : rawStatus === 'cancelled'
+              ? 'Заявка отменена автоматически'
+              : 'Статус изменён автоматически';
+      } else if (who) {
+        title = `${who} ${changed} статус`;
+      } else {
+        title = 'Статус изменён';
+      }
       message = `Заявка №${orderId} → ${statusText}`;
     } else if (type === 'volume') {
       icon = 'package';
-      title = `${who} ${changed} объём`;
+      title = who ? `${who} ${changed} объём` : 'Изменён объём';
       message = `Заявка №${orderId} — было ${oldData?.volume || '?'} → стало ${orderData?.volume} м³`;
     } else if (type === 'datetime') {
       icon = 'clock';
-      title = `${who} ${changed} дату и время`;
+      title = who ? `${who} ${changed} дату и время` : 'Изменены дата и время';
       const deliveryStr = formatDate(orderData?.delivery_date);
       const timeStr = orderData?.delivery_time ? formatTimeHHMM(orderData.delivery_time) : '';
       message = `Заявка №${orderId}`;
@@ -552,7 +575,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       icon = 'refresh';
       const oldGrade = String(oldData?.grade ?? '').trim() || '—';
       const newGrade = String(orderData?.grade ?? '').trim() || '—';
-      title = `${who} ${changed} марку`;
+      title = who ? `${who} ${changed} марку` : 'Изменена марка';
       message = `Заявка №${orderId} — ${oldGrade} → ${newGrade}`;
       if (orderData?.volume != null && orderData?.volume !== '') {
         message += ` · ${orderData.volume} м³`;
