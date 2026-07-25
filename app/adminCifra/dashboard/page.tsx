@@ -1119,27 +1119,30 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
           height: '100%'
         }}>
         
-        {/* Topbar — плашки по базовой линии заголовка (чуть ниже глифов) */}
+        {/* Topbar — центр плашек по строчным («испетчерская»), без заглавной «Д».
+            translateY компенсирует вынос заглавной над x-height. */}
 <div style={{ 
   display: 'flex', 
   justifyContent: 'space-between', 
-  alignItems: 'baseline',
+  alignItems: 'center',
   flexWrap: 'wrap',
   gap: '16px',
 }}>
-  <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap' }}>
+  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', height: 26 }}>
     <h1 style={{ 
-      fontSize: '26px',
+      fontSize: 26,
       fontWeight: 700, 
       color: '#fff',
       margin: 0,
-      lineHeight: 1,
+      padding: 0,
+      height: 26,
+      lineHeight: '26px',
       display: 'inline-flex',
-      alignItems: 'baseline',
-      gap: '10px',
+      alignItems: 'center',
+      gap: 10,
     }}>
-      <Home size={22} color="#94A3B8" style={{ position: 'relative', top: 2, flexShrink: 0 }} />
-      <span>Диспетчерская</span>
+      <Home size={22} color="#94A3B8" style={{ flexShrink: 0, display: 'block' }} />
+      <span style={{ display: 'block', lineHeight: '26px' }}>Диспетчерская</span>
     </h1>
     
     <div 
@@ -1147,20 +1150,22 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
       style={volumeCardSoftStyle({
         display: 'inline-flex',
         alignItems: 'center',
+        justifyContent: 'center',
         gap: 7,
+        boxSizing: 'border-box',
+        height: 26,
         color: '#F87171',
         fontWeight: 600,
         fontSize: 13.5,
-        padding: '4px 12px',
+        lineHeight: 1,
+        padding: '0 12px',
         borderRadius: 9999,
         cursor: 'pointer',
         whiteSpace: 'nowrap',
         border: '1px solid rgba(248,113,113,0.45)',
         background: 'linear-gradient(165deg, rgba(248,113,113,0.22) 0%, rgba(15,23,42,0.95) 55%, rgba(15,23,42,1) 100%)',
         boxShadow: '0 8px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(248,113,113,0.35), inset 0 0 22px rgba(248,113,113,0.16)',
-        // Ниже относительно надписи: baseline + небольшой сдвиг вниз
-        position: 'relative',
-        top: 5,
+        transform: 'translateY(3px)',
       })}
     >
       <CalendarDays size={15} strokeWidth={2} color="#F87171" />
@@ -1168,22 +1173,25 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
     </div>
   </div>
 
-         <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px' }}>
+         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', height: 26 }}>
   {(userRole === 'admin' || userRole === 'manager') && notifications.length > 0 && (
     <div 
       style={{ 
         background: '#EF4444', 
         color: 'white', 
-        padding: '8px 16px', 
+        boxSizing: 'border-box',
+        height: 26,
+        padding: '0 16px', 
         borderRadius: '9999px',
         fontWeight: '700',
+        fontSize: 13,
+        lineHeight: 1,
         display: 'flex',
         alignItems: 'center',
         gap: '8px',
         animation: 'pulse 2s infinite',
         cursor: 'pointer',
-        position: 'relative',
-        top: 5,
+        transform: 'translateY(3px)',
       }}
       onClick={() => window.location.href = '/adminCifra/withdrawals'}
     >
@@ -1195,17 +1203,20 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   <div style={volumeCardSoftStyle({
     display: 'inline-flex',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 7,
+    boxSizing: 'border-box',
+    height: 26,
     color: '#4ADE80',
     fontWeight: 600,
     fontSize: 13.5,
-    padding: '4px 12px',
+    lineHeight: 1,
+    padding: '0 12px',
     borderRadius: 9999,
     border: '1px solid rgba(74,222,128,0.45)',
     background: 'linear-gradient(165deg, rgba(74,222,128,0.22) 0%, rgba(15,23,42,0.95) 55%, rgba(15,23,42,1) 100%)',
     boxShadow: '0 8px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(74,222,128,0.35), inset 0 0 22px rgba(74,222,128,0.18)',
-    position: 'relative',
-    top: 5,
+    transform: 'translateY(3px)',
   })}>
     <User size={15} strokeWidth={2} color="#4ADE80" />
     {userFullName || 'Сотрудник'}

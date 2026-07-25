@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
-import { 
+import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell 
+  PieChart, Pie, Cell,
 } from 'recharts';
 import { calculateCementUsageKg, findRecipeByGrade, getAdditiveDosage, type RecipeLike } from '@/lib/recipeAdditives';
 import {
@@ -15,6 +15,9 @@ import { CARD_BORDER, modalCloseButtonStyle, modalFieldStyle, volumeCardSoftStyl
 import ModalDateInput from '../components/ModalDateInput';
 import { appConfirm } from '../components/appDialog';
 import AdminPagination from '../components/AdminPagination';
+import ProductionVolumeChart, {
+  type ProductionVolumePoint,
+} from '../components/ProductionVolumeChart';
 
 const COLORS = ['#10B981', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
 
@@ -61,6 +64,41 @@ function getReportDateIso(report: any): string | null {
   }
   // Уже YYYY-MM-DD (или ISO с временем)
   return String(raw).substring(0, 10);
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+function shiftIsoDays(iso: string, deltaDays: number): string {
+  const ms = Date.parse(`${iso}T12:00:00`) + deltaDays * 86400000;
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function shiftMonthKey(ym: string, deltaMonths: number): string {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, (m || 1) - 1 + deltaMonths, 1);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+}
+
+function aggregateVolumesByDay(reports: any[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const report of reports) {
+    const iso = getReportDateIso(report);
+    if (!iso) continue;
+    map.set(iso, (map.get(iso) || 0) + Number(report.total_volume || 0));
+  }
+  return map;
+}
+
+function aggregateVolumesByMonth(dayMap: Map<string, number>): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const [iso, vol] of dayMap) {
+    const ym = iso.slice(0, 7);
+    map.set(ym, (map.get(ym) || 0) + vol);
+  }
+  return map;
 }
 
 /** Час партии MEKA из поля time («0:10:03», «17:18:40»). */
@@ -585,28 +623,6 @@ function MaterialTooltip({ active, payload, label }: any) {
   );
 }
 
-function VolumeTooltip({ active, payload, label }: any) {
-  if (!active || !payload?.length) return null;
-  const m3 = Number(payload[0].payload?.targetValue ?? payload[0].value) || 0;
-  return (
-    <div style={{
-      background: '#1E2937',
-      padding: '12px 16px',
-      borderRadius: '12px',
-      border: '1px solid #475569',
-      color: '#fff',
-      fontSize: '14px',
-    }}>
-      <div style={{ marginBottom: '6px', color: '#94A3B8' }}>
-        {label}{payload[0].payload?.fullDate ? ` • ${payload[0].payload.fullDate}` : ''}
-      </div>
-      <div style={{ fontWeight: 700, color: '#10B981' }}>
-        {Math.round(m3)} м³
-      </div>
-    </div>
-  );
-}
-
 /** Столбцы расхода: свой рост высоты + фиксированная ось Y. */
 function MaterialsBarChart({
   data,
@@ -671,68 +687,6 @@ function MaterialsBarChart({
   );
 }
 
-type VolumeSlice = { label: string; value: number; fullDate?: string };
-
-/** Столбцы объёма производства — тот же плавный рост, что у расхода. */
-function VolumeBarChart({
-  data,
-  viewMode,
-}: {
-  data: VolumeSlice[];
-  viewMode: 'month' | 'day';
-}) {
-  const dataKey = `${viewMode}|${data.map((d) => `${d.label}:${d.value}`).join('|')}`;
-  const progress = useChartGrowProgress(dataKey, BAR_GROW_MS, BAR_GROW_EASE);
-  const yMax = useMemo(() => niceAxisMax(Math.max(0, ...data.map((d) => d.value))), [data]);
-  const animData = useMemo(
-    () => data.map((d) => ({
-      ...d,
-      targetValue: d.value,
-      value: d.value * progress,
-    })),
-    [data, progress],
-  );
-
-  return (
-    <ResponsiveContainer width="100%" height="100%" initialDimension={CHART_INITIAL_DIMENSION}>
-      <BarChart
-        data={animData}
-        barCategoryGap={viewMode === 'month' ? '40%' : '18%'}
-        barGap={4}
-        margin={{ top: 8, right: 8, left: 4, bottom: 0 }}
-      >
-        <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-        <XAxis
-          dataKey="label"
-          stroke="#94A3B8"
-          tickLine={false}
-          axisLine={false}
-          interval="preserveStartEnd"
-          minTickGap={viewMode === 'day' ? 12 : 8}
-          tick={{ fontSize: 11 }}
-        />
-        <YAxis
-          stroke="#94A3B8"
-          tickLine={false}
-          axisLine={false}
-          width={48}
-          domain={[0, yMax]}
-          allowDataOverflow={false}
-          tickCount={5}
-        />
-        <Tooltip content={<VolumeTooltip />} cursor={{ fill: 'rgba(148, 163, 184, 0.08)' }} />
-        <Bar
-          dataKey="value"
-          fill="#10B981"
-          radius={[6, 6, 0, 0]}
-          isAnimationActive={false}
-          activeBar={{ fill: '#34D399', stroke: 'none' }}
-        />
-      </BarChart>
-    </ResponsiveContainer>
-  );
-}
-
 export default function ReportsPage() {
   const [history, setHistory] = useState<any[]>(_historyCache || []);
   const [isLoading, setIsLoading] = useState(!_historyCache);
@@ -742,7 +696,6 @@ export default function ReportsPage() {
   const [periodPreset, setPeriodPreset] = useState<PeriodPreset>('month');
   const [dateFrom, setDateFrom] = useState(() => getPeriodRange('month').from);
   const [dateTo, setDateTo] = useState(() => getPeriodRange('month').to);
-  const [viewMode, setViewMode] = useState<'month' | 'day'>('day');
   const [currentPage, setCurrentPage] = useState(1);
   const [scaleMode, setScaleMode] = useState<'linear' | 'log'>('linear');
 
@@ -1101,6 +1054,36 @@ export default function ReportsPage() {
     }
   }, [periodPreset, dateFrom, dateTo]);
 
+  /**
+   * Масштаб столбцов графика «Объём производства» — из верхнего фильтра периода.
+   * Короткий период → по дням; год / всё время / длинный свой период → по месяцам.
+   * Отдельные кнопки «По дням / По месяцам» на графике больше не нужны.
+   */
+  const viewMode = useMemo((): 'month' | 'day' => {
+    if (
+      periodPreset === 'year' ||
+      periodPreset === 'last_year' ||
+      periodPreset === 'all'
+    ) {
+      return 'month';
+    }
+    if (
+      periodPreset === 'month' ||
+      periodPreset === 'last_month' ||
+      periodPreset === 'week' ||
+      periodPreset === 'days30'
+    ) {
+      return 'day';
+    }
+    // custom
+    if (!dateFrom || !dateTo) return 'month';
+    const fromMs = Date.parse(`${dateFrom}T12:00:00`);
+    const toMs = Date.parse(`${dateTo}T12:00:00`);
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs < fromMs) return 'month';
+    const days = Math.round((toMs - fromMs) / 86400000) + 1;
+    return days > 45 ? 'month' : 'day';
+  }, [periodPreset, dateFrom, dateTo]);
+
   const totalPages = Math.ceil(filteredHistory.length / itemsPerPage);
 
   // itemsPerPage меняется динамически (см. ResizeObserver выше) — не даём
@@ -1204,69 +1187,92 @@ export default function ReportsPage() {
 
     // ==================== ГРАФИКИ ====================
 
-      // ==================== МЕСЯЧНЫЙ ГРАФИК ====================
-      const monthlyVolume = useMemo(() => {
-        const groups: any = {};
+  /** Длина выбранного периода (для сдвига «прошлого» при сравнении по дням). */
+  const periodSpanDays = useMemo(() => {
+    if (dateFrom && dateTo) {
+      const a = Date.parse(`${dateFrom}T12:00:00`);
+      const b = Date.parse(`${dateTo}T12:00:00`);
+      if (Number.isFinite(a) && Number.isFinite(b) && b >= a) {
+        return Math.round((b - a) / 86400000) + 1;
+      }
+    }
+    if (periodPreset === 'week') return 7;
+    if (periodPreset === 'days30') return 30;
+    if (periodPreset === 'month' || periodPreset === 'last_month') return 31;
+    if (periodPreset === 'year' || periodPreset === 'last_year') return 365;
+    return 30;
+  }, [dateFrom, dateTo, periodPreset]);
 
-        filteredHistory.forEach(report => {
-          let dateStr = report.raw_data?.[0]?.date || report.report_date || '';
-          if (!dateStr) return;
+  const compareLabel = useMemo(() => {
+    if (viewMode === 'month') {
+      if (periodPreset === 'year' || periodPreset === 'last_year' || periodPreset === 'all') {
+        return 'к прошлому году';
+      }
+      return 'к пред. периоду';
+    }
+    if (periodPreset === 'week') return 'к прошлым 7 дням';
+    if (periodPreset === 'days30') return 'к прошлым 30 дням';
+    if (periodPreset === 'month' || periodPreset === 'last_month') return 'к прошлому месяцу';
+    return `к прошлым ${periodSpanDays} дн.`;
+  }, [viewMode, periodPreset, periodSpanDays]);
 
-          let monthKey = '';
-          if (dateStr.includes('.')) {
-            const [_, month, year] = dateStr.split('.');
-            monthKey = `${year}-${month.padStart(2, '0')}`;
-          } else {
-            monthKey = dateStr.substring(0, 7);
-          }
+  /**
+   * Объём производства + сравнение с прошлым периодом.
+   * prev берём из полной history (не только filtered), иначе «прошлый» часто пустой.
+   */
+  const productionVolumeData = useMemo((): ProductionVolumePoint[] => {
+    const byDayAll = aggregateVolumesByDay(history);
 
-          groups[monthKey] = (groups[monthKey] || 0) + (report.total_volume || 0);
-        });
-
-        return Object.entries(groups)
-          .map(([monthKey, volume]) => ({
-            label: monthKey.split('-')[1] + '.' + monthKey.split('-')[0].slice(2),
-            value: Math.round(Number(volume) || 0)   // Округление
-          }))
-          .sort((a, b) => b.label.localeCompare(a.label));
-      }, [filteredHistory]);
-
-          // ==================== ДНЕВНОЙ ГРАФИК — С УЛУЧШЕННЫМ TOOLTIP ====================
-    const dailyVolume = useMemo(() => {
-      const groups: any = {};
-
-      filteredHistory.forEach(report => {
-        let dateStr = report.raw_data?.[0]?.date || report.report_date || '';
-        if (!dateStr) return;
-
-        let fullDateKey = '';
-        if (dateStr.includes('.')) {
-          const [day, month, year] = dateStr.split('.');
-          fullDateKey = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-        } else {
-          fullDateKey = dateStr.substring(0, 10);
-        }
-
-        groups[fullDateKey] = (groups[fullDateKey] || 0) + (report.total_volume || 0);
-      });
-
-      return Object.entries(groups)
-        .map(([fullDate, volume]) => {
-          const [year, month, day] = fullDate.split('-');
-          const label = `${day}.${month}`;
-
+    if (viewMode === 'day') {
+      const groups = new Map<string, number>();
+      for (const report of filteredHistory) {
+        const iso = getReportDateIso(report);
+        if (!iso) continue;
+        groups.set(iso, (groups.get(iso) || 0) + Number(report.total_volume || 0));
+      }
+      return [...groups.entries()]
+        .map(([iso, vol]) => {
+          const prevIso = shiftIsoDays(iso, -periodSpanDays);
+          const [y, m, d] = iso.split('-');
           return {
-            label,
-            value: Math.round(Number(volume) || 0),
-            fullDate,
-            dateObj: new Date(`${fullDate}T12:00:00`)
+            key: iso,
+            label: `${d}.${m}`,
+            fullDate: `${d}.${m}.${y}`,
+            value: Math.round(vol),
+            prevValue: Math.round(byDayAll.get(prevIso) || 0),
           };
         })
-        // Слева → направо: от старых к новым. Широкий график — больше дней
-        // (раньше 31 выглядело «жидко» на широкой колонке).
-        .sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime())
+        .sort((a, b) => a.key.localeCompare(b.key))
         .slice(-60);
-    }, [filteredHistory]);
+    }
+
+    const byMonthAll = aggregateVolumesByMonth(byDayAll);
+    const groups = new Map<string, number>();
+    for (const report of filteredHistory) {
+      const iso = getReportDateIso(report);
+      if (!iso) continue;
+      const ym = iso.slice(0, 7);
+      groups.set(ym, (groups.get(ym) || 0) + Number(report.total_volume || 0));
+    }
+    const monthShift =
+      periodPreset === 'year' || periodPreset === 'last_year' || periodPreset === 'all'
+        ? 12
+        : Math.max(1, groups.size);
+
+    return [...groups.entries()]
+      .map(([ym, vol]) => {
+        const prevYm = shiftMonthKey(ym, -monthShift);
+        const [y, m] = ym.split('-');
+        return {
+          key: ym,
+          label: `${m}.${y.slice(2)}`,
+          fullDate: `${m}.${y}`,
+          value: Math.round(vol),
+          prevValue: Math.round(byMonthAll.get(prevYm) || 0),
+        };
+      })
+      .sort((a, b) => a.key.localeCompare(b.key));
+  }, [history, filteredHistory, viewMode, periodSpanDays, periodPreset]);
 
   // ==================== ТОП РЕЦЕПТОВ ====================
   const topRecipes = useMemo(() => {
@@ -1559,54 +1565,13 @@ export default function ReportsPage() {
             minHeight: 0
           }}>
 
-                     {/* 1. Объём производства — с переключением */}
-            <div style={volumeCardStyle({ padding: 'clamp(10px, 1.4vh, 18px)', borderRadius: 16, display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden' })}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexShrink: 0 }}>
-                <h3 style={{ color: '#E2E8F0', margin: 0, fontSize: 'clamp(13px, 1vw, 16px)' }}>Объём производства</h3>
-                
-                <div style={{ display: 'flex', backgroundColor: '#25334A', borderRadius: '9999px', padding: '3px', border: '1px solid #334155' }}>
-                  <button
-                    onClick={() => setViewMode('month')}
-                    style={{
-                      padding: '5px 14px',
-                      borderRadius: '9999px',
-                      backgroundColor: viewMode === 'month' ? '#3D6B5A' : 'transparent',
-                      color: viewMode === 'month' ? '#E2E8F0' : '#94A3B8',
-                      border: 'none',
-                      fontSize: 'clamp(11px, 0.8vw, 13px)',
-                      fontWeight: '600',
-                      cursor: 'pointer',
-                      transition: 'background-color 0.2s ease, color 0.2s ease',
-                    }}
-                  >
-                    По месяцам
-                  </button>
-                  <button
-                    onClick={() => setViewMode('day')}
-                    style={{
-                      padding: '5px 14px',
-                      borderRadius: '9999px',
-                      backgroundColor: viewMode === 'day' ? '#3D6B5A' : 'transparent',
-                      color: viewMode === 'day' ? '#E2E8F0' : '#94A3B8',
-                      border: 'none',
-                      fontSize: 'clamp(11px, 0.8vw, 13px)',
-                      fontWeight: '600',
-                      cursor: 'pointer',
-                      transition: 'background-color 0.2s ease, color 0.2s ease',
-                    }}
-                  >
-                    По дням
-                  </button>
-                </div>
-              </div>
-
-              <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-                <VolumeBarChart
-                  data={viewMode === 'month' ? monthlyVolume : dailyVolume}
-                  viewMode={viewMode}
-                />
-              </div>
-            </div>
+            {/* 1. Объём производства — столбцы/линия, сравнение, модалка */}
+            <ProductionVolumeChart
+              data={productionVolumeData}
+              grain={viewMode}
+              periodLabel={periodLabel}
+              compareLabel={compareLabel}
+            />
 
             {/* ТОП РЕЦЕПТОВ */}
 <div style={volumeCardStyle({ borderRadius: 16, padding: 'clamp(10px, 1.4vh, 18px)', display: 'flex', flexDirection: 'column', minHeight: 0, minWidth: 0, overflow: 'hidden' })}>

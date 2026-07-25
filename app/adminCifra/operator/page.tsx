@@ -1323,12 +1323,14 @@ export default function OperatorBSUPage() {
               padding: '2px 8px',
             }}
           >
+            {/* Сетка 1fr | : | 1fr — двоеточие строго по центру; секунды
+                уходят в правую колонку и не сдвигают ось даты. */}
             <div
               style={{
-                display: 'flex',
+                display: 'grid',
+                gridTemplateColumns: '1fr auto 1fr',
                 alignItems: 'baseline',
-                justifyContent: 'center',
-                gap: '2px',
+                width: '100%',
                 fontFamily: "ui-monospace, 'SF Mono', 'Consolas', 'Menlo', monospace",
                 fontVariantNumeric: 'tabular-nums',
                 lineHeight: 1,
@@ -1341,6 +1343,8 @@ export default function OperatorBSUPage() {
                   color: '#F8FAFC',
                   letterSpacing: '0.12em',
                   textShadow: '0 0 24px rgba(148, 163, 184, 0.22)',
+                  textAlign: 'right',
+                  paddingRight: '4px',
                 }}
               >
                 {clockHours}
@@ -1350,37 +1354,47 @@ export default function OperatorBSUPage() {
                   fontSize: '34px',
                   fontWeight: 500,
                   color: '#64748B',
-                  margin: '0 4px',
                   letterSpacing: 0,
                   opacity: Number(clockSeconds) % 2 === 0 ? 1 : 0.35,
                   transition: 'opacity 0.25s ease',
+                  textAlign: 'center',
                 }}
               >
                 :
               </span>
-              <span
+              <div
                 style={{
-                  fontSize: '38px',
-                  fontWeight: 600,
-                  color: '#F8FAFC',
-                  letterSpacing: '0.12em',
-                  textShadow: '0 0 24px rgba(148, 163, 184, 0.22)',
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  justifyContent: 'flex-start',
+                  gap: '14px',
+                  paddingLeft: '4px',
+                  minWidth: 0,
                 }}
               >
-                {clockMinutes}
-              </span>
-              <span
-                style={{
-                  fontSize: '18px',
-                  fontWeight: 600,
-                  color: '#34D399',
-                  marginLeft: '14px',
-                  letterSpacing: '0.08em',
-                  textShadow: '0 0 14px rgba(52, 211, 153, 0.35)',
-                }}
-              >
-                {clockSeconds}
-              </span>
+                <span
+                  style={{
+                    fontSize: '38px',
+                    fontWeight: 600,
+                    color: '#F8FAFC',
+                    letterSpacing: '0.12em',
+                    textShadow: '0 0 24px rgba(148, 163, 184, 0.22)',
+                  }}
+                >
+                  {clockMinutes}
+                </span>
+                <span
+                  style={{
+                    fontSize: '18px',
+                    fontWeight: 600,
+                    color: '#34D399',
+                    letterSpacing: '0.08em',
+                    textShadow: '0 0 14px rgba(52, 211, 153, 0.35)',
+                  }}
+                >
+                  {clockSeconds}
+                </span>
+              </div>
             </div>
             <div
               style={{
@@ -1388,7 +1402,6 @@ export default function OperatorBSUPage() {
                 alignItems: 'center',
                 gap: '14px',
                 width: '100%',
-                maxWidth: '340px',
               }}
             >
               <span
