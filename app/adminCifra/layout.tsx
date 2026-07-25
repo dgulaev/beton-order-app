@@ -345,8 +345,12 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     const notif = document.createElement('div');
     notif.dataset.notifId = id;
     // Салатовый тост (как раньше) — отдельно от тёмных appAlert/confirm.
+    // Фиксированная ширина: длинный текст не растягивает баннер.
     notif.style.cssText = `
       position: relative;
+      box-sizing: border-box;
+      width: 420px;
+      max-width: min(420px, calc(100vw - 48px));
       background: linear-gradient(135deg, #22c55e, #86efac);
       color: #0f172a;
       padding: 16px 22px;
@@ -356,7 +360,6 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       display: flex;
       align-items: center;
       gap: 14px;
-      min-width: 390px;
       cursor: pointer;
       pointer-events: auto;
     `;
@@ -364,14 +367,50 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     const icon = resolveNotifIcon(iconKey);
     notif.innerHTML = `
       ${notifIconHtml(icon)}
-      <div style="flex: 1; min-width: 0;">
-        <div style="font-size: 16px; font-weight: 700;">${title}</div>
-        <div style="font-size: 14px; opacity: 0.92;">${message}</div>
+      <div class="toast-text" style="flex: 1; min-width: 0; overflow: hidden;">
+        <div class="toast-title" style="font-size: 16px; font-weight: 700; white-space: nowrap;">${title}</div>
+        <div class="toast-msg" style="font-size: 14px; opacity: 0.92; white-space: nowrap;">${message}</div>
       </div>
       <div style="font-size: 22px; opacity: 0.7; cursor: pointer; line-height: 1; padding: 2px 4px; flex-shrink: 0;" class="close-btn">✕</div>
     `;
 
     const closeBtn = notif.querySelector('.close-btn') as HTMLElement;
+    const textCol = notif.querySelector('.toast-text') as HTMLElement | null;
+
+    /** Ужимает шрифт title/msg, чтобы обе строки влезли в ширину баннера без обрезки. */
+    const fitToastText = () => {
+      if (!textCol) return;
+      const titleEl = textCol.querySelector('.toast-title') as HTMLElement | null;
+      const msgEl = textCol.querySelector('.toast-msg') as HTMLElement | null;
+      if (!titleEl || !msgEl) return;
+
+      const avail = textCol.clientWidth;
+      if (avail <= 0) return;
+
+      // Сброс к базовым размерам, затем пропорциональное уменьшение
+      titleEl.style.fontSize = '16px';
+      msgEl.style.fontSize = '14px';
+
+      const need = Math.max(titleEl.scrollWidth, msgEl.scrollWidth);
+      if (need <= avail) return;
+
+      const scale = Math.max(0.72, avail / need);
+      titleEl.style.fontSize = `${(16 * scale).toFixed(2)}px`;
+      msgEl.style.fontSize = `${(14 * scale).toFixed(2)}px`;
+
+      // Если после округления всё ещё не влезло — дожимаем по 0.25px
+      let guard = 24;
+      while (
+        guard-- > 0 &&
+        (titleEl.scrollWidth > avail || msgEl.scrollWidth > avail)
+      ) {
+        const t = parseFloat(titleEl.style.fontSize);
+        const m = parseFloat(msgEl.style.fontSize);
+        if (t <= 11 && m <= 10) break;
+        titleEl.style.fontSize = `${Math.max(11, t - 0.25)}px`;
+        msgEl.style.fontSize = `${Math.max(10, m - 0.25)}px`;
+      }
+    };
 
     const closeNotification = () => {
       notif.remove();
@@ -394,6 +433,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     });
 
     getNotificationContainer().prepend(notif);
+    // После вставки в DOM измеряем реальную ширину и подгоняем шрифт
+    requestAnimationFrame(fitToastText);
   };
 
   // ==================== 4.3A ВОССТАНОВЛЕНИЕ УВЕДОМЛЕНИЙ ПРИ ЗАГРУЗКЕ СТРАНИЦЫ ====================

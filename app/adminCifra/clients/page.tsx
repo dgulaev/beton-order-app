@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import NewOrderModal from '../components/NewOrderModal';
 import OrderViewModal from '../components/OrderViewModal';
 import CallResultModal from '../components/CallResultModal';
@@ -21,6 +21,129 @@ type ClientsGridFit = { cols: number; rows: number; perPage: number };
 // Список: не больше столько строк на странице — быстрее грузится и не лагает
 const TABLE_MAX_ROWS = 22;
 const TABLE_ROW_GAP = 8;
+
+/** Яркие плашки ролей в табличном режиме — без полупрозрачного «тумана». */
+const STAFF_ROLE_BADGE: Record<string, { label: string; bg: string; color: string; border: string }> = {
+  admin: {
+    label: 'Администратор',
+    bg: 'rgba(139, 92, 246, 0.38)',
+    color: '#EDE9FE',
+    border: 'rgba(196, 181, 253, 0.65)',
+  },
+  manager: {
+    label: 'Менеджер',
+    bg: 'rgba(14, 165, 233, 0.32)',
+    color: '#BAE6FD',
+    border: 'rgba(56, 189, 248, 0.6)',
+  },
+  dispatcher: {
+    label: 'Диспетчер',
+    bg: 'rgba(249, 115, 22, 0.32)',
+    color: '#FED7AA',
+    border: 'rgba(251, 146, 60, 0.6)',
+  },
+  operator: {
+    label: 'Оператор',
+    bg: 'rgba(16, 185, 129, 0.32)',
+    color: '#A7F3D0',
+    border: 'rgba(52, 211, 153, 0.6)',
+  },
+  laborant: {
+    label: 'Лаборант',
+    bg: 'rgba(20, 184, 166, 0.32)',
+    color: '#99F6E4',
+    border: 'rgba(45, 212, 191, 0.6)',
+  },
+  accountant: {
+    label: 'Бухгалтер',
+    bg: 'rgba(234, 179, 8, 0.3)',
+    color: '#FDE68A',
+    border: 'rgba(250, 204, 21, 0.6)',
+  },
+  logist: {
+    label: 'Логист',
+    bg: 'rgba(236, 72, 153, 0.3)',
+    color: '#FBCFE8',
+    border: 'rgba(244, 114, 182, 0.6)',
+  },
+  guest: {
+    label: 'Гость',
+    bg: 'rgba(100, 116, 139, 0.4)',
+    color: '#E2E8F0',
+    border: 'rgba(148, 163, 184, 0.55)',
+  },
+};
+
+function staffRoleBadge(role: string) {
+  return (
+    STAFF_ROLE_BADGE[(role || '').toLowerCase()] || {
+      label: role || '—',
+      bg: 'rgba(100, 116, 139, 0.4)',
+      color: '#E2E8F0',
+      border: 'rgba(148, 163, 184, 0.55)',
+    }
+  );
+}
+
+function clientStatusBadge(vol: number, ordersCount: number): { text: string; bg: string; color: string; border: string } {
+  if (vol >= 30 || ordersCount >= 5) {
+    return {
+      text: '🔥 Горячий',
+      bg: 'rgba(239, 68, 68, 0.28)',
+      color: '#FECACA',
+      border: 'rgba(248, 113, 113, 0.55)',
+    };
+  }
+  if (vol >= 8 || ordersCount >= 2) {
+    return {
+      text: '🌡 Тёплый',
+      bg: 'rgba(245, 158, 11, 0.28)',
+      color: '#FDE68A',
+      border: 'rgba(251, 191, 36, 0.55)',
+    };
+  }
+  return {
+    text: '❄ Холодный',
+    bg: 'rgba(56, 189, 248, 0.2)',
+    color: '#BAE6FD',
+    border: 'rgba(56, 189, 248, 0.45)',
+  };
+}
+
+/** Строка таблицы: чуть светлее базовой volume-карточки, без «затемнения». */
+function tableRowCardStyle(extra: CSSProperties = {}): CSSProperties {
+  return volumeCardSoftStyle({
+    background: 'linear-gradient(165deg, #2A3A52 0%, #1A2740 55%, #152033 100%)',
+    border: '1px solid rgba(148, 163, 184, 0.38)',
+    boxShadow: '0 6px 14px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.1)',
+    ...extra,
+  });
+}
+
+function tablePillStyle(opts: {
+  bg: string;
+  color: string;
+  border: string;
+  padding?: string;
+  fontSize?: number | string;
+}): CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: opts.padding ?? '4px 11px',
+    borderRadius: 9999,
+    fontSize: opts.fontSize ?? 12,
+    fontWeight: 600,
+    letterSpacing: '0.01em',
+    background: opts.bg,
+    color: opts.color,
+    border: `1px solid ${opts.border}`,
+    whiteSpace: 'nowrap',
+    lineHeight: 1.2,
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12)',
+  };
+}
 
 export default function ClientsPage() {
 
@@ -1767,7 +1890,8 @@ const changeStaffPassword = async (staffMember: any) => {
   {/* Левая группа — Кнопки действий */}
 <div style={{ display: 'flex', gap: '8px' }}>
 
-  {/* Кнопка Показать дубли */}
+  {/* Дубли — только на вкладке клиентов (у стаффа не нужны) */}
+  {activeTab === 'clients' && (
   <button 
     onClick={findDuplicates}
     style={{
@@ -1788,6 +1912,7 @@ const changeStaffPassword = async (staffMember: any) => {
     <span style={{ fontSize: '22px', opacity: 0.9 }}>🔗</span>
     Показать дубли
   </button>
+  )}
 
   {/* Кнопка Новый клиент / Новый сотрудник — меняется в зависимости от вкладки */}
   {activeTab === 'clients' && (
@@ -2168,7 +2293,7 @@ const changeStaffPassword = async (staffMember: any) => {
 
         {/* Шапка таблицы */}
       {activeTab === 'staff' ? (
-  <div style={volumeCardSoftStyle({
+  <div style={tableRowCardStyle({
     display: 'grid',
     gridTemplateColumns: currentUserRole === 'admin'
       ? '2.8fr 160px 1.6fr 1.1fr 130px'
@@ -2177,7 +2302,7 @@ const changeStaffPassword = async (staffMember: any) => {
     borderRadius: 12,
     fontSize: '13px',
     fontWeight: 600,
-    color: '#94A3B8',
+    color: '#E2E8F0',
     flexShrink: 0,
     marginBottom: TABLE_ROW_GAP,
   })}>
@@ -2189,14 +2314,14 @@ const changeStaffPassword = async (staffMember: any) => {
   </div>
 ) : (
 
-          <div style={volumeCardSoftStyle({
+          <div style={tableRowCardStyle({
             display: 'grid',
             gridTemplateColumns: 'minmax(160px, 2fr) 110px 120px 100px 90px 110px 70px',
             padding: '8px 16px',
             borderRadius: 12,
             fontSize: '13px',
             fontWeight: 600,
-            color: '#94A3B8',
+            color: '#E2E8F0',
             flexShrink: 0,
             marginBottom: TABLE_ROW_GAP,
             alignItems: 'center',
@@ -2250,12 +2375,13 @@ const changeStaffPassword = async (staffMember: any) => {
         }}>
         {(activeTab === 'staff' ? staffProfiles : clients).map((item: any) => {
           if (activeTab === 'staff') {
+            const roleBadge = staffRoleBadge(item.role);
   return (
     <div
       key={item.user_id}
       data-client-row
       onClick={() => handleSelectProfile(item)}
-      style={volumeCardSoftStyle({
+      style={tableRowCardStyle({
         display: 'grid',
         gridTemplateColumns: currentUserRole === 'admin'
           ? '2.8fr 160px 1.6fr 1.1fr 130px'
@@ -2264,22 +2390,23 @@ const changeStaffPassword = async (staffMember: any) => {
         borderRadius: 10,
         cursor: 'pointer',
         alignItems: 'center',
-        opacity: item.role === 'guest' ? 0.92 : 1,
         flexShrink: 0,
-        transition: 'filter 0.15s ease',
+        transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
       })}
       onMouseOver={(e) => {
-        e.currentTarget.style.filter = 'brightness(1.08)';
+        e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.55)';
+        e.currentTarget.style.boxShadow = '0 8px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.14)';
       }}
       onMouseOut={(e) => {
-        e.currentTarget.style.filter = 'none';
+        e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.38)';
+        e.currentTarget.style.boxShadow = '0 6px 14px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.1)';
       }}
     >
       {/* 1. Сотрудник */}
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.full_name}</div>
+        <div style={{ fontWeight: 600, fontSize: '14px', color: '#F8FAFC', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.full_name}</div>
         {item.role === 'guest' && (
-          <div style={{ fontSize: '11px', color: '#94A3B8' }}>Демо-доступ</div>
+          <div style={{ fontSize: '11px', color: '#CBD5E1' }}>Демо-доступ</div>
         )}
       </div>
 
@@ -2292,14 +2419,14 @@ const changeStaffPassword = async (staffMember: any) => {
               changeStaffPassword(item);
             }}
             style={{
-              padding: '4px 10px',
-              backgroundColor: 'rgba(139, 92, 246, 0.15)',
-              color: '#A78BFA',
-              border: '1px solid rgba(139, 92, 246, 0.3)',
-              borderRadius: '8px',
-              fontSize: '12px',
+              ...tablePillStyle({
+                bg: 'rgba(139, 92, 246, 0.4)',
+                color: '#EDE9FE',
+                border: 'rgba(196, 181, 253, 0.65)',
+                padding: '5px 11px',
+              }),
               cursor: 'pointer',
-              fontWeight: 500,
+              borderRadius: 9999,
             }}
           >
             Сменить пароль
@@ -2308,31 +2435,12 @@ const changeStaffPassword = async (staffMember: any) => {
       )}
 
       {/* 3. Телефон */}
-      <div style={{ color: '#94A3B8', fontSize: '13px' }}>{formatPhoneDisplay(item.phone)}</div>
+      <div style={{ color: '#E2E8F0', fontSize: '13px' }}>{formatPhoneDisplay(item.phone)}</div>
 
       {/* 4. Роль */}
       <div style={{ textAlign: 'center' }}>
-        <span style={{ 
-          padding: '3px 10px', 
-          borderRadius: '9999px', 
-          fontSize: '12px', 
-          background: item.role === 'admin'
-            ? 'rgba(124, 58, 237, 0.18)'
-            : item.role === 'guest'
-            ? 'rgba(71, 85, 105, 0.35)'
-            : 'rgba(51, 65, 85, 0.6)',
-          color: item.role === 'admin' ? '#A78BFA'
-            : item.role === 'guest' ? '#64748B'
-            : '#94A3B8',
-          border: `1px solid ${item.role === 'admin' ? 'rgba(167,139,250,0.25)' : 'rgba(100,116,139,0.2)'}`,
-          display: 'inline-block',
-          fontWeight: 500,
-        }}>
-          {item.role === 'admin' ? 'Администратор' : 
-           item.role === 'dispatcher' ? 'Диспетчер' : 
-           item.role === 'operator' ? 'Оператор' : 
-           item.role === 'laborant' ? 'Лаборант' : 
-           item.role === 'guest' ? 'Гость' : 'Менеджер'}
+        <span style={tablePillStyle(roleBadge)}>
+          {roleBadge.label}
         </span>
       </div>
 
@@ -2340,15 +2448,15 @@ const changeStaffPassword = async (staffMember: any) => {
       <div style={{ textAlign: 'center' }}>
         <button 
           onClick={(e) => { e.stopPropagation(); editStaff(item); }}
-          style={{ 
-            padding: '4px 12px', 
-            background: 'rgba(96, 165, 250, 0.12)',
-            border: '1px solid rgba(96, 165, 250, 0.3)',
-            borderRadius: '8px', 
-            color: '#60A5FA', 
+          style={{
+            ...tablePillStyle({
+              bg: 'rgba(59, 130, 246, 0.38)',
+              color: '#BFDBFE',
+              border: 'rgba(96, 165, 250, 0.65)',
+              padding: '5px 12px',
+            }),
             cursor: 'pointer',
-            fontWeight: 500,
-            fontSize: '12px',
+            borderRadius: 9999,
           }}
         >
           Изменить
@@ -2361,10 +2469,7 @@ const changeStaffPassword = async (staffMember: any) => {
             const ordersCount = item.total_orders || item.totalOrders || 0;
             const avgVol = Number(item.avg_volume ?? (ordersCount > 0 ? vol / ordersCount : 0));
             const lastVol = Number(item.last_volume ?? 0);
-            let statusText = '❄️ Холодный';
-            let statusColor = '#64748B';
-            if (vol >= 30 || ordersCount >= 5) { statusText = '🔥 Горячий'; statusColor = '#EF4444'; }
-            else if (vol >= 8 || ordersCount >= 2) { statusText = '🌡️ Тёплый'; statusColor = '#F59E0B'; }
+            const status = clientStatusBadge(vol, ordersCount);
 
             const phoneLine = item.phones?.length
               ? item.phones.map((p: string) => formatPhoneDisplay(p)).join(' • ')
@@ -2375,7 +2480,7 @@ const changeStaffPassword = async (staffMember: any) => {
                 key={item.groupId || item.user_id}
                 data-client-row
                 onClick={() => setSelectedProfile(item)}
-                style={volumeCardSoftStyle({
+                style={tableRowCardStyle({
                   display: 'grid',
                   gridTemplateColumns: 'minmax(160px, 2fr) 110px 120px 100px 90px 110px 70px',
                   padding: '6px 14px',
@@ -2385,55 +2490,73 @@ const changeStaffPassword = async (staffMember: any) => {
                   flexShrink: 0,
                   minHeight: 0,
                   gap: 8,
-                  transition: 'filter 0.15s ease',
+                  transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
                 })}
-                onMouseOver={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
-                onMouseOut={(e) => { e.currentTarget.style.filter = 'none'; }}
+                onMouseOver={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.55)';
+                  e.currentTarget.style.boxShadow = '0 8px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.14)';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.38)';
+                  e.currentTarget.style.boxShadow = '0 6px 14px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.1)';
+                }}
               >
                 <div style={{ minWidth: 0 }}>
                   <div style={{
                     fontWeight: 600,
                     fontSize: '14px',
                     lineHeight: 1.2,
+                    color: '#F8FAFC',
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                   }}>
                     {item.organization_name || item.full_name || 'Без названия'}
                     {phoneLine ? (
-                      <span style={{ color: '#94A3B8', fontWeight: 400, fontSize: '12px' }}>
+                      <span style={{ color: '#CBD5E1', fontWeight: 400, fontSize: '12px' }}>
                         {' · '}{phoneLine}
                       </span>
                     ) : null}
                   </div>
                 </div>
-                <div style={{ color: '#94A3B8', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div style={{ color: '#E2E8F0', fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {item.inn || '—'}
                 </div>
                 <div style={{
-                  color: item.curator_name ? '#60A5FA' : '#64748B',
+                  color: item.curator_name ? '#7DD3FC' : '#94A3B8',
                   fontSize: '13px',
+                  fontWeight: item.curator_name ? 600 : 400,
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                 }}>
                   {item.curator_name || '—'}
                 </div>
-                <div style={{ color: statusColor, fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap' }}>{statusText}</div>
-                <div style={{ fontSize: '14px', fontWeight: 700, color: '#60A5FA', whiteSpace: 'nowrap' }}>{Number(vol).toFixed(1)}</div>
+                <div>
+                  <span style={tablePillStyle({
+                    bg: status.bg,
+                    color: status.color,
+                    border: status.border,
+                    fontSize: 12,
+                    padding: '4px 10px',
+                  })}>
+                    {status.text}
+                  </span>
+                </div>
+                <div style={{ fontSize: '14px', fontWeight: 700, color: '#38BDF8', whiteSpace: 'nowrap' }}>{Number(vol).toFixed(1)}</div>
                 <div
-                  style={{ fontSize: '13px', color: '#CBD5E1', whiteSpace: 'nowrap' }}
+                  style={{ fontSize: '13px', color: '#E2E8F0', whiteSpace: 'nowrap' }}
                   title="Средний / последний объём, м³"
                 >
                   {ordersCount > 0 ? (
                     <>
-                      <span style={{ color: '#94A3B8' }}>{avgVol.toFixed(1)}</span>
-                      <span style={{ color: '#64748B' }}> / </span>
-                      <span style={{ color: '#E2E8F0', fontWeight: 600 }}>{lastVol.toFixed(1)}</span>
+                      <span style={{ color: '#CBD5E1' }}>{avgVol.toFixed(1)}</span>
+                      <span style={{ color: '#94A3B8' }}> / </span>
+                      <span style={{ color: '#F8FAFC', fontWeight: 600 }}>{lastVol.toFixed(1)}</span>
                     </>
                   ) : '—'}
                 </div>
-                <div style={{ color: '#94A3B8', fontWeight: 500, fontSize: '13px', whiteSpace: 'nowrap', textAlign: 'center' }}>{ordersCount}</div>
+                <div style={{ color: '#E2E8F0', fontWeight: 600, fontSize: '13px', whiteSpace: 'nowrap', textAlign: 'center' }}>{ordersCount}</div>
               </div>
             );
           }

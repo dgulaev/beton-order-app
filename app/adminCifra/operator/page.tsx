@@ -8,7 +8,7 @@ import WarehousePage from '../warehouse/page';
 import ReportsPage, { preloadReportsData } from '../reports/page';
 import RecipesPage, { type LabTab } from '../recipes/page';
 import { CARD_VOLUME_SOFT, MODAL_VOLUME_GLOW, modalCloseButtonStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
-import { UserCog, ChevronDown, UserRound } from 'lucide-react';
+import { UserCog, ChevronDown, UserRound, Truck } from 'lucide-react';
 import ModalSelect from '../components/ModalSelect';
 import OperatorSilosBar from '../components/OperatorSilosBar';
 import OperatorMekaUploadCard from '../components/OperatorMekaUploadCard';
@@ -2118,8 +2118,18 @@ export default function OperatorBSUPage() {
               minHeight: 0,
               overflow: 'hidden',
             })}>
-              <h2 style={{ fontSize: '19px', fontWeight: '600', marginBottom: '14px', color: '#10B981', flexShrink: 0 }}>
-                🚚 Отгружено сегодня ({filteredCompletedTrips.length})
+              <h2 style={{
+                fontSize: '19px',
+                fontWeight: '600',
+                marginBottom: '14px',
+                color: '#10B981',
+                flexShrink: 0,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+              }}>
+                <Truck size={22} color="#10B981" strokeWidth={2} />
+                Отгружено сегодня ({filteredCompletedTrips.length})
               </h2>
 
               {/* Раньше у этой панели не было шапки колонок вовсе — цифры прогресса

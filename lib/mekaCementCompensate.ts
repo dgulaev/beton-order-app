@@ -13,6 +13,13 @@ export type CompensateSiloRow = {
   siloId: number;
   kg: number;
   direction: 'writeoff' | 'return';
+  /**
+   * Куда применить writeoff:
+   * - balance — минус с текущего остатка (как раньше);
+   * - savings — остаток не трогаем, сумма в экономию (если силос уже пополнили из минуса).
+   * Для return всегда balance (+ экономия meka_reconcile при плюсе).
+   */
+  sink?: 'balance' | 'savings';
 };
 
 export type CompensateResult = {
@@ -71,6 +78,17 @@ function moscowMinutesFromIso(iso: string | null | undefined): number | null {
 function moscowDayBounds(dateKey: string): { start: string; end: string } {
   const start = new Date(`${dateKey}T00:00:00+03:00`);
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+/**
+ * Окно списаний для дня отчёта MEKA: календарные сутки МСК + ночной хвост
+ * до 06:00 следующего дня (поздняя отгрузка после полуночи относится к
+ * вчерашнему отчёту; утренний refill и дневная работа — уже к новым суткам).
+ */
+function moscowReportWriteoffBounds(dateKey: string): { start: string; end: string } {
+  const start = new Date(`${dateKey}T00:00:00+03:00`);
+  const end = new Date(start.getTime() + 30 * 60 * 60 * 1000); // dateKey+1 06:00 МСК
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
@@ -261,9 +279,139 @@ function siloDeltasToRows(map: Map<number, number>): CompensateSiloRow[] {
       siloId: spec.silo_id,
       kg: Math.abs(raw),
       direction: raw > 0 ? 'writeoff' : 'return',
+      sink: 'balance',
     });
   }
   return rows;
+}
+
+/**
+ * Момент последнего автосписания с силоса в окне дня отчёта
+ * (сутки МСК + хвост до 06:00 следующего дня).
+ */
+async function lastSiloWriteoffIsoOnReportDay(
+  siloId: number,
+  reportDate: string,
+): Promise<string | null> {
+  const { start, end } = moscowReportWriteoffBounds(reportDate);
+  const siloLabel = siloNameById(siloId);
+
+  const [tripsRes, journalRes] = await Promise.all([
+    supabase
+      .from('order_mixers')
+      .select('cement_write_off_at')
+      .eq('cement_write_off_silo_id', siloId)
+      .not('cement_write_off_kg', 'is', null)
+      .gte('cement_write_off_at', start)
+      .lt('cement_write_off_at', end)
+      .order('cement_write_off_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    // Учитываем и журнал (смена силоса и т.п.), не только order_mixers.
+    supabase
+      .from('warehouse_operations')
+      .select('created_at')
+      .eq('item_type', siloLabel)
+      .eq('operation_type', 'subtract')
+      .ilike('user_name', '%Автосписание%')
+      .gte('created_at', start)
+      .lt('created_at', end)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  if (tripsRes.error) console.error('lastSiloWriteoff trips:', tripsRes.error);
+  if (journalRes.error) console.error('lastSiloWriteoff journal:', journalRes.error);
+
+  const a = tripsRes.data?.cement_write_off_at
+    ? String(tripsRes.data.cement_write_off_at)
+    : null;
+  const b = journalRes.data?.created_at ? String(journalRes.data.created_at) : null;
+  if (a && b) return a > b ? a : b;
+  return a || b;
+}
+
+/**
+ * Refill из минуса ПОСЛЕ последнего списания окна отчёта и ДО компенсации.
+ *
+ * Рабочий цикл завода:
+ * 1) День D: работа → минус (иногда поздняя отгрузка после полуночи) →
+ *    отчёт MEKA за D (часто уже после 00:00) → если успели пополнить до отчёта —
+ *    writeoff в экономию, не с нового объёма.
+ * 2) Утро D+1: пополнили из минуса → днём работали → вечером отчёт за D+1 →
+ *    balance (утренний refill раньше дневных списаний D+1).
+ * 3) Утро D+1: пополнили и не работали, а отчёт за D ещё не грузили /
+ *    writeoff доля на силос → savings.
+ * 4) Минус без пополнения к моменту отчёта → balance (углубляем минус,
+ *    при следующем refill уйдёт в экономию).
+ */
+async function findPostDepletionRefillFromNegative(
+  siloId: number,
+  reportDate: string,
+  beforeIso: string,
+): Promise<{ balanceBeforeTons: number; createdAt: string } | null> {
+  const { start } = moscowDayBounds(reportDate);
+  const lastTripAt = await lastSiloWriteoffIsoOnReportDay(siloId, reportDate);
+  // После последнего рейса дня отчёта; если рейсов не было — после начала этого дня.
+  const afterThreshold = lastTripAt || start;
+
+  const { data, error } = await supabase
+    .from('warehouse_cement_savings')
+    .select('id, balance_before_tons, created_at')
+    .eq('silo_id', siloId)
+    .eq('reason', 'refill')
+    .lt('balance_before_tons', 0)
+    .gt('created_at', afterThreshold)
+    .lt('created_at', beforeIso)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('findPostDepletionRefillFromNegative:', error);
+    return null;
+  }
+  if (!data) return null;
+  return {
+    balanceBeforeTons: Number(data.balance_before_tons || 0),
+    createdAt: String(data.created_at),
+  };
+}
+
+/** Проставить sink для writeoff по правилу «refill после опустошения дня отчёта». */
+async function assignSinksForBySilo(
+  rows: CompensateSiloRow[],
+  reportDate: string,
+): Promise<CompensateSiloRow[]> {
+  const beforeIso = new Date().toISOString();
+  const out: CompensateSiloRow[] = [];
+  for (const row of rows) {
+    if (row.direction !== 'writeoff') {
+      out.push({ ...row, sink: 'balance' });
+      continue;
+    }
+    const refill = await findPostDepletionRefillFromNegative(
+      row.siloId,
+      reportDate,
+      beforeIso,
+    );
+    out.push({
+      ...row,
+      sink: refill ? 'savings' : 'balance',
+    });
+  }
+  return out;
+}
+
+async function readSiloCurrentTons(siloId: number): Promise<number> {
+  const { data, error } = await supabase
+    .from('warehouse_silos')
+    .select('current')
+    .eq('silo_id', siloId)
+    .maybeSingle();
+  if (error) throw new Error(`Силос ${siloId}: ${error.message}`);
+  return Number(data?.current ?? 0);
 }
 
 /** Выровнять сумму signed-дельт к targetDelta (поправка на последний силос). */
@@ -475,6 +623,10 @@ export async function compensateMekaCementDelta(opts: {
       };
     }
 
+    // Writeoff → экономия только если refill из минуса был ПОСЛЕ последнего
+    // списания дня отчёта (иначе утреннее пополнение + дневная работа → balance).
+    bySilo = await assignSinksForBySilo(bySilo, reportDate);
+
     // Сначала фиксируем день (идемпотентность), потом двигаем силосы.
     // Если adjust упадёт — удаляем запись, чтобы можно было повторить.
     const inserted = await recordCompensation({
@@ -505,6 +657,39 @@ export async function compensateMekaCementDelta(opts: {
     const dateLabel = reportDate.split('-').reverse().join('.');
     try {
       for (const row of bySilo) {
+        const siloLabel = siloNameById(row.siloId);
+
+        // Writeoff после пополнения из минуса: остаток не трогаем, сумма → экономия.
+        if (row.direction === 'writeoff' && row.sink === 'savings') {
+          const currentTons = await readSiloCurrentTons(row.siloId);
+          const currentKg = roundKg(currentTons * 1000);
+          const refill = await findPostDepletionRefillFromNegative(
+            row.siloId,
+            reportDate,
+            new Date().toISOString(),
+          );
+          const { error: savError } = await supabase.from('warehouse_cement_savings').insert({
+            silo_id: row.siloId,
+            amount_kg: row.kg,
+            reason: 'meka_reconcile',
+            balance_before_tons: refill?.balanceBeforeTons ?? currentTons,
+            user_name: opts.userName || 'MEKA',
+          });
+          if (savError) {
+            throw new Error(`Силос ${row.siloId} экономия: ${savError.message}`);
+          }
+          await supabase.from('warehouse_operations').insert({
+            operation_type: 'subtract',
+            item_type: siloLabel,
+            amount: row.kg,
+            old_value: currentKg,
+            new_value: currentKg,
+            unit: 'кг',
+            user_name: `Компенсация MEKA → экономия · ${dateLabel} · ${siloLabel}`,
+          });
+          continue;
+        }
+
         const signedTons = (row.direction === 'writeoff' ? -row.kg : row.kg) / 1000;
         const { data: adjRows, error: rpcError } = await supabase.rpc('warehouse_silo_adjust', {
           p_silo_id: row.siloId,
@@ -518,12 +703,12 @@ export async function compensateMekaCementDelta(opts: {
         const newKg = Number(adj?.new_current ?? 0) * 1000;
         await supabase.from('warehouse_operations').insert({
           operation_type: row.direction === 'writeoff' ? 'subtract' : 'add',
-          item_type: siloNameById(row.siloId),
+          item_type: siloLabel,
           amount: row.kg,
           old_value: Math.round(oldKg * 10) / 10,
           new_value: Math.round(newKg * 10) / 10,
           unit: 'кг',
-          user_name: `Компенсация MEKA · ${dateLabel} · ${siloNameById(row.siloId)}`,
+          user_name: `Компенсация MEKA · ${dateLabel} · ${siloLabel}`,
         });
         await syncSiloLowRateAlert(supabase, row.siloId);
 
@@ -706,6 +891,45 @@ export async function rollbackMekaCementCompensation(opts: {
 
   if (status === 'applied' && bySilo.length > 0) {
     for (const item of bySilo) {
+      const siloLabel = siloNameById(item.siloId);
+      const sink = item.sink || 'balance';
+      const createdAt = row.created_at ? String(row.created_at) : null;
+
+      // Writeoff ушёл в экономию — силос не двигали, откатываем только savings.
+      if (item.direction === 'writeoff' && sink === 'savings') {
+        let q = supabase
+          .from('warehouse_cement_savings')
+          .delete()
+          .eq('reason', 'meka_reconcile')
+          .eq('silo_id', item.siloId)
+          .eq('amount_kg', item.kg);
+        if (createdAt) {
+          const t0 = new Date(createdAt).getTime();
+          q = q
+            .gte('created_at', new Date(t0 - 60_000).toISOString())
+            .lte('created_at', new Date(t0 + 5 * 60_000).toISOString());
+        }
+        const { error: delSav } = await q;
+        if (delSav) console.error('rollback meka_reconcile savings (sink):', delSav);
+
+        try {
+          const currentTons = await readSiloCurrentTons(item.siloId);
+          const currentKg = roundKg(currentTons * 1000);
+          await supabase.from('warehouse_operations').insert({
+            operation_type: 'add',
+            item_type: siloLabel,
+            amount: item.kg,
+            old_value: currentKg,
+            new_value: currentKg,
+            unit: 'кг',
+            user_name: `Откат компенсации MEKA (экономия) · ${dateLabel} · ${siloLabel}`,
+          });
+        } catch (e) {
+          console.error('rollback savings journal:', e);
+        }
+        continue;
+      }
+
       // Было writeoff (−) → вернуть (+); было return (+) → снова списать (−)
       const signedTons = (item.direction === 'writeoff' ? item.kg : -item.kg) / 1000;
       const { data: adjRows, error: rpcError } = await supabase.rpc('warehouse_silo_adjust', {
@@ -722,18 +946,17 @@ export async function rollbackMekaCementCompensation(opts: {
       const adj = Array.isArray(adjRows) ? adjRows[0] : adjRows;
       await supabase.from('warehouse_operations').insert({
         operation_type: item.direction === 'writeoff' ? 'add' : 'subtract',
-        item_type: siloNameById(item.siloId),
+        item_type: siloLabel,
         amount: item.kg,
         old_value: Math.round(Number(adj?.old_current ?? 0) * 1000 * 10) / 10,
         new_value: Math.round(Number(adj?.new_current ?? 0) * 1000 * 10) / 10,
         unit: 'кг',
-        user_name: `Откат компенсации MEKA · ${dateLabel} · ${siloNameById(item.siloId)}`,
+        user_name: `Откат компенсации MEKA · ${dateLabel} · ${siloLabel}`,
       });
       await syncSiloLowRateAlert(supabase, item.siloId);
 
       if (item.direction === 'return') {
         // Удаляем экономию сверки по этому силосу/объёму за день компенсации
-        const createdAt = row.created_at ? String(row.created_at) : null;
         let q = supabase
           .from('warehouse_cement_savings')
           .delete()

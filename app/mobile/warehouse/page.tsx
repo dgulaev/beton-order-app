@@ -36,16 +36,31 @@ function KpiCard({ label, value, unit, color }: { label: string; value: number; 
 
 function ProgressBar({ current, max, color }: { current: number; max: number; color: string }) {
   const pct = Math.min(Math.max((current / Math.max(max, 1)) * 100, 0), 100);
-  const low = pct < 30;
+  const negative = current < 0;
+  const low = !negative && pct < 30;
+  const fill = negative ? '#F87171' : low ? '#F59E0B' : color;
   return (
-    <div style={{ background: '#0F172A', borderRadius: '9999px', height: '12px', overflow: 'hidden' }}>
-      <div style={{
-        height: '100%',
-        width: `${pct}%`,
-        background: low ? '#F59E0B' : color,
-        borderRadius: '9999px',
-        transition: 'width 0.4s ease',
-      }} />
+    <div
+      style={{
+        background: 'rgba(2, 6, 23, 0.65)',
+        borderRadius: 9999,
+        height: 12,
+        overflow: 'hidden',
+        border: '1px solid rgba(148, 163, 184, 0.22)',
+        boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.35)',
+      }}
+    >
+      <div
+        style={{
+          height: '100%',
+          width: `${pct}%`,
+          minWidth: pct > 0 ? 6 : 0,
+          background: fill,
+          borderRadius: 9999,
+          transition: 'width 0.4s ease',
+          boxShadow: pct > 0 ? `0 0 10px ${fill}55` : undefined,
+        }}
+      />
     </div>
   );
 }
@@ -497,25 +512,29 @@ export default function MobileWarehousePage() {
           const current = Number(silo.current || 0);
           const max = Number(silo.max || 1);
           const pct = Math.min(Math.max((current / max) * 100, 0), 100);
-          const low = pct < 30;
+          const low = pct < 30 || current < 0;
           const negative = current < 0;
           const isActive = Number(silo.silo_id) === activeSiloId;
 
+          // Важно: не передавать background/border/boxShadow: undefined —
+          // в volumeCardStyle это затирает базовую плашку (React пропускает undefined).
           return (
             <div
               key={silo.silo_id}
               style={volumeCardStyle({
                 padding: '16px',
                 borderRadius: 16,
-                position: 'relative' as const,
+                position: 'relative',
                 overflow: 'hidden',
-                border: isActive ? '1px solid rgba(52,211,153,0.55)' : undefined,
-                background: isActive
-                  ? 'linear-gradient(135deg, rgba(16,185,129,0.22) 0%, rgba(15,23,42,0.92) 55%)'
-                  : undefined,
-                boxShadow: isActive
-                  ? '0 0 0 1px rgba(52,211,153,0.12), 0 10px 28px rgba(16,185,129,0.2)'
-                  : undefined,
+                ...(isActive
+                  ? {
+                      border: '1px solid rgba(52,211,153,0.55)',
+                      background:
+                        'linear-gradient(165deg, rgba(16,185,129,0.28) 0%, #1E2937 42%, #0F172A 100%)',
+                      boxShadow:
+                        '0 12px 28px rgba(0,0,0,0.34), 0 0 0 1px rgba(52,211,153,0.14), 0 10px 28px rgba(16,185,129,0.18), inset 0 1px 0 rgba(255,255,255,0.12)',
+                    }
+                  : {}),
               })}
             >
               {isActive && (
@@ -531,34 +550,82 @@ export default function MobileWarehousePage() {
                   }}
                 />
               )}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', gap: 8 }}>
-                <span style={{ fontWeight: '600', fontSize: '16px', color: isActive ? '#A7F3D0' : '#E2E8F0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: 10,
+                  gap: 8,
+                  paddingLeft: isActive ? 6 : 0,
+                }}
+              >
+                <span
+                  style={{
+                    fontWeight: 600,
+                    fontSize: 16,
+                    color: isActive ? '#A7F3D0' : '#E2E8F0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                  }}
+                >
                   {silo.name}
                   {isActive && (
-                    <span style={{
-                      fontSize: 10, fontWeight: 800, color: '#ECFDF5',
-                      textTransform: 'uppercase', letterSpacing: '0.08em',
-                      padding: '3px 9px', borderRadius: 999,
-                      background: 'linear-gradient(135deg, #059669 0%, #10B981 100%)',
-                      boxShadow: '0 3px 10px rgba(16,185,129,0.4)',
-                    }}>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 800,
+                        color: '#ECFDF5',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.08em',
+                        padding: '3px 9px',
+                        borderRadius: 999,
+                        background: 'linear-gradient(135deg, #059669 0%, #10B981 100%)',
+                        boxShadow: '0 3px 10px rgba(16,185,129,0.4)',
+                      }}
+                    >
                       Рабочий
                     </span>
                   )}
                 </span>
-                <span style={{ fontSize: '18px', fontWeight: '700', color: negative ? '#F87171' : low ? '#FBBF24' : '#34D399', flexShrink: 0 }}>
-                  {current.toFixed(2)} <span style={{ fontSize: '13px', color: '#64748B' }}>/ {silo.max} т</span>
+                <span
+                  style={{
+                    fontSize: 18,
+                    fontWeight: 700,
+                    color: negative ? '#F87171' : low ? '#FBBF24' : '#34D399',
+                    flexShrink: 0,
+                  }}
+                >
+                  {current.toFixed(2)}{' '}
+                  <span style={{ fontSize: 13, color: '#64748B' }}>/ {silo.max} т</span>
                 </span>
               </div>
-              <ProgressBar current={current} max={max} color="#34D399" />
-              <div style={{ fontSize: '12px', color: isActive ? '#6EE7B7' : '#64748B', marginTop: '4px', textAlign: 'right' }}>
-                {pct.toFixed(0)}%
-                {isActive && <span style={{ marginLeft: '8px' }}>· с него списывается</span>}
-                {low && <span style={{ color: '#F59E0B', marginLeft: '8px' }}>⚠ Низкий уровень</span>}
-              </div>
-              <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
-                <ActionBtn color="#3B82F6" onClick={() => siloAction(silo.silo_id, 1)}>+ Внести</ActionBtn>
-                <ActionBtn color="#EF4444" onClick={() => siloAction(silo.silo_id, -1)}>− Списать</ActionBtn>
+              <div style={{ paddingLeft: isActive ? 6 : 0 }}>
+                <ProgressBar current={current} max={max} color="#34D399" />
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: isActive ? '#6EE7B7' : '#64748B',
+                    marginTop: 6,
+                    textAlign: 'right',
+                  }}
+                >
+                  {pct.toFixed(0)}%
+                  {isActive && <span style={{ marginLeft: 8 }}>· с него списывается</span>}
+                  {low && (
+                    <span style={{ color: '#F59E0B', marginLeft: 8 }}>⚠ Низкий уровень</span>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                  <ActionBtn color="#3B82F6" onClick={() => siloAction(silo.silo_id, 1)}>
+                    + Внести
+                  </ActionBtn>
+                  <ActionBtn color="#EF4444" onClick={() => siloAction(silo.silo_id, -1)}>
+                    − Списать
+                  </ActionBtn>
+                </div>
               </div>
             </div>
           );
@@ -659,11 +726,17 @@ function ActionBtn({ color, onClick, children }: { color: string; onClick: () =>
   return (
     <button
       onClick={onClick}
-      style={{
-        flex: 1, padding: '12px', background: 'transparent',
-        border: `1px solid ${color}40`, borderRadius: '12px',
-        color, fontWeight: '600', fontSize: '15px', cursor: 'pointer',
-      }}
+      style={volumeCardSoftStyle({
+        flex: 1,
+        padding: '12px',
+        borderRadius: 12,
+        border: `1px solid ${color}55`,
+        background: `linear-gradient(165deg, ${color}22 0%, rgba(15,23,42,0.92) 70%)`,
+        color,
+        fontWeight: 600,
+        fontSize: 15,
+        cursor: 'pointer',
+      })}
     >
       {children}
     </button>
