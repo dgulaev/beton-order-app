@@ -52,7 +52,9 @@ jobs:
           # Вызываем версию 17 по прямому пути, а не через обёртку /usr/bin/pg_dump —
           # на раннере уже стоял pg_dump 16 "по умолчанию", и обёртка продолжала
           # выбирать его даже после установки пакета postgresql-client-17.
-          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --no-acl --format=plain | gzip > "$FILE"
+          # --no-owner: не тащим OWNER (на restore в Supabase роли другие).
+          # ACL (GRANT/REVOKE) сохраняем — нужны для anon/authenticated/service_role.
+          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --no-owner --format=plain | gzip > "$FILE"
 
           SIZE=$(stat -c%s "$FILE")
           echo "Создан файл: $FILE ($SIZE байт)"

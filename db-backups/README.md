@@ -5,6 +5,10 @@
 каждый день в 05:00 по Москве. Хранятся последние 30 дней, старые удаляются
 автоматически.
 
+Дамп: `pg_dump --no-owner` (без привязки к OWNER), **с ACL** — в файл
+попадают `GRANT`/`REVOKE` для ролей `anon` / `authenticated` / `service_role`
+и др. RLS и `CREATE POLICY` сохраняются как и раньше.
+
 ## Настройка (сделать один раз)
 
 1. Откройте Supabase Dashboard → ваш проект → **Project Settings → Database**.
