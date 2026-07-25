@@ -8,6 +8,7 @@ import { formatPhoneInput, normalizePhone } from '@/lib/phone';
 import { useDeliveryCoords } from '@/lib/yandexRoute';
 import { calculateDeliveryCost, fetchDeliverySettings, DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
 import { nowTimeHHMM } from '@/app/adminCifra/components/modalPickerShared';
+import { formatTimeHHMM } from '@/lib/ruLocale';
 
 declare const WebApp: any;
 
@@ -1181,7 +1182,7 @@ const loadReferrals = async () => {
           {orders.map((order) => (
             <div key={order.id} style={{ background: 'rgba(255,255,255,0.06)', padding: '18px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.08)' }}>
               <strong style={{ color: '#F8FAFC' }}>{order.grade} — {order.volume} м³</strong>
-              <div style={{ color: 'rgba(255,255,255,0.5)', margin: '6px 0', fontSize: '14px' }}>{order.delivery_date} в {order.delivery_time}</div>
+              <div style={{ color: 'rgba(255,255,255,0.5)', margin: '6px 0', fontSize: '14px' }}>{order.delivery_date} в {formatTimeHHMM(order.delivery_time)}</div>
               <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '14px' }}>{order.address}</div>
               <div style={{ marginTop: '12px', fontSize: '19px', fontWeight: '700', color: '#10B981' }}>
                 {order.total_price?.toLocaleString('ru-RU')} ₽

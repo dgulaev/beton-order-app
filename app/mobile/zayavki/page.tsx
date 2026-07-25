@@ -11,6 +11,7 @@ import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle } from '@/app/adminCifra/cardStyles';
 import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { formatTimeHHMM } from '@/lib/ruLocale';
 
 export default function MobileZayavkiPage() {
 const { user } = useUserRole();   // ← Берём роль из провайдера
@@ -464,7 +465,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                   <div style={{ fontWeight: 700, fontSize: '18px', color: '#F1F5F9' }}>
-                    #{order.id} — {order.delivery_time ? String(order.delivery_time).slice(0, 5) : '—'}
+                    #{order.id} — {formatTimeHHMM(order.delivery_time) || '—'}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                     {order.is_questionable && (

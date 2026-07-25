@@ -18,6 +18,7 @@ import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { CARD_BORDER, CARD_GRADIENT_SOFT, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 import { appAlert, appConfirm } from '@/app/adminCifra/components/appDialog';
+import { formatTimeHHMM } from '@/lib/ruLocale';
 
 export default function MobileDashboard() {
   // ==================== 1. СТАТУСЫ И СОСТОЯНИЯ ====================
@@ -948,7 +949,7 @@ useWakeRefresh(() => {
                   const firstOrder = group.orders[0];
                   const isPast = isToday && firstOrder.status !== 'completed' && firstOrder.status !== 'cancelled' && group.time < nowMins;
                   const hiddenByNow = isToday && nowVisualY !== null && Math.abs(nowVisualY - gPos[gi]) < 8;
-                  const timeStr = (firstOrder.delivery_time || '').slice(0, 5) || '—';
+                  const timeStr = formatTimeHHMM(firstOrder.delivery_time) || '—';
                   return (
                     <span key={`lbl${gi}`} style={{
                       position: 'absolute',

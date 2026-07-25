@@ -52,7 +52,6 @@ export async function POST(request: NextRequest) {
     const wasQuestionable =
       order.is_questionable === true || order.is_questionable === 'true';
 
-    // Обновляем статус (+ автоснятие метки «Под вопросом» при уходе в работу)
     const { error: updateError } = await supabase
       .from('orders')
       .update({
@@ -67,13 +66,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, message: updateError.message }, { status: 500 });
     }
 
-    // Записываем в историю
     const actor = userName || 'Диспетчер';
     const historyEntries: any[] = [{
       order_id: numericId,
       action: `Изменил статус заявки с "${STATUS_RU[order.status] || order.status}" на "${STATUS_RU[status] || status}"`,
       user_name: actor,
       user_role: userRole || null,
+      field_name: 'status',
     }];
 
     if (transitioningToProcessing && wasQuestionable) {

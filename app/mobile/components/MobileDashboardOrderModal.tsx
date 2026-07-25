@@ -13,6 +13,7 @@ import {
   volumeModalStyle,
 } from '@/app/adminCifra/cardStyles';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { formatTimeHHMM } from '@/lib/ruLocale';
 
 interface MobileOrderDetailModalProps {
   order: Order | null;
@@ -295,7 +296,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
             <InfoRow label="Телефон" value={order.phone} />
             <InfoRow label="Марка бетона" value={order.grade} accent="#60A5FA" />
             <InfoRow label="Объём" value={`${order.volume} м³`} accent="#10B981" />
-            <InfoRow label="Дата и время" value={`${order.delivery_date} · ${order.delivery_time}`} />
+            <InfoRow label="Дата и время" value={`${order.delivery_date} · ${formatTimeHHMM(order.delivery_time)}`} />
             <InfoRow label="Адрес" value={order.address} />
             {order.comment && (
               <div style={volumeCardSoftStyle({ marginTop: '12px', borderRadius: 10, padding: '12px', color: '#94A3B8', fontSize: '13px', lineHeight: 1.5 })}>

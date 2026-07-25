@@ -14,6 +14,7 @@ import OrderRouteMap from './OrderRouteMap';
 import ModalActionButton from './ModalActionButton';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
 import { modalCloseButtonStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
+import { formatTimeHHMM } from '@/lib/ruLocale';
 
 interface OrderViewModalProps {
   order: any;
@@ -143,7 +144,7 @@ export default function OrderViewModal({ order, onClose, onDuplicate }: OrderVie
               <Field label="Марка бетона" value={order.grade} />
               <Field label="Объём" value={order.volume ? `${order.volume} м³` : null} />
               <Field label="Дата доставки" value={deliveryDate} />
-              <Field label="Время доставки" value={order.delivery_time} />
+              <Field label="Время доставки" value={formatTimeHHMM(order.delivery_time)} />
               <Field label="Адрес доставки" value={order.address} />
               {order.comment && <Field label="Комментарий" value={order.comment} />}
             </div>

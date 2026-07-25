@@ -285,7 +285,8 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    // Сохраняем историю после успешного UPDATE — только реально применённые изменения
+    // История только после успешного UPDATE — иначе в журнале останутся
+    // «изменения», которых в заявке нет. Тост ждёт автора с короткими ретраями.
     if (changes.length > 0) {
       const { error: historyError } = await supabase
         .from('order_history')

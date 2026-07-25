@@ -14,6 +14,7 @@ import {
 } from '@/app/adminCifra/cardStyles';
 import { VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { formatTimeHHMM } from '@/lib/ruLocale';
 
 interface MobileOrderDetailModalProps {
   isOpen: boolean;
@@ -217,7 +218,7 @@ export default function MobileOrderDetailModal({
 
   const handleShare = () => {
     const id = editedOrder.id || '—';
-    const text = `Заявка #${id}\nКлиент: ${editedOrder.organization_name || editedOrder.full_name || '—'}\nТелефон: ${editedOrder.phone || '—'}\nОбъём: ${editedOrder.volume} м³ ${editedOrder.grade || ''}\nДата: ${editedOrder.delivery_date || '—'} ${editedOrder.delivery_time || ''}\nАдрес: ${editedOrder.address || '—'}${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}`;
+    const text = `Заявка #${id}\nКлиент: ${editedOrder.organization_name || editedOrder.full_name || '—'}\nТелефон: ${editedOrder.phone || '—'}\nОбъём: ${editedOrder.volume} м³ ${editedOrder.grade || ''}\nДата: ${editedOrder.delivery_date || '—'} ${formatTimeHHMM(editedOrder.delivery_time)}\nАдрес: ${editedOrder.address || '—'}${editedOrder.comment ? `\nКомментарий: ${editedOrder.comment}` : ''}`;
     if (navigator.share) {
       navigator.share({ title: `Заявка #${id}`, text }).catch(() => navigator.clipboard.writeText(text));
     } else {
@@ -441,8 +442,8 @@ export default function MobileOrderDetailModal({
               </FieldBlock>
               <FieldBlock icon={<Clock size={15} />} label="Время">
                 <input
-                  value={(editedOrder.delivery_time || '').slice(0, 5)}
-                  onChange={e => set('delivery_time', e.target.value)}
+                  value={formatTimeHHMM(editedOrder.delivery_time)}
+                  onChange={e => set('delivery_time', formatTimeHHMM(e.target.value) || e.target.value)}
                   style={INPUT}
                   type="time"
                   step={60}

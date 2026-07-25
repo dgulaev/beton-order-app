@@ -11,6 +11,7 @@ import { reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
 import { useWakeReload } from '@/hooks/useWakeReload';
 import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
 import { formatPhoneInput } from '@/lib/phone';
+import { formatTimeHHMM, ruPastByName } from '@/lib/ruLocale';
 import AppDialogHost, { appConfirm } from './components/appDialog';
 
 // ==================== PERSISTENTНЫЕ УВЕДОМЛЕНИЯ (localStorage) ====================
@@ -412,77 +413,150 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   }, []);
 
   // ==================== 4.2.1 ВЫСОКОУРОВНЕВАЯ ФУНКЦИЯ — ПРИШЛО НОВОЕ СОБЫТИЕ ====================
-  const showVisualNotification = (
-    type: 'new' | 'status' | 'volume' | 'datetime' | 'grade',
+  type OrderNotifType = 'new' | 'status' | 'volume' | 'datetime' | 'grade';
+
+  const isUsableActorName = (name: string, role?: string | null) => {
+    const n = name.trim();
+    const r = String(role || '').toLowerCase();
+    if (!n || n === 'Система' || r === 'system') return false;
+    if (n === 'Сотрудник' || n === 'Клиент') return false;
+    return true;
+  };
+
+  /** Запись истории относится к типу тоста (не путаем автора чужого поля). */
+  const historyRowMatchesNotif = (row: any, type: OrderNotifType): boolean => {
+    const field = String(row?.field_name || '').trim();
+    const action = String(row?.action || '');
+    if (type === 'new') {
+      return action.includes('Создал заявку');
+    }
+    if (type === 'volume') return field === 'volume';
+    if (type === 'grade') return field === 'grade';
+    // Не путать со «статус миксера» в истории рейсов.
+    if (type === 'status') {
+      return field === 'status' || action.includes('статус заявки');
+    }
+    if (type === 'datetime') {
+      return field === 'delivery_date' || field === 'delivery_time';
+    }
+    return false;
+  };
+
+  /**
+   * Имя сотрудника из истории заявки.
+   * История пишется сразу после UPDATE — поэтому короткие ретраи.
+   * Берём только запись по нужному полю, не «последнего кто угодно».
+   */
+  const resolveOrderActorName = async (
+    orderId: string | number,
+    type: OrderNotifType,
+  ): Promise<string | null> => {
+    const delays = [80, 200, 400, 700];
+    for (const delay of delays) {
+      await new Promise((r) => setTimeout(r, delay));
+      try {
+        const res = await fetch(`/api/adminCifra/order-history?orderId=${orderId}&_t=${Date.now()}`);
+        if (!res.ok) continue;
+        const rows = await res.json();
+        if (!Array.isArray(rows) || rows.length === 0) continue;
+
+        for (const row of rows) {
+          if (!historyRowMatchesNotif(row, type)) continue;
+          const name = String(row?.user_name || '').trim();
+          if (!isUsableActorName(name, row?.user_role)) continue;
+          return name;
+        }
+      } catch {
+        /* ретрай */
+      }
+    }
+    return null;
+  };
+
+  const showVisualNotification = async (
+    type: OrderNotifType,
     orderData?: any,
     oldData?: any,
   ) => {
     const orderId = orderData?.id || '—';
 
-    let title = '';
-    let message = '';
-    let icon: NotifIconKey = 'package';
-
     const formatDate = (dateStr: string) => {
       if (!dateStr) return '';
-      const date = new Date(dateStr);
+      // YYYY-MM-DD без времени — парсим как локальную дату, иначе UTC сдвигает день.
+      const m = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      const date = m
+        ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+        : new Date(dateStr);
+      if (Number.isNaN(date.getTime())) return '';
       const day = String(date.getDate()).padStart(2, '0');
       const month = String(date.getMonth() + 1).padStart(2, '0');
       const year = date.getFullYear();
       return `${day}-${month}-${year}`;
     };
 
+    // Автор сначала — имя идёт в заголовок: «Дмитрий Гулаев изменил …»
+    let actor: string | null = null;
+    if (orderId !== '—') {
+      actor = await resolveOrderActorName(orderId, type);
+    }
+    if (!actor && type === 'new') {
+      const curator = String(orderData?.curator_name || '').trim();
+      if (isUsableActorName(curator)) actor = curator;
+    }
+    const who = actor || 'Сотрудник';
+    const created = ruPastByName(who, 'создал', 'создала');
+    const changed = ruPastByName(who, 'изменил', 'изменила');
+
+    let title = '';
+    let message = '';
+    let icon: NotifIconKey = 'package';
+
     if (type === 'new') {
       icon = 'package';
-      title = 'Новая заявка!';
+      title = `${who} ${created} заявку`;
       const deliveryStr = formatDate(orderData?.delivery_date);
       message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} м³`;
       if (deliveryStr) message += ` — на ${deliveryStr}`;
-    } 
-    else if (type === 'status') {
-      title = 'Статус изменён';
+    } else if (type === 'status') {
       const statusMap: Record<string, string> = {
-        'new': 'Новая', 'NEW': 'Новая',
-        'processing': 'В работе',
-        'completed': 'Выполнена',
-        'cancelled': 'Отменена'
+        new: 'Новая',
+        NEW: 'Новая',
+        processing: 'В работе',
+        completed: 'Выполнена',
+        cancelled: 'Отменена',
       };
       const statusIcon: Record<string, NotifIconKey> = {
-        'new': 'package',
-        'processing': 'play',
-        'completed': 'check',
-        'cancelled': 'cancel',
+        new: 'package',
+        processing: 'play',
+        completed: 'check',
+        cancelled: 'cancel',
       };
       const rawStatus = (orderData?.status || '').toString().toLowerCase();
       icon = statusIcon[rawStatus] || 'refresh';
       const statusText = statusMap[rawStatus] || orderData?.status || '—';
+      title = `${who} ${changed} статус`;
       message = `Заявка №${orderId} → ${statusText}`;
-    } 
-    else if (type === 'volume') {
+    } else if (type === 'volume') {
       icon = 'package';
-      title = 'Изменён объём';
+      title = `${who} ${changed} объём`;
       message = `Заявка №${orderId} — было ${oldData?.volume || '?'} → стало ${orderData?.volume} м³`;
-    } 
-    else if (type === 'datetime') {
+    } else if (type === 'datetime') {
       icon = 'clock';
-      title = 'Изменены дата и время';
+      title = `${who} ${changed} дату и время`;
       const deliveryStr = formatDate(orderData?.delivery_date);
-      message = `Заявка №${orderId} — ${deliveryStr}`;
-      if (orderData?.delivery_time) {
-        message += ` ${orderData.delivery_time}`;
-      }
-    }
-    else if (type === 'grade') {
+      const timeStr = orderData?.delivery_time ? formatTimeHHMM(orderData.delivery_time) : '';
+      message = `Заявка №${orderId}`;
+      if (deliveryStr) message += ` — ${deliveryStr}`;
+      if (timeStr) message += ` ${timeStr}`;
+    } else if (type === 'grade') {
       icon = 'refresh';
       const oldGrade = String(oldData?.grade ?? '').trim() || '—';
       const newGrade = String(orderData?.grade ?? '').trim() || '—';
-      title = `Изменение марки с ${oldGrade} на ${newGrade}`;
-      const deliveryStr = formatDate(orderData?.delivery_date);
-      message = `№${orderId}`;
+      title = `${who} ${changed} марку`;
+      message = `Заявка №${orderId} — ${oldGrade} → ${newGrade}`;
       if (orderData?.volume != null && orderData?.volume !== '') {
-        message += ` — ${orderData.volume} м³`;
+        message += ` · ${orderData.volume} м³`;
       }
-      if (deliveryStr) message += ` — на ${deliveryStr}`;
     }
 
     // Сохраняем в localStorage — переживёт перезагрузку страницы
@@ -509,24 +583,19 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     enabled: !!userRole && staffRoles.includes(userRole),
     onNewOrder: (order) => {
       setNewOrdersCount((prev) => prev + 1);
-      playNotificationSound();
-      showVisualNotification('new', order);
+      void showVisualNotification('new', order);
     },
     onStatusChange: (order) => {
-      playNotificationSound();
-      showVisualNotification('status', order);
+      void showVisualNotification('status', order);
     },
     onVolumeChange: (order, oldOrder) => {
-      playNotificationSound();
-      showVisualNotification('volume', order, oldOrder);
+      void showVisualNotification('volume', order, oldOrder);
     },
     onDateTimeChange: (order) => {
-      playNotificationSound();
-      showVisualNotification('datetime', order);
+      void showVisualNotification('datetime', order);
     },
     onGradeChange: (order, oldOrder) => {
-      playNotificationSound();
-      showVisualNotification('grade', order, oldOrder);
+      void showVisualNotification('grade', order, oldOrder);
     },
   });
 

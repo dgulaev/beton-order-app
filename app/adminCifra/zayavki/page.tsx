@@ -32,7 +32,7 @@ import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import ModalSelect from '@/app/adminCifra/components/ModalSelect';
 import { InstantFieldHint, VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
-import { formatRuDateWithWeekday, pluralWord } from '@/lib/ruLocale';
+import { formatRuDateWithWeekday, formatTimeHHMM, pluralWord } from '@/lib/ruLocale';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
@@ -1010,7 +1010,7 @@ useEffect(() => {
 Марка: ${order.grade}
 Объём: ${order.volume} м³
 Дата: ${order.delivery_date}
-Время: ${order.delivery_time}
+Время: ${formatTimeHHMM(order.delivery_time)}
 
 Адрес: ${order.address}
 
@@ -2375,7 +2375,7 @@ ${order.customer_type?.includes('Юридическое')
               {order.delivery_date ? new Date(order.delivery_date + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '—'}
             </div>
             <div style={{ fontSize: '12px', color: '#64748B' }}>
-              {(order as any).delivery_time ? String((order as any).delivery_time).slice(0, 5) : ''}
+              {formatTimeHHMM((order as any).delivery_time)}
             </div>
           </div>
         )}
@@ -2383,7 +2383,7 @@ ${order.customer_type?.includes('Юридическое')
         {/* Время — только вне режима поиска */}
         {!searchMode && (
         <div style={{ width: '76px', fontWeight: '700', fontSize: '15px' }}>
-          {order.delivery_time}
+          {formatTimeHHMM(order.delivery_time)}
         </div>
         )}
 

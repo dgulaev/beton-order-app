@@ -5,7 +5,7 @@ import { X } from 'lucide-react';
 import { Order } from './hooks/useCalendarOrders';
 import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
 import { CARD_VOLUME_SOFT, modalCloseButtonStyle, volumeCardSoftStyle, volumeModalStyle } from './cardStyles';
-import { formatRuDateWithWeekday, pluralRu } from '@/lib/ruLocale';
+import { formatRuDateWithWeekday, formatTimeHHMM, pluralRu } from '@/lib/ruLocale';
 
 interface StatusConfig {
   label: string;
@@ -442,7 +442,7 @@ export default function Calendar({ onClose, orders: externalOrders, onSelectOrde
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', alignItems: 'center' }}>
                       <span style={{ color: '#10B981', fontWeight: '600' }}>{order.volume} м³</span>
-                      <span style={{ color: '#64748B', fontSize: '13px' }}>{(order as any).delivery_time || ''}</span>
+                      <span style={{ color: '#64748B', fontSize: '13px' }}>{formatTimeHHMM((order as any).delivery_time)}</span>
                     </div>
                   </div>
                 );

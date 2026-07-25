@@ -1,6 +1,7 @@
 // app/api/order/send-notification/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { formatTimeHHMM } from '@/lib/ruLocale';
 
 const BOT_TOKEN = process.env.MAX_BOT_TOKEN;
 const CHAT_ID = process.env.MANAGER_CHAT_ID;
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
 
 📌 **Марка:** ${order.grade}
 📦 **Объём:** ${order.volume} м³
-📅 **Дата:** ${order.delivery_date} в ${order.delivery_time}
+📅 **Дата:** ${order.delivery_date} в ${formatTimeHHMM(order.delivery_time)}
 
 📍 **Адрес:** ${order.address}
 

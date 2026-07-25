@@ -13,6 +13,7 @@ import ModalTimeInput from './ModalTimeInput';
 import { nowTimeHHMM } from './modalPickerShared';
 import ModalSelect from './ModalSelect';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { formatTimeHHMM } from '@/lib/ruLocale';
 
 interface NewOrderModalProps {
   isOpen: boolean;                    // ← обязательно
@@ -80,7 +81,7 @@ export default function NewOrderModal({
         grade: initialData.grade || 'М300',
         volume: initialData.volume?.toString() || '',
         deliveryDate: deliveryDateRaw ? String(deliveryDateRaw).split('T')[0] : new Date().toISOString().split('T')[0],
-        deliveryTime: initialData.deliveryTime || initialData.delivery_time || nowTimeHHMM(),
+        deliveryTime: formatTimeHHMM(initialData.deliveryTime || initialData.delivery_time) || nowTimeHHMM(),
         address: initialData.address || '',
         customerType: initialData.customerType || 'physical',
         organizationName: initialData.organizationName || initialData.organization_name || '',

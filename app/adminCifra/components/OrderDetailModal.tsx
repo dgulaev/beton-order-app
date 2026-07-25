@@ -11,6 +11,7 @@ import { nowTimeHHMM } from './modalPickerShared';
 import ModalSelect from './ModalSelect';
 import { CARD_BORDER, modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { formatTimeHHMM } from '@/lib/ruLocale';
 
 interface OrderDetailModalProps {
   order: Order | null;
@@ -650,7 +651,7 @@ const formatVolume = (value: number | string) => {
                 <div style={{ fontSize: '20px', fontWeight: '700', color: '#10B981' }}>{order.volume} м³</div>
 
                 <div style={{ color: '#94A3B8' }}>Дата и время</div>
-                <div>{order.delivery_date} • {order.delivery_time}</div>
+                <div>{order.delivery_date} • {formatTimeHHMM(order.delivery_time)}</div>
 
                 <div style={{ color: '#94A3B8' }}>Адрес доставки</div>
                 <div style={{ fontWeight: '600', fontSize: '15px' }}>{order.address}</div>

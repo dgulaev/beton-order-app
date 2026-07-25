@@ -15,7 +15,7 @@ import {
   buildDailyMixerReportText,
   formatDailyReportDateLabel,
 } from '@/lib/dailyMixerReport';
-import { formatRuDateWithWeekday, pluralRu, pluralWord } from '@/lib/ruLocale';
+import { formatRuDateWithWeekday, formatTimeHHMM, pluralRu, pluralWord } from '@/lib/ruLocale';
 import { CARD_BORDER, modalCloseButtonStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import ModalSelect from '../components/ModalSelect';
 import DailyMixerReportModal from '../components/DailyMixerReportModal';
@@ -574,7 +574,7 @@ const fmtDelayMins = (mins: number) =>
         groups.push({
           orderId: order.id,
           client: order.organization_name || order.full_name || '—',
-          deliveryTime: order.delivery_time || '—',
+          deliveryTime: formatTimeHHMM(order.delivery_time) || '—',
           grade: String((order as any).grade || '').trim() || '—',
           mixers: mixersForOrder
         });
@@ -714,7 +714,7 @@ const planOrdersDetail = useMemo(() => {
       return {
         id: o.id,
         client: (o as any).organization_name || (o as any).full_name || '—',
-        time: o.delivery_time || '—',
+        time: formatTimeHHMM(o.delivery_time) || '—',
         status: o.status,
         planVol,
         unloadedCount,
@@ -1420,7 +1420,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
             fontSize: '12.5px',
           }}>
             <span style={{ color: '#CBD5E1', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              #{order.id} · {order.delivery_time}
+              #{order.id} · {formatTimeHHMM(order.delivery_time)}
               {(order as any).travelTime ? (
                 <span style={{ color: '#475569', marginLeft: '4px', fontWeight: '400' }}>
                   ~{(order as any).travelTime}м пути
@@ -1772,7 +1772,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   >
     {todayOrders.length > 0 ? todayOrders.map((order: Order) => {
   const client = (order as any).organization_name || (order as any).full_name || '—';
-  const time = order.delivery_time || '00:00';
+  const time = formatTimeHHMM(order.delivery_time) || '00:00';
   const [h, m] = time.split(':').map(Number);
   const startMinutes = h * 60 + m;
 
@@ -2254,7 +2254,7 @@ const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVo
                    overflow: 'hidden',
                    textOverflow: 'ellipsis',
                  }}>
-                   {mixer.time && mixer.time !== '—' ? mixer.time : '—'} • {mixer.volume} м³
+                   {mixer.time && mixer.time !== '—' ? formatTimeHHMM(mixer.time) : '—'} • {mixer.volume} м³
                  </div>
 
                  {/* Статус — кастомный select с цветом по статусу */}
@@ -2577,7 +2577,7 @@ const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVo
                                       textOverflow: 'ellipsis',
                                       whiteSpace: 'nowrap',
                                     }}>
-                                      #{order.id} · {order.delivery_time || '—'} · {client}
+                                      #{order.id} · {formatTimeHHMM(order.delivery_time) || '—'} · {client}
                                     </div>
                                     <div style={{ fontSize: '13px', color: '#94A3B8', marginTop: '4px' }}>
                                       {(order as any).grade || '—'} · {fmtM3(Number(order.volume || 0))} м³
@@ -3055,7 +3055,7 @@ const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVo
                               textOverflow: 'ellipsis',
                               whiteSpace: 'nowrap',
                             }}>
-                              #{order.id} · {order.delivery_time || '—'} · {client}
+                              #{order.id} · {formatTimeHHMM(order.delivery_time) || '—'} · {client}
                             </div>
                             <div style={{ marginTop: '4px' }}>
                               <span style={{

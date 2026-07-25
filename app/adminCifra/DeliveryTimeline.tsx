@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useCalendarOrders, Order } from './hooks/useCalendarOrders';
-import { pluralWord } from '@/lib/ruLocale';
+import { formatTimeHHMM, pluralWord } from '@/lib/ruLocale';
 
 export default function DeliveryTimeline() {
   const today = new Date().toISOString().split('T')[0];
@@ -64,7 +64,7 @@ export default function DeliveryTimeline() {
               }}
             >
               <div style={{ width: '80px', fontSize: '15px', fontWeight: '600', color: '#fff' }}>
-                {order.delivery_time || '—'}
+                {formatTimeHHMM(order.delivery_time) || '—'}
               </div>
 
               <div style={{ flex: 1 }}>

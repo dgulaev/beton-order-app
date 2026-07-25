@@ -7,6 +7,7 @@ import {
   logisticsOffsetMinutes,
   sortMixersByLogisticsTime,
 } from '@/lib/mixerTimeSort';
+import { formatTimeHHMM } from '@/lib/ruLocale';
 
 interface DelayInfo { id: string|number; delayMinutes: number; delayText: string; }
 
@@ -374,7 +375,7 @@ export default function VerticalTimelinePanel({
         {/* ── Order groups ── */}
         {groups.map((group, gi) => {
           const hiddenByNow  = isToday && nowVisualY !== null && Math.abs(nowVisualY - gPos[gi]) < 8;
-          const timeStr      = (group.orders[0].delivery_time || '').slice(0, 5);
+          const timeStr      = formatTimeHHMM(group.orders[0].delivery_time);
           const isPastGroup  = isToday && group.time < nowMins;
 
           // Cumulative Y offsets for stacked same-time orders
@@ -678,7 +679,7 @@ export default function VerticalTimelinePanel({
             {tooltip.data.time && (
               <div style={{ color:'#7A99B8' }}>
                 Отправка: <span style={{ color:'#E2E8F0', fontWeight:600 }}>
-                  {String(tooltip.data.time).slice(0, 5)}
+                  {formatTimeHHMM(String(tooltip.data.time))}
                 </span>
               </div>
             )}
@@ -761,7 +762,7 @@ export default function VerticalTimelinePanel({
             <div style={{ display:'flex', gap:'16px', marginBottom:'8px' }}>
               <div><span style={{ color:'#4A6080' }}>Марка</span><br/><strong style={{ color:'#E2E8F0' }}>{grade}</strong></div>
               <div><span style={{ color:'#4A6080' }}>Объём</span><br/><strong style={{ color:'#E2E8F0' }}>{v} м³</strong></div>
-              <div><span style={{ color:'#4A6080' }}>Время</span><br/><strong style={{ color:'#E2E8F0' }}>{(o.delivery_time||'').slice(0,5)}</strong></div>
+              <div><span style={{ color:'#4A6080' }}>Время</span><br/><strong style={{ color:'#E2E8F0' }}>{formatTimeHHMM(o.delivery_time)}</strong></div>
             </div>
 
             {/* Logistics progress */}

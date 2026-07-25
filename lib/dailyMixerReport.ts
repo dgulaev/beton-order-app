@@ -5,7 +5,7 @@
  */
 
 import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
-import { formatRuDateWithWeekday } from '@/lib/ruLocale';
+import { formatRuDateWithWeekday, formatTimeHHMM } from '@/lib/ruLocale';
 
 export type DailyReportMixerLine = {
   number: string;
@@ -102,13 +102,13 @@ export function buildDailyMixerReportGroups(opts: {
     return {
       orderId: order.id,
       client: String(order.organization_name || order.full_name || '—').trim() || '—',
-      deliveryTime: String(order.delivery_time || '—'),
+      deliveryTime: formatTimeHHMM(order.delivery_time) || '—',
       grade: String(order.grade || '').trim() || '—',
       orderVolume: Number(order.volume || 0),
       orderStatus: String(order.status || ''),
       mixers: sorted.map((m) => ({
         number: String(m.number || m.mixer_name || '—'),
-        time: m.time && m.time !== '—' ? String(m.time) : '—',
+        time: m.time && m.time !== '—' ? formatTimeHHMM(String(m.time)) || '—' : '—',
         volume: Number(m.volume || 0),
         status: String(m.status || '—'),
       })),

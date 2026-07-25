@@ -249,7 +249,10 @@ function orderDateStr(o: any): string {
 }
 
 function fmtTime(t?: string) {
-  return t ? String(t).slice(0, 5) : '';
+  // Секунды в UI не показываем (в БД иногда приходит HH:MM:SS)
+  if (!t) return '';
+  const m = String(t).match(/^(\d{1,2}):(\d{2})/);
+  return m ? `${m[1].padStart(2, '0')}:${m[2]}` : String(t).slice(0, 5);
 }
 
 /** Элегантная пилюля испытания: «7 сут» / «28 сут» */
