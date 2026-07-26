@@ -96,47 +96,94 @@ async function enrichSiloOpsWithOrders(
   });
 }
 
+type ItemFilter = 'all' | 'silo1' | 'silo2' | 'silo3' | 'additives' | 'fbs';
+
+function parseItemFilter(raw: string | null): ItemFilter {
+  const v = String(raw || 'all').toLowerCase();
+  if (v === 'silo1' || v === 'silo2' || v === 'silo3' || v === 'additives' || v === 'fbs') {
+    return v;
+  }
+  return 'all';
+}
+
+function applyItemFilter(query: any, item: ItemFilter, scope: string | null) {
+  // Журнал силосов (модалка): только цементные силосы, опционально один из них
+  if (scope === 'silos') {
+    if (item === 'silo1') return query.ilike('item_type', '%Силос 1%');
+    if (item === 'silo2') return query.ilike('item_type', '%Силос 2%');
+    if (item === 'silo3') return query.ilike('item_type', '%Силос 3%');
+    return query.ilike('item_type', '%Силос%');
+  }
+
+  if (item === 'silo1') return query.ilike('item_type', '%Силос 1%');
+  if (item === 'silo2') return query.ilike('item_type', '%Силос 2%');
+  if (item === 'silo3') return query.ilike('item_type', '%Силос 3%');
+  if (item === 'additives') {
+    return query.or(
+      'item_type.ilike.%ПФМ%,item_type.ilike.%Линомикс%,item_type.ilike.%Добавка%,item_type.ilike.%НЛК%',
+    );
+  }
+  if (item === 'fbs') {
+    return query.or('unit.eq.шт,item_type.ilike.%ФБС%,item_type.ilike.%блок%');
+  }
+  return query;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const scope = request.nextUrl.searchParams.get('scope');
     const dateParam = request.nextUrl.searchParams.get('date');
     const dateKey =
       dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : null;
+    const item = parseItemFilter(request.nextUrl.searchParams.get('item'));
     const limitRaw = Number(request.nextUrl.searchParams.get('limit') || 40);
     const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 40, 1), 1000);
+    const offsetRaw = Number(request.nextUrl.searchParams.get('offset') || 0);
+    const offset = Math.max(0, Number.isFinite(offsetRaw) ? Math.floor(offsetRaw) : 0);
+    // paged=1 — новый формат { items, hasMore }; иначе массив (обратная совместимость)
+    const paged = request.nextUrl.searchParams.get('paged') === '1';
 
     let query = supabase
       .from('warehouse_operations')
       .select('*')
-      .order('created_at', { ascending: false })
-      .limit(limit);
+      .order('created_at', { ascending: false });
 
-    // Журнал силосов: только операции по цементным силосам
-    if (scope === 'silos') {
-      query = query.ilike('item_type', '%Силос%');
-    }
+    query = applyItemFilter(query, item, scope);
 
     if (dateKey) {
       const { start, end } = moscowDayBounds(dateKey);
       query = query.gte('created_at', start).lt('created_at', end);
     }
 
+    // Берём +1, чтобы понять, есть ли ещё страница
+    query = query.range(offset, offset + limit);
+
     const { data, error } = await query;
 
     if (error) {
       console.error('GET history error:', error);
-      return NextResponse.json([]);
+      return NextResponse.json(paged ? { items: [], hasMore: false } : []);
     }
 
     let rows = data || [];
+    const hasMore = rows.length > limit;
+    if (hasMore) rows = rows.slice(0, limit);
+
     if (scope === 'silos' && dateKey) {
       rows = await enrichSiloOpsWithOrders(rows, dateKey);
     }
 
+    if (paged) {
+      return NextResponse.json({ items: rows, hasMore, offset, limit });
+    }
     return NextResponse.json(rows);
   } catch (error) {
     console.error('GET history error:', error);
-    return NextResponse.json([]);
+    return NextResponse.json(
+      request.nextUrl.searchParams.get('paged') === '1'
+        ? { items: [], hasMore: false }
+        : [],
+    );
   }
 }
 

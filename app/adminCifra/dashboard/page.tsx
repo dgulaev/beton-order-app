@@ -1154,7 +1154,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
         gap: 7,
         boxSizing: 'border-box',
         height: 26,
-        color: '#F87171',
+        color: '#93C5FD',
         fontWeight: 600,
         fontSize: 13.5,
         lineHeight: 1,
@@ -1162,13 +1162,15 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
         borderRadius: 9999,
         cursor: 'pointer',
         whiteSpace: 'nowrap',
-        border: '1px solid rgba(248,113,113,0.45)',
-        background: 'linear-gradient(165deg, rgba(248,113,113,0.22) 0%, rgba(15,23,42,0.95) 55%, rgba(15,23,42,1) 100%)',
-        boxShadow: '0 8px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(248,113,113,0.35), inset 0 0 22px rgba(248,113,113,0.16)',
+        border: '1px solid rgba(96,165,250,0.55)',
+        background:
+          'radial-gradient(120% 140% at 50% 0%, rgba(147,197,253,0.38) 0%, rgba(59,130,246,0.18) 42%, rgba(15,23,42,0.92) 78%), linear-gradient(165deg, rgba(59,130,246,0.28) 0%, rgba(30,58,138,0.22) 45%, rgba(15,23,42,0.98) 100%)',
+        boxShadow:
+          '0 8px 18px rgba(0,0,0,0.28), 0 0 20px rgba(59,130,246,0.18), inset 0 1px 0 rgba(191,219,254,0.45), inset 0 0 18px rgba(96,165,250,0.28), inset 0 -10px 20px rgba(15,23,42,0.45)',
         transform: 'translateY(3px)',
       })}
     >
-      <CalendarDays size={15} strokeWidth={2} color="#F87171" />
+      <CalendarDays size={15} strokeWidth={2} color="#93C5FD" />
       {formatRuDateWithWeekday(new Date(), 'nominative')}
     </div>
   </div>

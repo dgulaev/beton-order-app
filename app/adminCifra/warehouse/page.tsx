@@ -100,8 +100,54 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
   /** Средний расход добавок за 7 дней (л/день) — для «хватит на ~N дней». */
   const [avgDailyLiters, setAvgDailyLiters] = useState({ pfm: 0, linomix: 0 });
   const [operationHistory, setOperationHistory] = useState<any[]>([]);
+  /** Фильтр ленты: все / силос / добавки / ФБС */
+  const [historyItemFilter, setHistoryItemFilter] = useState<
+    'all' | 'silo1' | 'silo2' | 'silo3' | 'additives' | 'fbs'
+  >('all');
+  /** Дата ленты YYYY-MM-DD (МСК) или '' = все дни */
+  const [historyDateFilter, setHistoryDateFilter] = useState('');
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const historyScrollRef = useRef<HTMLDivElement | null>(null);
+  const historyLoadMoreRef = useRef<HTMLDivElement | null>(null);
+  const historyLenRef = useRef(0);
+  const historyHasMoreRef = useRef(false);
+  const historyFetchLockRef = useRef(false);
   /** Плотности из настроек лаборатории (т→л / кг→л). */
   const [additiveDensities, setAdditiveDensities] = useState<AdditiveDensities>({});
+
+  const HISTORY_PAGE = 30;
+  historyLenRef.current = operationHistory.length;
+  historyHasMoreRef.current = historyHasMore;
+
+  const historyOpMatchesFilters = useCallback(
+    (op: any) => {
+      const item = String(op?.item_type || '');
+      if (historyItemFilter === 'silo1' && !/силос\s*1/i.test(item)) return false;
+      if (historyItemFilter === 'silo2' && !/силос\s*2/i.test(item)) return false;
+      if (historyItemFilter === 'silo3' && !/силос\s*3/i.test(item)) return false;
+      if (historyItemFilter === 'additives') {
+        if (!/(пфм|линомикс|добавка|нлк)/i.test(item)) return false;
+      }
+      if (historyItemFilter === 'fbs') {
+        if (!/(фбс|блок)/i.test(item) && String(op?.unit || '') !== 'шт') return false;
+      }
+      if (historyDateFilter) {
+        const iso = op?.created_at || op?.time;
+        if (!iso) return false;
+        const key = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Europe/Moscow',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(new Date(iso));
+        if (key !== historyDateFilter) return false;
+      }
+      return true;
+    },
+    [historyItemFilter, historyDateFilter],
+  );
 
   /** Анимация кубиков добавок при заходе: idle → running → done (один раз). */
   const [additiveCubesAnim, setAdditiveCubesAnim] = useState<'idle' | 'running' | 'done'>('idle');
@@ -411,29 +457,82 @@ const loadTodayConsumption = async () => {
   };
 
   // ==================== 2.2 ЗАГРУЗКА ИСТОРИИ ====================
-  const loadOperationHistory = async () => {
-    try {
-      const res = await fetch('/api/adminCifra/warehouse/history', {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' }
-      });
-      if (res.ok) {
+  const loadOperationHistory = useCallback(
+    async (opts?: { append?: boolean }) => {
+      const append = !!opts?.append;
+      if (historyFetchLockRef.current) return;
+      if (append && !historyHasMoreRef.current) return;
+
+      historyFetchLockRef.current = true;
+      if (append) setHistoryLoadingMore(true);
+      else setHistoryLoading(true);
+
+      try {
+        const offset = append ? historyLenRef.current : 0;
+        const qs = new URLSearchParams({
+          paged: '1',
+          limit: String(HISTORY_PAGE),
+          offset: String(offset),
+          item: historyItemFilter,
+        });
+        if (historyDateFilter) qs.set('date', historyDateFilter);
+
+        const res = await fetch(`/api/adminCifra/warehouse/history?${qs}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' },
+        });
+        if (!res.ok) return;
         const data = await res.json();
-        setOperationHistory(data || []);
+        const items = Array.isArray(data) ? data : data?.items || [];
+        const hasMore = Array.isArray(data) ? items.length >= HISTORY_PAGE : !!data?.hasMore;
+
+        setOperationHistory((prev) => (append ? [...prev, ...items] : items));
+        setHistoryHasMore(hasMore);
+        historyHasMoreRef.current = hasMore;
+      } catch (err) {
+        console.error('Ошибка загрузки истории:', err);
+      } finally {
+        historyFetchLockRef.current = false;
+        if (append) setHistoryLoadingMore(false);
+        else setHistoryLoading(false);
       }
-    } catch (err) {
-      console.error('Ошибка загрузки истории:', err);
-    }
-  };
+    },
+    [historyDateFilter, historyItemFilter],
+  );
 
   // ==================== 2.3 ЗАГРУЗКА ДАННЫХ И ИНИЦИАЛИЗАЦИЯ ====================
   useEffect(() => {
     loadWarehouse();
     loadTodayConsumption();
-    loadOperationHistory();
-
     console.log('✅ WarehousePage загружен');
   }, []);
+
+  // Лента: первичная загрузка и сброс при смене фильтров
+  useEffect(() => {
+    historyFetchLockRef.current = false;
+    setOperationHistory([]);
+    setHistoryHasMore(true);
+    historyHasMoreRef.current = true;
+    historyLenRef.current = 0;
+    void loadOperationHistory({ append: false });
+  }, [historyItemFilter, historyDateFilter, loadOperationHistory]);
+
+  // Подгрузка при скролле к низу ленты
+  useEffect(() => {
+    const root = historyScrollRef.current;
+    const sentinel = historyLoadMoreRef.current;
+    if (!root || !sentinel || !historyHasMore) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          void loadOperationHistory({ append: true });
+        }
+      },
+      { root, rootMargin: '100px', threshold: 0 },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [loadOperationHistory, operationHistory.length, historyHasMore]);
 
   // Poll остатков/алертов (как OperatorSilosBar): realtime ловит смену статуса
   // рейса, но глубокий минус после ручного списания/transfer на другой вкладке
@@ -1548,7 +1647,10 @@ const removeLastCube = async (index: number) => {
       time: new Date().toISOString(),
     };
 
-    setOperationHistory(prev => [entry, ...prev].slice(0, 40));
+    if (historyOpMatchesFilters(entry)) {
+      setOperationHistory((prev) => [entry, ...prev]);
+      historyLenRef.current += 1;
+    }
 
     // Persist в БД (не блокируем UI)
     fetch('/api/adminCifra/warehouse/history', {
@@ -1614,7 +1716,7 @@ const removeLastCube = async (index: number) => {
         style={{
           display: 'flex',
           alignItems: 'stretch',
-          gap: '16px',
+          gap: '12px',
           flexShrink: 0,
           minHeight: 0,
         }}
@@ -1625,7 +1727,7 @@ const removeLastCube = async (index: number) => {
           minWidth: 0,
           display: 'flex',
           flexDirection: 'column',
-          gap: '14px',
+          gap: '12px',
         }}
       >
       {/* ==================== МЕТРИКИ РАСХОДА СЕГОДНЯ (только над левой колонкой) ==================== */}
@@ -1673,9 +1775,9 @@ const removeLastCube = async (index: number) => {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr) 420px',
-          columnGap: '16px',
-          rowGap: '20px',
+          gridTemplateColumns: 'minmax(0, 1fr) 360px',
+          columnGap: '12px',
+          rowGap: '16px',
           alignItems: 'stretch',
           flexShrink: 0,
         }}
@@ -2591,8 +2693,8 @@ const removeLastCube = async (index: number) => {
           {/* Лента справа: от верха (линия табов/KPI) до низа левого блока. */}
           <div
             style={{
-              flex: '0 0 300px',
-              width: 300,
+              flex: '0 0 360px',
+              width: 360,
               alignSelf: 'stretch',
               position: 'relative',
             }}
@@ -2618,7 +2720,7 @@ const removeLastCube = async (index: number) => {
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: '8px',
-                  marginBottom: '12px',
+                  marginBottom: '10px',
                   flexShrink: 0,
                 }}
               >
@@ -2626,16 +2728,96 @@ const removeLastCube = async (index: number) => {
                   Лента операций
                 </h2>
                 <span style={{ fontSize: '11px', color: '#64748B', whiteSpace: 'nowrap' }}>
-                  {Math.min(operationHistory.length, 40)}
+                  {operationHistory.length}
+                  {historyHasMore ? '+' : ''}
                 </span>
               </div>
 
-              {operationHistory.length === 0 ? (
+              {/* Дата + фильтры */}
+              <div style={{ flexShrink: 0, marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <input
+                  type="date"
+                  value={historyDateFilter}
+                  onChange={(e) => setHistoryDateFilter(e.target.value)}
+                  title="Фильтр по дате"
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '7px 10px',
+                    borderRadius: 10,
+                    border: CARD_BORDER,
+                    background: '#0F172A',
+                    color: '#E2E8F0',
+                    fontSize: 12,
+                    colorScheme: 'dark',
+                    outline: 'none',
+                  }}
+                />
+                {historyDateFilter ? (
+                  <button
+                    type="button"
+                    onClick={() => setHistoryDateFilter('')}
+                    style={{
+                      alignSelf: 'flex-start',
+                      padding: 0,
+                      border: 'none',
+                      background: 'transparent',
+                      color: '#93C5FD',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Сбросить дату
+                  </button>
+                ) : null}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                  {(
+                    [
+                      { key: 'all', label: 'Все' },
+                      { key: 'silo1', label: 'Силос 1' },
+                      { key: 'silo2', label: 'Силос 2' },
+                      { key: 'silo3', label: 'Силос 3' },
+                      { key: 'additives', label: 'Добавки' },
+                      { key: 'fbs', label: 'ФБС' },
+                    ] as const
+                  ).map((f) => {
+                    const on = historyItemFilter === f.key;
+                    return (
+                      <button
+                        key={f.key}
+                        type="button"
+                        onClick={() => setHistoryItemFilter(f.key)}
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: 9999,
+                          border: on ? '1px solid rgba(96,165,250,0.55)' : CARD_BORDER,
+                          background: on ? 'rgba(59,130,246,0.22)' : 'rgba(15,23,42,0.65)',
+                          color: on ? '#BFDBFE' : '#94A3B8',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {f.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {historyLoading && operationHistory.length === 0 ? (
                 <div style={{ color: '#64748B', fontSize: '12px', padding: '8px 2px' }}>
-                  Пока нет операций — внесения и списания появятся здесь
+                  Загрузка…
+                </div>
+              ) : operationHistory.length === 0 ? (
+                <div style={{ color: '#64748B', fontSize: '12px', padding: '8px 2px' }}>
+                  Нет операций по выбранным фильтрам
                 </div>
               ) : (
                 <div
+                  ref={historyScrollRef}
                   className="scroll-hidden"
                   style={{
                     display: 'flex',
@@ -2735,6 +2917,30 @@ const removeLastCube = async (index: number) => {
                       </div>
                     );
                   })}
+                  <div ref={historyLoadMoreRef} style={{ minHeight: 1, padding: '4px 0 8px', textAlign: 'center' }}>
+                    {historyLoadingMore ? (
+                      <span style={{ fontSize: 11, color: '#64748B' }}>Загрузка…</span>
+                    ) : historyHasMore ? (
+                      <button
+                        type="button"
+                        onClick={() => void loadOperationHistory({ append: true })}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 8,
+                          border: CARD_BORDER,
+                          background: 'rgba(15,23,42,0.8)',
+                          color: '#93C5FD',
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Ещё
+                      </button>
+                    ) : operationHistory.length > 0 ? (
+                      <span style={{ fontSize: 11, color: '#475569' }}>Все операции загружены</span>
+                    ) : null}
+                  </div>
                 </div>
               )}
             </div>
