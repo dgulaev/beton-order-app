@@ -4,6 +4,27 @@ import { useEffect, useRef, useState } from 'react';
 import { Bell, X, CheckCheck, Package, AlertCircle } from 'lucide-react';
 import { useMobileNotifications, MobileNotification } from '@/hooks/useMobileNotifications';
 import { volumeCardSoftStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
+import { LEAD_SOURCE_LABEL } from '@/lib/leads';
+import { DEMAND_SOURCE_LABEL } from '@/lib/demand/labels';
+
+const NOTIF_TYPE_LABEL: Record<string, string> = {
+  new_order: 'Заявка',
+  field_change: 'Изменение',
+  new_lead: 'Лид',
+  demand_hit: 'Спрос',
+};
+
+/** Подменяет англ. ключи источников в заголовках старых нотисов */
+function localizeNotifTitle(title: string): string {
+  let t = title;
+  for (const [key, label] of Object.entries(LEAD_SOURCE_LABEL)) {
+    t = t.replace(new RegExp(`\\b${key}\\b`, 'g'), label);
+  }
+  for (const [key, label] of Object.entries(DEMAND_SOURCE_LABEL)) {
+    t = t.replace(new RegExp(`\\b${key}\\b`, 'g'), label);
+  }
+  return t;
+}
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -27,8 +48,8 @@ function NotifCard({
   n: MobileNotification;
   onDismiss: (id: number) => void;
 }) {
-  const isNewOrder = n.type === 'new_order';
-  const accentColor = isNewOrder ? '#10B981' : '#60A5FA';
+  const isNewOrder = n.type === 'new_order' || n.type === 'new_lead' || n.type === 'demand_hit';
+  const accentColor = n.type === 'demand_hit' ? '#34D399' : isNewOrder ? '#10B981' : '#60A5FA';
 
   return (
     <div
@@ -81,9 +102,16 @@ function NotifCard({
             <AlertCircle size={14} color={accentColor} />
           )}
         </div>
-        <span style={{ color: '#E2E8F0', fontSize: '13px', fontWeight: 600, lineHeight: 1.35 }}>
-          {n.title}
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+          {NOTIF_TYPE_LABEL[n.type] && (
+            <span style={{ color: '#64748B', fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+              {NOTIF_TYPE_LABEL[n.type]}
+            </span>
+          )}
+          <span style={{ color: '#E2E8F0', fontSize: '13px', fontWeight: 600, lineHeight: 1.35 }}>
+            {localizeNotifTitle(n.title)}
+          </span>
+        </div>
       </div>
 
       {/* Клиент / контекст */}

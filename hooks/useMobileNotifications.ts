@@ -7,7 +7,7 @@ import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 export type MobileNotification = {
   id: number;
   created_at: string;
-  type: 'new_order' | 'field_change';
+  type: 'new_order' | 'field_change' | 'new_lead' | 'demand_hit' | string;
   title: string;
   body: string | null;
   entity_id: number | null;

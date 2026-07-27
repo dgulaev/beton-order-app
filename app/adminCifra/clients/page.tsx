@@ -282,6 +282,8 @@ export default function ClientsPage() {
   const itemsPerPage = viewMode === 'table' ? tablePerPage : gridFit.perPage;
 
   const [activeTab, setActiveTab] = useState<'clients' | 'staff'>('clients');
+  /** hide — обычный список без спама; only — только помеченные is_spam */
+  const [spamFilter, setSpamFilter] = useState<'hide' | 'only'>('hide');
 
   // Сколько карточек/строк влезает. Считаем в visual-пикселях (getBoundingClientRect
   // + window.innerHeight) — так корректно учитывается transform: scale админки.
@@ -389,6 +391,7 @@ export default function ClientsPage() {
       if (clientTypeFilter && clientTypeFilter !== 'all') {
         url += `&clientType=${encodeURIComponent(clientTypeFilter)}`;
       }
+      url += `&spam=${spamFilter === 'only' ? 'only' : 'hide'}`;
 
       // Список клиентов — только grouped. Стафф грузится отдельно через /staff/stats.
       if (activeTab === 'staff') {
@@ -413,10 +416,10 @@ export default function ClientsPage() {
     }
   };
 
-  // Первая загрузка и смена страницы + поиск + фильтр типа клиента
+  // Первая загрузка и смена страницы + поиск + фильтр типа клиента / спама
   useEffect(() => {
     fetchClientsPage(currentPage);
-  }, [currentPage, debouncedSearch, activeTab, itemsPerPage, clientTypeFilter]);
+  }, [currentPage, debouncedSearch, activeTab, itemsPerPage, clientTypeFilter, spamFilter]);
 
   // При смене вида отображения (карточки/список) размер страницы меняется —
   // сбрасываем на первую страницу, чтобы не оказаться на "несуществующей" странице.
@@ -1250,6 +1253,40 @@ const loadGroupOrders = async (group: any) => {
     }
   };
 
+  const clearClientSpam = async (profile: any) => {
+    const ids: number[] = (profile?.clients || [])
+      .filter((c: any) => c?.is_spam && c?.user_id != null)
+      .map((c: any) => Number(c.user_id));
+    const fallback = profile?.user_id ?? profile?.clients?.[0]?.user_id;
+    if (ids.length === 0 && fallback != null) ids.push(Number(fallback));
+    if (ids.length === 0) {
+      alert('Не найден клиент для снятия спама');
+      return;
+    }
+    try {
+      for (const userId of ids) {
+        const res = await adminCifraFetch('/api/adminCifra/clients/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, is_spam: false }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(err.error || 'Не удалось снять спам');
+          return;
+        }
+      }
+      alert('Спам снят — клиент снова в общем списке');
+      setSelectedProfile(null);
+      setSpamFilter('hide');
+      setCurrentPage(1);
+      void fetchClientsPage(1);
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка соединения с сервером');
+    }
+  };
+
    // ==================== 3.0.4 СОЗДАНИЕ НОВОГО КЛИЕНТА ====================
 const createNewClient = async () => {
   if (!newClientForm.phone) {
@@ -1911,6 +1948,31 @@ const changeStaffPassword = async (staffMember: any) => {
   >
     <span style={{ fontSize: '22px', opacity: 0.9 }}>🔗</span>
     Показать дубли
+  </button>
+  )}
+
+  {activeTab === 'clients' && (
+  <button
+    type="button"
+    title={spamFilter === 'only' ? 'Вернуться к обычному списку клиентов' : 'Показать только клиентов в спаме'}
+    onClick={() => {
+      setSpamFilter((v) => (v === 'only' ? 'hide' : 'only'));
+      setCurrentPage(1);
+    }}
+    style={{
+      padding: '12px 24px',
+      background: 'transparent',
+      border: 'none',
+      color: spamFilter === 'only' ? '#F87171' : '#94A3B8',
+      fontSize: '17px',
+      fontWeight: '600',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      cursor: 'pointer',
+    }}
+  >
+    {spamFilter === 'only' ? '← Все клиенты' : 'Спам'}
   </button>
   )}
 
@@ -3419,6 +3481,15 @@ const changeStaffPassword = async (staffMember: any) => {
         >
           ✏️ Редактировать
         </button>
+        {(selectedProfile.is_spam || selectedProfile.clients?.some((c: any) => c.is_spam)) && (
+          <button
+            type="button"
+            onClick={() => void clearClientSpam(selectedProfile)}
+            style={{ flex: 1, padding: '14px', background: '#F59E0B', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}
+          >
+            Снять спам
+          </button>
+        )}
         <button 
           onClick={() => deleteClient(selectedProfile.user_id || selectedProfile.id || selectedProfile.clients?.[0]?.user_id)} 
           style={{ flex: 1, padding: '14px', background: '#EF4444', color: 'white', border: 'none', borderRadius: '12px', fontWeight: '600' }}

@@ -13,6 +13,8 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const userId = searchParams.get('userId');
     const all = searchParams.get('all'); // Новый параметр: если true — возвращаем всех (включая стафф)
+    // spam=hide (default) | only | all
+    const spamMode = (searchParams.get('spam') || 'hide').toLowerCase();
 
     // ==================== 1. ЗАГРУЗКА ОДНОГО КЛИЕНТА ====================
     if (userId) {
@@ -38,6 +40,8 @@ export async function GET(request: NextRequest) {
     } else {
       // По умолчанию — только клиенты (как было раньше)
       query = query.eq('role', 'client');
+      if (spamMode === 'only') query = query.eq('is_spam', true);
+      else if (spamMode !== 'all') query = query.eq('is_spam', false);
     //  console.log('📋 [Clients API] Возвращаем только клиентов (role = client)');
     }
 

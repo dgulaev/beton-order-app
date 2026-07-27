@@ -8,7 +8,7 @@
 
 import { ReactNode, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Home, Package, Truck, Factory, Users, ArrowLeft, Loader2 } from 'lucide-react';
+import { Home, Package, Truck, Factory, Users, Inbox, ArrowLeft, Loader2 } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useUserRole } from '../providers/UserRoleProvider';
 import { formatPhoneInput } from '@/lib/phone';
@@ -614,15 +614,16 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
         transform: navVisible ? 'translateY(0)' : 'translateY(100%)',
         transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
       })}>
-        <NavLink href="/mobile/" icon={<Home size={26} />} label="Дашборд" pathname={pathname} />
-        <NavLink href="/mobile/zayavki" icon={<Package size={26} />} label="Заявки" pathname={pathname} />
+        <NavLink href="/mobile/" icon={<Home size={24} />} label="Дашборд" pathname={pathname} />
+        <NavLink href="/mobile/zayavki" icon={<Package size={24} />} label="Заявки" pathname={pathname} />
+        <NavLink href="/mobile/leads" icon={<Inbox size={24} />} label="Лиды" pathname={pathname} />
         {!isGuest && (
-          <NavLink href="/mobile/mixers" icon={<Truck size={26} />} label="Миксеры" pathname={pathname} />
+          <NavLink href="/mobile/mixers" icon={<Truck size={24} />} label="Миксеры" pathname={pathname} />
         )}
         {!isGuest && (
-          <NavLink href="/mobile/warehouse" icon={<Factory size={26} />} label="Склад" pathname={pathname} />
+          <NavLink href="/mobile/warehouse" icon={<Factory size={24} />} label="Склад" pathname={pathname} />
         )}
-        <NavLink href="/mobile/clients" icon={<Users size={26} />} label="Клиенты" pathname={pathname} />
+        <NavLink href="/mobile/clients" icon={<Users size={24} />} label="Клиенты" pathname={pathname} />
 
         {/* Broadcast-индикатор: правый нижний угол навбара */}
         <BroadcastDot status={broadcastStatus} />

@@ -13,16 +13,21 @@ export async function GET(request: NextRequest) {
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '18', 10) || 18));
     let search = searchParams.get('search')?.trim() || '';
     const clientType = (searchParams.get('clientType') || 'all').toLowerCase();
+    // spam=hide (default) | only | all
+    const spamMode = (searchParams.get('spam') || 'hide').toLowerCase();
 
     const from = (page - 1) * limit;
 
-    console.log(`🚀 [Загрузка] Страница ${page} | Поиск: "${search}" | Тип: ${clientType}`);
+    console.log(`🚀 [Загрузка] Страница ${page} | Поиск: "${search}" | Тип: ${clientType} | spam: ${spamMode}`);
 
     let query = supabase
       .from('users')
       .select('*')
       .eq('role', 'client')
       .order('created_at', { ascending: false });
+
+    if (spamMode === 'only') query = query.eq('is_spam', true);
+    else if (spamMode !== 'all') query = query.eq('is_spam', false);
 
     if (search.length > 0) {
       search = search.replace(/,/g, ' ');
@@ -117,11 +122,14 @@ export async function GET(request: NextRequest) {
           created_by: client.created_by,
           curator_id: curatorKey || null,
           curator_name: curatorName,
+          is_spam: Boolean(client.is_spam),
           clients: [],
         });
       }
 
       const group = grouped.get(key)!;
+
+      if (client.is_spam) group.is_spam = true;
 
       if (client.phone) group.phones.push(client.phone);
 

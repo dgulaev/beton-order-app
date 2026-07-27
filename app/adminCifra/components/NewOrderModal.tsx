@@ -18,7 +18,10 @@ import { formatTimeHHMM } from '@/lib/ruLocale';
 interface NewOrderModalProps {
   isOpen: boolean;                    // ← обязательно
   onClose: () => void;
-  onSuccess?: (newOrder?: any) => void; // ← если используешь onSuccess
+  onSuccess?: (
+    newOrder?: any,
+    meta?: { warning?: string; leadConverted?: boolean },
+  ) => void;
   userId?: any;                       // ID клиента
   userName?: string;                  // Имя клиента (для отображения)
   userPhone?: string;
@@ -326,6 +329,12 @@ const handleSubmit = async (e: React.FormEvent) => {
     source: 'admin',
     userRole: currentRole || '',
     userName: currentUserName || localStorage.getItem('userName') || 'Сотрудник',
+
+    // Конверсия из inbox лидов
+    lead_id: initialData?.lead_id ?? initialData?.leadId ?? null,
+    lead_source: initialData?.lead_source ?? initialData?.leadSource ?? null,
+    external_ref: initialData?.external_ref ?? initialData?.externalRef ?? null,
+    referredBy: initialData?.referredBy ?? initialData?.referred_by ?? null,
   };
 
   try {
@@ -361,10 +370,16 @@ const handleSubmit = async (e: React.FormEvent) => {
       setOrderCreated(createdOrder);
       setNotificationSent(false);
 
-      alert(`✅ Заявка #${data.orderId} успешно создана!`);
-      
+      const leadConverted = Boolean(data.leadConverted);
+      const warning = typeof data.warning === 'string' ? data.warning : undefined;
+      alert(
+        warning
+          ? `✅ Заявка #${data.orderId} создана.\n⚠️ ${warning}`
+          : `✅ Заявка #${data.orderId} успешно создана!`,
+      );
+
       if (typeof onSuccess === 'function') {
-        onSuccess(createdOrder);
+        onSuccess(createdOrder, { warning, leadConverted });
       }
 
       setTimeout(() => {
@@ -407,6 +422,10 @@ const handleSubmit = async (e: React.FormEvent) => {
       setIsSendingNotification(false);
     }
   };
+
+  // Без этого модалка всегда висит поверх страницы (как на «Лидах»),
+  // даже когда isOpen=false — вызывающие места полагаются на этот флаг.
+  if (!isOpen) return null;
 
   return (
     <div

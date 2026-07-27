@@ -1,0 +1,41 @@
+# Скопируйте нужные переменные в .env.local и Vercel → Environment Variables
+
+# ── Авито (фаза 1–2) ──
+AVITO_CLIENT_ID=
+AVITO_CLIENT_SECRET=
+AVITO_USER_ID=
+# Обязателен: без него webhook отвечает 401
+AVITO_WEBHOOK_SECRET=
+
+# Webhook URL после деплоя:
+# https://<domain>/api/webhooks/avito?secret=<AVITO_WEBHOOK_SECRET>
+# или заголовок x-avito-webhook-secret / Authorization: Bearer …
+
+# Vercel Cron (обязателен для /api/cron/avito-sync и demand-radar)
+CRON_SECRET=
+
+# ── Demand Radar (фаза 3) ──
+# JSON-лента: [{ "id", "title", "body", "url", "region", "published_at" }]
+# После деплоя лидов: выполнить scripts/users-is-spam.sql (колонка users.is_spam)
+
+DEMAND_FEED_URL=
+# Демо только локально/preview. В production игнорируется даже при =1
+DEMAND_DEMO=0
+# Регионы завода через запятую
+DEMAND_HOME_REGIONS=брянск,брянская
+DEMAND_MIN_VOLUME_M3=0.5
+DEMAND_ALERT_SCORE=60
+
+# ── ГосПлан API (Demand Radar) ──
+# По умолчанию включён тестовый сервер без ключа
+# GOSPLAN_ENABLED=0
+GOSPLAN_BASE_URL=https://v2test.gosplan.info
+# Для прода: https://v2.gosplan.info + ключ
+# GOSPLAN_API_KEY=
+# Коды субъектов РФ (32 = Брянская область)
+GOSPLAN_REGIONS=32
+GOSPLAN_CLASSIFIERS=23.63
+GOSPLAN_PUBLISHED_FORPAST=180d
+GOSPLAN_LIMIT=50
+# Полнотекстовые запросы object_info (через запятую)
+# GOSPLAN_QUERIES="смесь бетонная" бетон БСТ -камн -бортов -лоток -жби

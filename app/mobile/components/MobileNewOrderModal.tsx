@@ -15,6 +15,7 @@ import {
 } from '@/app/adminCifra/cardStyles';
 import { nowTimeHHMM } from '@/app/adminCifra/components/modalPickerShared';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { formatTimeHHMM } from '@/lib/ruLocale';
 
 const INPUT: React.CSSProperties = modalFieldStyle({
   padding: '11px 14px',
@@ -34,7 +35,10 @@ function Label({ icon, text }: { icon: React.ReactNode; text: string }) {
 interface MobileNewOrderModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess?: (newOrder?: any) => void;
+  onSuccess?: (
+    newOrder?: any,
+    meta?: { warning?: string; leadConverted?: boolean },
+  ) => void;
   defaultDeliveryDate?: string;
   currentRole?: string;
   currentUserName?: string;
@@ -98,12 +102,17 @@ export default function MobileNewOrderModal({
     const newFormData = {
       grade: initialData.grade || 'М300',
       volume: initialData.volume?.toString() || '',
-      deliveryDate: initialData.deliveryDate || defaultDeliveryDate || new Date().toISOString().split('T')[0],
-      deliveryTime: initialData.deliveryTime || nowTimeHHMM(),
+      deliveryDate:
+        initialData.deliveryDate
+        || initialData.delivery_date
+        || defaultDeliveryDate
+        || new Date().toISOString().split('T')[0],
+      deliveryTime:
+        formatTimeHHMM(initialData.deliveryTime || initialData.delivery_time) || nowTimeHHMM(),
       address: initialData.address || '',
       customerType: initialData.customerType || 'legal',
-      organizationName: initialData.organizationName || '',
-      fullName: initialData.fullName || '',
+      organizationName: initialData.organizationName || initialData.organization_name || '',
+      fullName: initialData.fullName || initialData.full_name || '',
       phone: phone,
       inn: initialData.inn || '',
       comment: initialData.comment || '',
@@ -239,6 +248,10 @@ export default function MobileNewOrderModal({
       userName: currentUserName,
       isFromAdmin: true,
       source: 'admin',
+      lead_id: initialData?.lead_id ?? initialData?.leadId ?? null,
+      lead_source: initialData?.lead_source ?? initialData?.leadSource ?? null,
+      external_ref: initialData?.external_ref ?? initialData?.externalRef ?? null,
+      referredBy: initialData?.referredBy ?? initialData?.referred_by ?? null,
     };
 
     try {
@@ -251,12 +264,18 @@ export default function MobileNewOrderModal({
       const data = await response.json();
 
       if (data.success) {
-        alert(`✅ Заявка #${data.orderId} успешно создана!`);
+        const leadConverted = Boolean(data.leadConverted);
+        const warning = typeof data.warning === 'string' ? data.warning : undefined;
+        alert(
+          warning
+            ? `✅ Заявка #${data.orderId} создана.\n⚠️ ${warning}`
+            : `✅ Заявка #${data.orderId} успешно создана!`,
+        );
         // ⚠️ Отдаём наверх те же имена полей, что и в payload/ответе сервера
         // (delivery_date/delivery_time), а не form.deliveryDate/deliveryTime —
         // иначе оптимистично добавленная заявка не проходила фильтр по дню
         // (страница фильтрует именно по delivery_date) и "не показывалась".
-        if (onSuccess) onSuccess({ ...payload, id: data.orderId });
+        if (onSuccess) onSuccess({ ...payload, id: data.orderId }, { warning, leadConverted });
         onClose();
       } else {
         alert(data.message || 'Ошибка создания заявки');

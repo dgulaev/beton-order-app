@@ -12,6 +12,7 @@ const ALLOWED_FIELDS = [
   'client_status',
   'loyalty_score',
   'last_contact',
+  'is_spam',
 ] as const;
 
 type AllowedField = (typeof ALLOWED_FIELDS)[number];
@@ -49,7 +50,11 @@ export async function POST(request: NextRequest) {
     const updatePayload: Partial<Record<AllowedField, unknown>> = {};
     for (const key of ALLOWED_FIELDS) {
       if (body[key] !== undefined) {
-        updatePayload[key] = body[key] === '' ? null : body[key];
+        if (key === 'is_spam') {
+          updatePayload.is_spam = Boolean(body.is_spam);
+        } else {
+          updatePayload[key] = body[key] === '' ? null : body[key];
+        }
       }
     }
 

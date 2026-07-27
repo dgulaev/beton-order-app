@@ -1,0 +1,96 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { isAvitoConfigured } from '@/lib/integrations/avito';
+import { registerAllMarketplaceAdapters } from '@/lib/integrations/registerAll';
+import { getMarketplaceAdapter } from '@/lib/integrations/marketplaceAdapter';
+import { listListingTemplates } from '@/lib/avitoListingTemplates';
+
+export async function GET(request: NextRequest) {
+  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  if (auth.error) return auth.error;
+
+  const source = request.nextUrl.searchParams.get('source') || undefined;
+
+  let query = supabaseAdmin
+    .from('marketplace_listings')
+    .select('*')
+    .order('updated_at', { ascending: false })
+    .limit(200);
+
+  if (source) query = query.eq('source', source);
+
+  const [{ data, error }, templatesResult] = await Promise.all([
+    query,
+    listListingTemplates(),
+  ]);
+  if (error) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({
+    success: true,
+    listings: data ?? [],
+    templates: templatesResult.templates,
+    templatesPersistable: templatesResult.persistable,
+    templatesPersistError: templatesResult.persistError,
+    avitoConfigured: isAvitoConfigured(),
+  });
+}
+
+/** Синхронизация объявлений с площадки (source=avito по умолчанию). */
+export async function POST(request: NextRequest) {
+  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  if (auth.error) return auth.error;
+
+  try {
+    const body = await request.json().catch(() => ({}));
+    const source = body.source || 'avito';
+
+    registerAllMarketplaceAdapters();
+
+    if (source === 'avito') {
+      if (!isAvitoConfigured()) {
+        return NextResponse.json(
+          { success: false, error: 'Задайте AVITO_CLIENT_ID / AVITO_CLIENT_SECRET / AVITO_USER_ID' },
+          { status: 400 },
+        );
+      }
+    }
+
+    const adapter = getMarketplaceAdapter(source);
+    if (!adapter?.fetchListings) {
+      return NextResponse.json({ success: false, error: `Адаптер ${source} не найден` }, { status: 400 });
+    }
+
+    const listings = await adapter.fetchListings();
+    let upserted = 0;
+    for (const L of listings) {
+      const { error } = await supabaseAdmin.from('marketplace_listings').upsert(
+        {
+          source: L.source,
+          external_id: L.external_id,
+          title: L.title,
+          description: L.description,
+          price: L.price,
+          status: L.status || 'active',
+          url: L.url,
+          category: L.category,
+          city: L.city,
+          views: L.views ?? 0,
+          contacts: L.contacts ?? 0,
+          template_key: L.template_key,
+          raw_payload: L.raw_payload,
+          last_synced_at: new Date().toISOString(),
+        },
+        { onConflict: 'source,external_id' },
+      );
+      if (!error) upserted += 1;
+    }
+
+    return NextResponse.json({ success: true, upserted, total: listings.length });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Ошибка';
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
+  }
+}

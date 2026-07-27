@@ -3,6 +3,14 @@
     {
       "path": "/api/cron/dismiss-notifications",
       "schedule": "1 21 * * *"
+    },
+    {
+      "path": "/api/cron/avito-sync",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/demand-radar",
+      "schedule": "0 6 * * *"
     }
   ],
   "headers": [

@@ -162,16 +162,28 @@ export default function MobileWarehousePage() {
 
   // ==================== ЗАГРУЗКА ДАННЫХ ====================
 
-  const loadWarehouse = useCallback(async () => {
+  /** fetch без throw: после сворачивания браузера iOS/Android рвёт запросы → TypeError. */
+  const safeFetch = useCallback(async (url: string, init?: RequestInit): Promise<Response | null> => {
     try {
-      const [warehouseRes, recipesRes, labRes, shiftRes] = await Promise.all([
-        fetch('/api/adminCifra/warehouse', { cache: 'no-store' }),
-        fetch('/api/adminCifra/recipes', { cache: 'no-store' }),
-        fetch('/api/adminCifra/lab-settings', { cache: 'no-store' }),
-        fetch('/api/adminCifra/operator-shift', { cache: 'no-store' }),
-      ]);
+      return await fetch(url, { cache: 'no-store', ...init });
+    } catch {
+      return null;
+    }
+  }, []);
 
-      if (warehouseRes.ok) {
+  const loadWarehouse = useCallback(async () => {
+    // Не дёргаем сеть, пока вкладка в фоне — запросы всё равно отменят
+    if (typeof document !== 'undefined' && document.hidden) return;
+
+    const [warehouseRes, recipesRes, labRes, shiftRes] = await Promise.all([
+      safeFetch('/api/adminCifra/warehouse'),
+      safeFetch('/api/adminCifra/recipes'),
+      safeFetch('/api/adminCifra/lab-settings'),
+      safeFetch('/api/adminCifra/operator-shift'),
+    ]);
+
+    try {
+      if (warehouseRes?.ok) {
         const data = await warehouseRes.json();
         setSilos(data.silos || []);
         setLowRateAlerts(Array.isArray(data.lowRateAlerts) ? data.lowRateAlerts : []);
@@ -185,7 +197,7 @@ export default function MobileWarehousePage() {
         );
       }
 
-      if (recipesRes.ok) {
+      if (recipesRes?.ok) {
         const all = await recipesRes.json();
         setRecipes(all);
         const fbs = all
@@ -199,22 +211,23 @@ export default function MobileWarehousePage() {
         setAvailableFBS(fbs);
       }
 
-      if (labRes.ok) {
+      if (labRes?.ok) {
         setAdditiveDensities(densitiesFromLabSettings(await labRes.json()));
       }
 
-      if (shiftRes.ok) {
+      if (shiftRes?.ok) {
         const shift = await shiftRes.json();
         const sid = shift?.active_silo_id != null ? Number(shift.active_silo_id) : null;
         setActiveSiloId(Number.isFinite(sid as number) ? sid : null);
       }
-    } catch (err) {
-      console.error('Ошибка загрузки склада:', err);
+    } catch {
+      // битый JSON / обрыв ответа — тихо, данные останутся прошлыми
     }
-  }, []);
+  }, [safeFetch]);
 
   const loadFBS = useCallback(async (available: any[]) => {
     if (!available.length) return;
+    if (typeof document !== 'undefined' && document.hidden) return;
     try {
       const { data } = await supabase.from('fbs_blocks').select('*').order('name');
       const merged = available.map((r: any) => {
@@ -222,18 +235,18 @@ export default function MobileWarehousePage() {
         return { ...r, id: ex?.id || r.id, name: r.name || r.code, current: Number(ex?.current || 0) };
       });
       setFbsBlocks(merged);
-    } catch (err) {
-      console.error('Ошибка загрузки ФБС:', err);
+    } catch {
+      /* тихо */
     }
   }, []);
 
   const loadTodayConsumption = useCallback(async (recipeList: any[]) => {
+    if (typeof document !== 'undefined' && document.hidden) return;
     try {
-      const res = await fetch('/api/adminCifra/production-log?today=true', {
-        cache: 'no-store',
+      const res = await safeFetch('/api/adminCifra/production-log?today=true', {
         signal: AbortSignal.timeout(4000),
       });
-      if (!res.ok) return;
+      if (!res?.ok) return;
       const data = await res.json();
       const logs = data.logs || data || [];
       let cement = 0, pfm = 0, linomix = 0;
@@ -249,7 +262,7 @@ export default function MobileWarehousePage() {
       });
       setTodayConsumption({ cement: Math.round(cement / 1000), pfm: Math.round(pfm), linomix: Math.round(linomix) });
     } catch { /* тихо */ }
-  }, []);
+  }, [safeFetch]);
 
   useEffect(() => {
     (async () => {
@@ -273,14 +286,42 @@ export default function MobileWarehousePage() {
   useRealtimeBroadcast({
     topic: 'order_mixers:all',
     onUpdate: (r: any) => {
-      if (r?.status === 'В пути' || r?.status === 'Разгружен') loadWarehouse();
+      if (r?.status === 'В пути' || r?.status === 'Разгружен') void loadWarehouse();
     },
   });
 
-  // Poll остатков/алертов (как на десктопе)
+  // Poll остатков/алертов — только когда вкладка видима; после возврата — сразу обновить
   useEffect(() => {
-    const t = setInterval(() => { void loadWarehouse(); }, 15000);
-    return () => clearInterval(t);
+    let t: ReturnType<typeof setInterval> | null = null;
+
+    const stop = () => {
+      if (t) {
+        clearInterval(t);
+        t = null;
+      }
+    };
+    const start = () => {
+      stop();
+      t = setInterval(() => {
+        if (!document.hidden) void loadWarehouse();
+      }, 15000);
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) {
+        stop();
+        return;
+      }
+      void loadWarehouse();
+      start();
+    };
+
+    if (!document.hidden) start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [loadWarehouse]);
 
   // ==================== СОХРАНЕНИЕ В БД ====================

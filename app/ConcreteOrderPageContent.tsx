@@ -592,7 +592,7 @@ const loadReferrals = async () => {
     totalPrice: Number(totalPrice) || 0,
 
     // Погашение баллов
-    redeemAmount: redeemAmount > 0 ? redeemAmount : 0,
+    redeemAmount: 0,
 
     customerType: form.customerType === 'legal' 
       ? 'Юридическое лицо' 
@@ -624,13 +624,17 @@ const loadReferrals = async () => {
 
     if (data.success) {
       // ================================================
-      // 4. УСПЕШНОЕ СОЗДАНИЕ ЗАКАЗА
+      // 4. УСПЕХ: публичная форма → лид (менеджер обработает в inbox)
       // ================================================
-      setOrderId(data.orderId);
+      setOrderId(data.leadId ?? data.orderId);
       setCurrentScreen('success');
       if (wa?.MainButton) wa.MainButton.hide();
 
-      console.log(`✅ Заказ #${data.orderId} успешно создан! Погашено баллов: ${redeemAmount}`);
+      console.log(
+        data.isLead
+          ? `✅ Лид #${data.leadId} из публичной формы`
+          : `✅ Заказ #${data.orderId} успешно создан! Погашено баллов: ${redeemAmount}`,
+      );
 
       // Очистка формы + сброс суммы погашения
       setForm({
@@ -853,10 +857,11 @@ const loadReferrals = async () => {
         display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center',
       }}>
         <div style={{ fontSize: '80px', marginBottom: '24px' }}>✅</div>
-        <h2 style={{ fontSize: '28px', marginBottom: '16px', color: '#F8FAFC' }}>Заявка отправлена!</h2>
+        <h2 style={{ fontSize: '28px', marginBottom: '16px', color: '#F8FAFC' }}>Обращение принято!</h2>
         <p style={{ fontSize: '18px', color: 'rgba(255,255,255,0.5)', marginBottom: '40px' }}>
-          Номер заявки: <strong style={{ color: '#10B981' }}>#{orderId}</strong><br />
-          Менеджер свяжется с вами в ближайшее время.
+          Номер обращения: <strong style={{ color: '#10B981' }}>#{orderId}</strong><br />
+          Менеджер проверит заявку и свяжется с вами.<br />
+          <span style={{ fontSize: 15 }}>В «Моих заявках» она появится после подтверждения.</span>
         </p>
         
         <button
@@ -975,66 +980,20 @@ const loadReferrals = async () => {
       </div>
     )}
 
-    {/* === НОВЫЙ БЛОК ПОГАШЕНИЯ БАЛЛОВ === */}
+    {/* Публичка → лид: списание баллов только после подтверждения менеджером */}
     {balance > 0 && (
       <div style={{ 
         marginTop: '16px', 
         padding: '14px', 
         backgroundColor: 'rgba(16,185,129,0.1)', 
         borderRadius: '12px', 
-        border: '1px solid rgba(16,185,129,0.3)' 
+        border: '1px solid rgba(16,185,129,0.3)',
+        fontSize: 13,
+        color: '#6EE7B7',
+        lineHeight: 1.45,
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-          <span style={{ fontWeight: '600', color: '#10B981' }}>Погасить баллами</span>
-          <span style={{ color: '#10B981' }}>Доступно: <strong>{balance} ₽</strong></span>
-        </div>
-        
-        <input
-      type="number"
-      value={redeemAmount || ''}           // ← важно для исчезновения нуля
-      min="0"
-      max={Math.min(balance, totalPrice)}
-      onChange={(e) => {
-        const inputValue = e.target.value;
-        
-        if (inputValue === '') {
-          setRedeemAmount(0);
-          return;
-        }
-
-        let val = Number(inputValue);
-        if (isNaN(val) || val < 0) val = 0;
-        
-        // Ограничиваем максимумом
-        val = Math.min(val, balance, totalPrice);
-        
-        setRedeemAmount(val);
-      }}
-          style={{ 
-            width: '100%', 
-            padding: '12px', 
-            borderRadius: '10px', 
-            border: '1px solid rgba(16,185,129,0.4)', 
-            fontSize: '16px',
-            textAlign: 'center',
-            boxSizing: 'border-box',
-            background: 'rgba(255,255,255,0.05)',
-            color: '#F8FAFC',
-          }}
-          placeholder="0"
-        />
-        
-        <div style={{ 
-          marginTop: '10px', 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          fontSize: '18px', 
-          fontWeight: '700', 
-          color: '#10B981' 
-        }}>
-          <span>Итого к оплате:</span>
-          <span>{finalPrice.toLocaleString('ru-RU')} ₽</span>
-        </div>
+        На балансе <strong>{balance.toLocaleString('ru-RU')} ₽</strong>.
+        Списание баллов станет доступно после подтверждения обращения менеджером.
       </div>
     )}
 

@@ -2,11 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, FlaskConical, Truck, Package, Users, UserCog, Menu, X, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone } from 'lucide-react';
-import { useEffect, useState, useRef } from 'react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, Menu, X, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown } from 'lucide-react';
+import { useEffect, useState, useRef, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import Image from 'next/image';
 import { useUserRole } from '../providers/UserRoleProvider';
 import { useOrderChangeNotifications } from '@/hooks/useRealtimeOrders';
+import { useLeadChangeNotifications } from '@/hooks/useRealtimeLeads';
+import { LEAD_SOURCE_LABEL } from '@/lib/leads';
 import { reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
 import { useWakeReload } from '@/hooks/useWakeReload';
 import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
@@ -97,6 +100,11 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const pathname = usePathname();
   const router = useRouter();
   const isActive = (path: string) => pathname === path;
+  const isSalesSection =
+    !!pathname &&
+    (pathname.startsWith('/adminCifra/leads') ||
+      pathname.startsWith('/adminCifra/marketplace') ||
+      pathname.startsWith('/adminCifra/demand'));
 
   // Однократная перезагрузка при пробуждении вкладки после долгого простоя
   // (напр. оставленный на ночь экран) — оживляет «замороженную» страницу.
@@ -106,6 +114,30 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const { user, loading: roleLoading, refreshRole, logout } = useUserRole();
 
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const [salesMenuOpen, setSalesMenuOpen] = useState(false);
+  const [salesFlyoutPos, setSalesFlyoutPos] = useState<{ top: number; left: number } | null>(null);
+  const salesMenuRef = useRef<HTMLDivElement | null>(null);
+  const salesButtonRef = useRef<HTMLButtonElement | null>(null);
+  const salesFlyoutRef = useRef<HTMLDivElement | null>(null);
+
+  // Подменю «Продажи»: в развёрнутом режиме авто-открывать на дочерних страницах;
+  // в свёрнутом — закрывать при уходе со страниц раздела / при сворачивании сайдбара.
+  useEffect(() => {
+    if (!isCollapsed && isSalesSection) setSalesMenuOpen(true);
+    if (isCollapsed) setSalesMenuOpen(false);
+  }, [isCollapsed, isSalesSection, pathname]);
+
+  useEffect(() => {
+    if (!salesMenuOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const inTrigger = salesMenuRef.current?.contains(target);
+      const inFlyout = salesFlyoutRef.current?.contains(target);
+      if (!inTrigger && !inFlyout) setSalesMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [salesMenuOpen]);
 
   // Реальная высота окна в пикселях (100%/100vh ненадёжны в цепочке flex-родителей —
   // считаем сами и передаём вниз конкретное число, а не проценты)
@@ -119,6 +151,27 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     window.addEventListener('resize', updateViewportHeight);
     return () => window.removeEventListener('resize', updateViewportHeight);
   }, []);
+
+  // Свёрнутый режим: flyout через portal (сайдбар overflow:hidden обрезает absolute-панель).
+  useLayoutEffect(() => {
+    if (!isCollapsed || !salesMenuOpen) {
+      setSalesFlyoutPos(null);
+      return;
+    }
+    const updatePos = () => {
+      const btn = salesButtonRef.current;
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      setSalesFlyoutPos({ top: rect.top, left: rect.right + 8 });
+    };
+    updatePos();
+    window.addEventListener('resize', updatePos);
+    window.addEventListener('scroll', updatePos, true);
+    return () => {
+      window.removeEventListener('resize', updatePos);
+      window.removeEventListener('scroll', updatePos, true);
+    };
+  }, [isCollapsed, salesMenuOpen, viewportH]);
 
   // Админка — это фиксированный "каркас" приложения (свой скролл внутри),
   // а не обычная скроллящаяся страница. Если из-за округления пикселей/масштаба
@@ -663,6 +716,22 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     },
   });
 
+  useLeadChangeNotifications({
+    enabled: !!userRole && staffRoles.includes(userRole),
+    onNewLead: (lead) => {
+      // Спам уже отфильтрован в хуке; тост — только для inbox
+      const sourceLabel = LEAD_SOURCE_LABEL[lead.source] || lead.source;
+      const preview = (lead.raw_text || lead.name || lead.phone || 'Без текста').slice(0, 120);
+      playNotificationSound();
+      createToastRef.current?.(
+        `lead-${lead.id}-${Date.now()}`,
+        'package',
+        `Новый лид · ${sourceLabel}`,
+        preview,
+      );
+    },
+  });
+
   // ==================== 6. СБРОС СЧЁТЧИКА ====================
   useEffect(() => {
     if (pathname === '/adminCifra/zayavki') {
@@ -1027,6 +1096,128 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               <span style={navTextStyle(isCollapsed)}>Заявки</span>
             </Link>
 
+            {/* ==================== ПРОДАЖИ: Лиды / Площадки / Спрос ==================== */}
+            <div ref={salesMenuRef} style={{ position: 'relative', marginBottom: 4 }}>
+              <button
+                ref={salesButtonRef}
+                type="button"
+                title={isCollapsed ? 'Продажи' : undefined}
+                aria-expanded={salesMenuOpen}
+                aria-haspopup="menu"
+                onClick={() => setSalesMenuOpen((v) => !v)}
+                style={{
+                  ...navLinkStyle(isSalesSection, isCollapsed),
+                  width: '100%',
+                  cursor: 'pointer',
+                  marginBottom: 0,
+                  // Не использовать shorthand `font` вместе с fontWeight из navLinkStyle
+                  fontFamily: 'inherit',
+                  fontSize: 'inherit',
+                  lineHeight: 'inherit',
+                  textAlign: 'left',
+                }}
+              >
+                <Megaphone size={22} style={{ flexShrink: 0 }} />
+                <span style={{ ...navTextStyle(isCollapsed), flex: isCollapsed ? undefined : 1 }}>
+                  Продажи
+                </span>
+                {!isCollapsed && (
+                  <ChevronDown
+                    size={16}
+                    style={{
+                      marginLeft: 4,
+                      flexShrink: 0,
+                      opacity: 0.85,
+                      transform: salesMenuOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                      transition: 'transform 0.2s ease',
+                    }}
+                  />
+                )}
+              </button>
+
+              {/* Развёрнутый сайдбар — подменю под пунктом */}
+              {!isCollapsed && salesMenuOpen && (
+                <div style={{ paddingLeft: 12, marginTop: 2 }}>
+                  {SALES_SUBMENU.map((item) => {
+                    const active = isActive(item.href);
+                    const Icon = item.icon;
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        style={{
+                          ...navLinkStyle(active, false),
+                          padding: '10px 12px',
+                          fontSize: 14,
+                          marginBottom: 2,
+                        }}
+                      >
+                        <Icon size={18} />
+                        <span style={{ paddingLeft: 12 }}>{item.label}</span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Свёрнутый сайдбар — portal в body, иначе overflow:hidden сайдбара обрезает панель */}
+            {typeof document !== 'undefined' &&
+              isCollapsed &&
+              salesMenuOpen &&
+              salesFlyoutPos &&
+              createPortal(
+                <div
+                  ref={salesFlyoutRef}
+                  role="menu"
+                  style={{
+                    position: 'fixed',
+                    top: salesFlyoutPos.top,
+                    left: salesFlyoutPos.left,
+                    zIndex: 10050,
+                    minWidth: 180,
+                    padding: 8,
+                    borderRadius: 14,
+                    background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 100%)',
+                    border: '1px solid rgba(148, 163, 184, 0.28)',
+                    boxShadow: '0 12px 28px rgba(0,0,0,0.45)',
+                  }}
+                >
+                  <div style={{
+                    color: '#94A3B8',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: '0.04em',
+                    textTransform: 'uppercase',
+                    padding: '4px 10px 8px',
+                  }}>
+                    Продажи
+                  </div>
+                  {SALES_SUBMENU.map((item) => {
+                    const active = isActive(item.href);
+                    const Icon = item.icon;
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        role="menuitem"
+                        onClick={() => setSalesMenuOpen(false)}
+                        style={{
+                          ...navLinkStyle(active, false),
+                          padding: '10px 12px',
+                          fontSize: 14,
+                          marginBottom: 2,
+                        }}
+                      >
+                        <Icon size={18} />
+                        <span style={{ paddingLeft: 12 }}>{item.label}</span>
+                      </Link>
+                    );
+                  })}
+                </div>,
+                document.body,
+              )}
+
             {/* ==================== БЛОК 11: ОГРАНИЧЕНИЕ МЕНЮ ==================== */}
             {userRole === 'operator' ? (
               <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
@@ -1149,6 +1340,13 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     </div>
   );
 }
+
+// Подменю блока «Продажи» (лиды / Авито / спрос)
+const SALES_SUBMENU = [
+  { href: '/adminCifra/leads', label: 'Лиды', icon: Inbox },
+  { href: '/adminCifra/marketplace', label: 'Площадки', icon: Store },
+  { href: '/adminCifra/demand', label: 'Спрос', icon: Radar },
+] as const;
 
 // ==================== 15. СТИЛИ ДЛЯ ССЫЛОК ====================
 const ACCENT = '#4ADE80'; // Tailwind green-400 — «салатовый» акцент
