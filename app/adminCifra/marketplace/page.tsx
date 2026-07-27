@@ -1,24 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
-import { Store, RefreshCw, ExternalLink, Pencil, Plus, RotateCcw, X } from 'lucide-react';
+import { Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Store, RefreshCw, Pencil, Plus, RotateCcw, X, Webhook } from 'lucide-react';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import type { ListingTemplate } from '@/lib/avitoListingTemplates';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
-
-type Listing = {
-  id: number;
-  source: string;
-  external_id: string;
-  title: string | null;
-  price: number | null;
-  status: string;
-  url: string | null;
-  views: number | null;
-  contacts: number | null;
-  template_key: string | null;
-  last_synced_at: string | null;
-};
+import { ListingCard, type MarketplaceListing } from './ListingCard';
 
 type TemplateForm = {
   key: string;
@@ -27,6 +15,9 @@ type TemplateForm = {
   price: string;
   grade: string;
 };
+
+type Tab = 'listings' | 'templates';
+type StatusFilter = 'active' | 'archive' | 'all';
 
 const emptyForm = (): TemplateForm => ({
   key: '',
@@ -46,8 +37,26 @@ function formFromTemplate(t: ListingTemplate): TemplateForm {
   };
 }
 
+function isActiveStatus(status: string): boolean {
+  return status === 'active';
+}
+
 export default function MarketplacePage() {
-  const [listings, setListings] = useState<Listing[]>([]);
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: '#94A3B8' }}>Загрузка…</div>}>
+      <MarketplacePageInner />
+    </Suspense>
+  );
+}
+
+function MarketplacePageInner() {
+  const searchParams = useSearchParams();
+  const openExternalId = searchParams.get('open');
+  const openChat = searchParams.get('chat') === '1';
+
+  const [tab, setTab] = useState<Tab>('listings');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
+  const [listings, setListings] = useState<MarketplaceListing[]>([]);
   const [templates, setTemplates] = useState<ListingTemplate[]>([]);
   const [templatesPersistable, setTemplatesPersistable] = useState(true);
   const [templatesPersistError, setTemplatesPersistError] = useState<string | null>(null);
@@ -59,6 +68,33 @@ export default function MarketplacePage() {
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<TemplateForm>(emptyForm);
   const [savingTemplate, setSavingTemplate] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [webhookInfo, setWebhookInfo] = useState<{
+    subscribed?: boolean;
+    secretConfigured?: boolean;
+    needsResubscribe?: boolean;
+    error?: string | null;
+  } | null>(null);
+  const [webhookBusy, setWebhookBusy] = useState(false);
+
+  const loadWebhook = useCallback(async () => {
+    try {
+      const res = await fetch('/api/adminCifra/marketplace/webhook', {
+        headers: adminCifraAuthHeaders(),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setWebhookInfo({
+          subscribed: json.subscribed,
+          secretConfigured: json.secretConfigured,
+          needsResubscribe: !!json.needsResubscribe,
+          error: json.error || null,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -81,7 +117,30 @@ export default function MarketplacePage() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadWebhook();
+  }, [load, loadWebhook]);
+
+  useEffect(() => {
+    if (!openExternalId || listings.length === 0) return;
+    const found = listings.find((l) => l.external_id === openExternalId);
+    if (found) {
+      setExpandedId(found.id);
+      setStatusFilter('all');
+      setTab('listings');
+    }
+  }, [openExternalId, listings]);
+
+  const filteredListings = useMemo(() => {
+    if (statusFilter === 'all') return listings;
+    if (statusFilter === 'active') return listings.filter((l) => isActiveStatus(l.status));
+    return listings.filter((l) => !isActiveStatus(l.status));
+  }, [listings, statusFilter]);
+
+  const activeCount = useMemo(
+    () => listings.filter((l) => isActiveStatus(l.status)).length,
+    [listings],
+  );
+  const archiveCount = listings.length - activeCount;
 
   const sync = async () => {
     setSyncing(true);
@@ -103,33 +162,23 @@ export default function MarketplacePage() {
     }
   };
 
-  const updatePrice = async (id: number, price: number) => {
-    const res = await fetch(`/api/adminCifra/marketplace/listings/${id}`, {
-      method: 'PATCH',
-      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ price, push_to_avito: true }),
-    });
-    const json = await res.json();
-    if (!json.success) {
-      setMessage(json.error || 'Не удалось обновить цену');
-      return;
-    }
-    setListings((prev) => prev.map((l) => (l.id === id ? { ...l, ...json.listing } : l)));
-    setMessage('Цена обновлена');
-  };
-
-  const applyTemplate = async (id: number, templateKey: string) => {
-    const res = await fetch(`/api/adminCifra/marketplace/listings/${id}`, {
-      method: 'PATCH',
-      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ template_key: templateKey, apply_template: true }),
-    });
-    const json = await res.json();
-    if (json.success) {
-      setListings((prev) => prev.map((l) => (l.id === id ? { ...l, ...json.listing } : l)));
-      setMessage('Шаблон применён к объявлению');
-    } else {
-      setMessage(json.error || 'Не удалось применить шаблон');
+  const subscribeWebhook = async () => {
+    setWebhookBusy(true);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/adminCifra/marketplace/webhook', {
+        method: 'POST',
+        headers: adminCifraAuthHeaders(),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        setMessage(json.error || 'Не удалось подписать webhook');
+      } else {
+        setMessage('Webhook Авито подключён — новые сообщения придут зелёным уведомлением, как заявки');
+      }
+      await loadWebhook();
+    } finally {
+      setWebhookBusy(false);
     }
   };
 
@@ -202,43 +251,138 @@ export default function MarketplacePage() {
   const formOpen = creating || editingKey != null;
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+    <div
+      style={{
+        padding: 'clamp(12px, 2vw, 28px)',
+        width: '100%',
+        maxWidth: 'min(1600px, 100%)',
+        margin: '0 auto',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          marginBottom: 16,
+          flexWrap: 'wrap',
+        }}
+      >
         <Store size={28} color="#60A5FA" />
-        <div style={{ flex: 1 }}>
-          <h1 style={{ margin: 0, color: '#F1F5F9', fontSize: 24 }}>Площадки · Объявления</h1>
+        <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+          <h1 style={{ margin: 0, color: '#F1F5F9', fontSize: 'clamp(20px, 2vw, 28px)' }}>
+            Площадки
+          </h1>
           <p style={{ margin: '4px 0 0', color: '#94A3B8', fontSize: 13 }}>
-            Синхронизация и обновление цен на Авито
+            Авито: карточки объявлений, чаты и webhook
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void sync()}
-          disabled={syncing}
-          style={volumeCardSoftStyle({
-            border: 'none',
-            color: '#E2E8F0',
-            padding: '10px 14px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            opacity: syncing ? 0.6 : 1,
-          })}
-        >
-          <RefreshCw size={16} /> {syncing ? 'Синхронизация…' : 'Синхронизировать Авито'}
-        </button>
+        {tab === 'listings' && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => void subscribeWebhook()}
+              disabled={webhookBusy || !avitoConfigured}
+              style={volumeCardSoftStyle({
+                border: webhookInfo?.needsResubscribe ? '1px solid #FBBF24' : 'none',
+                color: '#E2E8F0',
+                padding: '10px 14px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                opacity: webhookBusy ? 0.6 : 1,
+              })}
+            >
+              <Webhook size={16} />
+              {webhookBusy
+                ? 'Подписка…'
+                : webhookInfo?.needsResubscribe
+                  ? 'Переподключить webhook'
+                  : webhookInfo?.subscribed
+                    ? 'Webhook OK'
+                    : 'Подключить webhook'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void sync()}
+              disabled={syncing}
+              style={volumeCardSoftStyle({
+                border: 'none',
+                color: '#E2E8F0',
+                padding: '10px 14px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                opacity: syncing ? 0.6 : 1,
+              })}
+            >
+              <RefreshCw size={16} /> {syncing ? 'Синхронизация…' : 'Синхронизировать Авито'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        {(
+          [
+            { id: 'listings' as const, label: `Объявления (${listings.length})` },
+            { id: 'templates' as const, label: `Шаблоны (${templates.length})` },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTab(t.id)}
+            style={{
+              padding: '10px 16px',
+              borderRadius: 10,
+              border: tab === t.id ? '1px solid #60A5FA' : '1px solid #334155',
+              background: tab === t.id ? '#1E3A5F' : '#0F172A',
+              color: '#E2E8F0',
+              fontWeight: 600,
+              fontSize: 14,
+              cursor: 'pointer',
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
       {!avitoConfigured && (
         <div style={volumeCardStyle({ padding: 16, marginBottom: 16, color: '#FDE68A' })}>
-          Авито не настроено. Добавьте в Vercel / .env.local:{' '}
-          <code>AVITO_CLIENT_ID</code>, <code>AVITO_CLIENT_SECRET</code>, <code>AVITO_USER_ID</code>,
-          опционально <code>AVITO_WEBHOOK_SECRET</code>.
+          Авито не настроено. Нужны <code>AVITO_CLIENT_ID</code>, <code>AVITO_CLIENT_SECRET</code>,{' '}
+          <code>AVITO_USER_ID</code>. Для realtime-сообщений обязателен{' '}
+          <code>AVITO_WEBHOOK_SECRET</code>.
         </div>
       )}
 
-      {!templatesPersistable && (
+      {avitoConfigured && webhookInfo && (
+        <div
+          style={volumeCardStyle({
+            padding: 12,
+            marginBottom: 16,
+            color: webhookInfo.subscribed ? '#A7F3D0' : '#FDE68A',
+            fontSize: 13,
+          })}
+        >
+          {webhookInfo.subscribed
+            ? 'Webhook Авито активен — новые сообщения создают лид и зелёное уведомление (как у заявок).'
+            : webhookInfo.needsResubscribe
+              ? 'Секрет webhook изменился — нажми «Переподключить webhook».'
+              : webhookInfo.secretConfigured
+                ? 'Webhook ещё не подписан. Нажми «Подключить webhook», чтобы ловить сообщения в realtime.'
+                : 'Задай AVITO_WEBHOOK_SECRET в env, затем нажми «Подключить webhook».'}
+          {webhookInfo.error ? (
+            <div style={{ marginTop: 6, color: '#FCA5A5' }}>{webhookInfo.error}</div>
+          ) : null}
+        </div>
+      )}
+
+      {tab === 'templates' && !templatesPersistable && (
         <div style={volumeCardStyle({ padding: 16, marginBottom: 16, color: '#FDE68A' })}>
           Чтобы сохранять правки шаблонов, выполни в Supabase SQL Editor скрипт{' '}
           <code>scripts/marketplace-listing-templates.sql</code>
@@ -250,295 +394,272 @@ export default function MarketplacePage() {
         <div style={{ marginBottom: 12, color: '#93C5FD', fontSize: 14 }}>{message}</div>
       )}
 
-      <details open style={{ marginBottom: 16, color: '#E2E8F0' }}>
-        <summary
-          style={{
-            cursor: 'pointer',
-            marginBottom: 12,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: 16,
-            fontWeight: 700,
-            color: '#F1F5F9',
-          }}
-        >
-          <span style={{ flex: 1 }}>Шаблоны объявлений ({templates.length})</span>
-        </summary>
-
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={startCreate}
-            disabled={!templatesPersistable}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '8px 12px',
-              borderRadius: 10,
-              border: 'none',
-              background: '#2563EB',
-              color: '#fff',
-              cursor: templatesPersistable ? 'pointer' : 'not-allowed',
-              opacity: templatesPersistable ? 1 : 0.5,
-              fontSize: 13,
-            }}
-          >
-            <Plus size={14} /> Новый шаблон
-          </button>
-        </div>
-
-        {formOpen && (
-          <div style={volumeCardStyle({ padding: 16, marginBottom: 12 })}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ color: '#F8FAFC', fontWeight: 700 }}>
-                {creating ? 'Новый шаблон' : `Редактирование · ${editingKey}`}
-              </div>
+      {tab === 'listings' && (
+        <>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+            {(
+              [
+                { id: 'active' as const, label: `Активные (${activeCount})` },
+                { id: 'archive' as const, label: `Архив (${archiveCount})` },
+                { id: 'all' as const, label: `Все (${listings.length})` },
+              ] as const
+            ).map((f) => (
               <button
+                key={f.id}
                 type="button"
-                onClick={cancelEdit}
-                style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}
+                onClick={() => setStatusFilter(f.id)}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 10,
+                  border: statusFilter === f.id ? '1px solid #34D399' : '1px solid #334155',
+                  background: statusFilter === f.id ? '#064E3B' : 'transparent',
+                  color: '#E2E8F0',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                }}
               >
-                <X size={18} />
+                {f.label}
               </button>
+            ))}
+          </div>
+
+          <p style={{ margin: '0 0 12px', color: '#64748B', fontSize: 12 }}>
+            Кликни по объявлению — откроется карточка с текстом, ценой и чатами. На Авито уходит
+            только цена.
+          </p>
+
+          {loading ? (
+            <p style={{ color: '#94A3B8' }}>Загрузка…</p>
+          ) : filteredListings.length === 0 ? (
+            <div style={volumeCardStyle({ padding: 24, color: '#94A3B8' })}>
+              {listings.length === 0
+                ? 'Объявлений в базе нет. Нажмите «Синхронизировать Авито».'
+                : 'Нет объявлений по выбранному фильтру.'}
             </div>
-            <div style={{ display: 'grid', gap: 10 }}>
-              <label style={{ fontSize: 13, color: '#94A3B8' }}>
-                Ключ (латиница)
-                <input
-                  value={form.key}
-                  disabled={!creating}
-                  onChange={(e) => setForm((f) => ({ ...f, key: e.target.value }))}
-                  placeholder="grade_M250"
-                  style={inputStyle}
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {filteredListings.map((L) => (
+                <ListingCard
+                  key={L.id}
+                  listing={L}
+                  templates={templates}
+                  expanded={expandedId === L.id}
+                  openChat={expandedId === L.id && openChat && L.external_id === openExternalId}
+                  onToggle={() =>
+                    setExpandedId((prev) => (prev === L.id ? null : L.id))
+                  }
+                  onUpdated={(next) =>
+                    setListings((prev) => prev.map((x) => (x.id === next.id ? { ...x, ...next } : x)))
+                  }
+                  onMessage={setMessage}
                 />
-              </label>
-              <label style={{ fontSize: 13, color: '#94A3B8' }}>
-                Название
-                <input
-                  value={form.title}
-                  onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-                  style={inputStyle}
-                />
-              </label>
-              <label style={{ fontSize: 13, color: '#94A3B8' }}>
-                Текст объявления
-                <textarea
-                  value={form.description}
-                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                  rows={7}
-                  style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
-                />
-              </label>
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                <label style={{ fontSize: 13, color: '#94A3B8', flex: '1 1 140px' }}>
-                  Цена, ₽/м³
-                  <input
-                    type="number"
-                    value={form.price}
-                    onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
-                    style={inputStyle}
-                  />
-                </label>
-                <label style={{ fontSize: 13, color: '#94A3B8', flex: '1 1 120px' }}>
-                  Марка (необяз.)
-                  <input
-                    value={form.grade}
-                    onChange={(e) => setForm((f) => ({ ...f, grade: e.target.value }))}
-                    placeholder="М300"
-                    style={inputStyle}
-                  />
-                </label>
-              </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={() => void saveTemplate()}
-                  disabled={savingTemplate}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 10,
-                    border: 'none',
-                    background: '#059669',
-                    color: '#fff',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    opacity: savingTemplate ? 0.6 : 1,
-                  }}
-                >
-                  {savingTemplate ? 'Сохранение…' : 'Сохранить'}
-                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === 'templates' && (
+        <>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={startCreate}
+              disabled={!templatesPersistable}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '8px 12px',
+                borderRadius: 10,
+                border: 'none',
+                background: '#2563EB',
+                color: '#fff',
+                cursor: templatesPersistable ? 'pointer' : 'not-allowed',
+                opacity: templatesPersistable ? 1 : 0.5,
+                fontSize: 13,
+              }}
+            >
+              <Plus size={14} /> Новый шаблон
+            </button>
+          </div>
+
+          <p style={{ margin: '0 0 12px', color: '#64748B', fontSize: 12 }}>
+            Шаблоны хранятся в Цифре. Применение к объявлению меняет локальную карточку; на Авито
+            уходит только цена по кнопке «Цена на Авито».
+          </p>
+
+          {formOpen && (
+            <div style={volumeCardStyle({ padding: 16, marginBottom: 12 })}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+                <div style={{ color: '#F8FAFC', fontWeight: 700 }}>
+                  {creating ? 'Новый шаблон' : `Редактирование · ${editingKey}`}
+                </div>
                 <button
                   type="button"
                   onClick={cancelEdit}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 10,
-                    border: '1px solid #334155',
-                    background: 'transparent',
-                    color: '#94A3B8',
-                    cursor: 'pointer',
-                  }}
+                  style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}
                 >
-                  Отмена
+                  <X size={18} />
                 </button>
               </div>
-            </div>
-          </div>
-        )}
-
-        <div style={{ display: 'grid', gap: 8 }}>
-          {templates.map((t) => (
-            <div key={t.key} style={volumeCardSoftStyle({ padding: 12 })}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                <div style={{ flex: 1, minWidth: 200 }}>
-                  <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: 17, lineHeight: 1.35 }}>
-                    {t.title}
-                    {t.is_custom && (
-                      <span
-                        style={{
-                          marginLeft: 8,
-                          fontSize: 12,
-                          fontWeight: 600,
-                          color: '#A7F3D0',
-                          background: '#064E3B',
-                          padding: '2px 8px',
-                          borderRadius: 6,
-                          verticalAlign: 'middle',
-                        }}
-                      >
-                        изменён
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 15, color: '#CBD5E1', marginTop: 6, fontWeight: 600 }}>
-                    {Number(t.price).toLocaleString('ru-RU')} ₽
-                    <span style={{ color: '#94A3B8', fontWeight: 500 }}>
-                      {' '}· ключ {t.key}
-                      {t.grade ? ` · ${t.grade}` : ''}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 14,
-                      color: '#CBD5E1',
-                      marginTop: 8,
-                      whiteSpace: 'pre-wrap',
-                      maxHeight: 96,
-                      overflow: 'hidden',
-                      lineHeight: 1.45,
-                    }}
-                  >
-                    {t.description}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
-                  <button
-                    type="button"
-                    onClick={() => startEdit(t)}
-                    disabled={!templatesPersistable}
-                    title="Редактировать"
-                    style={iconBtnStyle}
-                  >
-                    <Pencil size={14} /> Изменить
-                  </button>
-                  {t.is_custom && (
-                    <button
-                      type="button"
-                      onClick={() => void resetTemplate(t.key)}
-                      title="Сбросить к дефолту"
-                      style={iconBtnStyle}
-                    >
-                      <RotateCcw size={14} /> Сброс
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </details>
-
-      {loading ? (
-        <p style={{ color: '#94A3B8' }}>Загрузка…</p>
-      ) : listings.length === 0 ? (
-        <div style={volumeCardStyle({ padding: 24, color: '#94A3B8' })}>
-          Объявлений в базе нет. Нажмите «Синхронизировать Авито».
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {listings.map((L) => (
-            <div key={L.id} style={volumeCardSoftStyle({ padding: 16 })}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                <div style={{ flex: 1, minWidth: 220 }}>
-                  <div style={{ color: '#F8FAFC', fontWeight: 700 }}>{L.title || `Объявление ${L.external_id}`}</div>
-                  <div style={{ color: '#94A3B8', fontSize: 13, marginTop: 4 }}>
-                    {L.source} · {L.status} · просмотры {L.views ?? 0} · контакты {L.contacts ?? 0}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'grid', gap: 10 }}>
+                <label style={{ fontSize: 13, color: '#94A3B8' }}>
+                  Ключ (латиница)
                   <input
-                    type="number"
-                    defaultValue={L.price ?? ''}
-                    key={`${L.id}-${L.price}`}
-                    style={{
-                      width: 120,
-                      padding: '8px 10px',
-                      borderRadius: 10,
-                      border: '1px solid #334155',
-                      background: '#0F172A',
-                      color: '#fff',
-                    }}
-                    id={`price-${L.id}`}
+                    value={form.key}
+                    disabled={!creating}
+                    onChange={(e) => setForm((f) => ({ ...f, key: e.target.value }))}
+                    placeholder="grade_M250"
+                    style={inputStyle}
                   />
+                </label>
+                <label style={{ fontSize: 13, color: '#94A3B8' }}>
+                  Название
+                  <input
+                    value={form.title}
+                    onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                    style={inputStyle}
+                  />
+                </label>
+                <label style={{ fontSize: 13, color: '#94A3B8' }}>
+                  Текст объявления
+                  <textarea
+                    value={form.description}
+                    onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                    rows={7}
+                    style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
+                  />
+                </label>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <label style={{ fontSize: 13, color: '#94A3B8', flex: '1 1 140px' }}>
+                    Цена, ₽/м³
+                    <input
+                      type="number"
+                      value={form.price}
+                      onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
+                      style={inputStyle}
+                    />
+                  </label>
+                  <label style={{ fontSize: 13, color: '#94A3B8', flex: '1 1 120px' }}>
+                    Марка (необяз.)
+                    <input
+                      value={form.grade}
+                      onChange={(e) => setForm((f) => ({ ...f, grade: e.target.value }))}
+                      placeholder="М300"
+                      style={inputStyle}
+                    />
+                  </label>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button
                     type="button"
-                    onClick={() => {
-                      const el = document.getElementById(`price-${L.id}`) as HTMLInputElement | null;
-                      const price = Number(el?.value);
-                      if (Number.isFinite(price)) void updatePrice(L.id, price);
-                    }}
+                    onClick={() => void saveTemplate()}
+                    disabled={savingTemplate}
                     style={{
-                      padding: '8px 12px',
+                      padding: '10px 14px',
                       borderRadius: 10,
                       border: 'none',
-                      background: '#2563EB',
+                      background: '#059669',
                       color: '#fff',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      opacity: savingTemplate ? 0.6 : 1,
+                    }}
+                  >
+                    {savingTemplate ? 'Сохранение…' : 'Сохранить'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelEdit}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: 10,
+                      border: '1px solid #334155',
+                      background: 'transparent',
+                      color: '#94A3B8',
                       cursor: 'pointer',
                     }}
                   >
-                    Цена
+                    Отмена
                   </button>
-                  <select
-                    defaultValue=""
-                    onChange={(e) => {
-                      if (e.target.value) void applyTemplate(L.id, e.target.value);
-                    }}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: 10,
-                      background: '#0F172A',
-                      color: '#E2E8F0',
-                      border: '1px solid #334155',
-                      maxWidth: 160,
-                    }}
-                  >
-                    <option value="">Шаблон…</option>
-                    {templates.map((t) => (
-                      <option key={t.key} value={t.key}>{t.title.slice(0, 40)}</option>
-                    ))}
-                  </select>
-                  {L.url && (
-                    <a href={L.url} target="_blank" rel="noreferrer" style={{ color: '#93C5FD' }}>
-                      <ExternalLink size={18} />
-                    </a>
-                  )}
                 </div>
               </div>
             </div>
-          ))}
-        </div>
+          )}
+
+          <div style={{ display: 'grid', gap: 8 }}>
+            {templates.map((t) => (
+              <div key={t.key} style={volumeCardSoftStyle({ padding: 12 })}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: 17, lineHeight: 1.35 }}>
+                      {t.title}
+                      {t.is_custom && (
+                        <span
+                          style={{
+                            marginLeft: 8,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: '#A7F3D0',
+                            background: '#064E3B',
+                            padding: '2px 8px',
+                            borderRadius: 6,
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          изменён
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 15, color: '#CBD5E1', marginTop: 6, fontWeight: 600 }}>
+                      {Number(t.price).toLocaleString('ru-RU')} ₽
+                      <span style={{ color: '#94A3B8', fontWeight: 500 }}>
+                        {' '}
+                        · ключ {t.key}
+                        {t.grade ? ` · ${t.grade}` : ''}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 14,
+                        color: '#CBD5E1',
+                        marginTop: 8,
+                        whiteSpace: 'pre-wrap',
+                        maxHeight: 96,
+                        overflow: 'hidden',
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      {t.description}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                    <button
+                      type="button"
+                      onClick={() => startEdit(t)}
+                      disabled={!templatesPersistable}
+                      title="Редактировать"
+                      style={iconBtnStyle}
+                    >
+                      <Pencil size={14} /> Изменить
+                    </button>
+                    {t.is_custom && (
+                      <button
+                        type="button"
+                        onClick={() => void resetTemplate(t.key)}
+                        title="Сбросить к дефолту"
+                        style={iconBtnStyle}
+                      >
+                        <RotateCcw size={14} /> Сброс
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { isAvitoConfigured } from '@/lib/integrations/avito';
+import { upsertMarketplaceListing } from '@/lib/integrations/avito/upsertListing';
 import { registerAllMarketplaceAdapters } from '@/lib/integrations/registerAll';
 import { getMarketplaceAdapter } from '@/lib/integrations/marketplaceAdapter';
 import { listListingTemplates } from '@/lib/avitoListingTemplates';
@@ -65,30 +66,19 @@ export async function POST(request: NextRequest) {
 
     const listings = await adapter.fetchListings();
     let upserted = 0;
+    const errors: string[] = [];
     for (const L of listings) {
-      const { error } = await supabaseAdmin.from('marketplace_listings').upsert(
-        {
-          source: L.source,
-          external_id: L.external_id,
-          title: L.title,
-          description: L.description,
-          price: L.price,
-          status: L.status || 'active',
-          url: L.url,
-          category: L.category,
-          city: L.city,
-          views: L.views ?? 0,
-          contacts: L.contacts ?? 0,
-          template_key: L.template_key,
-          raw_payload: L.raw_payload,
-          last_synced_at: new Date().toISOString(),
-        },
-        { onConflict: 'source,external_id' },
-      );
-      if (!error) upserted += 1;
+      const r = await upsertMarketplaceListing(L);
+      if (r.ok) upserted += 1;
+      else if (r.error) errors.push(`${L.external_id}: ${r.error}`);
     }
 
-    return NextResponse.json({ success: true, upserted, total: listings.length });
+    return NextResponse.json({
+      success: errors.length === 0,
+      upserted,
+      total: listings.length,
+      errors: errors.length ? errors.slice(0, 5) : undefined,
+    });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Ошибка';
     return NextResponse.json({ success: false, error: message }, { status: 500 });

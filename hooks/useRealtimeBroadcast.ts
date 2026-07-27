@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
 import type { RealtimeStatus } from './useRealtimeOrders';
+import { getWakeGapMs, SOCKET_STALE_GAP_MS } from './useWakeReload';
 
 interface BroadcastListener {
   onInsert?: (record: any) => void;
@@ -248,10 +249,45 @@ function attachGlobalListeners() {
   if (globalListenersAttached || typeof document === 'undefined') return;
   globalListenersAttached = true;
 
-  // Немедленный (не-шахматный) реконнект: для online/pageshow/resume — там нет "шторма"
-  const reconnectAll = () => {
+  // После долгого сна/заморозки сокет мёртв: мягкий reconnect даёт минуты
+  // TIMED_OUT → CHANNEL_ERROR. Сразу hard-reset (если WakeReload не сделал reload).
+  let lastRecoverAt = 0;
+  const recoverAfterWake = (source: string, opts?: { softOk?: boolean }) => {
     if (document.visibilityState !== 'visible') return;
-    registry.forEach((_e, topic) => reconnect(topic));
+    if (registry.size === 0) return;
+
+    const now = Date.now();
+    if (now - lastRecoverAt < 3000) return;
+
+    const gap = getWakeGapMs();
+    const stale = gap >= SOCKET_STALE_GAP_MS;
+
+    // focus/online/pageshow без bfcache — только если простой длинный,
+    // иначе каждый клик в окно срывал бы живые каналы.
+    if (!stale && !opts?.softOk) return;
+
+    lastRecoverAt = now;
+
+    if (stale) {
+      // 700ms: даём useWakeReload шанс сделать location.reload при gap > 10 мин
+      // (reload сбросит всё сам). Если reload не нужен — поднимаем свежий сокет.
+      console.warn(
+        `🔌 [Broadcast] Пробуждение (${source}): простой ~${Math.round(gap / 60000)} мин → hard-reset`,
+      );
+      firstErrorAt = null;
+      setTimeout(() => {
+        if (document.visibilityState !== 'visible') return;
+        void hardResetSocket();
+      }, 700);
+      return;
+    }
+
+    // Короткое переключение вкладки — шахматное переподключение.
+    let i = 0;
+    registry.forEach((_e, topic) => {
+      setTimeout(() => reconnect(topic), 500 + i * 200);
+      i += 1;
+    });
   };
 
   document.addEventListener('visibilitychange', () => {
@@ -262,28 +298,22 @@ function attachGlobalListeners() {
       // обрыва сети, который давно восстановился).
       firstErrorAt = null;
     } else {
-      // При пробуждении: шахматное переподключение со стартовой задержкой.
-      // Задержка 500ms даёт useWakeReload время выполнить window.location.reload()
-      // (если сон был длинным) ДО того, как начнётся шторм реконнектов.
-      // Шаг 200ms между топиками размазывает нагрузку на event loop.
-      let i = 0;
-      registry.forEach((_e, topic) => {
-        setTimeout(() => reconnect(topic), 500 + i * 200);
-        i++;
-      });
+      recoverAfterWake('visibility', { softOk: true });
     }
   });
-  window.addEventListener('online', reconnectAll);
-  // Мобильные: возврат из bfcache и выход из «заморозки» (Page Lifecycle)
+  window.addEventListener('online', () => recoverAfterWake('online'));
+  // Мобильные / Mac sleep: возврат из bfcache и выход из «заморозки»
   window.addEventListener('pageshow', (e) => {
-    if ((e as PageTransitionEvent).persisted) reconnectAll();
+    const persisted = (e as PageTransitionEvent).persisted;
+    recoverAfterWake('pageshow', { softOk: persisted });
   });
-  document.addEventListener('resume', reconnectAll);
+  document.addEventListener('resume', () => recoverAfterWake('resume', { softOk: true }));
+  window.addEventListener('focus', () => recoverAfterWake('focus'));
 
   // Watchdog: если сбой держится дольше HARD_RESET_AFTER_MS — сокет считается
   // «мёртвым», делаем жёсткий сброс всего соединения. Проверяем только на
   // видимой вкладке (в фоне браузер всё равно троттлит; пробуждение поднимет
-  // страницу через useWakeReload/reconnectAll).
+  // страницу через useWakeReload/recoverAfterWake).
   setInterval(() => {
     if (document.visibilityState !== 'visible') return;
     if (firstErrorAt === null) return;

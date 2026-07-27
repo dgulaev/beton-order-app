@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { CheckCircle } from 'lucide-react';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
 import ModalSelect from '../components/ModalSelect';
 import ModalDateInput from '../components/ModalDateInput';
@@ -27,7 +29,7 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
 
-  const [filter, setFilter] = useState<'all' | 'my_created' | 'assigned_to_me' | 'created_by_me'>('all');
+  const [filter, setFilter] = useState<'all' | 'assigned_to_me' | 'created_by_me'>('all');
   const [editingTaskId, setEditingTaskId] = useState<number | null>(null);
 
   const [formData, setFormData] = useState({
@@ -50,9 +52,15 @@ export default function TasksPage() {
 
   const fetchTasks = async () => {
     try {
-      const res = await fetch(`/api/adminCifra/tasks?userId=${userId}`);
+      const res = await fetch('/api/adminCifra/tasks', {
+        headers: adminCifraAuthHeaders(),
+      });
       const data = await res.json();
-      console.log('📋 Получено задач с сервера:', data.tasks?.length || 0, data);
+      if (!res.ok) {
+        console.error('Ошибка загрузки задач:', data.error);
+        setTasks([]);
+        return;
+      }
       setTasks(data.tasks || []);
     } catch (err) {
       console.error('Ошибка загрузки задач:', err);
@@ -63,7 +71,9 @@ export default function TasksPage() {
 
   const fetchEmployees = async () => {
     try {
-      const res = await fetch('/api/adminCifra/employees');
+      const res = await fetch('/api/adminCifra/employees', {
+        headers: adminCifraAuthHeaders(),
+      });
       const data = await res.json();
       setEmployees(data.employees || []);
     } catch (err) {
@@ -81,15 +91,12 @@ useEffect(() => {
 }, []);
 
   // ==================== БЛОК 3: ФИЛЬТРАЦИЯ ЗАДАЧ ====================
-  const filteredTasks = tasks.filter(task => {
+  const filteredTasks = tasks.filter((task) => {
     if (filter === 'all') return true;
-    if (filter === 'my_created') return String(task.created_by) === userId;
     if (filter === 'assigned_to_me') return String(task.assigned_to) === userId;
     if (filter === 'created_by_me') return String(task.created_by) === userId;
     return true;
   });
-
-  console.log('🔍 Текущий фильтр:', filter, ' | Задач после фильтра:', filteredTasks.length);
 
   // ==================== БЛОК 4: СОЗДАНИЕ / РЕДАКТИРОВАНИЕ ЗАДАЧИ ====================
 const createTask = async (e: React.FormEvent) => {
@@ -111,15 +118,12 @@ const createTask = async (e: React.FormEvent) => {
       due_date: formData.due_date || null
     };
   } else {
-    bodyData = { 
-      ...formData,
-      created_by: parseInt(userId!) 
-    };
+    bodyData = { ...formData };
   }
 
   const res = await fetch('/api/adminCifra/tasks', {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(bodyData)
   });
 
@@ -145,7 +149,7 @@ const updateTaskStatus = async (taskId: number, newStatus: string, note?: string
 
   const res = await fetch('/api/adminCifra/tasks', {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body)
   });
 
@@ -188,11 +192,8 @@ const deleteTask = async (taskId: number) => {
   try {
     const res = await fetch('/api/adminCifra/tasks', {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        taskId, 
-        userId: parseInt(userId!) 
-      })
+      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ taskId }),
     });
 
     const result = await res.json();
@@ -336,7 +337,7 @@ const showVisualNotification = (type: string, data: any) => {
         marginBottom: '14px'
       }}>
         {/* ==================== ЗАГОЛОВОК + КНОПКА ДОБАВИТЬ ==================== */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
           <h1 style={{
             fontSize: '26px',
             fontWeight: 700,
@@ -366,31 +367,41 @@ const showVisualNotification = (type: string, data: any) => {
           </button>
         </div>
 
+        <p style={{ margin: '0 0 12px', color: '#94A3B8', fontSize: 13, lineHeight: 1.45 }}>
+          Внутренние поручения сотрудникам. Входящие заявки клиентов — в разделе{' '}
+          <Link href="/adminCifra/leads" style={{ color: '#6EE7B7', textDecoration: 'underline' }}>
+            Лиды
+          </Link>
+          .
+        </p>
+
         {/* ==================== ПАНЕЛЬ ФИЛЬТРОВ ==================== */}
         <div style={{
           display: 'flex',
           gap: '8px',
           flexWrap: 'wrap'
         }}>
-          {(['all', 'my_created', 'assigned_to_me', 'created_by_me'] as const).map(f => (
+          {([
+            { value: 'all' as const, label: 'Все' },
+            { value: 'assigned_to_me' as const, label: 'На мне' },
+            { value: 'created_by_me' as const, label: 'Я создал' },
+          ]).map((f) => (
             <button
-              key={f}
-              onClick={() => setFilter(f)}
+              key={f.value}
+              type="button"
+              onClick={() => setFilter(f.value)}
               style={{
                 padding: '10px 20px',
                 background: 'transparent',
                 border: 'none',
-                color: filter === f ? '#10B981' : '#64748B',
+                color: filter === f.value ? '#10B981' : '#64748B',
                 fontSize: '17px',
                 fontWeight: '600',
                 transition: 'color 0.25s ease',
                 cursor: 'pointer',
               }}
             >
-              {f === 'all' && 'Все'}
-              {f === 'my_created' && 'Созданные мной'}
-              {f === 'assigned_to_me' && 'Назначенные мне'}
-              {f === 'created_by_me' && 'Мои задачи'}
+              {f.label}
             </button>
           ))}
         </div>

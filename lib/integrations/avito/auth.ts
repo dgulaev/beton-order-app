@@ -6,7 +6,11 @@ type TokenCache = {
 let cache: TokenCache | null = null;
 
 export function isAvitoConfigured(): boolean {
-  return Boolean(process.env.AVITO_CLIENT_ID && process.env.AVITO_CLIENT_SECRET);
+  return Boolean(
+    process.env.AVITO_CLIENT_ID?.trim() &&
+      process.env.AVITO_CLIENT_SECRET?.trim() &&
+      process.env.AVITO_USER_ID?.trim(),
+  );
 }
 
 export function getAvitoUserId(): string | null {

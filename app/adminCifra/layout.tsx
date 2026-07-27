@@ -32,6 +32,16 @@ interface PersistedNotif {
   title: string;
   message: string;
   timestamp: number;
+  /** Куда вести по клику (по умолчанию — заявки). */
+  href?: string;
+}
+
+function escapeToastHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function resolveNotifIcon(raw?: string): NotifIconKey {
@@ -307,7 +317,9 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
   // Ref для функции создания тоста — позволяет вызывать её из mount-эффекта
   // без проблем с замыканиями (всегда последняя версия функции)
-  const createToastRef = useRef<((id: string, iconKey: string, title: string, message: string) => void) | null>(null);
+  const createToastRef = useRef<
+    ((id: string, iconKey: string, title: string, message: string, href?: string) => void) | null
+  >(null);
 
   // ==================== 2.1 СОСТОЯНИЕ УВЕДОМЛЕНИЙ ПО КЛИЕНТАМ ====================
   const [clientReminders, setClientReminders] = useState<any[]>([]);
@@ -394,7 +406,13 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
   // ==================== 4.2 СОЗДАНИЕ DOM-ТОСТА (не зависит от sound/storage) ====================
   // Обновляем ref на каждом рендере — mount-эффект восстановления всегда вызовет актуальную версию
-  createToastRef.current = (id: string, iconKey: string, title: string, message: string) => {
+  createToastRef.current = (
+    id: string,
+    iconKey: string,
+    title: string,
+    message: string,
+    href = '/adminCifra/zayavki',
+  ) => {
     const notif = document.createElement('div');
     notif.dataset.notifId = id;
     // Салатовый тост (как раньше) — отдельно от тёмных appAlert/confirm.
@@ -421,8 +439,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     notif.innerHTML = `
       ${notifIconHtml(icon)}
       <div class="toast-text" style="flex: 1; min-width: 0; overflow: hidden;">
-        <div class="toast-title" style="font-size: 16px; font-weight: 700; white-space: nowrap;">${title}</div>
-        <div class="toast-msg" style="font-size: 14px; opacity: 0.92; white-space: nowrap;">${message}</div>
+        <div class="toast-title" style="font-size: 16px; font-weight: 700; white-space: nowrap;">${escapeToastHtml(title)}</div>
+        <div class="toast-msg" style="font-size: 14px; opacity: 0.92; white-space: nowrap;">${escapeToastHtml(message)}</div>
       </div>
       <div style="font-size: 22px; opacity: 0.7; cursor: pointer; line-height: 1; padding: 2px 4px; flex-shrink: 0;" class="close-btn">✕</div>
     `;
@@ -480,7 +498,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
     notif.addEventListener('click', (e) => {
       if (e.target !== closeBtn) {
-        window.location.href = '/adminCifra/zayavki';
+        window.location.href = href || '/adminCifra/zayavki';
         closeNotification();
       }
     });
@@ -497,7 +515,13 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     // Небольшая задержка чтобы контейнер успел смонтироваться в DOM
     const timer = setTimeout(() => {
       saved.forEach(n => {
-        createToastRef.current?.(n.id, n.icon || n.emoji || 'package', n.title, n.message);
+        createToastRef.current?.(
+          n.id,
+          n.icon || n.emoji || 'package',
+          n.title,
+          n.message,
+          n.href,
+        );
       });
       // Обновляем счётчик
       setNewOrdersCount(prev => prev + saved.length);
@@ -719,16 +743,32 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   useLeadChangeNotifications({
     enabled: !!userRole && staffRoles.includes(userRole),
     onNewLead: (lead) => {
-      // Спам уже отфильтрован в хуке; тост — только для inbox
+      // Тот же салатовый тост, что и у заявок (звук + localStorage + клик).
       const sourceLabel = LEAD_SOURCE_LABEL[lead.source] || lead.source;
-      const preview = (lead.raw_text || lead.name || lead.phone || 'Без текста').slice(0, 120);
+      const who = (lead.name || '').trim();
+      const preview = (lead.raw_text || lead.phone || 'Без текста').slice(0, 120);
+      const isAvito = lead.source === 'avito';
+      const title = isAvito
+        ? who
+          ? `${who} · сообщение в Авито`
+          : 'Новое сообщение · Авито'
+        : `Новый лид · ${sourceLabel}`;
+      const href = isAvito
+        ? lead.listing_id
+          ? `/adminCifra/marketplace?open=${encodeURIComponent(lead.listing_id)}&chat=1`
+          : '/adminCifra/marketplace'
+        : '/adminCifra/leads';
+      const id = `lead-${lead.id}`;
+      savePersistedNotif({
+        id,
+        icon: 'package',
+        title,
+        message: preview,
+        timestamp: Date.now(),
+        href,
+      });
       playNotificationSound();
-      createToastRef.current?.(
-        `lead-${lead.id}-${Date.now()}`,
-        'package',
-        `Новый лид · ${sourceLabel}`,
-        preview,
-      );
+      createToastRef.current?.(id, 'package', title, preview, href);
     },
   });
 
@@ -1226,11 +1266,6 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               </Link>
             ) : (
               <>
-                <Link href="/adminCifra/tasks" style={navLinkStyle(isActive('/adminCifra/tasks'), isCollapsed)}>
-                  <CheckCircle size={22} />
-                  <span style={navTextStyle(isCollapsed)}>Задачи</span>
-                </Link>
-
                 <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
                   <FlaskConical size={22} />
                   <span style={navTextStyle(isCollapsed)}>Лаборатория</span>
@@ -1244,6 +1279,12 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 <Link href="/adminCifra/clients" style={navLinkStyle(isActive('/adminCifra/clients'), isCollapsed)}>
                   <Users size={22} />
                   <span style={navTextStyle(isCollapsed)}>Клиенты</span>
+                </Link>
+
+                {/* Операционка: поручения сотрудникам (не путать с Лидами в «Продажи») */}
+                <Link href="/adminCifra/tasks" style={navLinkStyle(isActive('/adminCifra/tasks'), isCollapsed)}>
+                  <CheckCircle size={22} />
+                  <span style={navTextStyle(isCollapsed)}>Задачи</span>
                 </Link>
 
                 <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>

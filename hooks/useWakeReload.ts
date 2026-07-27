@@ -16,6 +16,10 @@ import { supabase } from '@/lib/supabaseClient';
 // врут). Он опирается только на разрыв во времени между тиками локального
 // heartbeat — это простое сравнение Date.now() в памяти, БЕЗ каких-либо запросов
 // к серверу (в отличие от старого полинга): ноль трафика, ноль нагрузки.
+//
+// Пульс пишется в sessionStorage: после сна ноутбука Next/HMR часто ремаунтит
+// хук и обнуляет in-memory lastBeat — без persistence детектор «съедает» день
+// сна и не делает reload, а страница минутами крутит мёртвый WebSocket.
 
 import { useEffect, useRef } from 'react';
 
@@ -26,24 +30,57 @@ const HEARTBEAT_MS = 30_000;
 // скрытой вкладки ~1 тик/мин), поэтому менеджеров при коротких переключениях
 // это не трогает.
 const FROZEN_GAP_MS = 10 * 60_000;
+/** После такого простоя сокет почти всегда мёртв — нужен hard-reset, не «мягкий» reconnect. */
+export const SOCKET_STALE_GAP_MS = 2 * 60_000;
 // Не перезагружаемся повторно чаще, чем раз в минуту (защита от циклов).
 const RELOAD_GUARD_MS = 60_000;
 const RELOAD_GUARD_KEY = 'wakeReloadAt';
+export const WAKE_LAST_BEAT_KEY = 'wakeLastBeatAt';
+const WAKE_HIDDEN_AT_KEY = 'wakeHiddenAt';
+
+function readTs(key: string): number | null {
+  try {
+    const n = Number(sessionStorage.getItem(key) || 0);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeTs(key: string, value: number) {
+  try {
+    sessionStorage.setItem(key, String(value));
+  } catch {
+    // sessionStorage может быть недоступен — не критично.
+  }
+}
+
+function clearTs(key: string) {
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    // ignore
+  }
+}
+
+/** Сколько мс прошло с последнего «пульса» вкладки (0 = неизвестно). */
+export function getWakeGapMs(): number {
+  const t = readTs(WAKE_LAST_BEAT_KEY);
+  if (!t) return 0;
+  return Math.max(0, Date.now() - t);
+}
+
+export function touchWakeBeat(now = Date.now()) {
+  writeTs(WAKE_LAST_BEAT_KEY, now);
+}
 
 export function useWakeReload(enabled = true) {
   useEffect(() => {
     if (!enabled || typeof window === 'undefined') return;
 
-    let lastBeat = Date.now();
-    let hiddenAt: number | null = null;
-
     const reloadedRecently = () => {
-      try {
-        const t = Number(sessionStorage.getItem(RELOAD_GUARD_KEY) || 0);
-        return Date.now() - t < RELOAD_GUARD_MS;
-      } catch {
-        return false;
-      }
+      const t = readTs(RELOAD_GUARD_KEY);
+      return t != null && Date.now() - t < RELOAD_GUARD_MS;
     };
 
     const reloadOnce = (reason: string) => {
@@ -51,11 +88,11 @@ export function useWakeReload(enabled = true) {
       // может зациклиться.
       if (document.visibilityState !== 'visible') return;
       if (reloadedRecently()) return;
-      try {
-        sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now()));
-      } catch {
-        // sessionStorage может быть недоступен — не критично.
-      }
+      writeTs(RELOAD_GUARD_KEY, Date.now());
+      // Сбрасываем пульс ДО reload, иначе после перезагрузки gap снова огромный
+      // и страница уйдёт в цикл перезагрузок.
+      touchWakeBeat();
+      clearTs(WAKE_HIDDEN_AT_KEY);
       console.warn(`♻️ [WakeReload] Перезагрузка страницы: ${reason}`);
       // Принудительно закрываем WebSocket ПЕРЕД перезагрузкой.
       // Без этого React unmount пытается graceful-завершить каналы через
@@ -66,14 +103,36 @@ export function useWakeReload(enabled = true) {
       setTimeout(() => window.location.reload(), 150);
     };
 
+    const checkGapAndReload = (reasonPrefix: string) => {
+      const gap = getWakeGapMs();
+      if (gap > FROZEN_GAP_MS) {
+        reloadOnce(`${reasonPrefix} ${Math.round(gap / 60000)} мин`);
+        return true;
+      }
+      const hiddenAt = readTs(WAKE_HIDDEN_AT_KEY);
+      if (hiddenAt && Date.now() - hiddenAt > FROZEN_GAP_MS) {
+        reloadOnce(
+          `${reasonPrefix} (скрыта) ${Math.round((Date.now() - hiddenAt) / 60000)} мин`,
+        );
+        return true;
+      }
+      return false;
+    };
+
+    // При маунте (в т.ч. HMR после сна) — сразу проверяем сохранённый пульс.
+    if (document.visibilityState === 'visible') {
+      checkGapAndReload('разрыв пульса при старте');
+    }
+    touchWakeBeat();
+
     // Тик heartbeat: ловит замороженную вкладку, которая наконец получила
     // процессорное время (экран включили / окно развернули). Работает даже
-    // если visibilitychange не пришёл (напр. экран выключался, а вкладка
-    // формально оставалась visible).
+    // если visibilitychange не пришёл (напр. Mac sleep при visible-вкладке).
     const beat = setInterval(() => {
       const now = Date.now();
-      const gap = now - lastBeat;
-      lastBeat = now;
+      const prev = readTs(WAKE_LAST_BEAT_KEY) ?? now;
+      const gap = now - prev;
+      touchWakeBeat(now);
       if (gap > FROZEN_GAP_MS) {
         reloadOnce(`разрыв пульса ${Math.round(gap / 60000)} мин`);
       }
@@ -81,21 +140,44 @@ export function useWakeReload(enabled = true) {
 
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        hiddenAt = Date.now();
+        writeTs(WAKE_HIDDEN_AT_KEY, Date.now());
+        touchWakeBeat();
       } else {
-        lastBeat = Date.now();
-        if (hiddenAt && Date.now() - hiddenAt > FROZEN_GAP_MS) {
-          reloadOnce(`вкладка была скрыта ${Math.round((Date.now() - hiddenAt) / 60000)} мин`);
-        }
-        hiddenAt = null;
+        checkGapAndReload('вкладка была скрыта');
+        clearTs(WAKE_HIDDEN_AT_KEY);
+        touchWakeBeat();
       }
     };
 
+    // Mac sleep часто НЕ шлёт visibilitychange=hidden — ловим pageshow/focus/online.
+    const onPageShow = (e: Event) => {
+      if ((e as PageTransitionEvent).persisted || document.visibilityState === 'visible') {
+        checkGapAndReload('pageshow после простоя');
+        touchWakeBeat();
+      }
+    };
+    const onFocus = () => {
+      if (document.visibilityState !== 'visible') return;
+      checkGapAndReload('focus после простоя');
+      touchWakeBeat();
+    };
+    const onOnline = () => {
+      if (document.visibilityState !== 'visible') return;
+      checkGapAndReload('online после простоя');
+      touchWakeBeat();
+    };
+
     document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onOnline);
 
     return () => {
       clearInterval(beat);
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onOnline);
     };
   }, [enabled]);
 }
@@ -127,7 +209,8 @@ export function useWakeRefresh(onWake: () => void, enabled = true) {
       try {
         cbRef.current();
       } catch (e) {
-        console.warn('[WakeRefresh] onWake error:', e);
+        // Не console.error(Error) — Next.js Dev Overlay рисует белый экран.
+        console.warn('[WakeRefresh] onWake error:', e instanceof Error ? e.message : e);
       }
     };
 

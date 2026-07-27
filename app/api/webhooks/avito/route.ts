@@ -26,7 +26,19 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const body = await request.json();
+    // Авито может пинговать пустым телом — отвечаем 200 сразу.
+    const raw = await request.text();
+    if (!raw.trim() || raw.trim() === '{}') {
+      return NextResponse.json({ success: true, created: 0, skipped: 0, total: 0, ping: true });
+    }
+
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return NextResponse.json({ success: true, created: 0, skipped: 1, total: 0 });
+    }
+
     const { leads } = await adapter.handleWebhook(body, request.headers);
 
     let created = 0;
@@ -38,6 +50,7 @@ export async function POST(request: NextRequest) {
       else skipped += 1;
     }
 
+    // Быстрый ответ Авито (лиды уже в БД + notifyManagers / realtime).
     return NextResponse.json({ success: true, created, skipped, total: leads.length });
   } catch (e: unknown) {
     console.error('[webhooks/avito]', e);

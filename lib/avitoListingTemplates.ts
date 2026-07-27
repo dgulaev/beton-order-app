@@ -14,6 +14,97 @@ export type ListingTemplate = {
 const ZONE = 'Брянск и область';
 const MIN_VOLUME = CONCRETE_CONFIG.limits.minVolume;
 
+/** Запасной прайс ФБС, если рецепты из БД недоступны (актуально на 2026). */
+const FBS_FALLBACK: Array<{
+  code: string;
+  price: number;
+  length_cm: number;
+  width_cm: number;
+  height_cm: number;
+}> = [
+  { code: '12-4-6', price: 2144, length_cm: 120, width_cm: 40, height_cm: 60 },
+  { code: '24-3-6', price: 3300, length_cm: 240, width_cm: 30, height_cm: 60 },
+  { code: '24-4-6', price: 4200, length_cm: 240, width_cm: 40, height_cm: 60 },
+  { code: '24-5-6', price: 5200, length_cm: 240, width_cm: 50, height_cm: 60 },
+];
+
+type FbsRecipeRow = {
+  code: string;
+  name?: string | null;
+  price: number | string;
+  length_cm?: number | string | null;
+  width_cm?: number | string | null;
+  height_cm?: number | string | null;
+};
+
+function fbsTemplateKey(code: string): string {
+  return `fbs_${String(code).trim().replace(/\./g, '-')}`;
+}
+
+function formatFbsSizeCm(row: {
+  length_cm?: number | string | null;
+  width_cm?: number | string | null;
+  height_cm?: number | string | null;
+}): string | null {
+  const L = Number(row.length_cm);
+  const W = Number(row.width_cm);
+  const H = Number(row.height_cm);
+  if (![L, W, H].every((n) => Number.isFinite(n) && n > 0)) return null;
+  return `${L}×${W}×${H} см`;
+}
+
+/** Шаблоны ФБС: общий + по типоразмерам (цена за 1 шт.). */
+export function buildFbsListingTemplates(rows: FbsRecipeRow[] = FBS_FALLBACK): ListingTemplate[] {
+  const items = rows
+    .map((r) => ({
+      code: String(r.code || '').trim(),
+      name: (r.name || '').trim() || `ФБС ${String(r.code || '').trim()}`,
+      price: Number(r.price),
+      length_cm: r.length_cm,
+      width_cm: r.width_cm,
+      height_cm: r.height_cm,
+    }))
+    .filter((r) => r.code && Number.isFinite(r.price) && r.price > 0)
+    .sort((a, b) => a.code.localeCompare(b.code, 'ru'));
+
+  if (items.length === 0) return [];
+
+  const codesLabel = items.map((i) => i.code).join(', ');
+  const minPrice = Math.min(...items.map((i) => i.price));
+
+  const service: ListingTemplate = {
+    key: 'fbs_delivery',
+    title: `Фундаментные блоки ФБС — ${ZONE}`,
+    description: [
+      `Фундаментные блоки ФБС со склада, ${ZONE}.`,
+      `В наличии: ${codesLabel}.`,
+      `Цена от ${minPrice.toLocaleString('ru-RU')} ₽/шт (зависит от типоразмера).`,
+      'Доставка манипулятором / самовывоз — уточняйте у менеджера.',
+      'Напишите типоразмер и количество — ответим по наличию и срокам.',
+    ].join('\n'),
+    price: minPrice,
+  };
+
+  const bySize: ListingTemplate[] = items.map((item) => {
+    const size = formatFbsSizeCm(item);
+    return {
+      key: fbsTemplateKey(item.code),
+      grade: item.code,
+      title: `${item.name} — ${ZONE}`,
+      description: [
+        `${item.name}${size ? ` (${size})` : ''}.`,
+        `Цена от ${item.price.toLocaleString('ru-RU')} ₽/шт.`,
+        `Отгрузка: ${ZONE}.`,
+        'Доставка манипулятором или самовывоз.',
+        'Напишите количество и адрес — рассчитаем стоимость доставки.',
+      ].join('\n'),
+      price: item.price,
+    };
+  });
+
+  return [service, ...bySize];
+}
+
 /** Дефолтные шаблоны из прайса завода (если в БД нет переопределения). */
 export function buildDefaultListingTemplates(): ListingTemplate[] {
   const grades = Object.keys(CONCRETE_CONFIG.prices) as ConcreteGrade[];
@@ -45,7 +136,7 @@ export function buildDefaultListingTemplates(): ListingTemplate[] {
     price: CONCRETE_CONFIG.prices[grade],
   }));
 
-  return [service, ...byGrade];
+  return [service, ...byGrade, ...buildFbsListingTemplates()];
 }
 
 /** @deprecated используйте buildDefaultListingTemplates / listListingTemplates */
@@ -77,9 +168,24 @@ export type ListTemplatesResult = {
   persistError?: string;
 };
 
-/** Дефолты + переопределения из БД. */
+async function loadFbsRecipes(): Promise<FbsRecipeRow[]> {
+  const { data, error } = await supabaseAdmin
+    .from('recipes')
+    .select('code, name, price, length_cm, width_cm, height_cm')
+    .eq('is_active', true)
+    .eq('item_type', 'fbs')
+    .order('code');
+
+  if (error || !data?.length) return FBS_FALLBACK;
+  return data;
+}
+
+/** Дефолты + переопределения из БД. Цены ФБС подтягиваются из recipes. */
 export async function listListingTemplates(): Promise<ListTemplatesResult> {
-  const defaults = buildDefaultListingTemplates();
+  const fbsRows = await loadFbsRecipes();
+  const concrete = buildDefaultListingTemplates().filter((t) => !t.key.startsWith('fbs_'));
+  const defaults: ListingTemplate[] = [...concrete, ...buildFbsListingTemplates(fbsRows)];
+
   const { data, error } = await supabaseAdmin
     .from('marketplace_listing_templates')
     .select('key, title, description, price, grade')
@@ -154,7 +260,7 @@ export async function saveListingTemplate(input: SaveTemplateInput): Promise<Lis
   return rowToTemplate(data);
 }
 
-/** Удалить переопределение — вернётся дефолт из кода (если был). */
+/** Удалить переопределение — вернётся дефолт из кода/рецептов (если был). */
 export async function resetListingTemplate(key: string): Promise<ListingTemplate | null> {
   const { error } = await supabaseAdmin
     .from('marketplace_listing_templates')
@@ -163,7 +269,6 @@ export async function resetListingTemplate(key: string): Promise<ListingTemplate
 
   if (error) throw new Error(error.message);
 
-  const defaults = buildDefaultListingTemplates();
-  const fallback = defaults.find((t) => t.key === key);
-  return fallback ? { ...fallback, is_custom: false } : null;
+  const { templates } = await listListingTemplates();
+  return templates.find((t) => t.key === key) ?? null;
 }

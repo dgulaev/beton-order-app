@@ -37,20 +37,30 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
+    // Ручное создание из админки — всегда manual (нельзя подменить source на avito/demand).
+    let volume: number | null = null;
+    if (body.volume_m3 != null && body.volume_m3 !== '') {
+      const n = Number(body.volume_m3);
+      if (!Number.isFinite(n) || n < 0) {
+        return NextResponse.json({ success: false, error: 'Некорректный объём' }, { status: 400 });
+      }
+      volume = n;
+    }
+
     const draft: LeadDraft = {
-      source: body.source || 'manual',
-      external_id: body.external_id ?? null,
+      source: 'manual',
+      external_id: null,
       phone: body.phone ?? null,
       name: body.name ?? null,
-      chat_url: body.chat_url ?? null,
+      chat_url: null,
       raw_text: body.raw_text || body.comment || '',
       grade: body.grade ?? null,
-      volume_m3: body.volume_m3 != null ? Number(body.volume_m3) : null,
+      volume_m3: volume,
       address: body.address ?? null,
       city: body.city ?? null,
       desired_date: body.desired_date ?? null,
       status: 'new',
-      score: body.score ?? 50,
+      score: 50,
       raw_payload: { created_by: auth.user.user_id },
     };
 

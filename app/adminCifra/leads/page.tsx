@@ -1,12 +1,19 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Inbox, ExternalLink, Phone, Plus, RefreshCw, X } from 'lucide-react';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatPhoneInput } from '@/lib/phone';
 import { LEAD_SOURCE_LABEL, leadToOrderInitialData, type Lead, type LeadStatus } from '@/lib/leads';
 import { useRealtimeLeads } from '@/hooks/useRealtimeLeads';
-import { modalCloseButtonStyle, modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
+import {
+  modalCloseButtonStyle,
+  modalFieldStyle,
+  volumeCardSoftStyle,
+  volumeCardStyle,
+  volumeModalStyle,
+} from '../cardStyles';
 import NewOrderModal from '../components/NewOrderModal';
 import { useUserRole } from '../../providers/UserRoleProvider';
 
@@ -17,6 +24,8 @@ const STATUS_LABEL: Record<LeadStatus, string> = {
   rejected: 'Отказ',
   spam: 'Спам',
 };
+
+const STATUS_FILTERS = ['new', 'in_progress', 'converted', 'rejected', 'spam'] as const;
 
 const EMPTY_LEAD_FORM = {
   name: '',
@@ -29,14 +38,38 @@ const EMPTY_LEAD_FORM = {
   raw_text: '',
 };
 
+const pageWrap: CSSProperties = {
+  padding: 'clamp(12px, 2vw, 28px)',
+  width: '100%',
+  maxWidth: 'min(1600px, 100%)',
+  margin: '0 auto',
+  boxSizing: 'border-box',
+};
+
 export default function LeadsPage() {
+  return (
+    <Suspense fallback={<div style={{ ...pageWrap, color: '#94A3B8' }}>Загрузка…</div>}>
+      <LeadsPageInner />
+    </Suspense>
+  );
+}
+
+function LeadsPageInner() {
   const { user } = useUserRole();
+  const searchParams = useSearchParams();
   const userRole = user?.role;
   const userName = user?.full_name;
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<string>('new');
-  const [sourceFilter, setSourceFilter] = useState<string>('');
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const initialStatus = searchParams.get('status');
+  const initialSource = searchParams.get('source');
+  const [statusFilter, setStatusFilter] = useState<string>(
+    initialStatus && (STATUS_FILTERS as readonly string[]).includes(initialStatus)
+      ? initialStatus
+      : 'new',
+  );
+  const [sourceFilter, setSourceFilter] = useState<string>(initialSource || '');
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [orderInitial, setOrderInitial] = useState<any>(null);
   const [convertingId, setConvertingId] = useState<number | null>(null);
@@ -44,8 +77,14 @@ export default function LeadsPage() {
   const [createForm, setCreateForm] = useState(EMPTY_LEAD_FORM);
   const [creating, setCreating] = useState(false);
 
+  const statusFilterArr = useMemo(
+    () => (statusFilter ? [statusFilter as LeadStatus] : undefined),
+    [statusFilter],
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const qs = new URLSearchParams();
       if (statusFilter) qs.set('status', statusFilter);
@@ -54,9 +93,16 @@ export default function LeadsPage() {
         headers: adminCifraAuthHeaders(),
       });
       const json = await res.json();
-      if (json.success) setLeads(json.leads || []);
+      if (!res.ok || !json.success) {
+        setLoadError(json.error || `Ошибка загрузки (${res.status})`);
+        setLeads([]);
+        return;
+      }
+      setLeads(json.leads || []);
     } catch (e) {
       console.error(e);
+      setLoadError('Ошибка соединения с сервером');
+      setLeads([]);
     } finally {
       setLoading(false);
     }
@@ -66,7 +112,11 @@ export default function LeadsPage() {
     void load();
   }, [load]);
 
-  useRealtimeLeads(setLeads, { enabled: true });
+  useRealtimeLeads(setLeads, {
+    enabled: true,
+    statusFilter: statusFilterArr,
+    sourceFilter: sourceFilter || undefined,
+  });
 
   const patchStatus = async (id: number, status: LeadStatus) => {
     const res = await fetch(`/api/adminCifra/leads/${id}`, {
@@ -77,15 +127,30 @@ export default function LeadsPage() {
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.success) {
       alert(json.error || 'Не удалось обновить статус лида');
-      return;
+      return false;
     }
-    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, status } : l)));
+    if (json.clientSpamMarked) {
+      alert('Клиент помечен как спам в базе');
+    } else if (json.clientSpamSkipped) {
+      // тихо — у клиента могли быть заказы
+    }
+    setLeads((prev) => {
+      if (statusFilter && status !== statusFilter) {
+        return prev.filter((l) => l.id !== id);
+      }
+      return prev.map((l) => (l.id === id ? { ...l, ...json.lead, status } : l));
+    });
+    return true;
   };
 
   const openConvert = async (lead: Lead) => {
     setConvertingId(lead.id);
     if (lead.status === 'new') {
-      await patchStatus(lead.id, 'in_progress');
+      const ok = await patchStatus(lead.id, 'in_progress');
+      if (!ok) {
+        setConvertingId(null);
+        return;
+      }
     }
     setOrderInitial(leadToOrderInitialData(lead));
     setShowOrderModal(true);
@@ -140,52 +205,74 @@ export default function LeadsPage() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <Inbox size={28} color="#60A5FA" />
-        <div style={{ flex: 1 }}>
-          <h1 style={{ margin: 0, color: '#F1F5F9', fontSize: 24 }}>Лиды</h1>
+    <div style={pageWrap}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          marginBottom: 20,
+          flexWrap: 'wrap',
+        }}
+      >
+        <Inbox size={28} color="#60A5FA" style={{ flexShrink: 0 }} />
+        <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+          <h1 style={{ margin: 0, color: '#F1F5F9', fontSize: 'clamp(20px, 2vw, 28px)' }}>
+            Лиды
+          </h1>
           <p style={{ margin: '4px 0 0', color: '#94A3B8', fontSize: 13 }}>
             Inbox с площадок (Авито и др.) → конверсия в заявку
           </p>
         </div>
-        <button
-          type="button"
-          onClick={openCreateModal}
-          style={{
-            border: 'none',
-            background: '#2563EB',
-            color: '#fff',
-            padding: '10px 14px',
-            borderRadius: 12,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontWeight: 600,
-            fontSize: 14,
-          }}
-        >
-          <Plus size={16} /> Создать лид
-        </button>
-        <button
-          type="button"
-          onClick={() => void load()}
-          style={volumeCardSoftStyle({
-            border: 'none',
-            color: '#E2E8F0',
-            padding: '10px 14px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-          })}
-        >
-          <RefreshCw size={16} /> Обновить
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={openCreateModal}
+            style={{
+              border: 'none',
+              background: '#2563EB',
+              color: '#fff',
+              padding: '10px 14px',
+              borderRadius: 12,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontWeight: 600,
+              fontSize: 14,
+              flexShrink: 0,
+            }}
+          >
+            <Plus size={16} /> Создать лид
+          </button>
+          <button
+            type="button"
+            onClick={() => void load()}
+            style={volumeCardSoftStyle({
+              border: 'none',
+              color: '#E2E8F0',
+              padding: '10px 14px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              flexShrink: 0,
+            })}
+          >
+            <RefreshCw size={16} /> Обновить
+          </button>
+        </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 10,
+          marginBottom: 16,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+        }}
+      >
         {['', 'new', 'in_progress', 'converted', 'rejected', 'spam'].map((s) => (
           <button
             key={s || 'all'}
@@ -214,6 +301,7 @@ export default function LeadsPage() {
             background: '#0F172A',
             color: '#E2E8F0',
             border: '1px solid #334155',
+            minWidth: 160,
           }}
         >
           <option value="">Все источники</option>
@@ -226,45 +314,74 @@ export default function LeadsPage() {
         </select>
       </div>
 
+      {loadError && (
+        <div style={volumeCardStyle({ padding: 14, marginBottom: 12, color: '#FCA5A5' })}>
+          {loadError}
+        </div>
+      )}
+
       {loading ? (
         <p style={{ color: '#94A3B8' }}>Загрузка…</p>
       ) : leads.length === 0 ? (
         <div style={volumeCardStyle({ padding: 28, color: '#94A3B8' })}>
-          Лидов пока нет.{' '}
-          <button
-            type="button"
-            onClick={openCreateModal}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#93C5FD',
-              cursor: 'pointer',
-              padding: 0,
-              fontSize: 'inherit',
-              textDecoration: 'underline',
-            }}
-          >
-            Создайте лид вручную
-          </button>
-          {' '}или подключите webhook Авито.
+          {loadError ? (
+            'Не удалось загрузить лиды.'
+          ) : (
+            <>
+              Лидов пока нет.{' '}
+              <button
+                type="button"
+                onClick={openCreateModal}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#93C5FD',
+                  cursor: 'pointer',
+                  padding: 0,
+                  fontSize: 'inherit',
+                  textDecoration: 'underline',
+                }}
+              >
+                Создайте лид вручную
+              </button>
+              {' '}или подключите webhook Авито.
+            </>
+          )}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 520px), 1fr))',
+            gap: 12,
+          }}
+        >
           {leads.map((lead) => (
-            <div key={lead.id} style={volumeCardSoftStyle({ padding: 16 })}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                <div>
+            <div key={lead.id} style={volumeCardSoftStyle({ padding: 16, height: '100%' })}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                  height: '100%',
+                }}
+              >
+                <div style={{ flex: '1 1 220px', minWidth: 0 }}>
                   <div style={{ color: '#F8FAFC', fontWeight: 700, marginBottom: 4 }}>
                     #{lead.id} · {LEAD_SOURCE_LABEL[lead.source] || lead.source}
-                    <span style={{
-                      marginLeft: 8,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      color: '#93C5FD',
-                      background: '#1E3A5F',
-                      padding: '2px 8px',
-                      borderRadius: 8,
-                    }}>
+                    <span
+                      style={{
+                        marginLeft: 8,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: '#93C5FD',
+                        background: '#1E3A5F',
+                        padding: '2px 8px',
+                        borderRadius: 8,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
                       {STATUS_LABEL[lead.status] || lead.status}
                     </span>
                     {lead.score != null && lead.score > 0 && (
@@ -273,13 +390,37 @@ export default function LeadsPage() {
                       </span>
                     )}
                   </div>
-                  <div style={{ color: '#CBD5E1', fontSize: 14, whiteSpace: 'pre-wrap' }}>
+                  <div
+                    style={{
+                      color: '#CBD5E1',
+                      fontSize: 14,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                    }}
+                  >
                     {lead.raw_text || '—'}
                   </div>
-                  <div style={{ marginTop: 8, display: 'flex', gap: 14, flexWrap: 'wrap', color: '#94A3B8', fontSize: 13 }}>
+                  <div
+                    style={{
+                      marginTop: 8,
+                      display: 'flex',
+                      gap: 14,
+                      flexWrap: 'wrap',
+                      color: '#94A3B8',
+                      fontSize: 13,
+                    }}
+                  >
                     {lead.name && <span>{lead.name}</span>}
                     {lead.phone && (
-                      <a href={`tel:${lead.phone}`} style={{ color: '#93C5FD', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <a
+                        href={`tel:${lead.phone}`}
+                        style={{
+                          color: '#93C5FD',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                        }}
+                      >
                         <Phone size={14} /> {lead.phone}
                       </a>
                     )}
@@ -289,7 +430,15 @@ export default function LeadsPage() {
                     <span>{new Date(lead.created_at).toLocaleString('ru-RU')}</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 140 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                    minWidth: 140,
+                    flex: '0 0 auto',
+                  }}
+                >
                   {lead.status !== 'converted' && lead.status !== 'spam' && (
                     <button
                       type="button"
@@ -384,11 +533,15 @@ export default function LeadsPage() {
           onSuccess={(_order, meta) => {
             setShowOrderModal(false);
             setOrderInitial(null);
-            // Оптимистично помечаем converted только если сервер реально конвертировал лид
             if (convertingId && meta?.leadConverted && !meta?.warning) {
-              setLeads((prev) =>
-                prev.map((l) => (l.id === convertingId ? { ...l, status: 'converted' } : l)),
-              );
+              setLeads((prev) => {
+                if (statusFilter && statusFilter !== 'converted') {
+                  return prev.filter((l) => l.id !== convertingId);
+                }
+                return prev.map((l) =>
+                  l.id === convertingId ? { ...l, status: 'converted' } : l,
+                );
+              });
             }
             setConvertingId(null);
             void load();
@@ -417,12 +570,21 @@ export default function LeadsPage() {
             style={volumeModalStyle({
               width: '100%',
               maxWidth: 480,
+              maxHeight: '90vh',
+              overflowY: 'auto',
               padding: 22,
               color: '#E2E8F0',
             })}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: 16,
+              }}
+            >
               <h2 style={{ margin: 0, fontSize: 18, color: '#F8FAFC' }}>Новый лид</h2>
               <button
                 type="button"
@@ -449,12 +611,20 @@ export default function LeadsPage() {
                 Телефон
                 <input
                   value={createForm.phone}
-                  onChange={(e) => setCreateForm((f) => ({ ...f, phone: formatPhoneInput(e.target.value) }))}
+                  onChange={(e) =>
+                    setCreateForm((f) => ({ ...f, phone: formatPhoneInput(e.target.value) }))
+                  }
                   style={modalFieldStyle({ marginTop: 4 })}
                   placeholder="+7…"
                 />
               </label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                  gap: 10,
+                }}
+              >
                 <label style={{ fontSize: 13, color: '#94A3B8' }}>
                   Марка
                   <input
@@ -512,7 +682,15 @@ export default function LeadsPage() {
               </label>
             </div>
 
-            <div style={{ display: 'flex', gap: 10, marginTop: 18, justifyContent: 'flex-end' }}>
+            <div
+              style={{
+                display: 'flex',
+                gap: 10,
+                marginTop: 18,
+                justifyContent: 'flex-end',
+                flexWrap: 'wrap',
+              }}
+            >
               <button
                 type="button"
                 disabled={creating}

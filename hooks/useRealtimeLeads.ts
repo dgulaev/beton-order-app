@@ -1,24 +1,34 @@
 'use client';
 
+import type { Dispatch, SetStateAction } from 'react';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import type { Lead, LeadStatus } from '@/lib/leads';
 
+function matchesLeadFilters(
+  lead: Lead,
+  options?: { statusFilter?: LeadStatus[]; sourceFilter?: string },
+): boolean {
+  if (options?.statusFilter && !options.statusFilter.includes(lead.status)) return false;
+  if (options?.sourceFilter && lead.source !== options.sourceFilter) return false;
+  return true;
+}
+
 export function useRealtimeLeads(
-  setLeads: React.Dispatch<React.SetStateAction<Lead[]>>,
+  setLeads: Dispatch<SetStateAction<Lead[]>>,
   options?: {
     enabled?: boolean;
-    /** Если задано — в списке остаются только эти статусы (inbox на mobile) */
+    /** Если задано — в списке остаются только эти статусы */
     statusFilter?: LeadStatus[];
+    /** Если задано — только этот source */
+    sourceFilter?: string;
   },
 ) {
-  const allowed = options?.statusFilter;
-
   return useRealtimeBroadcast({
     topic: 'leads:all',
     enabled: options?.enabled,
     onInsert: (record) => {
       const lead = record as Lead;
-      if (allowed && !allowed.includes(lead.status)) return;
+      if (!matchesLeadFilters(lead, options)) return;
       setLeads((prev) => {
         if (prev.some((l) => l.id === lead.id)) return prev;
         return [lead, ...prev];
@@ -27,16 +37,13 @@ export function useRealtimeLeads(
     onUpdate: (record) => {
       const lead = record as Lead;
       setLeads((prev) => {
-        if (allowed && !allowed.includes(lead.status)) {
+        if (!matchesLeadFilters(lead, options)) {
           return prev.filter((l) => l.id !== lead.id);
         }
         if (prev.some((l) => l.id === lead.id)) {
           return prev.map((l) => (l.id === lead.id ? ({ ...l, ...lead } as Lead) : l));
         }
-        if (!allowed || allowed.includes(lead.status)) {
-          return [lead, ...prev];
-        }
-        return prev;
+        return [lead, ...prev];
       });
     },
     onDelete: (old) => {

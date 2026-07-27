@@ -272,25 +272,37 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
   }, []);
 
    // ==================== 2. ЗАГРУЗКА ДАННЫХ ====================
+  /** fetch без throw: после сна ноутбука браузер рвёт сеть → TypeError + белый оверлей Next. */
+  const safeFetch = async (url: string, init?: RequestInit): Promise<Response | null> => {
+    try {
+      return await fetch(url, init);
+    } catch {
+      return null;
+    }
+  };
+
 const loadWarehouse = async () => {
+  if (typeof document !== 'undefined' && document.hidden) return;
+
+  const [warehouseRes, recipesRes, labRes, shiftRes] = await Promise.all([
+    safeFetch('/api/adminCifra/warehouse', {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
+    }),
+    safeFetch('/api/adminCifra/recipes', {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
+    }),
+    safeFetch('/api/adminCifra/lab-settings', { cache: 'no-store' }),
+    safeFetch('/api/adminCifra/operator-shift', { cache: 'no-store' }),
+  ]);
+
   try {
-    const [warehouseRes, recipesRes, labRes, shiftRes] = await Promise.all([
-      fetch('/api/adminCifra/warehouse', {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' },
-      }),
-      fetch('/api/adminCifra/recipes', {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' },
-      }),
-      fetch('/api/adminCifra/lab-settings', { cache: 'no-store' }),
-      fetch('/api/adminCifra/operator-shift', { cache: 'no-store' }),
-    ]);
     void loadFbsPassports();
 
-    if (warehouseRes.ok) {
+    if (warehouseRes?.ok) {
       const data = await warehouseRes.json();
-      
+
       setSilos(data.silos || []);
       setLowRateAlerts(Array.isArray(data.lowRateAlerts) ? data.lowRateAlerts : []);
 
@@ -299,33 +311,33 @@ const loadWarehouse = async () => {
         id: a.id || a.additive_id,
         current: Number(a.current || 0),
         max: Number(a.max || 9000),
-        name: a.name
+        name: a.name,
       }));
 
       setAdditives(loadedAdditives);
     }
 
-    if (recipesRes.ok) {
+    if (recipesRes?.ok) {
       const allData = await recipesRes.json();
-      const onlyFBS = allData.filter((r: any) => 
-        r.item_type === 'fbs' || (r.code && r.code.startsWith('24-'))
+      const onlyFBS = allData.filter(
+        (r: any) => r.item_type === 'fbs' || (r.code && r.code.startsWith('24-')),
       );
-      
+
       setAvailableFBS(onlyFBS);
     }
 
-    if (labRes.ok) {
+    if (labRes?.ok) {
       const lab = await labRes.json();
       setAdditiveDensities(densitiesFromLabSettings(lab));
     }
 
-    if (shiftRes.ok) {
+    if (shiftRes?.ok) {
       const shift = await shiftRes.json();
       const sid = shift?.active_silo_id != null ? Number(shift.active_silo_id) : null;
       setActiveSiloId(Number.isFinite(sid as number) ? sid : null);
     }
-  } catch (err) {
-    console.error('Ошибка загрузки склада:', err);
+  } catch {
+    // битый JSON / обрыв — оставляем прошлые данные, без console.error(TypeError)
   }
 };
 
@@ -539,15 +551,16 @@ const loadTodayConsumption = async () => {
   // иначе мог не всплыть, пока не обновишь страницу.
   useEffect(() => {
     const refreshStock = async () => {
+      if (document.hidden) return;
       try {
         const [res, shiftRes] = await Promise.all([
           fetch('/api/adminCifra/warehouse', {
             cache: 'no-store',
             headers: { 'Cache-Control': 'no-cache' },
-          }),
-          fetch('/api/adminCifra/operator-shift', { cache: 'no-store' }),
+          }).catch(() => null),
+          fetch('/api/adminCifra/operator-shift', { cache: 'no-store' }).catch(() => null),
         ]);
-        if (res.ok) {
+        if (res?.ok) {
           const data = await res.json();
           setSilos(data.silos || []);
           setLowRateAlerts(Array.isArray(data.lowRateAlerts) ? data.lowRateAlerts : []);
@@ -560,7 +573,7 @@ const loadTodayConsumption = async () => {
           }));
           setAdditives(loadedAdditives);
         }
-        if (shiftRes.ok) {
+        if (shiftRes?.ok) {
           const shift = await shiftRes.json();
           const sid = shift?.active_silo_id != null ? Number(shift.active_silo_id) : null;
           setActiveSiloId(Number.isFinite(sid as number) ? sid : null);
@@ -570,7 +583,14 @@ const loadTodayConsumption = async () => {
       }
     };
     const t = setInterval(refreshStock, 15000);
-    return () => clearInterval(t);
+    const onVis = () => {
+      if (!document.hidden) void refreshStock();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, []);
 
   // Рецепты в родителе (adminCifra/operator) грузятся отдельным запросом и

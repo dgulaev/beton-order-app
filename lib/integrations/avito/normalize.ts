@@ -7,17 +7,37 @@ import {
 import type { MarketplaceListingDraft } from '@/lib/integrations/marketplaceAdapter';
 import type { AvitoChat, AvitoItem } from './client';
 
+function extractCity(item: AvitoItem): string | null {
+  if (typeof item.city === 'string' && item.city.trim()) return item.city.trim();
+  if (typeof item.address === 'string' && item.address.trim()) {
+    // Часто «Брянск, …» или просто город
+    return item.address.split(',')[0]?.trim() || item.address.trim();
+  }
+  if (item.address && typeof item.address === 'object') {
+    const city = item.address.city?.trim();
+    if (city) return city;
+    const addr = item.address.address?.trim();
+    if (addr) return addr.split(',')[0]?.trim() || addr;
+  }
+  if (item.location?.city?.trim()) return item.location.city.trim();
+  if (item.location?.address?.trim()) {
+    return item.location.address.split(',')[0]?.trim() || item.location.address.trim();
+  }
+  return null;
+}
+
 export function avitoItemToListing(item: AvitoItem): MarketplaceListingDraft {
   return {
     source: 'avito',
     external_id: String(item.id),
     title: item.title ?? null,
-    description: null,
+    // Текст объявления Items API не отдаёт — только локально / из шаблона.
+    description: item.description?.trim() ? item.description : null,
     price: item.price ?? null,
     status: item.status ?? 'active',
     url: item.url ?? `https://www.avito.ru/item/${item.id}`,
     category: item.category?.name ?? null,
-    city: item.address?.city ?? null,
+    city: extractCity(item),
     views: item.stats?.views ?? 0,
     contacts: item.stats?.contacts ?? 0,
     raw_payload: item as unknown as Record<string, unknown>,
@@ -103,7 +123,16 @@ export function normalizeAvitoWebhookPayload(body: unknown): LeadDraft[] {
     null;
   const itemId = v.item_id || (v.item as { id?: number } | undefined)?.id;
 
-  // Исходящие сообщения менеджера не создаём как лиды
+  // Исходящие сообщения менеджера не создаём как лиды.
+  // В webhook часто есть author_id без direction — без этой проверки свои ответы = ложные лиды.
+  const authorId =
+    v.author_id ??
+    (v.author as { id?: number } | undefined)?.id ??
+    (v.user as { id?: number } | undefined)?.id;
+  const ourUserId = Number(process.env.AVITO_USER_ID);
+  if (Number.isFinite(ourUserId) && authorId != null && Number(authorId) === ourUserId) {
+    return [];
+  }
   const direction = v.direction || (v.type === 'system' ? 'out' : 'in');
   if (direction === 'out') return [];
 

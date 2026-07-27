@@ -34,6 +34,33 @@ export async function PATCH(request: NextRequest, context: Ctx) {
       );
     }
 
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from('leads')
+      .select('id, status, order_id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (existingError || !existing) {
+      return NextResponse.json({ success: false, error: 'Лид не найден' }, { status: 404 });
+    }
+
+    // Уже конвертированный лид нельзя откатить в new/rejected/spam — иначе ломается связка с заказом.
+    if (
+      existing.status === 'converted' &&
+      body.status != null &&
+      body.status !== 'converted'
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: existing.order_id
+            ? `Лид уже в заказе #${existing.order_id} — статус менять нельзя`
+            : 'Лид уже конвертирован — статус менять нельзя',
+        },
+        { status: 409 },
+      );
+    }
+
     if (body.status != null) {
       if (!LEAD_STATUSES.includes(body.status)) {
         return NextResponse.json({ success: false, error: 'Некорректный статус' }, { status: 400 });

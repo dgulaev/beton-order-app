@@ -26,13 +26,22 @@ export async function POST(request: NextRequest, context: Ctx) {
     return NextResponse.json({ success: false, error: 'Не найдено' }, { status: 404 });
   }
 
-  if (item.lead_id) {
-    const { data: existingLead } = await supabaseAdmin
-      .from('leads')
-      .select('*')
-      .eq('id', item.lead_id)
-      .maybeSingle();
-    return NextResponse.json({ success: true, lead: existingLead, already: true });
+  if (item.status === 'ignored') {
+    return NextResponse.json(
+      { success: false, error: 'Запись в игноре — сначала верните в «Новые»' },
+      { status: 409 },
+    );
+  }
+
+  if (item.lead_id || item.status === 'taken') {
+    const { data: existingLead } = item.lead_id
+      ? await supabaseAdmin.from('leads').select('*').eq('id', item.lead_id).maybeSingle()
+      : { data: null };
+    return NextResponse.json({
+      success: true,
+      lead: existingLead,
+      already: true,
+    });
   }
 
   const result = await upsertLead({
@@ -52,10 +61,34 @@ export async function POST(request: NextRequest, context: Ctx) {
     return NextResponse.json({ success: false, error: 'Не удалось создать лид' }, { status: 500 });
   }
 
-  await supabaseAdmin
+  // Атомарно: только если ещё никто не привязал lead_id (защита от двойного клика).
+  const { data: linked, error: linkError } = await supabaseAdmin
     .from('demand_items')
     .update({ status: 'taken', lead_id: result.lead.id })
-    .eq('id', id);
+    .eq('id', id)
+    .is('lead_id', null)
+    .select('*')
+    .maybeSingle();
+
+  if (linkError) {
+    return NextResponse.json({ success: false, error: linkError.message }, { status: 500 });
+  }
+
+  if (!linked) {
+    const { data: again } = await supabaseAdmin
+      .from('demand_items')
+      .select('lead_id')
+      .eq('id', id)
+      .maybeSingle();
+    const { data: existingLead } = again?.lead_id
+      ? await supabaseAdmin.from('leads').select('*').eq('id', again.lead_id).maybeSingle()
+      : { data: null };
+    return NextResponse.json({
+      success: true,
+      lead: existingLead || result.lead,
+      already: true,
+    });
+  }
 
   return NextResponse.json({ success: true, lead: result.lead, created: result.created });
 }

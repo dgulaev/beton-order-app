@@ -50,7 +50,9 @@ export async function PATCH(request: NextRequest, context: Ctx) {
       }
       patch.price = price;
 
-      if (listing.source === 'avito' && isAvitoConfigured() && body.push_to_avito !== false) {
+      // На Авито пушим только при явном push_to_avito: true (кнопка «Цена на Авито»).
+      const pushPrice = body.push_to_avito === true;
+      if (listing.source === 'avito' && isAvitoConfigured() && pushPrice) {
         try {
           await updateAvitoItemPrice(listing.external_id, price);
         } catch (e: unknown) {
