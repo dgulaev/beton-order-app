@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
     // Получаем данные
     const { data, error } = await supabase
       .from('users')
-      .select('role, full_name, username, force_logout_version')
+      .select('role, full_name, username, force_logout_version, can_process_tenders')
       .eq('user_id', parsedUserId)
       .maybeSingle();
 
@@ -69,6 +69,7 @@ export async function POST(request: NextRequest) {
     const role = data?.role || 'client';
     const full_name = data?.full_name || data?.username || 'Сотрудник';
     const forceLogoutVersion = data?.force_logout_version || 0;
+    const can_process_tenders = data?.can_process_tenders === true;
 
     const lastLog = lastLoggedByUser.get(parsedUserId);
     const changed = !lastLog || lastLog.role !== role || lastLog.full_name !== full_name;
@@ -83,7 +84,8 @@ export async function POST(request: NextRequest) {
       success: true, 
       role,
       full_name,
-      force_logout_version: forceLogoutVersion   // нормализуем имя поля
+      force_logout_version: forceLogoutVersion,   // нормализуем имя поля
+      can_process_tenders,
     });
 
   } catch (e: any) {

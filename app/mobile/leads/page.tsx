@@ -1,11 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Phone, Plus, Radar, RefreshCw, X } from 'lucide-react';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { canProcessTenders } from '@/lib/demandProcessAccess';
+import { canActOnAssignedLeadWork, parseIdList } from '@/lib/leadAssigneeIds';
 import { formatPhoneInput } from '@/lib/phone';
 import {
+  canManagerRejectOrSpamLead,
+  isLeadWorkOpenToAll,
   LEAD_SOURCE_LABEL,
   LEAD_STATUS_LABEL,
   leadToOrderInitialData,
@@ -19,8 +23,70 @@ import {
   volumeCardSoftStyle,
   volumeModalStyle,
 } from '@/app/adminCifra/cardStyles';
+import ProcessLeadModal from '@/app/adminCifra/leads/ProcessLeadModal';
 import MobileNewOrderModal from '../components/MobileNewOrderModal';
 import { useUserRole } from '../../providers/UserRoleProvider';
+
+type Employee = {
+  user_id: number;
+  full_name: string | null;
+  organization_name: string | null;
+  role: string;
+};
+
+function empLabel(emp: Employee): string {
+  return (
+    (emp.organization_name && emp.organization_name.trim()) ||
+    emp.full_name ||
+    `Сотрудник #${emp.user_id}`
+  );
+}
+
+const selectStyle: CSSProperties = {
+  width: '100%',
+  padding: '8px 10px',
+  borderRadius: 8,
+  border: '1px solid #334155',
+  background: '#0F172A',
+  color: '#E2E8F0',
+  fontSize: 13,
+};
+
+const btnBase: CSSProperties = {
+  flex: '1 1 0',
+  minWidth: 0,
+  padding: '10px 4px',
+  borderRadius: 8,
+  fontWeight: 600,
+  fontSize: 10,
+  lineHeight: 1.15,
+  textAlign: 'center',
+  boxSizing: 'border-box',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 3,
+  textDecoration: 'none',
+  border: 'none',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+};
+
+const btnAmber: CSSProperties = { ...btnBase, background: '#CA8A04', color: '#1F2937' };
+const btnProcess: CSSProperties = { ...btnBase, background: '#D97706', color: '#FFF7ED' };
+const btnBlue: CSSProperties = { ...btnBase, background: '#2563EB', color: '#fff' };
+const btnDanger: CSSProperties = {
+  ...btnBase,
+  background: 'transparent',
+  border: '1px solid #7F1D1D',
+  color: '#FCA5A5',
+};
+const btnGhost: CSSProperties = {
+  ...btnBase,
+  background: 'transparent',
+  border: '1px solid #334155',
+  color: '#94A3B8',
+};
 
 const INBOX_STATUSES: LeadStatus[] = ['new', 'in_progress'];
 
@@ -38,6 +104,8 @@ export default function MobileLeadsPage() {
   const { user } = useUserRole();
   const userRole = user?.role;
   const userName = user?.full_name;
+  const allowTenderProcess = canProcessTenders(user);
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -46,6 +114,30 @@ export default function MobileLeadsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState(EMPTY_FORM);
   const [creating, setCreating] = useState(false);
+  const [processLead, setProcessLead] = useState<Lead | null>(null);
+  const [sendingWorkId, setSendingWorkId] = useState<number | null>(null);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem('userId');
+    const id = raw ? Number(raw) : NaN;
+    setCurrentUserId(Number.isFinite(id) && id > 0 ? id : null);
+  }, []);
+
+  useEffect(() => {
+    if (!allowTenderProcess) return;
+    void (async () => {
+      try {
+        const res = await fetch('/api/adminCifra/employees', {
+          headers: adminCifraAuthHeaders(),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (res.ok && json.success) setEmployees(json.employees || []);
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, [allowTenderProcess]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,6 +189,56 @@ export default function MobileLeadsPage() {
     }
     setInitialData(leadToOrderInitialData(lead));
     setShowModal(true);
+  };
+
+  const assignLead = async (
+    leadId: number,
+    patch: { assigned_to?: string | null; co_assignees?: number[] },
+  ) => {
+    const body: Record<string, unknown> = {};
+    if (patch.assigned_to !== undefined) body.assigned_to = patch.assigned_to || null;
+    if (patch.co_assignees !== undefined) body.co_assignees = patch.co_assignees;
+    const res = await fetch(`/api/adminCifra/leads/${leadId}`, {
+      method: 'PATCH',
+      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.success) {
+      alert(json.error || 'Не удалось обновить назначение');
+      return;
+    }
+    setLeads((prev) =>
+      prev.map((l) => (l.id === leadId ? { ...l, ...json.lead } : l)),
+    );
+  };
+
+  /** Админ / Екатерина: задание назначенным, без самоназначения. */
+  const sendLeadToWork = async (lead: Lead) => {
+    if (sendingWorkId != null) return;
+    setSendingWorkId(lead.id);
+    try {
+      const res = await fetch(`/api/adminCifra/leads/${lead.id}`, {
+        method: 'PATCH',
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ send_to_work: true }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        alert(json.error || 'Не удалось отправить в работу');
+        return;
+      }
+      setLeads((prev) =>
+        prev.map((l) => (l.id === lead.id ? { ...l, ...json.lead } : l)),
+      );
+      if (json.already) {
+        alert('Задание уже отправлялось недавно');
+      } else {
+        alert('Задание отправлено назначенным исполнителям');
+      }
+    } finally {
+      setSendingWorkId(null);
+    }
   };
 
   const submitCreate = async () => {
@@ -179,99 +321,288 @@ export default function MobileLeadsPage() {
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {leads.map((lead) => (
-          <div key={lead.id} style={volumeCardSoftStyle({ padding: 14 })}>
-            <div style={{ color: '#F8FAFC', fontWeight: 700, marginBottom: 6, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-              <span>#{lead.id} · {LEAD_SOURCE_LABEL[lead.source] || lead.source}</span>
+        {leads.map((lead) => {
+          const payload =
+            lead.raw_payload && typeof lead.raw_payload === 'object'
+              ? (lead.raw_payload as Record<string, unknown>)
+              : null;
+          const etpUrl = String(payload?.etp_url ?? lead.chat_url ?? '').trim();
+          const docsUrl = String(payload?.docs_url ?? '').trim();
+          const tenderLike = !isLeadWorkOpenToAll(lead.source);
+          const canWork =
+            allowTenderProcess || canActOnAssignedLeadWork(lead, currentUserId);
+          const canReject =
+            allowTenderProcess || canManagerRejectOrSpamLead(lead.source);
+          const coIds = parseIdList(payload?.co_assignees).filter(
+            (id) => id !== lead.assigned_to,
+          );
+
+          return (
+          <div
+            key={lead.id}
+            style={volumeCardSoftStyle({
+              padding: 12,
+              overflow: 'hidden',
+              minWidth: 0,
+            })}
+          >
+            <div style={{ color: '#F8FAFC', fontWeight: 700, marginBottom: 6, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', minWidth: 0 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+                #{lead.id} · {LEAD_SOURCE_LABEL[lead.source] || lead.source}
+              </span>
               <span style={{
-                fontSize: 11,
+                fontSize: 10,
                 fontWeight: 600,
                 color: '#93C5FD',
                 background: '#1E3A5F',
-                padding: '2px 8px',
-                borderRadius: 8,
+                padding: '2px 7px',
+                borderRadius: 6,
+                flexShrink: 0,
               }}>
                 {LEAD_STATUS_LABEL[lead.status] || lead.status}
               </span>
             </div>
-            <div style={{ color: '#CBD5E1', fontSize: 14, whiteSpace: 'pre-wrap', marginBottom: 8 }}>
+            <div
+              style={{
+                color: '#CBD5E1',
+                fontSize: 13,
+                whiteSpace: 'pre-wrap',
+                marginBottom: 8,
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word',
+                maxHeight: 168,
+                minHeight: 72,
+                overflowY: 'auto',
+                lineHeight: 1.4,
+                padding: '6px 8px',
+                borderRadius: 8,
+                background: 'rgba(15, 23, 42, 0.45)',
+                border: '1px solid #1E293B',
+              }}
+            >
               {lead.raw_text || '—'}
             </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10, fontSize: 13, color: '#94A3B8' }}>
-              {lead.name && <span>{lead.name}</span>}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8, fontSize: 12, color: '#94A3B8', minWidth: 0 }}>
+              {lead.name && (
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+                  {lead.name}
+                </span>
+              )}
               {lead.phone && (
-                <a href={`tel:${lead.phone}`} style={{ color: '#93C5FD', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-                  <Phone size={14} /> {lead.phone}
+                <a href={`tel:${lead.phone}`} style={{ color: '#93C5FD', display: 'inline-flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+                  <Phone size={12} /> {lead.phone}
                 </a>
               )}
             </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                onClick={() => void openConvert(lead)}
-                style={{
-                  flex: 1,
-                  minWidth: 120,
-                  padding: 12,
-                  borderRadius: 12,
-                  border: 'none',
-                  background: '#2563EB',
-                  color: '#fff',
-                  fontWeight: 700,
-                }}
-              >
-                В заказ
-              </button>
-              {lead.chat_url && (
+
+            {allowTenderProcess && (
+              <div style={{ marginBottom: 10 }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: 6,
+                    alignItems: 'end',
+                  }}
+                >
+                  <label style={{ display: 'block', minWidth: 0 }}>
+                    <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 3 }}>Исполнитель</div>
+                    <select
+                      value={lead.assigned_to ? String(lead.assigned_to) : ''}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        void assignLead(lead.id, {
+                          assigned_to: v,
+                          co_assignees: coIds.filter((id) => String(id) !== v),
+                        });
+                      }}
+                      style={selectStyle}
+                    >
+                      <option value="">Не назначен</option>
+                      {employees.map((emp) => (
+                        <option key={emp.user_id} value={emp.user_id}>
+                          {empLabel(emp)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ display: 'block', minWidth: 0 }}>
+                    <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 3 }}>Соисполнители</div>
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (!v) return;
+                        void assignLead(lead.id, {
+                          co_assignees: Array.from(new Set([...coIds, Number(v)])),
+                        });
+                      }}
+                      style={selectStyle}
+                    >
+                      <option value="">Добавить…</option>
+                      {employees
+                        .filter(
+                          (emp) =>
+                            emp.user_id !== lead.assigned_to && !coIds.includes(emp.user_id),
+                        )
+                        .map((emp) => (
+                          <option key={emp.user_id} value={emp.user_id}>
+                            {empLabel(emp)}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                </div>
+                {coIds.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
+                    {coIds.map((uid) => {
+                      const emp = employees.find((e) => e.user_id === uid);
+                      return (
+                        <span
+                          key={uid}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            fontSize: 11,
+                            color: '#E2E8F0',
+                            background: '#1E293B',
+                            border: '1px solid #334155',
+                            borderRadius: 999,
+                            padding: '3px 8px',
+                          }}
+                        >
+                          {emp ? empLabel(emp) : `#${uid}`}
+                          <button
+                            type="button"
+                            aria-label="Убрать"
+                            onClick={() =>
+                              void assignLead(lead.id, {
+                                co_assignees: coIds.filter((x) => x !== uid),
+                              })
+                            }
+                            style={{
+                              border: 'none',
+                              background: 'none',
+                              color: '#FCA5A5',
+                              fontSize: 13,
+                              padding: 0,
+                              lineHeight: 1,
+                            }}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'nowrap',
+                gap: 4,
+                alignItems: 'stretch',
+              }}
+            >
+              {allowTenderProcess && lead.status !== 'converted' && (
+                <button
+                  type="button"
+                  onClick={() => setProcessLead(lead)}
+                  style={btnProcess}
+                >
+                  Обработать
+                </button>
+              )}
+              {allowTenderProcess && tenderLike && lead.status === 'new' && (
+                <button
+                  type="button"
+                  disabled={sendingWorkId === lead.id}
+                  onClick={() => void sendLeadToWork(lead)}
+                  style={{
+                    ...btnAmber,
+                    opacity: sendingWorkId === lead.id ? 0.7 : 1,
+                  }}
+                >
+                  {sendingWorkId === lead.id ? '…' : 'В работу'}
+                </button>
+              )}
+              {lead.status === 'new' &&
+                !(allowTenderProcess && tenderLike) &&
+                canWork && (
+                  <button
+                    type="button"
+                    onClick={() => void patchStatus(lead.id, 'in_progress')}
+                    style={btnAmber}
+                  >
+                    В работу
+                  </button>
+                )}
+              {canWork && lead.status !== 'converted' && lead.status !== 'spam' && (
+                <button
+                  type="button"
+                  onClick={() => void openConvert(lead)}
+                  style={btnBlue}
+                >
+                  Заказ
+                </button>
+              )}
+              {(etpUrl || lead.chat_url) && (
                 <a
-                  href={lead.chat_url}
+                  href={etpUrl || lead.chat_url || '#'}
                   target="_blank"
                   rel="noreferrer"
-                  style={{
-                    padding: 12,
-                    borderRadius: 12,
-                    border: '1px solid #334155',
-                    color: '#E2E8F0',
-                    display: 'flex',
-                    alignItems: 'center',
-                  }}
-                  aria-label="Открыть чат"
+                  style={btnGhost}
                 >
-                  <ExternalLink size={18} />
+                  <ExternalLink size={11} /> ЭТП
                 </a>
               )}
-              <button
-                type="button"
-                onClick={() => void patchStatus(lead.id, 'rejected')}
-                style={{
-                  padding: '12px 14px',
-                  borderRadius: 12,
-                  border: '1px solid #7F1D1D',
-                  background: 'transparent',
-                  color: '#FCA5A5',
-                  fontSize: 13,
-                }}
-              >
-                Отказ
-              </button>
-              <button
-                type="button"
-                onClick={() => void patchStatus(lead.id, 'spam')}
-                style={{
-                  padding: '12px 14px',
-                  borderRadius: 12,
-                  border: '1px solid #334155',
-                  background: 'transparent',
-                  color: '#94A3B8',
-                  fontSize: 13,
-                }}
-              >
-                Спам
-              </button>
+              {docsUrl && (
+                <a href={docsUrl} target="_blank" rel="noreferrer" style={btnGhost}>
+                  Доки
+                </a>
+              )}
+              {canReject &&
+                lead.status !== 'rejected' &&
+                lead.status !== 'converted' &&
+                lead.status !== 'spam' && (
+                  <button
+                    type="button"
+                    onClick={() => void patchStatus(lead.id, 'rejected')}
+                    style={btnDanger}
+                  >
+                    Отказ
+                  </button>
+                )}
+              {canReject && lead.status !== 'spam' && lead.status !== 'converted' && (
+                <button
+                  type="button"
+                  onClick={() => void patchStatus(lead.id, 'spam')}
+                  style={btnGhost}
+                >
+                  Спам
+                </button>
+              )}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
+
+      <ProcessLeadModal
+        open={Boolean(processLead)}
+        lead={processLead}
+        onClose={() => setProcessLead(null)}
+        onSaved={(updated) => {
+          setLeads((prev) =>
+            prev.map((l) => (l.id === updated.id ? { ...l, ...updated } : l)),
+          );
+          setProcessLead(null);
+        }}
+      />
 
       <MobileNewOrderModal
         isOpen={showModal}
@@ -309,79 +640,80 @@ export default function MobileLeadsPage() {
           <div
             style={volumeModalStyle({
               width: '100%',
-              maxHeight: '90vh',
+              maxHeight: '78dvh',
               overflow: 'auto',
-              padding: 18,
-              borderRadius: '20px 20px 0 0',
+              padding: 14,
+              borderRadius: '16px 16px 0 0',
               color: '#E2E8F0',
             })}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <h2 style={{ margin: 0, fontSize: 18, color: '#F8FAFC' }}>Новый лид</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <h2 style={{ margin: 0, fontSize: 16, color: '#F8FAFC' }}>Новый лид</h2>
               <button type="button" style={modalCloseButtonStyle()} onClick={() => setShowCreate(false)} aria-label="Закрыть">
-                <X size={18} />
+                <X size={16} />
               </button>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <input
                 placeholder="Имя"
                 value={createForm.name}
                 onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
-                style={modalFieldStyle()}
+                style={modalFieldStyle({ padding: '10px 12px', fontSize: 14 })}
               />
               <input
                 placeholder="Телефон"
                 value={createForm.phone}
                 onChange={(e) => setCreateForm((f) => ({ ...f, phone: formatPhoneInput(e.target.value) }))}
-                style={modalFieldStyle()}
+                style={modalFieldStyle({ padding: '10px 12px', fontSize: 14 })}
               />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                 <input
                   placeholder="Марка"
                   value={createForm.grade}
                   onChange={(e) => setCreateForm((f) => ({ ...f, grade: e.target.value }))}
-                  style={modalFieldStyle()}
+                  style={modalFieldStyle({ padding: '10px 12px', fontSize: 14 })}
                 />
                 <input
                   placeholder="Объём, м³"
                   type="number"
                   value={createForm.volume_m3}
                   onChange={(e) => setCreateForm((f) => ({ ...f, volume_m3: e.target.value }))}
-                  style={modalFieldStyle()}
+                  style={modalFieldStyle({ padding: '10px 12px', fontSize: 14 })}
                 />
               </div>
               <input
                 placeholder="Город"
                 value={createForm.city}
                 onChange={(e) => setCreateForm((f) => ({ ...f, city: e.target.value }))}
-                style={modalFieldStyle()}
+                style={modalFieldStyle({ padding: '10px 12px', fontSize: 14 })}
               />
               <input
                 placeholder="Адрес"
                 value={createForm.address}
                 onChange={(e) => setCreateForm((f) => ({ ...f, address: e.target.value }))}
-                style={modalFieldStyle()}
+                style={modalFieldStyle({ padding: '10px 12px', fontSize: 14 })}
               />
               <textarea
                 placeholder="Текст обращения"
-                rows={3}
+                rows={2}
                 value={createForm.raw_text}
                 onChange={(e) => setCreateForm((f) => ({ ...f, raw_text: e.target.value }))}
-                style={modalFieldStyle({ resize: 'vertical' })}
+                style={modalFieldStyle({ resize: 'vertical', padding: '10px 12px', fontSize: 14 })}
               />
               <button
                 type="button"
                 disabled={creating}
                 onClick={() => void submitCreate()}
                 style={{
-                  marginTop: 6,
-                  padding: 14,
-                  borderRadius: 12,
+                  marginTop: 4,
+                  padding: '9px 12px',
+                  borderRadius: 8,
                   border: 'none',
                   background: '#2563EB',
                   color: '#fff',
-                  fontWeight: 700,
+                  fontWeight: 600,
+                  fontSize: 13,
                 }}
               >
                 {creating ? 'Создание…' : 'Создать лид'}

@@ -1744,7 +1744,12 @@ const editStaff = (staffMember: any) => {
 const addNewStaff = () => {
   setIsNewStaff(true);
   setStaffPasswordInput('');
-  setEditingStaff({ full_name: '', phone: '+7', role: 'manager' });
+  setEditingStaff({
+    full_name: '',
+    phone: '+7',
+    role: 'manager',
+    can_process_tenders: false,
+  });
   setIsStaffEditModalOpen(true);
 };
 
@@ -1767,13 +1772,14 @@ const saveStaff = async () => {
   try {
     const res = await fetch('/api/adminCifra/staff', {
       method: isNewStaff ? 'POST' : 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         userId: editingStaff.user_id,
         fullName: editingStaff.full_name.trim(),
         phone: editingStaff.phone,
         role: editingStaff.role || 'manager',
         password: staffPasswordInput || undefined,
+        canProcessTenders: editingStaff.can_process_tenders === true,
       }),
     });
 
@@ -1823,11 +1829,11 @@ const changeStaffPassword = async (staffMember: any) => {
 
     const res = await fetch('/api/adminCifra/staff/change-password', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         userId: staffMember.user_id,
-        encrypted_password: hashedPassword
-      })
+        encrypted_password: hashedPassword,
+      }),
     });
 
     if (res.ok) {
@@ -2359,7 +2365,7 @@ const changeStaffPassword = async (staffMember: any) => {
     display: 'grid',
     gridTemplateColumns: currentUserRole === 'admin'
       ? '2.8fr 160px 1.6fr 1.1fr 130px'
-      : '2.8fr 1.6fr 1.1fr 130px',
+      : '2.8fr 1.6fr 1.1fr',
     padding: '10px 16px',
     borderRadius: 12,
     fontSize: '13px',
@@ -2372,7 +2378,7 @@ const changeStaffPassword = async (staffMember: any) => {
     {currentUserRole === 'admin' && <div style={{ textAlign: 'center' }}>Пароль</div>}
     <div>Телефон</div>
     <div style={{ textAlign: 'center' }}>Роль</div>
-    <div style={{ textAlign: 'center' }}>Изменить</div>
+    {currentUserRole === 'admin' && <div style={{ textAlign: 'center' }}>Изменить</div>}
   </div>
 ) : (
 
@@ -2447,7 +2453,7 @@ const changeStaffPassword = async (staffMember: any) => {
         display: 'grid',
         gridTemplateColumns: currentUserRole === 'admin'
           ? '2.8fr 160px 1.6fr 1.1fr 130px'
-          : '2.8fr 1.6fr 1.1fr 130px',
+          : '2.8fr 1.6fr 1.1fr',
         padding: '6px 14px',
         borderRadius: 10,
         cursor: 'pointer',
@@ -2506,24 +2512,29 @@ const changeStaffPassword = async (staffMember: any) => {
         </span>
       </div>
 
-      {/* 5. Изменить */}
-      <div style={{ textAlign: 'center' }}>
-        <button 
-          onClick={(e) => { e.stopPropagation(); editStaff(item); }}
-          style={{
-            ...tablePillStyle({
-              bg: 'rgba(59, 130, 246, 0.38)',
-              color: '#BFDBFE',
-              border: 'rgba(96, 165, 250, 0.65)',
-              padding: '5px 12px',
-            }),
-            cursor: 'pointer',
-            borderRadius: 9999,
-          }}
-        >
-          Изменить
-        </button>
-  </div>
+      {/* 5. Изменить — только admin (роль / флаг торгов) */}
+      {currentUserRole === 'admin' && (
+        <div style={{ textAlign: 'center' }}>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              editStaff(item);
+            }}
+            style={{
+              ...tablePillStyle({
+                bg: 'rgba(59, 130, 246, 0.38)',
+                color: '#BFDBFE',
+                border: 'rgba(96, 165, 250, 0.65)',
+                padding: '5px 12px',
+              }),
+              cursor: 'pointer',
+              borderRadius: 9999,
+            }}
+          >
+            Изменить
+          </button>
+        </div>
+      )}
 </div>
             );
           } else {
@@ -3947,6 +3958,41 @@ const changeStaffPassword = async (staffMember: any) => {
             ]}
           />
         </div>
+
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            padding: '12px 14px',
+            borderRadius: 12,
+            border: '1px solid #334155',
+            background: 'rgba(15, 23, 42, 0.55)',
+            cursor: 'pointer',
+            userSelect: 'none',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={editingStaff.can_process_tenders === true}
+            onChange={(e) =>
+              setEditingStaff({
+                ...editingStaff,
+                can_process_tenders: e.target.checked,
+              })
+            }
+            style={{ marginTop: 3, width: 16, height: 16, accentColor: '#D97706' }}
+          />
+          <span>
+            <span style={{ display: 'block', color: '#F8FAFC', fontWeight: 600, fontSize: 14 }}>
+              Может обрабатывать торги / спрос
+            </span>
+            <span style={{ display: 'block', color: '#94A3B8', fontSize: 12, marginTop: 3, lineHeight: 1.4 }}>
+              Обработка заявок, документы, назначение исполнителей и «Отправить в работу».
+              Администраторы имеют доступ всегда.
+            </span>
+          </span>
+        </label>
 
         {/* ==================== ИМЕНА ОПЕРАТОРОВ СМЕНЫ ==================== */}
         {/* У "Оператора" одна общая учётка на всех (без личных логинов) — здесь

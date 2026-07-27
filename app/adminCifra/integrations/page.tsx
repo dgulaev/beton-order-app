@@ -16,6 +16,7 @@ type PublicSettings = {
   avito: {
     enabled: boolean;
     configured: boolean;
+    demand_from_messenger: boolean;
     client_id: string | null;
     user_id: string | null;
     client_secret_set: boolean;
@@ -47,6 +48,7 @@ type PublicSettings = {
 
 type FormState = {
   avito_enabled: boolean;
+  avito_demand_messenger: boolean;
   avito_client_id: string;
   avito_user_id: string;
   avito_client_secret: string;
@@ -231,6 +233,7 @@ function Section({
 function formFromSettings(s: PublicSettings): FormState {
   return {
     avito_enabled: s.avito.enabled,
+    avito_demand_messenger: s.avito.demand_from_messenger,
     avito_client_id: s.avito.client_id_from_db ? s.avito.client_id || '' : '',
     avito_user_id: s.avito.user_id_from_db ? s.avito.user_id || '' : '',
     avito_client_secret: '',
@@ -305,6 +308,7 @@ export default function IntegrationsPage() {
     try {
       const body: Record<string, unknown> = {
         avito_enabled: form.avito_enabled,
+        avito_demand_messenger: form.avito_demand_messenger,
         avito_client_id: form.avito_client_id,
         avito_user_id: form.avito_user_id,
         gosplan_enabled: form.gosplan_enabled,
@@ -497,6 +501,21 @@ export default function IntegrationsPage() {
               onChange={(v) => setForm((f) => (f ? { ...f, avito_enabled: v } : f))}
               label={form.avito_enabled ? 'Включено' : 'Выключено'}
             />
+            <Toggle
+              checked={form.avito_demand_messenger}
+              onChange={(v) =>
+                setForm((f) => (f ? { ...f, avito_demand_messenger: v } : f))
+              }
+              label={
+                form.avito_demand_messenger
+                  ? 'Спрос из чатов Авито: вкл.'
+                  : 'Спрос из чатов Авито: выкл.'
+              }
+            />
+            <p style={{ margin: 0, fontSize: 12, color: '#64748B', lineHeight: 1.45 }}>
+              Легально: только входящие в ваши объявления (Messenger API). Поиск чужих объявлений
+              Авито не отдаёт и мы его не парсим — риск бана.
+            </p>
             <div style={grid2}>
               <label style={{ minWidth: 0 }}>
                 <span style={labelStyle}>Client ID</span>

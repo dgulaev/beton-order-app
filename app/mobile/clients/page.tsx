@@ -5,6 +5,7 @@ import { Search, X, Phone, Users, Briefcase, ChevronDown, ChevronRight, Building
 import MobileExitButton from '../components/MobileExitButton';
 import MobileClientDetailModal from '../components/MobileClientDetailModal';
 import { useUserRole } from '../../providers/UserRoleProvider';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatPhoneDisplay } from '@/lib/phone';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 
@@ -159,7 +160,9 @@ export default function MobileClientsPage() {
   const loadStaff = useCallback(async () => {
     setStaffLoading(true);
     try {
-      const res = await fetch('/api/adminCifra/staff');
+      const res = await fetch('/api/adminCifra/staff', {
+        headers: adminCifraAuthHeaders(),
+      });
       if (!res.ok) return;
       const data = await res.json();
       setStaff(Array.isArray(data) ? data : (data.staff || []));

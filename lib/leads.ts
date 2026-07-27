@@ -11,6 +11,24 @@ export const LEAD_SOURCE_LABEL: Record<string, string> = {
   demand: 'Спрос',
 };
 
+/** Источники, которые можно выбрать при ручном создании из админки. */
+export const LEAD_MANUAL_CREATE_SOURCES = ['tender', 'manual', 'site'] as const;
+export type LeadManualCreateSource = (typeof LEAD_MANUAL_CREATE_SOURCES)[number];
+
+/** Площадки для специалиста по торгам. */
+export const LEAD_PLATFORM_OPTIONS = [
+  'ЕИС (zakupki.gov.ru)',
+  'Сбербанк-АСТ',
+  'РТС-тендер',
+  'ТЭК-Торг',
+  'Фабрикант',
+  'B2B-Center',
+  'Авито',
+  'Другое',
+] as const;
+
+export const LEAD_LAW_OPTIONS = ['44-ФЗ', '223-ФЗ', 'Коммерция', 'Иное'] as const;
+
 export const LEAD_STATUSES = ['new', 'in_progress', 'converted', 'rejected', 'spam'] as const;
 export type LeadStatus = (typeof LEAD_STATUSES)[number];
 
@@ -21,6 +39,25 @@ export const LEAD_STATUS_LABEL: Record<LeadStatus, string> = {
   rejected: 'Отказ',
   spam: 'Спам',
 };
+
+/**
+ * Входящие лиды без торгового назначения:
+ * «Взять в работу» / «Создать заказ» доступны всем менеджерам.
+ */
+export const LEAD_OPEN_WORK_SOURCES = ['avito', 'public_form'] as const;
+
+export function isLeadWorkOpenToAll(source: string | null | undefined): boolean {
+  if (!source) return false;
+  return (LEAD_OPEN_WORK_SOURCES as readonly string[]).includes(String(source).toLowerCase());
+}
+
+/**
+ * Отказ/спам у менеджеров только для Авито и публичной формы.
+ * Спрос / тендер / площадка уже проработаны админом или специалистом по торгам.
+ */
+export function canManagerRejectOrSpamLead(source: string | null | undefined): boolean {
+  return isLeadWorkOpenToAll(source);
+}
 
 export type Lead = {
   id: number;
@@ -62,6 +99,7 @@ export type LeadDraft = {
   desired_date?: string | null;
   score?: number | null;
   listing_id?: string | null;
+  assigned_to?: number | null;
 };
 
 /** Prefill для NewOrderModal / MobileNewOrderModal */

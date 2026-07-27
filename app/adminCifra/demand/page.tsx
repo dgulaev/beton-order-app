@@ -4,9 +4,12 @@ import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { Radar, RefreshCw, ExternalLink } from 'lucide-react';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
-import { demandSourceLabel } from '@/lib/demand/labels';
+import { DEMAND_STATUS_LABEL, demandSourceLabel } from '@/lib/demand/labels';
+import { canProcessTenders } from '@/lib/demandProcessAccess';
 import { useRouter } from 'next/navigation';
+import { useUserRole } from '@/app/providers/UserRoleProvider';
 import { useRealtimeDemand, type DemandItemRow } from '@/hooks/useRealtimeDemand';
+import ProcessDemandModal from './ProcessDemandModal';
 
 const pageWrap: CSSProperties = {
   padding: 'clamp(12px, 2vw, 28px)',
@@ -18,6 +21,8 @@ const pageWrap: CSSProperties = {
 
 export default function DemandPage() {
   const router = useRouter();
+  const { user } = useUserRole();
+  const allowTenderProcess = canProcessTenders(user);
   const [items, setItems] = useState<DemandItemRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -26,6 +31,7 @@ export default function DemandPage() {
   const [minScore, setMinScore] = useState(0);
   const [status, setStatus] = useState('new');
   const [message, setMessage] = useState<string | null>(null);
+  const [processItem, setProcessItem] = useState<DemandItemRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -137,36 +143,96 @@ export default function DemandPage() {
     }
   };
 
-  const take = async (id: number) => {
-    setBusyId(id);
+  const ensureProcessing = async (item: DemandItemRow): Promise<DemandItemRow | null> => {
+    if (item.status === 'processing') return item;
+    const res = await fetch(`/api/adminCifra/demand/${item.id}`, {
+      method: 'PATCH',
+      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ status: 'processing' }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.success) {
+      setMessage(json.error || 'Не удалось взять в обработку');
+      return null;
+    }
+    const updated = json.item as DemandItemRow;
+    setItems((prev) => {
+      if (status && status !== 'processing') return prev.filter((i) => i.id !== item.id);
+      return prev.map((i) => (i.id === item.id ? { ...i, ...updated } : i));
+    });
+    return updated;
+  };
+
+  const startProcessing = async (item: DemandItemRow) => {
+    setBusyId(item.id);
     setMessage(null);
     try {
-      const res = await fetch(`/api/adminCifra/demand/${id}/take`, {
+      const updated = await ensureProcessing(item);
+      if (updated) setProcessItem(updated);
+    } catch {
+      setMessage('Ошибка соединения');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  /** Отправка в работу с карточки: если исполнители уже в черновике — сразу /take, иначе форма. */
+  const sendDemandToWork = async (item: DemandItemRow) => {
+    setBusyId(item.id);
+    setMessage(null);
+    try {
+      const updated = await ensureProcessing(item);
+      if (!updated) return;
+
+      const raw =
+        updated.raw_payload && typeof updated.raw_payload === 'object'
+          ? updated.raw_payload
+          : {};
+      const p =
+        raw.processing && typeof raw.processing === 'object'
+          ? (raw.processing as Record<string, unknown>)
+          : {};
+      const hasAssignee =
+        (p.assigned_to != null && String(p.assigned_to).trim() !== '') ||
+        (Array.isArray(p.co_assignees) && p.co_assignees.length > 0);
+
+      if (!hasAssignee) {
+        setProcessItem(updated);
+        setMessage(
+          'Назначьте исполнителей в форме и нажмите «Отправить в работу» внизу окна',
+        );
+        return;
+      }
+
+      const res = await fetch(`/api/adminCifra/demand/${updated.id}/take`, {
         method: 'POST',
         headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(p),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.success) {
-        setMessage(json.error || 'Ошибка');
+        setProcessItem(updated);
+        setMessage(json.error || 'Не удалось отправить — проверьте форму');
         return;
       }
-      const leadId = json.lead?.id;
+      if (json.warning) {
+        alert(`Лид создан, но: ${json.warning}`);
+      }
+      const leadId = json.lead?.id as number | undefined;
       setItems((prev) => {
-        if (status && status !== 'taken') return prev.filter((i) => i.id !== id);
+        if (status && status !== 'taken') return prev.filter((i) => i.id !== updated.id);
         return prev.map((i) =>
-          i.id === id ? { ...i, status: 'taken', lead_id: leadId ?? i.lead_id } : i,
+          i.id === updated.id
+            ? { ...i, status: 'taken', lead_id: leadId ?? i.lead_id }
+            : i,
         );
       });
-      if (json.already) {
-        setMessage(
-          leadId
-            ? `Лид #${leadId} уже был создан ранее — открываю «Лиды»`
-            : 'Уже взято ранее — открываю «Лиды»',
-        );
-      } else {
-        setMessage(leadId ? `Лид #${leadId} создан — открываю «Лиды»` : 'Лид создан');
-      }
-      router.push('/adminCifra/leads?status=new&source=demand');
+      setMessage(
+        leadId
+          ? `Лид #${leadId} отправлен в работу — исполнители уведомлены.`
+          : 'Отправлено в работу.',
+      );
+      if (leadId) router.push('/adminCifra/leads?status=new&source=demand');
     } catch {
       setMessage('Ошибка соединения');
     } finally {
@@ -245,8 +311,8 @@ export default function DemandPage() {
             Радар спроса по Брянской области
           </div>
           <div style={{ color: '#94A3B8', fontSize: 13, lineHeight: 1.45 }}>
-            Собирает тендеры и запросы на бетон с площадок. Нажми «Запустить поиск», оцени карточки
-            и бери подходящие в лиды.
+            Новая заявка → «Обработать» (торги, документы) → назначить исполнителей → «Отправить в
+            работу». Исполнителям придёт задание взять лид.
           </div>
         </div>
       </div>
@@ -263,8 +329,9 @@ export default function DemandPage() {
         {(
           [
             { value: 'new', label: 'Новые' },
+            { value: 'processing', label: 'Обработка' },
             { value: 'relevant', label: 'Релевантные' },
-            { value: 'taken', label: 'Взятые' },
+            { value: 'taken', label: 'В лидах' },
             { value: 'ignored', label: 'Игнор' },
             { value: '', label: 'Все' },
           ] as const
@@ -340,6 +407,12 @@ export default function DemandPage() {
         >
           {items.map((item) => {
             const busy = busyId === item.id;
+            const inProcessing = item.status === 'processing';
+            const canOpenProcess =
+              allowTenderProcess &&
+              (item.status === 'new' ||
+                item.status === 'relevant' ||
+                item.status === 'processing');
             return (
               <div key={item.id} style={volumeCardSoftStyle({ padding: 16, height: '100%' })}>
                 <div
@@ -367,6 +440,21 @@ export default function DemandPage() {
                       >
                         оценка {item.fit_score ?? 0}%
                       </span>
+                      {inProcessing && (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 12,
+                            color: '#FDE68A',
+                            background: '#78350F',
+                            padding: '2px 8px',
+                            borderRadius: 8,
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {DEMAND_STATUS_LABEL.processing}
+                        </span>
+                      )}
                     </div>
                     <div style={{ color: '#94A3B8', fontSize: 13, marginTop: 4 }}>
                       {demandSourceLabel(item.source)}
@@ -403,26 +491,47 @@ export default function DemandPage() {
                       flex: '0 0 auto',
                     }}
                   >
-                    {item.status !== 'taken' && item.status !== 'ignored' && (
+                    {canOpenProcess && (
                       <>
                         <button
                           type="button"
                           disabled={busy}
-                          onClick={() => void take(item.id)}
+                          onClick={() => void startProcessing(item)}
                           style={{
                             padding: '10px 12px',
                             borderRadius: 10,
                             border: 'none',
-                            background: '#059669',
+                            background: inProcessing ? '#D97706' : '#059669',
                             color: '#fff',
                             fontWeight: 600,
                             cursor: busy ? 'wait' : 'pointer',
                             opacity: busy ? 0.7 : 1,
                           }}
                         >
-                          {busy ? '…' : 'Взять'}
+                          {busy ? '…' : 'Обработать'}
                         </button>
-                        {item.status !== 'relevant' && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void sendDemandToWork(item)}
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: 10,
+                            border: 'none',
+                            background: '#CA8A04',
+                            color: '#1F2937',
+                            fontWeight: 600,
+                            cursor: busy ? 'wait' : 'pointer',
+                            opacity: busy ? 0.7 : 1,
+                          }}
+                        >
+                          Отправить в работу
+                        </button>
+                      </>
+                    )}
+                    {item.status !== 'taken' && item.status !== 'ignored' && (
+                      <>
+                        {!inProcessing && item.status !== 'relevant' && (
                           <button
                             type="button"
                             disabled={busy}
@@ -484,6 +593,39 @@ export default function DemandPage() {
           })}
         </div>
       )}
+
+      <ProcessDemandModal
+        open={Boolean(processItem)}
+        item={processItem}
+        onClose={() => setProcessItem(null)}
+        onDraftSaved={(updated) => {
+          setProcessItem(updated);
+          setItems((prev) => {
+            if (status && status !== 'processing' && status !== '') {
+              return prev.filter((i) => i.id !== updated.id);
+            }
+            if (prev.some((i) => i.id === updated.id)) {
+              return prev.map((i) => (i.id === updated.id ? { ...i, ...updated } : i));
+            }
+            return status === 'processing' || !status ? [updated, ...prev] : prev;
+          });
+          setMessage('Черновик обработки сохранён');
+        }}
+        onSent={(leadId) => {
+          const id = processItem?.id;
+          setProcessItem(null);
+          if (id != null) {
+            setItems((prev) => {
+              if (status && status !== 'taken') return prev.filter((i) => i.id !== id);
+              return prev.map((i) =>
+                i.id === id ? { ...i, status: 'taken', lead_id: leadId } : i,
+              );
+            });
+          }
+          setMessage(`Лид #${leadId} отправлен в работу — исполнители уведомлены.`);
+          router.push('/adminCifra/leads?status=new&source=demand');
+        }}
+      />
     </div>
   );
 }

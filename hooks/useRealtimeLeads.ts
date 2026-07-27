@@ -2,6 +2,7 @@
 
 import type { Dispatch, SetStateAction } from 'react';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
+import { getLeadAssigneeIds } from '@/lib/leadAssigneeIds';
 import type { Lead, LeadStatus } from '@/lib/leads';
 
 function matchesLeadFilters(
@@ -54,7 +55,10 @@ export function useRealtimeLeads(
 
 export function useLeadChangeNotifications(options: {
   enabled?: boolean;
+  currentUserId?: number | null;
   onNewLead?: (lead: Lead) => void;
+  /** Персонально: «Вам необходимо взять лид №… в работу!» */
+  onTakeRequired?: (lead: Lead) => void;
 }) {
   return useRealtimeBroadcast({
     topic: 'leads:all',
@@ -62,7 +66,23 @@ export function useLeadChangeNotifications(options: {
     onInsert: (record) => {
       const lead = record as Lead;
       if (lead.status === 'spam') return;
+      const myId = options.currentUserId;
+      const assigneeIds = getLeadAssigneeIds(lead);
+      if (myId && lead.status === 'new' && assigneeIds.includes(myId)) {
+        options.onTakeRequired?.(lead);
+        return;
+      }
       options.onNewLead?.(lead);
+    },
+    onUpdate: (record, old) => {
+      const lead = record as Lead;
+      const myId = options.currentUserId;
+      if (!myId || lead.status !== 'new') return;
+      const nowIds = getLeadAssigneeIds(lead);
+      const oldIds = old ? getLeadAssigneeIds(old as Lead) : [];
+      if (nowIds.includes(myId) && !oldIds.includes(myId)) {
+        options.onTakeRequired?.(lead);
+      }
     },
   });
 }

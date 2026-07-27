@@ -35,6 +35,8 @@ interface PersistedNotif {
   timestamp: number;
   /** Куда вести по клику (по умолчанию — заявки). */
   href?: string;
+  /** Визуальный вариант: заявки — зелёный, лиды — жёлтый. */
+  tone?: 'order' | 'lead';
 }
 
 function escapeToastHtml(s: string): string {
@@ -315,7 +317,14 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   // Ref для функции создания тоста — позволяет вызывать её из mount-эффекта
   // без проблем с замыканиями (всегда последняя версия функции)
   const createToastRef = useRef<
-    ((id: string, iconKey: string, title: string, message: string, href?: string) => void) | null
+    ((
+      id: string,
+      iconKey: string,
+      title: string,
+      message: string,
+      href?: string,
+      tone?: 'order' | 'lead',
+    ) => void) | null
   >(null);
 
   // ==================== 2.1 СОСТОЯНИЕ УВЕДОМЛЕНИЙ ПО КЛИЕНТАМ ====================
@@ -409,35 +418,55 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     title: string,
     message: string,
     href = '/adminCifra/zayavki',
+    tone: 'order' | 'lead' = 'order',
   ) => {
     const notif = document.createElement('div');
     notif.dataset.notifId = id;
-    // Салатовый тост (как раньше) — отдельно от тёмных appAlert/confirm.
+    const isLead = tone === 'lead' || id.startsWith('lead-');
+    // Заявки — салатовый; лиды — жёлтый (чтобы сразу отличались в стеке).
     // Фиксированная ширина: длинный текст не растягивает баннер.
+    const widthPx = isLead ? 460 : 420;
+    const bg = isLead
+      ? 'linear-gradient(135deg, #eab308, #fde047)'
+      : 'linear-gradient(135deg, #22c55e, #86efac)';
+    const shadow = isLead
+      ? '0 20px 40px rgba(234, 179, 8, 0.45)'
+      : '0 20px 40px rgba(34, 197, 94, 0.45)';
+    const padY = isLead ? 20 : 16;
+    const titleSize = isLead ? 18 : 16;
+    const msgSize = isLead ? 15 : 14;
+    const titleMin = isLead ? 14 : 11;
+    const msgMin = isLead ? 13 : 10;
+
     notif.style.cssText = `
       position: relative;
       box-sizing: border-box;
-      width: 420px;
-      max-width: min(420px, calc(100vw - 48px));
-      background: linear-gradient(135deg, #22c55e, #86efac);
+      width: ${widthPx}px;
+      max-width: min(${widthPx}px, calc(100vw - 48px));
+      background: ${bg};
       color: #0f172a;
-      padding: 16px 22px;
+      padding: ${padY}px 22px;
       border-radius: 16px;
       font-weight: 600;
-      box-shadow: 0 20px 40px rgba(34, 197, 94, 0.45);
+      box-shadow: ${shadow};
       display: flex;
-      align-items: center;
+      align-items: ${isLead ? 'flex-start' : 'center'};
       gap: 14px;
       cursor: pointer;
       pointer-events: auto;
+      min-height: ${isLead ? '76px' : 'auto'};
     `;
 
     const icon = resolveNotifIcon(iconKey);
+    const msgWhiteSpace = isLead ? 'normal' : 'nowrap';
+    const msgClamp = isLead
+      ? 'display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35;'
+      : '';
     notif.innerHTML = `
-      ${notifIconHtml(icon)}
+      <div style="flex-shrink: 0; ${isLead ? 'padding-top: 2px;' : ''}">${notifIconHtml(icon)}</div>
       <div class="toast-text" style="flex: 1; min-width: 0; overflow: hidden;">
-        <div class="toast-title" style="font-size: 16px; font-weight: 700; white-space: nowrap;">${escapeToastHtml(title)}</div>
-        <div class="toast-msg" style="font-size: 14px; opacity: 0.92; white-space: nowrap;">${escapeToastHtml(message)}</div>
+        <div class="toast-title" style="font-size: ${titleSize}px; font-weight: 700; white-space: nowrap; line-height: 1.25;">${escapeToastHtml(title)}</div>
+        <div class="toast-msg" style="font-size: ${msgSize}px; opacity: 0.92; white-space: ${msgWhiteSpace}; margin-top: 4px; ${msgClamp}">${escapeToastHtml(message)}</div>
       </div>
       <div style="font-size: 22px; opacity: 0.7; cursor: pointer; line-height: 1; padding: 2px 4px; flex-shrink: 0;" class="close-btn">✕</div>
     `;
@@ -445,7 +474,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     const closeBtn = notif.querySelector('.close-btn') as HTMLElement;
     const textCol = notif.querySelector('.toast-text') as HTMLElement | null;
 
-    /** Ужимает шрифт title/msg, чтобы обе строки влезли в ширину баннера без обрезки. */
+    /** Ужимает шрифт title/msg, чтобы строки влезли в ширину баннера. */
     const fitToastText = () => {
       if (!textCol) return;
       const titleEl = textCol.querySelector('.toast-title') as HTMLElement | null;
@@ -456,15 +485,29 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       if (avail <= 0) return;
 
       // Сброс к базовым размерам, затем пропорциональное уменьшение
-      titleEl.style.fontSize = '16px';
-      msgEl.style.fontSize = '14px';
+      titleEl.style.fontSize = `${titleSize}px`;
+      msgEl.style.fontSize = `${msgSize}px`;
+
+      // У лидов подзаголовок переносится на 2 строки — ужимаем в основном title
+      if (isLead) {
+        if (titleEl.scrollWidth <= avail) return;
+        const scale = Math.max(titleMin / titleSize, avail / titleEl.scrollWidth);
+        titleEl.style.fontSize = `${(titleSize * scale).toFixed(2)}px`;
+        let guard = 24;
+        while (guard-- > 0 && titleEl.scrollWidth > avail) {
+          const t = parseFloat(titleEl.style.fontSize);
+          if (t <= titleMin) break;
+          titleEl.style.fontSize = `${Math.max(titleMin, t - 0.25)}px`;
+        }
+        return;
+      }
 
       const need = Math.max(titleEl.scrollWidth, msgEl.scrollWidth);
       if (need <= avail) return;
 
       const scale = Math.max(0.72, avail / need);
-      titleEl.style.fontSize = `${(16 * scale).toFixed(2)}px`;
-      msgEl.style.fontSize = `${(14 * scale).toFixed(2)}px`;
+      titleEl.style.fontSize = `${(titleSize * scale).toFixed(2)}px`;
+      msgEl.style.fontSize = `${(msgSize * scale).toFixed(2)}px`;
 
       // Если после округления всё ещё не влезло — дожимаем по 0.25px
       let guard = 24;
@@ -474,9 +517,9 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       ) {
         const t = parseFloat(titleEl.style.fontSize);
         const m = parseFloat(msgEl.style.fontSize);
-        if (t <= 11 && m <= 10) break;
-        titleEl.style.fontSize = `${Math.max(11, t - 0.25)}px`;
-        msgEl.style.fontSize = `${Math.max(10, m - 0.25)}px`;
+        if (t <= titleMin && m <= msgMin) break;
+        titleEl.style.fontSize = `${Math.max(titleMin, t - 0.25)}px`;
+        msgEl.style.fontSize = `${Math.max(msgMin, m - 0.25)}px`;
       }
     };
 
@@ -512,12 +555,15 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     // Небольшая задержка чтобы контейнер успел смонтироваться в DOM
     const timer = setTimeout(() => {
       saved.forEach(n => {
+        const tone =
+          n.tone || (n.id.startsWith('lead-') ? 'lead' : 'order');
         createToastRef.current?.(
           n.id,
           n.icon || n.emoji || 'package',
           n.title,
           n.message,
           n.href,
+          tone,
         );
       });
       // Обновляем счётчик
@@ -737,36 +783,79 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     },
   });
 
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
+  useEffect(() => {
+    const id = Number(localStorage.getItem('userId') || 0);
+    setCurrentUserId(Number.isFinite(id) && id > 0 ? id : null);
+  }, [userRole, roleLoading]);
+
+  const showLeadToast = (
+    id: string,
+    title: string,
+    message: string,
+    href: string,
+  ) => {
+    savePersistedNotif({
+      id,
+      icon: 'package',
+      title,
+      message,
+      timestamp: Date.now(),
+      href,
+      tone: 'lead',
+    });
+    playNotificationSound();
+    createToastRef.current?.(id, 'package', title, message, href, 'lead');
+  };
+
   useLeadChangeNotifications({
     // Тосты по лидам — только у ролей с доступом к «Продажи».
     enabled: !!userRole && canAccessSales(userRole),
+    currentUserId,
+    onTakeRequired: (lead) => {
+      const preview = (lead.raw_text || lead.phone || 'Новый лид').slice(0, 160);
+      showLeadToast(
+        `lead-take-${lead.id}-${Date.now()}`,
+        `Вам необходимо взять лид №${lead.id} в работу!`,
+        preview,
+        '/adminCifra/leads?status=new',
+      );
+    },
     onNewLead: (lead) => {
-      // Тот же салатовый тост, что и у заявок (звук + localStorage + клик).
+      // Жёлтый тост лида (крупнее текст) — отдельно от зелёных заявок.
       const sourceLabel = LEAD_SOURCE_LABEL[lead.source] || lead.source;
-      const who = (lead.name || '').trim();
-      const preview = (lead.raw_text || lead.phone || 'Без текста').slice(0, 120);
+      const clientName = (lead.name || '').trim();
+      const preview = (lead.raw_text || lead.phone || 'Без текста').slice(0, 160);
       const isAvito = lead.source === 'avito';
-      const title = isAvito
-        ? who
-          ? `${who} · сообщение в Авито`
-          : 'Новое сообщение · Авито'
-        : `Новый лид · ${sourceLabel}`;
+      const payload =
+        lead.raw_payload && typeof lead.raw_payload === 'object' ? lead.raw_payload : {};
+      const actorName = String(
+        (payload as Record<string, unknown>).created_by_name
+          ?? (payload as Record<string, unknown>).createdByName
+          ?? '',
+      ).trim();
+
+      let title: string;
+      if (lead.source === 'demand' && actorName) {
+        const verb = ruPastByName(actorName, 'одобрил', 'одобрила');
+        title = `${actorName} ${verb} лид · ${sourceLabel}`;
+      } else if ((lead.source === 'manual' || lead.source === 'tender' || lead.source === 'site') && actorName) {
+        const verb = ruPastByName(actorName, 'создал', 'создала');
+        title = `${actorName} ${verb} лид`;
+      } else if (isAvito) {
+        title = clientName
+          ? `${clientName} · сообщение в Авито`
+          : 'Новое сообщение · Авито';
+      } else {
+        title = `Новый лид · ${sourceLabel}`;
+      }
+
       const href = isAvito
         ? lead.listing_id
           ? `/adminCifra/marketplace?open=${encodeURIComponent(lead.listing_id)}&chat=1`
           : '/adminCifra/marketplace'
         : '/adminCifra/leads';
-      const id = `lead-${lead.id}`;
-      savePersistedNotif({
-        id,
-        icon: 'package',
-        title,
-        message: preview,
-        timestamp: Date.now(),
-        href,
-      });
-      playNotificationSound();
-      createToastRef.current?.(id, 'package', title, preview, href);
+      showLeadToast(`lead-${lead.id}`, title, preview, href);
     },
   });
 
@@ -1185,28 +1274,133 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 )}
               </button>
 
-              {/* Развёрнутый сайдбар — подменю под пунктом */}
+              {/* Развёрнутый сайдбар — дерево подпунктов */}
               {!isCollapsed && salesMenuOpen && (
-                <div style={{ paddingLeft: 12, marginTop: 2 }}>
-                  {SALES_SUBMENU.filter((item) => salesMenuItemVisible(item, userRole)).map((item) => {
-                    const active = isActive(item.href);
-                    const Icon = item.icon;
-                    return (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        style={{
-                          ...navLinkStyle(active, false),
-                          padding: '10px 12px',
-                          fontSize: 14,
-                          marginBottom: 2,
-                        }}
-                      >
-                        <Icon size={18} />
-                        <span style={{ paddingLeft: 12 }}>{item.label}</span>
-                      </Link>
-                    );
-                  })}
+                <div
+                  style={{
+                    marginTop: 4,
+                    marginBottom: 2,
+                    marginLeft: 18,
+                    padding: '2px 0',
+                  }}
+                >
+                  {SALES_SUBMENU.filter((item) => salesMenuItemVisible(item, userRole)).map(
+                    (item, idx, arr) => {
+                      const active = isActive(item.href);
+                      const Icon = item.icon;
+                      const isLast = idx === arr.length - 1;
+                      return (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 0,
+                            textDecoration: 'none',
+                            padding: '0 10px 0 0',
+                            marginBottom: isLast ? 0 : 2,
+                            color: active ? ACCENT : '#CBD5E1',
+                            fontSize: 14,
+                            fontWeight: active ? 600 : 500,
+                            borderRadius: 10,
+                            transition: 'background-color 0.15s, color 0.15s',
+                          }}
+                        >
+                          {/* Вертикаль дерева + «уголок» */}
+                          <span
+                            aria-hidden
+                            style={{
+                              position: 'relative',
+                              width: 22,
+                              alignSelf: 'stretch',
+                              flexShrink: 0,
+                              marginLeft: 10,
+                            }}
+                          >
+                            {/* линия вниз (кроме последнего) */}
+                            <span
+                              style={{
+                                position: 'absolute',
+                                left: 7,
+                                top: 0,
+                                bottom: isLast ? '50%' : 0,
+                                width: 2,
+                                background: 'rgba(148, 163, 184, 0.35)',
+                                borderRadius: 1,
+                              }}
+                            />
+                            {/* горизонталь к пункту */}
+                            <span
+                              style={{
+                                position: 'absolute',
+                                left: 7,
+                                top: '50%',
+                                width: 12,
+                                height: 2,
+                                marginTop: -1,
+                                background: active
+                                  ? 'rgba(74, 222, 128, 0.65)'
+                                  : 'rgba(148, 163, 184, 0.35)',
+                                borderRadius: 1,
+                              }}
+                            />
+                            {/* узел */}
+                            <span
+                              style={{
+                                position: 'absolute',
+                                left: 3,
+                                top: '50%',
+                                width: 10,
+                                height: 10,
+                                marginTop: -5,
+                                borderRadius: '50%',
+                                background: active ? ACCENT : '#334155',
+                                border: active
+                                  ? '2px solid rgba(74, 222, 128, 0.45)'
+                                  : '2px solid rgba(148, 163, 184, 0.4)',
+                                boxSizing: 'border-box',
+                                zIndex: 1,
+                              }}
+                            />
+                          </span>
+                          <span
+                            style={{
+                              flex: 1,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                              padding: '9px 10px',
+                              borderRadius: 10,
+                              background: active ? 'rgba(74, 222, 128, 0.12)' : 'transparent',
+                              border: active
+                                ? '1px solid rgba(74, 222, 128, 0.35)'
+                                : '1px solid transparent',
+                              minWidth: 0,
+                            }}
+                          >
+                            <Icon
+                              size={17}
+                              style={{
+                                flexShrink: 0,
+                                opacity: active ? 1 : 0.85,
+                                color: active ? ACCENT : '#94A3B8',
+                              }}
+                            />
+                            <span
+                              style={{
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {item.label}
+                            </span>
+                          </span>
+                        </Link>
+                      );
+                    },
+                  )}
                 </div>
               )}
             </div>

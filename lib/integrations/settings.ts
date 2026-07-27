@@ -7,6 +7,8 @@ export type IntegrationSettingsRow = {
   avito_client_secret: string | null;
   avito_user_id: string | null;
   avito_webhook_secret: string | null;
+  /** Легальный спрос из Messenger (не поиск чужих объявлений). */
+  avito_demand_messenger?: boolean;
   gosplan_enabled: boolean;
   gosplan_base_url: string | null;
   gosplan_api_key: string | null;
@@ -27,6 +29,8 @@ export type EffectiveIntegrationSettings = {
     userId: string | null;
     webhookSecret: string | null;
     configured: boolean;
+    /** Входящие чаты → карточки Спроса (официальный Messenger API). */
+    demandFromMessenger: boolean;
   };
   gosplan: {
     enabled: boolean;
@@ -79,6 +83,7 @@ export function envOnlyIntegrationSettings(): EffectiveIntegrationSettings {
       userId,
       webhookSecret,
       configured: Boolean(avitoEnabled && clientId && clientSecret && userId),
+      demandFromMessenger: process.env.AVITO_DEMAND_MESSENGER === '1',
     },
     gosplan: {
       enabled: envBoolOn(process.env.GOSPLAN_ENABLED, true),
@@ -119,6 +124,11 @@ function mergeRow(row: IntegrationSettingsRow | null): EffectiveIntegrationSetti
       userId,
       webhookSecret,
       configured: Boolean(avitoEnabled && clientId && clientSecret && userId),
+      // Если колонка уже в строке — тумблер из БД; иначе fallback на env.
+      demandFromMessenger:
+        typeof row.avito_demand_messenger === 'boolean'
+          ? row.avito_demand_messenger
+          : process.env.AVITO_DEMAND_MESSENGER === '1',
     },
     gosplan: {
       enabled: gosplanEnabled,
@@ -201,6 +211,7 @@ export type IntegrationSettingsPatch = {
   avito_client_secret?: string | null;
   avito_user_id?: string | null;
   avito_webhook_secret?: string | null;
+  avito_demand_messenger?: boolean;
   gosplan_enabled?: boolean;
   gosplan_base_url?: string | null;
   gosplan_api_key?: string | null;
@@ -226,6 +237,9 @@ export async function saveIntegrationSettings(
   const row: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
   if (typeof patch.avito_enabled === 'boolean') row.avito_enabled = patch.avito_enabled;
+  if (typeof patch.avito_demand_messenger === 'boolean') {
+    row.avito_demand_messenger = patch.avito_demand_messenger;
+  }
   if (typeof patch.gosplan_enabled === 'boolean') row.gosplan_enabled = patch.gosplan_enabled;
   if (typeof patch.demand_demo === 'boolean') row.demand_demo = patch.demand_demo;
 
@@ -297,6 +311,7 @@ export function publicIntegrationView(settings: EffectiveIntegrationSettings) {
     avito: {
       enabled: settings.avito.enabled,
       configured: settings.avito.configured,
+      demand_from_messenger: settings.avito.demandFromMessenger,
       client_id: settings.avito.clientId,
       user_id: settings.avito.userId,
       client_secret_set: secretSet(db?.avito_client_secret, process.env.AVITO_CLIENT_SECRET),

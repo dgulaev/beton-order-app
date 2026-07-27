@@ -16,6 +16,7 @@ export type DemandItemRow = {
   external_url: string | null;
   lead_id: number | null;
   published_at: string | null;
+  raw_payload?: Record<string, unknown> | null;
 };
 
 export function useRealtimeDemand(

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import bcrypt from 'bcryptjs';
 import { phonesMatch, normalizePhone } from '@/lib/phone';
+import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -11,12 +12,15 @@ const supabase = createClient(
 
 const ALLOWED_STAFF_ROLES = ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'guest'];
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const auth = await requireAdminCifraStaff(request);
+    if (auth.error) return auth.error;
+
     // Получаем всех сотрудников
     const { data: staffList, error } = await supabase
       .from('users')
-      .select('user_id, full_name, username, phone, role, created_at')
+      .select('user_id, full_name, username, phone, role, created_at, can_process_tenders')
       .in('role', ['admin', 'manager', 'dispatcher', 'operator', 'logist'])
       .order('full_name');
 
@@ -24,7 +28,7 @@ export async function GET() {
 
     // Для каждого сотрудника считаем статистику
     const staffWithStats = await Promise.all(
-      staffList.map(async (staff: any) => {
+      (staffList || []).map(async (staff: any) => {
         // Клиенты на кураторстве (как в /staff/stats и карточке стаффа)
         const { data: clients, error: clientsError } = await supabase
           .from('users')
@@ -36,7 +40,7 @@ export async function GET() {
           console.error('Clients error for', staff.user_id, clientsError);
         }
 
-        const clientIds = clients?.map(c => c.user_id) || [];
+        const clientIds = clients?.map((c) => c.user_id) || [];
 
         // Объём заказов по этим клиентам
         let totalVolume = 0;
@@ -46,15 +50,16 @@ export async function GET() {
             .select('volume')
             .in('user_id', clientIds);
 
-          totalVolume = orders?.reduce((sum: number, o: any) => sum + (Number(o.volume) || 0), 0) || 0;
+          totalVolume =
+            orders?.reduce((sum: number, o: any) => sum + (Number(o.volume) || 0), 0) || 0;
         }
 
         return {
           ...staff,
           clients_count: clientIds.length,
-          total_volume: totalVolume
+          total_volume: totalVolume,
         };
-      })
+      }),
     );
 
     return NextResponse.json(staffWithStats);
@@ -65,15 +70,16 @@ export async function GET() {
 }
 
 // ==================== СОЗДАНИЕ НОВОГО СОТРУДНИКА ====================
-// Раньше единственный способ завести сотрудника — сначала пройти клиентскую
-// регистрацию (телефон+ФИО на "/"), а затем найти себя в списке клиентов и
-// вручную назначить роль/пароль. Теперь админ может сразу создать учётку
-// сотрудника (телефон + пароль + роль) — без того, чтобы этот человек вообще
-// открывал публичную форму входа. Дальше он просто заходит по телефону+
-// паролю напрямую в /adminCifra или /mobile.
+// Только admin: иначе менеджер мог бы выдать себе can_process_tenders / роль.
 export async function POST(request: NextRequest) {
   try {
-    const { fullName, phone, role, password } = await request.json();
+    const auth = await requireAdminCifraStaff(request, ['admin']);
+    if (auth.error) return auth.error;
+
+    const body = await request.json();
+    const { fullName, phone, role, password } = body;
+    const canProcessTenders =
+      body.canProcessTenders === true || body.can_process_tenders === true;
 
     if (!phone || !normalizePhone(phone)) {
       return NextResponse.json({ error: 'Укажите телефон' }, { status: 400 });
@@ -110,6 +116,7 @@ export async function POST(request: NextRequest) {
         referral_code: referralCode,
         balance: 0,
         referred_by: null,
+        can_process_tenders: canProcessTenders,
       })
       .select()
       .single();
@@ -126,12 +133,19 @@ export async function POST(request: NextRequest) {
 }
 
 // ==================== РЕДАКТИРОВАНИЕ СОТРУДНИКА ====================
-// Раньше кнопка "Сохранить" в модалке редактирования была заглушкой
-// (console.log + alert, без единого запроса к серверу) — изменения ФИО/
-// телефона/роли никуда не сохранялись.
+// Только admin: роль и can_process_tenders нельзя менять «сам себе» через UI/curl.
 export async function PUT(request: NextRequest) {
   try {
-    const { userId, fullName, phone, role, password } = await request.json();
+    const auth = await requireAdminCifraStaff(request, ['admin']);
+    if (auth.error) return auth.error;
+
+    const body = await request.json();
+    const { userId, fullName, phone, role, password } = body;
+    const hasTendersFlag =
+      typeof body.canProcessTenders === 'boolean' ||
+      typeof body.can_process_tenders === 'boolean';
+    const canProcessTenders =
+      body.canProcessTenders === true || body.can_process_tenders === true;
 
     if (!userId) {
       return NextResponse.json({ error: 'Не передан userId' }, { status: 400 });
@@ -150,7 +164,10 @@ export async function PUT(request: NextRequest) {
       .not('phone', 'is', null);
 
     if ((existingUsers || []).some((u) => u.user_id !== userId && phonesMatch(u.phone, phone))) {
-      return NextResponse.json({ error: 'Этот телефон уже используется другим пользователем' }, { status: 409 });
+      return NextResponse.json(
+        { error: 'Этот телефон уже используется другим пользователем' },
+        { status: 409 },
+      );
     }
 
     const update: Record<string, any> = {
@@ -159,6 +176,9 @@ export async function PUT(request: NextRequest) {
       role,
       updated_at: new Date().toISOString(),
     };
+    if (hasTendersFlag) {
+      update.can_process_tenders = canProcessTenders;
+    }
 
     if (password) {
       if (password.length < 6) {

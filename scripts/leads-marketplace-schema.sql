@@ -127,7 +127,7 @@ create table if not exists public.demand_items (
   buyer_type        text,
   fit_score         integer default 0,
   status            text not null default 'new'
-                      check (status in ('new', 'relevant', 'ignored', 'taken')),
+                      check (status in ('new', 'relevant', 'processing', 'ignored', 'taken')),
   lead_id           bigint references public.leads(id) on delete set null,
   raw_payload       jsonb,
   created_at        timestamptz not null default now(),

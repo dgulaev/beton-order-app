@@ -2,14 +2,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import type { AdminCifraUser } from '@/lib/adminCifraAuth';
 import {
   findAnyUserByPhone,
   findClientByInn,
   findClientByOrganizationExact,
   findClientByPhone,
 } from '@/lib/clientUsers';
+import { canProcessTenders } from '@/lib/demandProcessAccess';
+import { canActOnAssignedLeadWork } from '@/lib/leadAssigneeIds';
 import { phonesMatch, toStoredPhone } from '@/lib/phone';
 import { upsertLead } from '@/lib/leadService';
+import { writeLeadHistory } from '@/lib/leadHistory';
 import { maybeMarkClientSpamFromLead } from '@/lib/clientSpam';
 import { isLikelySpam, scoreLeadText } from '@/lib/leads';
 
@@ -45,6 +49,7 @@ export async function POST(request: NextRequest) {
     // не из body и не из хардкода «главного» user_id.
     let staffActorId: number | null = null;
     let staffActorName: string | null = null;
+    let staffActor: AdminCifraUser | null = null;
     if (isFromAdmin) {
       const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
       if (auth.error) {
@@ -53,6 +58,7 @@ export async function POST(request: NextRequest) {
           { status: 403 },
         );
       }
+      staffActor = auth.user;
       staffActorId = auth.user.user_id;
       staffActorName =
         (typeof payload.curator_name === 'string' && payload.curator_name.trim())
@@ -347,7 +353,7 @@ export async function POST(request: NextRequest) {
     if (leadId) {
       const { data: existingLead, error: leadFetchError } = await supabase
         .from('leads')
-        .select('id, status, order_id')
+        .select('id, status, order_id, assigned_to, raw_payload, source')
         .eq('id', leadId)
         .maybeSingle();
 
@@ -374,6 +380,21 @@ export async function POST(request: NextRequest) {
             orderId: existingLead.order_id ?? undefined,
           },
           { status: 409 },
+        );
+      }
+
+      // Заказ из лида: Авито/публичная форма — всем; иначе — назначенный или админ/торги.
+      if (
+        staffActor &&
+        !canProcessTenders(staffActor) &&
+        !canActOnAssignedLeadWork(existingLead, staffActor.user_id)
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: 'Создать заказ может только назначенный исполнитель или соисполнитель',
+          },
+          { status: 403 },
         );
       }
       if (existingLead.status === 'spam') {
@@ -465,6 +486,28 @@ export async function POST(request: NextRequest) {
         leadId = null;
       } else {
         leadConverted = true;
+        const convertedLeadId = leadId;
+        const creatorName = payload.userName && payload.userName !== 'Сотрудник'
+          ? payload.userName
+          : (curatorName || (isFromAdmin ? 'Администратор' : 'Клиент'));
+        const creatorRole = payload.userRole || (isFromAdmin ? 'admin' : 'client');
+        const creatorUserIdRaw = payload.userId ?? payload.user_id ?? null;
+        const creatorUserId =
+          creatorUserIdRaw != null && Number.isFinite(Number(creatorUserIdRaw))
+            ? Number(creatorUserIdRaw)
+            : null;
+        if (convertedLeadId) {
+          await writeLeadHistory({
+            lead_id: convertedLeadId,
+            action: 'Конвертировал в заказ',
+            user_id: creatorUserId,
+            user_name: creatorName,
+            user_role: creatorRole,
+            field_name: 'status',
+            old_value: 'in_progress',
+            new_value: 'converted',
+          });
+        }
       }
     }
 

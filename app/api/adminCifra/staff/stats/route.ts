@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
 
       const { data: staff } = await supabase
         .from('users')
-        .select('user_id, full_name, phone, role')
+        .select('user_id, full_name, phone, role, can_process_tenders')
         .eq('user_id', staffId)
         .single();
 
@@ -115,7 +115,7 @@ export async function GET(request: NextRequest) {
     // === СПИСОК ВСЕХ СОТРУДНИКОВ ===
     const { data: staffList } = await supabase
       .from('users')
-      .select('user_id, full_name, phone, role')
+      .select('user_id, full_name, phone, role, can_process_tenders')
       .in('role', ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'guest'])
       .order('full_name', { ascending: true });
 
@@ -144,6 +144,7 @@ export async function GET(request: NextRequest) {
           full_name: staff.full_name || 'Без имени',
           phone: staff.phone,
           role: staff.role,
+          can_process_tenders: staff.can_process_tenders === true,
           clients_count: clientsRaw?.length || 0,
           total_volume: Math.round(totalVolume)
         };

@@ -10,6 +10,10 @@ AVITO_CLIENT_SECRET=
 AVITO_USER_ID=
 # Обязателен: без него webhook отвечает 401
 AVITO_WEBHOOK_SECRET=
+# Легальный спрос в Demand Radar из непрочитанных чатов (Messenger API).
+# Поиск чужих объявлений Авито не поддерживает — парсинг сайта запрещён.
+# AVITO_DEMAND_MESSENGER=1
+
 
 # Webhook URL после деплоя:
 # https://<domain>/api/webhooks/avito?secret=<AVITO_WEBHOOK_SECRET>

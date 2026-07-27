@@ -22,6 +22,8 @@ create table if not exists public.integration_settings (
   avito_client_secret    text,
   avito_user_id          text,
   avito_webhook_secret   text,
+  -- Легальный спрос: Messenger по своим объявлениям (не поиск чужих)
+  avito_demand_messenger boolean not null default false,
 
   -- ГосПлан / Demand
   gosplan_enabled        boolean not null default true,

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -13,19 +14,22 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireAdminCifraStaff(request, ['admin']);
+    if (auth.error) return auth.error;
+
     const { userId, encrypted_password: newPasswordHash } = await request.json();
 
     if (!userId || !newPasswordHash) {
-      return NextResponse.json({ 
-        error: 'Не переданы userId или пароль' 
+      return NextResponse.json({
+        error: 'Не переданы userId или пароль',
       }, { status: 400 });
     }
 
     const { error } = await supabaseAdmin
       .from('users')
-      .update({ 
-        password_hash: newPasswordHash,        // ← Исправлено
-        updated_at: new Date().toISOString()
+      .update({
+        password_hash: newPasswordHash,
+        updated_at: new Date().toISOString(),
       })
       .eq('user_id', userId);
 
@@ -36,11 +40,10 @@ export async function POST(request: NextRequest) {
 
     console.log(`✅ Пароль успешно обновлён для пользователя ${userId}`);
 
-    return NextResponse.json({ 
-      success: true, 
-      message: 'Пароль успешно обновлён' 
+    return NextResponse.json({
+      success: true,
+      message: 'Пароль успешно обновлён',
     });
-
   } catch (err: any) {
     console.error('Ошибка в change-password:', err);
     return NextResponse.json({ error: 'Внутренняя ошибка сервера' }, { status: 500 });

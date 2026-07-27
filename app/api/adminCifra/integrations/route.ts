@@ -63,6 +63,9 @@ export async function PATCH(request: NextRequest) {
     const patch: IntegrationSettingsPatch = {};
 
     if (typeof body.avito_enabled === 'boolean') patch.avito_enabled = body.avito_enabled;
+    if (typeof body.avito_demand_messenger === 'boolean') {
+      patch.avito_demand_messenger = body.avito_demand_messenger;
+    }
     if (typeof body.gosplan_enabled === 'boolean') patch.gosplan_enabled = body.gosplan_enabled;
     if (typeof body.demand_demo === 'boolean') patch.demand_demo = body.demand_demo;
 

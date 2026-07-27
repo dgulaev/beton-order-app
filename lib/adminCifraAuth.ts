@@ -16,6 +16,7 @@ export type AdminCifraUser = {
   user_id: number;
   role: string;
   full_name: string | null;
+  can_process_tenders: boolean;
 };
 
 type AuthOk = { user: AdminCifraUser; error?: undefined };
@@ -37,7 +38,7 @@ export async function requireAdminCifraStaff(
 
   const { data: user } = await supabase
     .from('users')
-    .select('user_id, role, full_name, force_logout_version')
+    .select('user_id, role, full_name, force_logout_version, can_process_tenders')
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -59,6 +60,7 @@ export async function requireAdminCifraStaff(
       user_id: user.user_id,
       role,
       full_name: user.full_name ?? null,
+      can_process_tenders: user.can_process_tenders === true,
     },
   };
 }

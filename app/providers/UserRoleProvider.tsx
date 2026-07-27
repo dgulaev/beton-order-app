@@ -7,6 +7,7 @@ interface UserRole {
   full_name: string;
   username: string;
   force_logout_version?: number;
+  can_process_tenders?: boolean;
 }
 
 interface UserRoleContextType {
@@ -203,7 +204,7 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
         user,
         loading,
         error,
-        isAdmin: user?.role === 'admin',
+        isAdmin: (user?.role || '').toLowerCase() === 'admin',
         refreshRole,
         logout,
       }}
