@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { registerAllMarketplaceAdapters } from '@/lib/integrations/registerAll';
 import { getMarketplaceAdapter } from '@/lib/integrations/marketplaceAdapter';
+import { getIntegrationSettings } from '@/lib/integrations/settings';
 import { upsertLead } from '@/lib/leadService';
 
-function verifyWebhookSecret(request: NextRequest): boolean {
-  const expected = process.env.AVITO_WEBHOOK_SECRET?.trim();
+async function verifyWebhookSecret(request: NextRequest): Promise<boolean> {
+  const settings = await getIntegrationSettings();
+  const expected = settings.avito.webhookSecret;
   // Без секрета webhook закрыт — не открываем его по факту наличия CLIENT_ID.
   if (!expected) return false;
   const header =
@@ -15,7 +17,7 @@ function verifyWebhookSecret(request: NextRequest): boolean {
 }
 
 export async function POST(request: NextRequest) {
-  if (!verifyWebhookSecret(request)) {
+  if (!(await verifyWebhookSecret(request))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -61,12 +63,13 @@ export async function POST(request: NextRequest) {
 
 /** Healthcheck для настройки webhook в кабинете Авито. */
 export async function GET(request: NextRequest) {
-  if (!verifyWebhookSecret(request)) {
+  if (!(await verifyWebhookSecret(request))) {
     return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
   }
+  const settings = await getIntegrationSettings();
   return NextResponse.json({
     ok: true,
-    configured: Boolean(process.env.AVITO_CLIENT_ID),
-    webhookSecretConfigured: Boolean(process.env.AVITO_WEBHOOK_SECRET?.trim()),
+    configured: settings.avito.configured,
+    webhookSecretConfigured: Boolean(settings.avito.webhookSecret),
   });
 }

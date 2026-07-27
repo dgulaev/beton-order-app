@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { SALES_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { upsertLead } from '@/lib/leadService';
 import type { LeadDraft } from '@/lib/leads';
 
 export async function GET(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   const status = request.nextUrl.searchParams.get('status');
@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
 
 /** Ручное создание лида (источник manual). */
 export async function POST(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   try {

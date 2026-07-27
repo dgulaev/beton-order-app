@@ -2,13 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, FlaskConical, Truck, Package, Users, UserCog, Menu, X, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown } from 'lucide-react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, Menu, X, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown, Cable } from 'lucide-react';
 import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Image from 'next/image';
 import { useUserRole } from '../providers/UserRoleProvider';
 import { useOrderChangeNotifications } from '@/hooks/useRealtimeOrders';
 import { useLeadChangeNotifications } from '@/hooks/useRealtimeLeads';
+import { canAccessSales, isSalesPath } from '@/lib/adminCifraSalesAccess';
 import { LEAD_SOURCE_LABEL } from '@/lib/leads';
 import { reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
 import { useWakeReload } from '@/hooks/useWakeReload';
@@ -110,11 +111,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const pathname = usePathname();
   const router = useRouter();
   const isActive = (path: string) => pathname === path;
-  const isSalesSection =
-    !!pathname &&
-    (pathname.startsWith('/adminCifra/leads') ||
-      pathname.startsWith('/adminCifra/marketplace') ||
-      pathname.startsWith('/adminCifra/demand'));
+  const isSalesSection = isSalesPath(pathname);
 
   // Однократная перезагрузка при пробуждении вкладки после долгого простоя
   // (напр. оставленный на ночь экран) — оживляет «замороженную» страницу.
@@ -741,7 +738,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   });
 
   useLeadChangeNotifications({
-    enabled: !!userRole && staffRoles.includes(userRole),
+    // Тосты по лидам — только у ролей с доступом к «Продажи».
+    enabled: !!userRole && canAccessSales(userRole),
     onNewLead: (lead) => {
       // Тот же салатовый тост, что и у заявок (звук + localStorage + клик).
       const sourceLabel = LEAD_SOURCE_LABEL[lead.source] || lead.source;
@@ -779,13 +777,23 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     }
   }, [pathname]);
 
-  // ==================== 6.0 ОГРАНИЧЕНИЕ ДОСТУПА ЛАБОРАНТА ====================
-  // Лаборант работает только со страницей «Лаборатория» — если он попал на
-  // любой другой путь /adminCifra (по прямой ссылке, из истории и т.п.),
-  // возвращаем его на свою страницу, чтобы он не путался в разделах.
+  // ==================== 6.0 ОГРАНИЧЕНИЕ ДОСТУПА ПО РОЛЯМ ====================
+  // Лаборант — только «Лаборатория».
+  // Оператор / лаборант — без раздела «Продажи» (прямые ссылки тоже режем).
   useEffect(() => {
+    if (!userRole || !pathname) return;
     if (userRole === 'laborant' && pathname !== '/adminCifra/recipes') {
       router.replace('/adminCifra/recipes');
+      return;
+    }
+    if (!canAccessSales(userRole) && isSalesPath(pathname)) {
+      router.replace(
+        userRole === 'laborant'
+          ? '/adminCifra/recipes'
+          : userRole === 'operator'
+            ? '/adminCifra/operator'
+            : '/adminCifra/dashboard',
+      );
     }
   }, [userRole, pathname, router]);
 
@@ -1136,7 +1144,9 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               <span style={navTextStyle(isCollapsed)}>Заявки</span>
             </Link>
 
-            {/* ==================== ПРОДАЖИ: Лиды / Площадки / Спрос ==================== */}
+            {/* ==================== ПРОДАЖИ: без operator / laborant ==================== */}
+            {canAccessSales(userRole) && (
+            <>
             <div ref={salesMenuRef} style={{ position: 'relative', marginBottom: 4 }}>
               <button
                 ref={salesButtonRef}
@@ -1178,7 +1188,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               {/* Развёрнутый сайдбар — подменю под пунктом */}
               {!isCollapsed && salesMenuOpen && (
                 <div style={{ paddingLeft: 12, marginTop: 2 }}>
-                  {SALES_SUBMENU.map((item) => {
+                  {SALES_SUBMENU.filter((item) => salesMenuItemVisible(item, userRole)).map((item) => {
                     const active = isActive(item.href);
                     const Icon = item.icon;
                     return (
@@ -1233,7 +1243,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   }}>
                     Продажи
                   </div>
-                  {SALES_SUBMENU.map((item) => {
+                  {SALES_SUBMENU.filter((item) => salesMenuItemVisible(item, userRole)).map((item) => {
                     const active = isActive(item.href);
                     const Icon = item.icon;
                     return (
@@ -1257,6 +1267,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 </div>,
                 document.body,
               )}
+            </>
+            )}
 
             {/* ==================== БЛОК 11: ОГРАНИЧЕНИЕ МЕНЮ ==================== */}
             {userRole === 'operator' ? (
@@ -1382,12 +1394,28 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   );
 }
 
-// Подменю блока «Продажи» (лиды / Авито / спрос)
+// Подменю блока «Продажи» (лиды / Авито / спрос / интеграции)
 const SALES_SUBMENU = [
   { href: '/adminCifra/leads', label: 'Лиды', icon: Inbox },
   { href: '/adminCifra/marketplace', label: 'Площадки', icon: Store },
   { href: '/adminCifra/demand', label: 'Спрос', icon: Radar },
+  {
+    href: '/adminCifra/integrations',
+    label: 'Интеграции',
+    icon: Cable,
+    /** Только admin и manager (секреты — admin на самой странице). */
+    roles: ['admin', 'manager'] as const,
+  },
 ] as const;
+
+function salesMenuItemVisible(
+  item: (typeof SALES_SUBMENU)[number],
+  role: string | null,
+): boolean {
+  if (!('roles' in item) || !item.roles) return true;
+  if (!role) return false;
+  return (item.roles as readonly string[]).includes(role);
+}
 
 // ==================== 15. СТИЛИ ДЛЯ ССЫЛОК ====================
 const ACCENT = '#4ADE80'; // Tailwind green-400 — «салатовый» акцент

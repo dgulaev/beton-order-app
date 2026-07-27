@@ -1,32 +1,47 @@
+import {
+  getIntegrationSettings,
+  peekIntegrationSettings,
+} from '@/lib/integrations/settings';
+
 type TokenCache = {
   accessToken: string;
   expiresAt: number;
+  /** Инвалидируем токен при смене client_id/secret */
+  fingerprint: string;
 };
 
 let cache: TokenCache | null = null;
 
+function credentialsFingerprint(clientId: string, clientSecret: string) {
+  return `${clientId}:${clientSecret.slice(0, 4)}:${clientSecret.length}`;
+}
+
+/** Sync: кэш настроек или env. Перед важными операциями вызывай getIntegrationSettings(). */
 export function isAvitoConfigured(): boolean {
-  return Boolean(
-    process.env.AVITO_CLIENT_ID?.trim() &&
-      process.env.AVITO_CLIENT_SECRET?.trim() &&
-      process.env.AVITO_USER_ID?.trim(),
-  );
+  return peekIntegrationSettings().avito.configured;
 }
 
 export function getAvitoUserId(): string | null {
-  return process.env.AVITO_USER_ID?.trim() || null;
+  return peekIntegrationSettings().avito.userId;
+}
+
+export async function getAvitoWebhookSecret(): Promise<string | null> {
+  const s = await getIntegrationSettings();
+  return s.avito.webhookSecret;
 }
 
 /** OAuth2 client_credentials → Bearer token (кэш ~23ч). */
 export async function getAvitoAccessToken(): Promise<string> {
-  const clientId = process.env.AVITO_CLIENT_ID;
-  const clientSecret = process.env.AVITO_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
+  const settings = await getIntegrationSettings();
+  const clientId = settings.avito.clientId;
+  const clientSecret = settings.avito.clientSecret;
+  if (!settings.avito.enabled || !clientId || !clientSecret) {
     throw new Error('AVITO_CLIENT_ID / AVITO_CLIENT_SECRET не заданы');
   }
 
+  const fingerprint = credentialsFingerprint(clientId, clientSecret);
   const now = Date.now();
-  if (cache && cache.expiresAt > now + 60_000) {
+  if (cache && cache.fingerprint === fingerprint && cache.expiresAt > now + 60_000) {
     return cache.accessToken;
   }
 
@@ -55,6 +70,7 @@ export async function getAvitoAccessToken(): Promise<string> {
   cache = {
     accessToken: json.access_token,
     expiresAt: now + (json.expires_in ?? 86400) * 1000,
+    fingerprint,
   };
 
   return cache.accessToken;

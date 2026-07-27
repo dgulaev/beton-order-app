@@ -1,14 +1,16 @@
+import { getIntegrationSettings } from '@/lib/integrations/settings';
 import type { DemandCollector, DemandDraft } from './types';
 
 /**
  * Легальный коллектор: JSON-лента по URL (агрегатор тендеров / свой экспорт).
- * Env: DEMAND_FEED_URL — массив объектов { title, body?, url?, region?, id?, published_at? }
+ * URL: integration_settings / DEMAND_FEED_URL
  */
 export const feedCollector: DemandCollector = {
   source: 'feed',
 
   async collect() {
-    const url = process.env.DEMAND_FEED_URL?.trim();
+    const { demand } = await getIntegrationSettings();
+    const url = demand.feedUrl?.trim();
     if (!url) return [];
 
     const res = await fetch(url, { cache: 'no-store' });

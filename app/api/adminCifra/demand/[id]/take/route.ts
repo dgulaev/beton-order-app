@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { SALES_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { upsertLead } from '@/lib/leadService';
 
@@ -7,7 +7,7 @@ type Ctx = { params: Promise<{ id: string }> };
 
 /** Взять спрос в работу → создать лид. */
 export async function POST(request: NextRequest, context: Ctx) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   const { id: idRaw } = await context.params;

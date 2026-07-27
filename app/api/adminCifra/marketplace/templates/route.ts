@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { SALES_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import {
   listListingTemplates,
   resetListingTemplate,
@@ -7,7 +7,7 @@ import {
 } from '@/lib/avitoListingTemplates';
 
 export async function GET(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   const result = await listListingTemplates();
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
 
 /** Создать / обновить шаблон. */
 export async function PUT(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   try {
@@ -43,7 +43,7 @@ export async function PUT(request: NextRequest) {
 
 /** Сбросить к дефолту (удалить переопределение) или удалить кастомный. */
 export async function DELETE(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   try {

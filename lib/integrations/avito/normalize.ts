@@ -5,6 +5,7 @@ import {
   type LeadDraft,
 } from '@/lib/leads';
 import type { MarketplaceListingDraft } from '@/lib/integrations/marketplaceAdapter';
+import { peekIntegrationSettings } from '@/lib/integrations/settings';
 import type { AvitoChat, AvitoItem } from './client';
 
 function extractCity(item: AvitoItem): string | null {
@@ -53,7 +54,8 @@ export function avitoChatToLead(chat: AvitoChat): LeadDraft | null {
   if (!chat.id || !stableMsgId) return null;
 
   const text = msg.content?.text?.trim() || '';
-  const buyer = (chat.users || []).find((u) => u.id !== Number(process.env.AVITO_USER_ID));
+  const ourUserIdSync = Number(peekIntegrationSettings().avito.userId);
+  const buyer = (chat.users || []).find((u) => u.id !== ourUserIdSync);
   const item = chat.context?.type === 'item' ? chat.context.value : undefined;
   const externalId = `${chat.id}:${stableMsgId}`;
 
@@ -129,7 +131,7 @@ export function normalizeAvitoWebhookPayload(body: unknown): LeadDraft[] {
     v.author_id ??
     (v.author as { id?: number } | undefined)?.id ??
     (v.user as { id?: number } | undefined)?.id;
-  const ourUserId = Number(process.env.AVITO_USER_ID);
+  const ourUserId = Number(peekIntegrationSettings().avito.userId);
   if (Number.isFinite(ourUserId) && authorId != null && Number(authorId) === ourUserId) {
     return [];
   }

@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { SALES_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { isAvitoConfigured } from '@/lib/integrations/avito';
 import { upsertMarketplaceListing } from '@/lib/integrations/avito/upsertListing';
 import { registerAllMarketplaceAdapters } from '@/lib/integrations/registerAll';
 import { getMarketplaceAdapter } from '@/lib/integrations/marketplaceAdapter';
+import { getIntegrationSettings } from '@/lib/integrations/settings';
 import { listListingTemplates } from '@/lib/avitoListingTemplates';
 
 export async function GET(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
+  await getIntegrationSettings();
   const source = request.nextUrl.searchParams.get('source') || undefined;
 
   let query = supabaseAdmin
@@ -41,7 +43,7 @@ export async function GET(request: NextRequest) {
 
 /** Синхронизация объявлений с площадки (source=avito по умолчанию). */
 export async function POST(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   try {
@@ -49,11 +51,16 @@ export async function POST(request: NextRequest) {
     const source = body.source || 'avito';
 
     registerAllMarketplaceAdapters();
+    await getIntegrationSettings(true);
 
     if (source === 'avito') {
       if (!isAvitoConfigured()) {
         return NextResponse.json(
-          { success: false, error: 'Задайте AVITO_CLIENT_ID / AVITO_CLIENT_SECRET / AVITO_USER_ID' },
+          {
+            success: false,
+            error:
+              'Авито не настроено. Заполни ключи на странице «Интеграции» или в env (AVITO_CLIENT_ID / SECRET / USER_ID).',
+          },
           { status: 400 },
         );
       }

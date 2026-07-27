@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { SALES_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import {
   fetchAvitoChats,
@@ -10,7 +10,7 @@ import {
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(request: NextRequest, context: Ctx) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   const { id: idRaw } = await context.params;

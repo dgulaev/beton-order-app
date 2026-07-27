@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { SALES_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { maybeMarkClientSpamFromLead } from '@/lib/clientSpam';
 import { LEAD_STATUSES } from '@/lib/leads';
@@ -7,7 +7,7 @@ import { LEAD_STATUSES } from '@/lib/leads';
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: NextRequest, context: Ctx) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   const { id: idRaw } = await context.params;

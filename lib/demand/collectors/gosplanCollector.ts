@@ -1,3 +1,4 @@
+import { getIntegrationSettings } from '@/lib/integrations/settings';
 import type { DemandCollector, DemandDraft } from './types';
 
 const DEFAULT_BASE = 'https://v2test.gosplan.info';
@@ -44,12 +45,6 @@ type GosplanPurchase = {
   }> | null;
 };
 
-function isEnabled(): boolean {
-  const raw = process.env.GOSPLAN_ENABLED?.trim().toLowerCase();
-  if (raw === '0' || raw === 'false' || raw === 'off') return false;
-  return true;
-}
-
 function parseList(raw: string | undefined, fallback: string[]): string[] {
   if (!raw?.trim()) return fallback;
   return raw
@@ -58,8 +53,8 @@ function parseList(raw: string | undefined, fallback: string[]): string[] {
     .filter(Boolean);
 }
 
-function parseRegions(): number[] {
-  return parseList(process.env.GOSPLAN_REGIONS, ['32'])
+function parseRegions(regionsRaw: string): number[] {
+  return parseList(regionsRaw, ['32'])
     .map((s) => Number(s))
     .filter((n) => Number.isFinite(n));
 }
@@ -374,27 +369,19 @@ async function enrichDraft(
 
 /**
  * Коллектор ГосПлан API (ЕИС).
- * По умолчанию тестовый сервер без ключа: https://v2test.gosplan.info
- *
- * Env:
- * - GOSPLAN_ENABLED=0 — выключить
- * - GOSPLAN_BASE_URL — по умолчанию v2test
- * - GOSPLAN_API_KEY — для продакшена
- * - GOSPLAN_REGIONS=32 — коды субъектов (Брянск = 32)
- * - GOSPLAN_CLASSIFIERS=23.63
- * - GOSPLAN_PUBLISHED_FORPAST=180d
- * - GOSPLAN_LIMIT=50
- * - GOSPLAN_ENRICH=0 — не тянуть карточку закупки (быстрее, меньше деталей)
+ * Тумблер/регионы/ключ — из Интеграций (БД) с fallback на env.
+ * Доп. тюнинг (classifiers, limit, enrich) пока только через env.
  */
 export const gosplanCollector: DemandCollector = {
   source: 'gosplan',
 
   async collect(): Promise<DemandDraft[]> {
-    if (!isEnabled()) return [];
+    const { gosplan } = await getIntegrationSettings();
+    if (!gosplan.enabled) return [];
 
-    const base = (process.env.GOSPLAN_BASE_URL || DEFAULT_BASE).replace(/\/$/, '');
-    const apiKey = process.env.GOSPLAN_API_KEY?.trim() || null;
-    const regions = parseRegions();
+    const base = (gosplan.baseUrl || DEFAULT_BASE).replace(/\/$/, '');
+    const apiKey = gosplan.apiKey;
+    const regions = parseRegions(gosplan.regions);
     const classifiers = parseList(process.env.GOSPLAN_CLASSIFIERS, ['23.63']);
     const publishedForpast = process.env.GOSPLAN_PUBLISHED_FORPAST?.trim() || '180d';
     const limit = Math.min(100, Math.max(1, Number(process.env.GOSPLAN_LIMIT || 50) || 50));

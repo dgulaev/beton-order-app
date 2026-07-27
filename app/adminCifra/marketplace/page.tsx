@@ -354,9 +354,11 @@ function MarketplacePageInner() {
 
       {!avitoConfigured && (
         <div style={volumeCardStyle({ padding: 16, marginBottom: 16, color: '#FDE68A' })}>
-          Авито не настроено. Нужны <code>AVITO_CLIENT_ID</code>, <code>AVITO_CLIENT_SECRET</code>,{' '}
-          <code>AVITO_USER_ID</code>. Для realtime-сообщений обязателен{' '}
-          <code>AVITO_WEBHOOK_SECRET</code>.
+          Авито не настроено. Заполни ключи на странице{' '}
+          <a href="/adminCifra/integrations" style={{ color: '#93C5FD' }}>
+            Интеграции
+          </a>
+          {' '}(Client ID, Secret, User ID и webhook-секрет).
         </div>
       )}
 
@@ -375,7 +377,7 @@ function MarketplacePageInner() {
               ? 'Секрет webhook изменился — нажми «Переподключить webhook».'
               : webhookInfo.secretConfigured
                 ? 'Webhook ещё не подписан. Нажми «Подключить webhook», чтобы ловить сообщения в realtime.'
-                : 'Задай AVITO_WEBHOOK_SECRET в env, затем нажми «Подключить webhook».'}
+                : 'Задай webhook-секрет в «Интеграции», затем нажми «Подключить webhook».'}
           {webhookInfo.error ? (
             <div style={{ marginTop: 6, color: '#FCA5A5' }}>{webhookInfo.error}</div>
           ) : null}

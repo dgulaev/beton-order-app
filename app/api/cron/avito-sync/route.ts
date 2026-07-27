@@ -3,6 +3,7 @@ import { isAvitoConfigured, pollAvitoIncomingLeads } from '@/lib/integrations/av
 import { upsertMarketplaceListing } from '@/lib/integrations/avito/upsertListing';
 import { registerAllMarketplaceAdapters } from '@/lib/integrations/registerAll';
 import { getMarketplaceAdapter } from '@/lib/integrations/marketplaceAdapter';
+import { getIntegrationSettings } from '@/lib/integrations/settings';
 import { upsertLead } from '@/lib/leadService';
 import { requireCronAuth } from '@/lib/cronAuth';
 
@@ -14,6 +15,7 @@ export async function GET(req: NextRequest) {
   const denied = requireCronAuth(req);
   if (denied) return denied;
 
+  await getIntegrationSettings(true);
   if (!isAvitoConfigured()) {
     return NextResponse.json({ success: true, skipped: true, reason: 'Avito not configured' });
   }

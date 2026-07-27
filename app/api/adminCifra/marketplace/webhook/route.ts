@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { SALES_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import {
   explainAvitoMessengerError,
   isAvitoConfigured,
   listAvitoWebhookSubscriptions,
   subscribeAvitoWebhook,
 } from '@/lib/integrations/avito';
+import { getIntegrationSettings } from '@/lib/integrations/settings';
 
-function buildWebhookUrl(request: NextRequest): string | null {
-  const secret = process.env.AVITO_WEBHOOK_SECRET?.trim();
+async function buildWebhookUrl(request: NextRequest): Promise<string | null> {
+  const settings = await getIntegrationSettings();
+  const secret = settings.avito.webhookSecret;
   if (!secret) return null;
 
   const base =
@@ -63,14 +65,16 @@ function sameUrlExact(a: string, b: string): boolean {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
-  const webhookUrl = buildWebhookUrl(request);
-  const secretConfigured = Boolean(process.env.AVITO_WEBHOOK_SECRET?.trim());
+  const settings = await getIntegrationSettings(true);
+  const webhookUrl = await buildWebhookUrl(request);
+  const secretConfigured = Boolean(settings.avito.webhookSecret);
   const webhookHost = maskWebhookUrl(webhookUrl);
+  const avitoConfigured = settings.avito.configured;
 
-  if (!isAvitoConfigured()) {
+  if (!avitoConfigured) {
     return NextResponse.json({
       success: true,
       avitoConfigured: false,
@@ -132,9 +136,10 @@ export async function GET(request: NextRequest) {
 
 /** Подписать URL Цифры на webhook Messenger Авито. */
 export async function POST(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
+  await getIntegrationSettings(true);
   if (!isAvitoConfigured()) {
     return NextResponse.json(
       { success: false, error: 'Авито не настроено' },
@@ -142,14 +147,15 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const secretConfigured = Boolean(process.env.AVITO_WEBHOOK_SECRET?.trim());
-  const webhookUrl = buildWebhookUrl(request);
+  const settings = await getIntegrationSettings();
+  const secretConfigured = Boolean(settings.avito.webhookSecret);
+  const webhookUrl = await buildWebhookUrl(request);
   if (!webhookUrl) {
     return NextResponse.json(
       {
         success: false,
         error: !secretConfigured
-          ? 'Задай AVITO_WEBHOOK_SECRET в env'
+          ? 'Задай webhook-секрет в «Интеграции» или AVITO_WEBHOOK_SECRET в env'
           : 'Нет публичного URL для webhook. Задай NEXT_PUBLIC_APP_URL=https://mostbeton.ru в Vercel.',
       },
       { status: 400 },

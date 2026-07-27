@@ -10,7 +10,12 @@ export function ensureAvitoAdapterRegistered(): void {
 }
 
 export { avitoAdapter } from './adapter';
-export { isAvitoConfigured, getAvitoAccessToken, getAvitoUserId } from './auth';
+export {
+  isAvitoConfigured,
+  getAvitoAccessToken,
+  getAvitoUserId,
+  getAvitoWebhookSecret,
+} from './auth';
 export {
   fetchAvitoItems,
   fetchAvitoItemInfo,

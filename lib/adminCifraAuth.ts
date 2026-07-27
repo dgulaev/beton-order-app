@@ -75,5 +75,12 @@ export const WAREHOUSE_MUTATION_ROLES = [
 
 export const ORDER_MUTATION_ROLES = WAREHOUSE_MUTATION_ROLES;
 
+/** Реэкспорт для API-роутов (источник — клиентский модуль без server deps). */
+export {
+  SALES_ROLES,
+  isSalesPath,
+  canAccessSales,
+} from '@/lib/adminCifraSalesAccess';
+
 /** Удаление «лёгкого» рейса (ещё без списания) — те же роли, что и заявки. */
 export const ORDER_MIXER_DELETE_ROLES = WAREHOUSE_MUTATION_ROLES;

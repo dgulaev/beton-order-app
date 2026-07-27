@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { SALES_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import {
   fetchAvitoChatMessages,
   getAvitoUserId,
@@ -11,7 +11,7 @@ import {
 type Ctx = { params: Promise<{ chatId: string }> };
 
 export async function GET(request: NextRequest, context: Ctx) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   if (!isAvitoConfigured()) {
@@ -55,7 +55,7 @@ export async function GET(request: NextRequest, context: Ctx) {
 }
 
 export async function POST(request: NextRequest, context: Ctx) {
-  const auth = await requireAdminCifraStaff(request, ORDER_MUTATION_ROLES);
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   if (!isAvitoConfigured()) {

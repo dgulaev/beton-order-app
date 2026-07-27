@@ -1,4 +1,8 @@
 # Скопируйте нужные переменные в .env.local и Vercel → Environment Variables
+#
+# Альтернатива: страница админки /adminCifra/integrations
+# (таблица integration_settings — scripts/integration-settings-schema.sql).
+# Приоритет: непустое значение в БД → иначе этот env → дефолт.
 
 # ── Авито (фаза 1–2) ──
 AVITO_CLIENT_ID=

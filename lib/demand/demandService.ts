@@ -1,10 +1,9 @@
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { notifyManagers } from '@/lib/notifyManagers';
 import { demandSourceLabel } from '@/lib/demand/labels';
+import { getIntegrationSettings, peekIntegrationSettings } from '@/lib/integrations/settings';
 import { enrichDemandFields, getMinDemandVolume, scoreDemandItem } from './score';
 import { getDemandCollectors, type DemandDraft } from './collectors';
-
-const ALERT_THRESHOLD = Number(process.env.DEMAND_ALERT_SCORE || 60);
 
 export async function upsertDemandDraft(draft: DemandDraft) {
   const enriched = enrichDemandFields(draft.title, draft.body);
@@ -65,7 +64,8 @@ export async function upsertDemandDraft(draft: DemandDraft) {
 
   const minVol = getMinDemandVolume();
   const volumeOk = volume == null || volume >= minVol;
-  if (score >= ALERT_THRESHOLD && volumeOk) {
+  const alertThreshold = peekIntegrationSettings().demand.alertScore || 60;
+  if (score >= alertThreshold && volumeOk) {
     await notifyManagers({
       type: 'demand_hit',
       title: `Спрос ${score}% · ${demandSourceLabel(draft.source)}`,
@@ -79,6 +79,7 @@ export async function upsertDemandDraft(draft: DemandDraft) {
 }
 
 export async function runDemandRadar(): Promise<{ collected: number; created: number; errors: string[] }> {
+  await getIntegrationSettings(true);
   const collectors = getDemandCollectors();
   let collected = 0;
   let created = 0;

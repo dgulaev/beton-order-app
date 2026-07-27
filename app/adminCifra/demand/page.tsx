@@ -215,19 +215,40 @@ export default function DemandPage() {
       </div>
 
       <div
-        style={volumeCardStyle({
-          padding: 14,
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 12,
           marginBottom: 16,
-          color: '#CBD5E1',
-          fontSize: 13,
-          lineHeight: 1.5,
-          wordBreak: 'break-word',
-        })}
+          padding: '12px 16px',
+          borderRadius: 14,
+          background: 'linear-gradient(135deg, rgba(6,78,59,0.35), rgba(15,23,42,0.6))',
+          border: '1px solid rgba(52,211,153,0.22)',
+        }}
       >
-        Источники: ГосПлан (тест <code>v2test.gosplan.info</code>, выкл.{' '}
-        <code>GOSPLAN_ENABLED=0</code>), JSON-лента <code>DEMAND_FEED_URL</code>, демо при{' '}
-        <code>DEMAND_DEMO=1</code>. Регион завода: <code>DEMAND_HOME_REGIONS</code> (по умолчанию
-        брянск). Код субъекта ЕИС: <code>GOSPLAN_REGIONS=32</code>.
+        <div
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 10,
+            background: 'rgba(52,211,153,0.15)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <Radar size={18} color="#34D399" />
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: '#ECFDF5', fontWeight: 600, fontSize: 14, marginBottom: 2 }}>
+            Радар спроса по Брянской области
+          </div>
+          <div style={{ color: '#94A3B8', fontSize: 13, lineHeight: 1.45 }}>
+            Собирает тендеры и запросы на бетон с площадок. Нажми «Запустить поиск», оцени карточки
+            и бери подходящие в лиды.
+          </div>
+        </div>
       </div>
 
       <div

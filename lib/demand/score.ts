@@ -1,4 +1,5 @@
 import { CONCRETE_CONFIG } from '@/lib/config/concrete';
+import { peekIntegrationSettings } from '@/lib/integrations/settings';
 
 export type DemandScoreInput = {
   title?: string | null;
@@ -9,14 +10,19 @@ export type DemandScoreInput = {
   delivery_needed?: boolean | null;
 };
 
-/** Регион работы завода (можно переопределить env). */
+/** Регион работы завода (БД → env → дефолт). Перед радаром прогрей getIntegrationSettings(). */
 export function getHomeRegions(): string[] {
-  const raw = process.env.DEMAND_HOME_REGIONS || 'брянск,брянская';
+  const raw = peekIntegrationSettings().demand.homeRegions || 'брянск,брянская';
   return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 }
 
 export function getMinDemandVolume(): number {
-  const n = Number(process.env.DEMAND_MIN_VOLUME_M3 || CONCRETE_CONFIG.limits.minVolume);
+  const fromSettings = peekIntegrationSettings().demand.minVolumeM3;
+  const n = Number(
+    fromSettings != null && Number.isFinite(fromSettings)
+      ? fromSettings
+      : CONCRETE_CONFIG.limits.minVolume,
+  );
   return Number.isFinite(n) ? n : 0.5;
 }
 

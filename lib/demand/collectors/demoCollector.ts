@@ -1,3 +1,4 @@
+import { getIntegrationSettings } from '@/lib/integrations/settings';
 import type { DemandCollector, DemandDraft } from './types';
 
 /** Боевой деплой на Vercel. Локальный `next start` (NODE_ENV=production) не блокируем. */
@@ -5,14 +6,15 @@ function isVercelProduction(): boolean {
   return process.env.VERCEL_ENV === 'production';
 }
 
-/** Демо только при DEMAND_DEMO=1 и не на Vercel production. */
+/** Демо: тумблер в Интеграциях / DEMAND_DEMO=1; на Vercel production всегда выкл. */
 export const demoCollector: DemandCollector = {
   source: 'demo',
 
   async collect(): Promise<DemandDraft[]> {
-    if (process.env.DEMAND_DEMO !== '1') return [];
+    const { demand } = await getIntegrationSettings();
+    if (!demand.demo) return [];
     if (isVercelProduction()) {
-      console.warn('[demand] DEMAND_DEMO=1 проигнорирован на Vercel production');
+      console.warn('[demand] демо-режим проигнорирован на Vercel production');
       return [];
     }
 
