@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/avito-sync",
-      "schedule": "*/10 * * * *"
+      "schedule": "15 5 * * *"
     },
     {
       "path": "/api/cron/demand-radar",
