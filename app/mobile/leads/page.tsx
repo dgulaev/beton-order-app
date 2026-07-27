@@ -394,6 +394,45 @@ export default function MobileLeadsPage() {
                 </a>
               )}
             </div>
+            {(() => {
+              const assigneeName = String(payload?.assigned_to_name ?? '').trim();
+              const coNames = Array.isArray(payload?.co_assignee_names)
+                ? (payload.co_assignee_names as unknown[])
+                    .map((n) => String(n || '').trim())
+                    .filter(Boolean)
+                : [];
+              const takenBy = String(payload?.taken_by_name ?? '').trim();
+              const takenAtRaw = String(payload?.taken_at ?? '').trim();
+              const takenAt = takenAtRaw
+                ? new Date(takenAtRaw).toLocaleString('ru-RU', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                : '';
+              return (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    marginBottom: 8,
+                    fontSize: 12,
+                    color: '#FDE68A',
+                  }}
+                >
+                  <span>Исполнитель: {assigneeName || (lead.assigned_to ? `#${lead.assigned_to}` : 'не назначен')}</span>
+                  <span>Соисполнители: {coNames.length ? coNames.join(', ') : 'нет'}</span>
+                  {lead.status !== 'new' && (takenBy || takenAt) && (
+                    <span style={{ color: '#86EFAC' }}>
+                      Взял в работу: {takenBy || '—'}
+                      {takenAt ? ` · ${takenAt}` : ''}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
 
             {allowTenderProcess && (
               <div style={{ marginBottom: 10 }}>

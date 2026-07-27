@@ -30,6 +30,7 @@ import ModalDateInput from '@/app/adminCifra/components/ModalDateInput';
 import ModalTimeInput from '@/app/adminCifra/components/ModalTimeInput';
 import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import ModalSelect from '@/app/adminCifra/components/ModalSelect';
+import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
 import { InstantFieldHint, VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatRuDateWithWeekday, formatTimeHHMM, pluralWord } from '@/lib/ruLocale';
@@ -1727,7 +1728,7 @@ ${order.customer_type?.includes('Юридическое')
     {/* ==================== KPI — отдельные карточки по параметрам ==================== */}
     <div style={{ 
       display: 'grid',
-      gridTemplateColumns: 'minmax(0, 1.25fr) repeat(3, minmax(0, 1fr)) minmax(0, 0.95fr)',
+      gridTemplateColumns: 'minmax(0, 1.2fr) repeat(3, minmax(0, 0.95fr)) minmax(0, 0.9fr) minmax(160px, 0.95fr)',
       gap: '12px',
       flexShrink: 0,
       marginBottom: '14px',
@@ -1900,6 +1901,8 @@ ${order.customer_type?.includes('Юридическое')
             )}
           </div>
         </div>
+
+        <WeatherKpiCard dateKey={selectedDateStr} compact />
 
     </div>
 

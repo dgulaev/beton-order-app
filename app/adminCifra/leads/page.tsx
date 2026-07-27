@@ -113,6 +113,58 @@ function leadPlatform(lead: Lead): string | null {
   return p || null;
 }
 
+function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatHistoryStatus(value: string | null | undefined): string {
+  if (!value) return '—';
+  if (value.startsWith('converted:#')) {
+    return `В заказ ${value.slice('converted:'.length)}`;
+  }
+  return STATUS_LABEL[value as LeadStatus] || value;
+}
+
+function historyEntryDetail(entry: LeadHistoryEntry): string | null {
+  if (entry.field_name === 'status') {
+    if (entry.old_value || entry.new_value) {
+      return `${formatHistoryStatus(entry.old_value)} → ${formatHistoryStatus(entry.new_value)}`;
+    }
+    return null;
+  }
+  if (entry.field_name === 'assigned_to') {
+    return `${entry.old_value || '—'} → ${entry.new_value || '—'}`;
+  }
+  if (entry.field_name === 'co_assignees') {
+    return `${entry.old_value || '—'} → ${entry.new_value || '—'}`;
+  }
+  if (entry.field_name === 'send_to_work' && entry.new_value) {
+    return entry.new_value;
+  }
+  if (entry.field_name === 'processing' && entry.new_value) {
+    return entry.new_value;
+  }
+  return null;
+}
+
+function groupHistoryByLead(entries: LeadHistoryEntry[]): Record<number, LeadHistoryEntry[]> {
+  const map: Record<number, LeadHistoryEntry[]> = {};
+  for (const entry of entries) {
+    if (!map[entry.lead_id]) map[entry.lead_id] = [];
+    map[entry.lead_id].push(entry);
+  }
+  return map;
+}
+
 const btnPrimary: CSSProperties = {
   padding: '10px 12px',
   borderRadius: 10,
@@ -169,6 +221,7 @@ function LeadsPageInner() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [history, setHistory] = useState<LeadHistoryEntry[]>([]);
+  const [historyByLead, setHistoryByLead] = useState<Record<number, LeadHistoryEntry[]>>({});
   const [historyLoading, setHistoryLoading] = useState(true);
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [expandedIds, setExpandedIds] = useState<Record<number, boolean>>({});
@@ -193,6 +246,19 @@ function LeadsPageInner() {
     [statusFilter],
   );
 
+  const refreshHistoryFeed = useCallback(async () => {
+    try {
+      const res = await fetch('/api/adminCifra/leads/history?limit=200', {
+        headers: adminCifraAuthHeaders(),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) return;
+      setHistoryByLead(groupHistoryByLead((json.history || []) as LeadHistoryEntry[]));
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
   const loadHistory = useCallback(async (leadId?: number | null) => {
     setHistoryLoading(true);
     try {
@@ -206,7 +272,13 @@ function LeadsPageInner() {
         setHistory([]);
         return;
       }
-      setHistory(json.history || []);
+      const list = (json.history || []) as LeadHistoryEntry[];
+      setHistory(list);
+      if (!leadId) {
+        setHistoryByLead(groupHistoryByLead(list));
+      } else {
+        setHistoryByLead((prev) => ({ ...prev, [leadId]: list }));
+      }
     } catch (e) {
       console.error(e);
       setHistory([]);
@@ -257,6 +329,7 @@ function LeadsPageInner() {
       const next = (json.leads || []) as Lead[];
       setLeads(next);
       void loadContracts(next);
+      void refreshHistoryFeed();
     } catch (e) {
       console.error(e);
       setLoadError('Ошибка соединения с сервером');
@@ -264,7 +337,7 @@ function LeadsPageInner() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, sourceFilter, loadContracts]);
+  }, [statusFilter, sourceFilter, loadContracts, refreshHistoryFeed]);
 
   useEffect(() => {
     void load();
@@ -643,6 +716,8 @@ function LeadsPageInner() {
                 const etpUrl = String(payload?.etp_url ?? lead.chat_url ?? '').trim();
                 const docsUrl = String(payload?.docs_url ?? '').trim();
                 const takenBy = String(payload?.taken_by_name ?? '').trim();
+                const takenAt = formatDateTime(String(payload?.taken_at ?? '').trim());
+                const cardHistory = (historyByLead[lead.id] || []).slice(0, 5);
                 const coAddOptions = employees
                   .filter((emp) => {
                     if (lead.assigned_to && emp.user_id === lead.assigned_to) return false;
@@ -694,37 +769,26 @@ function LeadsPageInner() {
                           {actorLabel(lead, actor)}
                         </p>
                       )}
-                      {(assignee || coNames.length > 0 || platform || takenBy) && (
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexWrap: 'wrap',
-                            gap: '6px 12px',
-                            marginBottom: 8,
-                            fontSize: 13,
-                            color: '#CBD5E1',
-                          }}
-                        >
-                          {platform && (
-                            <span style={{ color: '#93C5FD' }}>Площадка: {platform}</span>
-                          )}
-                          {assignee && (
-                            <span style={{ color: '#FDE68A' }}>
-                              Исполнитель: {assignee}
-                            </span>
-                          )}
-                          {coNames.length > 0 && (
-                            <span style={{ color: '#FDE68A' }}>
-                              Соисполнители: {coNames.join(', ')}
-                            </span>
-                          )}
-                          {takenBy && lead.status !== 'new' && (
-                            <span style={{ color: '#86EFAC' }}>
-                              Взял в работу: {takenBy}
-                            </span>
-                          )}
-                        </div>
-                      )}
+                      <div className={styles.peopleRow}>
+                        {platform && (
+                          <span className={styles.peopleChip} style={{ color: '#93C5FD' }}>
+                            Площадка: {platform}
+                          </span>
+                        )}
+                        <span className={styles.peopleChip} style={{ color: '#FDE68A' }}>
+                          Исполнитель: {assignee || 'не назначен'}
+                        </span>
+                        <span className={styles.peopleChip} style={{ color: '#FDE68A' }}>
+                          Соисполнители:{' '}
+                          {coNames.length > 0 ? coNames.join(', ') : 'нет'}
+                        </span>
+                        {(takenBy || takenAt) && lead.status !== 'new' && (
+                          <span className={styles.peopleChip} style={{ color: '#86EFAC' }}>
+                            Взял в работу: {takenBy || '—'}
+                            {takenAt ? ` · ${takenAt}` : ''}
+                          </span>
+                        )}
+                      </div>
 
                       <p
                         className={`${styles.preview}${
@@ -733,6 +797,27 @@ function LeadsPageInner() {
                       >
                         {text}
                       </p>
+
+                      {cardHistory.length > 0 && (
+                        <div className={styles.cardTimeline}>
+                          {cardHistory.map((entry) => {
+                            const detail = historyEntryDetail(entry);
+                            return (
+                              <div key={entry.id} className={styles.cardTimelineItem}>
+                                <span className={styles.cardTimelineAction}>{entry.action}</span>
+                                <span className={styles.cardTimelineMeta}>
+                                  {entry.user_name || 'Сотрудник'}
+                                  {' · '}
+                                  {formatDateTime(entry.created_at)}
+                                </span>
+                                {detail && (
+                                  <span className={styles.cardTimelineDetail}>{detail}</span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                       {longText && (
                         <button
                           type="button"
@@ -1168,8 +1253,7 @@ function LeadsPageInner() {
               <div className={styles.timeline}>
                 <div className={styles.timelineRail} />
                 {history.map((entry) => {
-                  const statusChange =
-                    entry.field_name === 'status' && (entry.old_value || entry.new_value);
+                  const detail = historyEntryDetail(entry);
                   return (
                     <div key={entry.id} className={styles.timelineItem}>
                       <div className={styles.timelineDot} />
@@ -1196,15 +1280,13 @@ function LeadsPageInner() {
                           </button>
                         )}
                       </div>
-                      {statusChange && (
+                      {detail && (
                         <div style={{ color: '#94A3B8', fontSize: 12, marginTop: 2 }}>
-                          {STATUS_LABEL[entry.old_value as LeadStatus] || entry.old_value || '—'}
-                          {' → '}
-                          {STATUS_LABEL[entry.new_value as LeadStatus] || entry.new_value || '—'}
+                          {detail}
                         </div>
                       )}
                       <div style={{ color: '#64748B', fontSize: 11, marginTop: 3 }}>
-                        {new Date(entry.created_at).toLocaleString('ru-RU')}
+                        {formatDateTime(entry.created_at)}
                       </div>
                     </div>
                   );

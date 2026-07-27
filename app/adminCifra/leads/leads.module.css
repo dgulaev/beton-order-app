@@ -179,6 +179,57 @@
   font-size: 13px;
 }
 
+.peopleRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-bottom: 8px;
+}
+
+.peopleChip {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid #334155;
+}
+
+.cardTimeline {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid #1e293b;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cardTimelineItem {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.cardTimelineAction {
+  color: #e2e8f0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cardTimelineMeta {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.cardTimelineDetail {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
 .actions {
   display: flex;
   flex-direction: column;

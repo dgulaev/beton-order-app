@@ -12,6 +12,7 @@ import { driverFetch, DriverMixerInfo, DriverTrip } from '../driverClient';
 import DriverTripDetailModal from './DriverTripDetailModal';
 import RouteButton from './RouteButton';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
+import { resolveOrderReceivingContact } from '@/lib/orderContact';
 
 interface Props {
   mixer: DriverMixerInfo;
@@ -39,28 +40,10 @@ function formatTime(t?: string | null) {
   return t.slice(0, 5);
 }
 
-// Извлекает телефон из текста комментария (клиенты часто пишут доп. контакт
-// прямо в комментарии: "...вывоз 12ой +79532799112 Евгений"). Берём первую
-// последовательность телефонного вида: 11 цифр с 7/8 в начале или 10 цифр с 9.
-// Разделители (пробел/дефис/скобки) допускаются, буквы — нет (не склеивают
-// соседние числа вроде "12ой и 10-ми").
-function extractPhoneFromText(text?: string | null): string | null {
-  if (!text) return null;
-  const matches = text.match(/(?:\+?[78][\s\-()]*)?\d(?:[\s\-()]*\d){9,10}/g);
-  if (!matches) return null;
-  for (const m of matches) {
-    const digits = m.replace(/\D/g, '');
-    if (digits.length === 11 && (digits[0] === '7' || digits[0] === '8')) return m.trim();
-    if (digits.length === 10 && digits[0] === '9') return m.trim();
-  }
-  return null;
-}
-
 // Телефон для кнопки «позвонить»: приоритет — номер из комментария заявки,
 // иначе телефон из самой заявки.
 function resolveContactPhone(order?: { phone?: string | null; comment?: string | null } | null): string | null {
-  if (!order) return null;
-  return extractPhoneFromText(order.comment) || order.phone || null;
+  return resolveOrderReceivingContact(order).phone;
 }
 
 function formatDateLabel(dateStr: string): string {

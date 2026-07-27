@@ -5,6 +5,7 @@
  */
 
 import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
+import { resolveOrderReceivingContact } from '@/lib/orderContact';
 import { formatRuDateWithWeekday, formatTimeHHMM } from '@/lib/ruLocale';
 
 export type DailyReportMixerLine = {
@@ -22,6 +23,11 @@ export type DailyReportOrderGroup = {
   /** План по заявке, м³ */
   orderVolume: number;
   orderStatus: string;
+  address: string;
+  /** Имя на приёмке из комментария (если удалось вытащить) */
+  contactName: string;
+  /** Телефон: из комментария, иначе из заявки */
+  contactPhone: string;
   mixers: DailyReportMixerLine[];
 };
 
@@ -78,6 +84,9 @@ export function buildDailyMixerReportGroups(opts: {
     grade?: string | null;
     volume?: number | string | null;
     status?: string | null;
+    address?: string | null;
+    phone?: string | null;
+    comment?: string | null;
   }>;
   mixers: Array<{
     orderId?: number | string | null;
@@ -99,6 +108,7 @@ export function buildDailyMixerReportGroups(opts: {
       (m) => String(m.orderId ?? m.order_id) === String(order.id)
     );
     const sorted = sortMixersByLogisticsTime(mixersForOrder);
+    const contact = resolveOrderReceivingContact(order);
     return {
       orderId: order.id,
       client: String(order.organization_name || order.full_name || '—').trim() || '—',
@@ -106,6 +116,9 @@ export function buildDailyMixerReportGroups(opts: {
       grade: String(order.grade || '').trim() || '—',
       orderVolume: Number(order.volume || 0),
       orderStatus: String(order.status || ''),
+      address: String(order.address || '').trim(),
+      contactName: contact.name || '',
+      contactPhone: contact.phoneDisplay || '',
       mixers: sorted.map((m) => ({
         number: String(m.number || m.mixer_name || '—'),
         time: m.time && m.time !== '—' ? formatTimeHHMM(String(m.time)) || '—' : '—',
@@ -157,6 +170,13 @@ export function buildDailyMixerReportText(opts: {
       text += ` • рейсы ${Math.round(assignedVol * 10) / 10} м³`;
     }
     text += ` • ${statusRu}\n`;
+    text += `   Адрес: ${group.address || 'не указан'}\n`;
+    if (group.contactPhone || group.contactName) {
+      const contactBits = [group.contactName, group.contactPhone].filter(Boolean);
+      text += `   Контакт: ${contactBits.join(', ')}\n`;
+    } else {
+      text += `   Контакт: не указан\n`;
+    }
 
     if (group.mixers.length === 0) {
       text += `   (миксеры ещё не назначены)\n`;
@@ -267,17 +287,36 @@ function renumberMixerLines(lines: string[]): string[] {
   });
 }
 
+/** Синхронизировать авто-строку (Бетон/Адрес/Контакт) в черновике. */
+function syncPrefixedLine(edited: string[], autoLines: string[], prefix: string): string[] {
+  const autoLine = autoLines.find((l) => l.trimStart().startsWith(prefix));
+  if (!autoLine) return edited;
+  const idx = edited.findIndex((l) => l.trimStart().startsWith(prefix));
+  if (idx >= 0) {
+    edited[idx] = autoLine;
+    return edited;
+  }
+  // Вставляем после блока мета-строк (Бетон/Адрес/Контакт), чтобы порядок не ломался
+  let insertAt = 1;
+  for (let i = 0; i < edited.length; i++) {
+    const t = edited[i].trimStart();
+    if (t.startsWith('Бетон:') || t.startsWith('Адрес:') || t.startsWith('Контакт:')) {
+      insertAt = i + 1;
+    }
+  }
+  edited.splice(insertAt, 0, autoLine);
+  return edited;
+}
+
 /**
  * Слить блок заявки: правки пользователя сохранить, новые рейсы из auto добавить,
- * строку «Бетон: …» обновить по свежим данным (план/объём рейсов).
+ * строки «Бетон: / Адрес: / Контакт:» обновить по свежим данным.
  */
 function mergeSectionLines(editedLines: string[], autoLines: string[]): string[] {
-  const edited = [...editedLines];
-  const autoMeta = autoLines.find((l) => l.trimStart().startsWith('Бетон:'));
-  const editedMetaIdx = edited.findIndex((l) => l.trimStart().startsWith('Бетон:'));
-  if (autoMeta && editedMetaIdx >= 0) {
-    edited[editedMetaIdx] = autoMeta;
-  }
+  let edited = [...editedLines];
+  edited = syncPrefixedLine(edited, autoLines, 'Бетон:');
+  edited = syncPrefixedLine(edited, autoLines, 'Адрес:');
+  edited = syncPrefixedLine(edited, autoLines, 'Контакт:');
 
   const autoMixers = autoLines.filter((l) => MIXER_LINE_RE.test(l));
   if (autoMixers.length > 0) {

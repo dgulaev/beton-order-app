@@ -424,8 +424,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     notif.dataset.notifId = id;
     const isLead = tone === 'lead' || id.startsWith('lead-');
     // Заявки — салатовый; лиды — жёлтый (чтобы сразу отличались в стеке).
-    // Фиксированная ширина: длинный текст не растягивает баннер.
-    const widthPx = isLead ? 460 : 420;
+    // Одна ширина со стеком заявок — иначе жёлтый баннер «выпирает».
+    const widthPx = 420;
     const bg = isLead
       ? 'linear-gradient(135deg, #eab308, #fde047)'
       : 'linear-gradient(135deg, #22c55e, #86efac)';

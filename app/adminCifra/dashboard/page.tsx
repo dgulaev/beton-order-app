@@ -19,6 +19,7 @@ import { formatRuDateWithWeekday, formatTimeHHMM, pluralRu, pluralWord } from '@
 import { CARD_BORDER, modalCloseButtonStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import ModalSelect from '../components/ModalSelect';
 import DailyMixerReportModal from '../components/DailyMixerReportModal';
+import WeatherKpiCard from '../components/WeatherKpiCard';
 import { appAlert, appConfirm } from '../components/appDialog';
 
 export default function AdminCifraDashboard() {
@@ -1227,7 +1228,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
 </div>
 
        {/* ==================== 34. KPI — РЕАЛЬНЫЕ ДАННЫЕ ==================== */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pb-2">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 pb-2">
           
        {/* ==================== 35. ЗАЯВКИ СЕГОДНЯ ==================== */}
 <div
@@ -1519,7 +1520,11 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
       );
     })}
   </div>
-</div>      </div>
+</div>
+
+   {/* 5. Погода на выбранный день */}
+   <WeatherKpiCard dateKey={selectedDateStr} />
+      </div>
       {/* ==================== 38. ТАЙМЛАЙН (УЛУЧШЕННЫЙ — В СТИЛЕ ЦИФРА.AI) ==================== */}
        <div style={volumeCardStyle({ 
             flex: 1, 

@@ -230,6 +230,22 @@ export async function PATCH(request: NextRequest, context: Ctx) {
       }
 
       const actorName = auth.user.full_name || 'Сотрудник';
+      const notifyNames = notifyIds
+        .map((uid) => {
+          const names = Array.isArray(nextPayload.co_assignee_names)
+            ? (nextPayload.co_assignee_names as unknown[])
+            : [];
+          const coIds = Array.isArray(nextPayload.co_assignees)
+            ? (nextPayload.co_assignees as unknown[]).map((x) => Number(x))
+            : [];
+          const idx = coIds.indexOf(uid);
+          if (idx >= 0 && names[idx]) return String(names[idx]);
+          if (Number(nextPayload.assigned_to) === uid) {
+            return String(nextPayload.assigned_to_name || `#${uid}`);
+          }
+          return `#${uid}`;
+        })
+        .join(', ');
       await writeLeadHistory({
         lead_id: id,
         action: 'Отправил в работу',
@@ -238,7 +254,7 @@ export async function PATCH(request: NextRequest, context: Ctx) {
         user_role: auth.user.role,
         field_name: 'send_to_work',
         old_value: null,
-        new_value: notifyIds.join(','),
+        new_value: notifyNames ? `уведомлены: ${notifyNames}` : null,
       });
 
       return NextResponse.json({ success: true, lead: sentLead, sent_to_work: true });

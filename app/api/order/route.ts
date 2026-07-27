@@ -499,13 +499,13 @@ export async function POST(request: NextRequest) {
         if (convertedLeadId) {
           await writeLeadHistory({
             lead_id: convertedLeadId,
-            action: 'Конвертировал в заказ',
+            action: `Создал заказ #${orderId}`,
             user_id: creatorUserId,
             user_name: creatorName,
             user_role: creatorRole,
             field_name: 'status',
             old_value: 'in_progress',
-            new_value: 'converted',
+            new_value: `converted:#${orderId}`,
           });
         }
       }
