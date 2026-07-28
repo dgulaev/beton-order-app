@@ -34,6 +34,8 @@ import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
 import { InstantFieldHint, VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatRuDateWithWeekday, formatTimeHHMM, pluralWord } from '@/lib/ruLocale';
+import OrderCommentsPanel, { CommentUnreadBadge, orderModalTabStyle } from '@/app/adminCifra/components/OrderCommentsPanel';
+import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
@@ -718,6 +720,8 @@ export default function ZayavkiPage() {
   
   const [notificationSent, setNotificationSent] = useState(false);
   const [isSendingNotification, setIsSendingNotification] = useState(false);
+  // Вкладки правой колонки модалки: логистика / комментарии сотрудников
+  const [orderModalRightTab, setOrderModalRightTab] = useState<'logistics' | 'comments'>('logistics');
 
   const [recipes, setRecipes] = useState<any[]>([]);
   // Остатки добавок на складе (литры), подгружаются один раз
@@ -860,8 +864,9 @@ const getStatusConfig = (status: string) => {
   }, [orderMixers, userFullName, currentRole, selectedOrder?.id, loadOrderHistory]);
 
   // ==================== ОТКРЫТИЕ ЗАЯВКИ С ИСТОРИЕЙ ====================
-  const handleOpenOrder = useCallback((order: Order) => {
+  const handleOpenOrder = useCallback((order: Order, opts?: { tab?: 'logistics' | 'comments' }) => {
     setSelectedOrder(order);
+    setOrderModalRightTab(opts?.tab === 'comments' ? 'comments' : 'logistics');
     const orderId = order.id ? Number(order.id) : null;
     if (orderId) {
       loadOrderHistory(orderId);
@@ -870,6 +875,48 @@ const getStatusConfig = (status: string) => {
       console.error('У заявки отсутствует id:', order);
     }
   }, [loadOrderHistory, loadOrderMixers]);
+
+  // Deep-link из тоста комментария: /adminCifra/zayavki?orderId=123&tab=comments
+  const deepLinkHandledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const rawId = params.get('orderId');
+    if (!rawId) return;
+    const orderId = Number(rawId);
+    if (!Number.isFinite(orderId) || orderId <= 0) return;
+    const tab = params.get('tab') === 'comments' ? 'comments' as const : 'logistics' as const;
+    const key = `${orderId}:${tab}`;
+    if (deepLinkHandledRef.current === key) return;
+
+    const fromList = allOrders.find((o) => Number(o.id) === orderId);
+    if (fromList) {
+      deepLinkHandledRef.current = key;
+      handleOpenOrder(fromList, { tab });
+      window.history.replaceState({}, '', '/adminCifra/zayavki');
+      return;
+    }
+
+    // Заявки может не быть в списке текущего дня — подтягиваем по id
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/adminCifra/orders/${orderId}`, {
+          headers: adminCifraAuthHeaders(),
+          cache: 'no-store',
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!data?.id || cancelled) return;
+        deepLinkHandledRef.current = key;
+        handleOpenOrder(data, { tab });
+        window.history.replaceState({}, '', '/adminCifra/zayavki');
+      } catch (e) {
+        console.error('deep-link order:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [allOrders, handleOpenOrder]);
 
                   // ==================== ЗАГРУЗКА РОЛИ И РЕАЛЬНОГО ИМЕНИ ====================
 useEffect(() => {
@@ -1427,6 +1474,12 @@ ${order.customer_type?.includes('Юридическое')
         return String(a.delivery_time || '').localeCompare(String(b.delivery_time || ''));
       });
   }, [searchMode, searchQuery, allOrders, statusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const listOrderIds = useMemo(
+    () => (searchMode ? searchResults : filteredOrders).map((o) => o.id),
+    [searchMode, searchResults, filteredOrders]
+  );
+  const { counts: commentUnreadCounts, setOrderUnread } = useOrderCommentUnreadCounts(listOrderIds, true);
 
   const runSearch = () => {
     if (!searchQuery.trim()) return;
@@ -2392,8 +2445,9 @@ ${order.customer_type?.includes('Юридическое')
 
         {/* Информация о заявке */}
         <div style={{ flex: 1, lineHeight: 1.25 }}>
-          <div style={{ fontWeight: '600', fontSize: '15px' }}>
+          <div style={{ fontWeight: '600', fontSize: '15px', display: 'flex', alignItems: 'center', gap: 8 }}>
             #{order.id} — {order.organization_name || order.full_name || '—'}
+            <CommentUnreadBadge count={commentUnreadCounts[String(order.id)] || 0} />
           </div>
           <div style={{ color: '#94A3B8', fontSize: '13px' }}>
             {order.grade} • {order.volume} м³
@@ -2878,10 +2932,49 @@ ${order.customer_type?.includes('Юридическое')
           )}
         </div>          
               
-                            {/* Правая колонка — Логистика + История (может скроллиться внутри своих блоков) */}
-              <div>
+                            {/* Правая колонка — вкладки Логистика / Комментарии + История */}
+              <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 14 }}>
+                  <button
+                    type="button"
+                    onClick={() => setOrderModalRightTab('logistics')}
+                    style={orderModalTabStyle(orderModalRightTab === 'logistics')}
+                  >
+                    Логистика
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrderModalRightTab('comments')}
+                    style={orderModalTabStyle(orderModalRightTab === 'comments')}
+                  >
+                    Комментарии
+                    <CommentUnreadBadge count={commentUnreadCounts[String(selectedOrder.id)] || 0} />
+                  </button>
+                </div>
+
+                {/* Обе панели в одной ячейке — без скачка высоты */}
+                <div style={{ display: 'grid', marginBottom: 16 }}>
+                  <div style={{
+                    gridArea: '1 / 1',
+                    visibility: orderModalRightTab === 'comments' ? 'visible' : 'hidden',
+                    pointerEvents: orderModalRightTab === 'comments' ? 'auto' : 'none',
+                  }}>
+                    <OrderCommentsPanel
+                      orderId={Number(selectedOrder.id)}
+                      userName={userFullName || 'Сотрудник'}
+                      userRole={currentRole || 'admin'}
+                      active={orderModalRightTab === 'comments'}
+                      listMaxHeight="clamp(160px, calc(160px + (100vh - 1080px) * 0.3), 420px)"
+                      onUnreadChange={(n) => setOrderUnread(selectedOrder.id, n)}
+                    />
+                  </div>
+                  <div style={{
+                    gridArea: '1 / 1',
+                    visibility: orderModalRightTab === 'logistics' ? 'visible' : 'hidden',
+                    pointerEvents: orderModalRightTab === 'logistics' ? 'auto' : 'none',
+                  }}>
                 {/* ==================== НАЗНАЧЕННЫЕ МИКСЕРЫ + ПРОСТОЙ ==================== */}
-                {orderMixers.length > 0 && (() => {
+                {orderMixers.length > 0 ? (() => {
                   const totalDowntime = orderMixers.reduce((sum, m) => sum + Number(m.downtimeMinutes || 0), 0);
                   const formatOnSiteDuration = (m: any): string | null => {
                     if (!m.onSiteAt) return null;
@@ -2984,7 +3077,13 @@ ${order.customer_type?.includes('Юридическое')
                       </div>
                     </div>
                   );
-                })()}
+                })() : (
+                  <div style={{ color: '#64748B', fontSize: 13, padding: '12px 0' }}>
+                    Пока нет назначенных миксеров
+                  </div>
+                )}
+                  </div>
+                </div>
 
                                                {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ ==================== */}
 <div>

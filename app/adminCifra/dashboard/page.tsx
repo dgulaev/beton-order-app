@@ -21,6 +21,8 @@ import ModalSelect from '../components/ModalSelect';
 import DailyMixerReportModal from '../components/DailyMixerReportModal';
 import WeatherKpiCard from '../components/WeatherKpiCard';
 import { appAlert, appConfirm } from '../components/appDialog';
+import { CommentUnreadBadge } from '../components/OrderCommentsPanel';
+import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts';
 
 export default function AdminCifraDashboard() {
 
@@ -415,6 +417,9 @@ const todayOrders = allOrders
   .sort((a: Order, b: Order) => 
     (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00')
   );
+
+const commentOrderIds = useMemo(() => todayOrders.map((o) => o.id), [todayOrders]);
+const { counts: commentUnreadCounts, setOrderUnread } = useOrderCommentUnreadCounts(commentOrderIds, true);
 
 // console.log(`Выбрана дата: ${selectedDateStr} | Найдено заказов: ${todayOrders.length}`);
 
@@ -1916,8 +1921,9 @@ const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVo
 
       {/* Информация (z-index выше плашки — текст всегда читаем) */}
       <div style={{ flex: 1, lineHeight: '1.25', zIndex: 15, minWidth: 0 }}>
-        <div style={{ fontWeight: '600', color: '#F1F5F9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          #{order.id} — {client}
+        <div style={{ fontWeight: '600', color: '#F1F5F9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>#{order.id} — {client}</span>
+          <CommentUnreadBadge count={commentUnreadCounts[String(order.id)] || 0} />
         </div>
         <div style={{ color: '#94A3B8', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <span>{order.grade} • {volume} м³</span>
@@ -2109,6 +2115,7 @@ const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVo
         selectedDateStr={selectedDateStr}
         onOrderClick={(order) => setSelectedOrder(order)}
         delayedOrders={delayedOrders.map((o: any) => ({ id: o.id, delayMinutes: o.delayMinutes, delayText: o.delayText }))}
+        commentUnreadCounts={commentUnreadCounts}
       />
     </div>
   )}
@@ -2421,6 +2428,8 @@ const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVo
     getStatusConfig={getStatusConfig}
     setHistory={setHistory}
     setSelectedOrder={setSelectedOrder}
+    initialCommentUnread={commentUnreadCounts[String(selectedOrder.id)] || 0}
+    onCommentUnreadChange={(orderId, count) => setOrderUnread(orderId, count)}
   />
 )}
 

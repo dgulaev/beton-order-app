@@ -12,6 +12,7 @@ import ModalSelect from './ModalSelect';
 import { CARD_BORDER, modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
+import OrderCommentsPanel, { CommentUnreadBadge, orderModalTabStyle } from './OrderCommentsPanel';
 
 interface OrderDetailModalProps {
   order: Order | null;
@@ -29,6 +30,10 @@ interface OrderDetailModalProps {
   getStatusConfig: (status: string) => any;
   setHistory: React.Dispatch<React.SetStateAction<any[]>>;
   setSelectedOrder: React.Dispatch<React.SetStateAction<Order | null>>;
+  /** Начальное число непрочитанных комментариев (бейдж на вкладке) */
+  initialCommentUnread?: number;
+  /** После прочтения / смены счётчика — обновить бейдж на списке */
+  onCommentUnreadChange?: (orderId: number, count: number) => void;
 }
 
 export default function OrderDetailModal({
@@ -46,10 +51,16 @@ export default function OrderDetailModal({
   addToHistory,
   getStatusConfig,
   setHistory,  
-  setSelectedOrder,    
+  setSelectedOrder,
+  initialCommentUnread = 0,
+  onCommentUnreadChange,
 }: OrderDetailModalProps) {
 
   if (!order) return null;
+
+  // Правая колонка: вкладки «Логистика» / «Комментарии»
+  const [rightTab, setRightTab] = useState<'logistics' | 'comments'>('logistics');
+  const [commentUnread, setCommentUnread] = useState(initialCommentUnread);
 
     // ==================== 0. ЗАГРУЗКА МИКСЕРОВ ДЛЯ МОДАЛКИ ====================
 const loadData = async () => {
@@ -91,7 +102,20 @@ const loadData = async () => {
   const [newMixerTime, setNewMixerTime] = useState(() => nowTimeHHMM());
   const [newMixerPick, setNewMixerPick] = useState('');
 
-  // Синхронизация при смене заказа
+  // Смена заявки — сброс вкладки и локального стейта
+  useEffect(() => {
+    setLocalOrder(order);
+    setRightTab('logistics');
+    setCommentUnread(initialCommentUnread);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- только id; initialCommentUnread берём на момент открытия
+  }, [order?.id]);
+
+  // Актуальный бейдж с родителя (без сброса вкладки)
+  useEffect(() => {
+    setCommentUnread(initialCommentUnread);
+  }, [initialCommentUnread]);
+
+  // Обновление полей заявки без смены id (realtime status и т.п.)
   useEffect(() => {
     setLocalOrder(order);
   }, [order]);
@@ -683,11 +707,27 @@ const formatVolume = (value: number | string) => {
             )}
           </div>
 
-                    {/* ==================== ПРАВАЯ КОЛОНКА — ЛОГИСТИКА ==================== */}
+                    {/* ==================== ПРАВАЯ КОЛОНКА — ЛОГИСТИКА / КОММЕНТАРИИ ==================== */}
           <div>
-            {/* ==================== ЗАГОЛОВОК + КНОПКА ЗАКРЫТИЯ (крестик перенесён с бывшего header) ==================== */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
-              <h3 style={{ margin: 0, color: '#94A3B8' }}>Выстраивание логистики</h3>
+            {/* Вкладки Логистика / Комментарии + крестик */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <button
+                  type="button"
+                  onClick={() => setRightTab('logistics')}
+                  style={orderModalTabStyle(rightTab === 'logistics')}
+                >
+                  Логистика
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRightTab('comments')}
+                  style={orderModalTabStyle(rightTab === 'comments')}
+                >
+                  Комментарии
+                  <CommentUnreadBadge count={commentUnread} />
+                </button>
+              </div>
               <button
                 onClick={onClose}
                 title="Закрыть"
@@ -709,8 +749,15 @@ const formatVolume = (value: number | string) => {
                 ×
               </button>
             </div>
-            
-            {(() => {
+
+            {/* Обе панели в одной ячейке — высота не прыгает при переключении */}
+            <div style={{ display: 'grid' }}>
+              <div style={{
+                gridArea: '1 / 1',
+                visibility: rightTab === 'logistics' ? 'visible' : 'hidden',
+                pointerEvents: rightTab === 'logistics' ? 'auto' : 'none',
+              }}>
+{(() => {
               const assignedVolume = mixerAssignments
                 .filter(m => m.orderId === order.id)
                 .reduce((sum, m) => sum + Number(m.volume || 0), 0);
@@ -948,11 +995,36 @@ const formatVolume = (value: number | string) => {
                 </div>
               );
             })()}
+              </div>
+              <div style={{
+                gridArea: '1 / 1',
+                visibility: rightTab === 'comments' ? 'visible' : 'hidden',
+                pointerEvents: rightTab === 'comments' ? 'auto' : 'none',
+              }}>
+                <OrderCommentsPanel
+                  orderId={Number(order.id)}
+                  userName={getCurrentUserName()}
+                  userRole={getCurrentRole()}
+                  active={rightTab === 'comments'}
+                  listMaxHeight="clamp(220px, calc(220px + (100vh - 1080px) * 0.4), 560px)"
+                  onUnreadChange={(n) => {
+                    setCommentUnread(n);
+                    onCommentUnreadChange?.(Number(order.id), n);
+                  }}
+                />
+              </div>
+            </div>
+
           </div>
           </div>
 
-                       {/* ==================== ФОРМА ДОБАВЛЕНИЯ МИКСЕРА ==================== */}
-        <div style={{ borderTop: CARD_BORDER, paddingTop: '10px', marginTop: '10px' }}>
+        <div style={{
+          visibility: rightTab === 'logistics' ? 'visible' : 'hidden',
+          pointerEvents: rightTab === 'logistics' ? 'auto' : 'none',
+          borderTop: CARD_BORDER,
+          paddingTop: '10px',
+          marginTop: '10px',
+        }}>
           <h4 style={{ color: '#94A3B8', marginBottom: '10px' }}>Добавить миксер</h4>
           
           <div style={{ 

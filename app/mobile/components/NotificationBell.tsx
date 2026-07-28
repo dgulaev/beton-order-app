@@ -12,6 +12,7 @@ const NOTIF_TYPE_LABEL: Record<string, string> = {
   field_change: 'Изменение',
   new_lead: 'Лид',
   demand_hit: 'Спрос',
+  order_comment: 'Комментарий',
 };
 
 /** Подменяет англ. ключи источников в заголовках старых нотисов */
@@ -49,7 +50,14 @@ function NotifCard({
   onDismiss: (id: number) => void;
 }) {
   const isNewOrder = n.type === 'new_order' || n.type === 'new_lead' || n.type === 'demand_hit';
-  const accentColor = n.type === 'demand_hit' ? '#34D399' : isNewOrder ? '#10B981' : '#60A5FA';
+  const isComment = n.type === 'order_comment';
+  const accentColor = n.type === 'demand_hit'
+    ? '#34D399'
+    : isComment
+      ? '#A78BFA'
+      : isNewOrder
+        ? '#10B981'
+        : '#60A5FA';
 
   return (
     <div

@@ -14,6 +14,7 @@ import {
 } from '@/app/adminCifra/cardStyles';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
+import OrderCommentsPanel from '@/app/adminCifra/components/OrderCommentsPanel';
 
 interface MobileOrderDetailModalProps {
   order: Order | null;
@@ -68,6 +69,8 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
   const [history, setLocalHistory] = useState(initialHistory || []);
   const [questionableSaving, setQuestionableSaving] = useState(false);
   const questionableSavingRef = useRef(false);
+  // Не помечаем прочитанным, пока пользователь не зашёл в блок комментариев
+  const [commentsActive, setCommentsActive] = useState(false);
   const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(order?.address);
 
   const role = (currentUser?.role || '').toLowerCase().trim();
@@ -84,7 +87,10 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
       .catch(console.error);
   }, [order?.id, setHistory]);
 
-  useEffect(() => { setLocalOrder(order); }, [order]);
+  useEffect(() => {
+    setLocalOrder(order);
+    setCommentsActive(false);
+  }, [order]);
 
   if (!order || !localOrder) return null;
 
@@ -453,6 +459,24 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
               <Navigation size={15} />
               Google
             </a>
+          </div>
+
+          {/* ── КОММЕНТАРИИ СОТРУДНИКОВ ───────────── */}
+          <div
+            style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px' })}
+            onPointerDown={() => setCommentsActive(true)}
+            onFocusCapture={() => setCommentsActive(true)}
+          >
+            <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
+              Комментарии сотрудников
+            </div>
+            <OrderCommentsPanel
+              orderId={Number(order.id)}
+              userName={currentUser?.name || 'Сотрудник'}
+              userRole={currentUser?.role || 'admin'}
+              listMaxHeight="220px"
+              active={commentsActive}
+            />
           </div>
 
           {/* ── ИСТОРИЯ (тот же таймлайн, что на десктопе) ── */}

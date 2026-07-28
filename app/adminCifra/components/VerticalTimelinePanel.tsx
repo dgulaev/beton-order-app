@@ -17,6 +17,8 @@ interface Props {
   selectedDateStr: string;
   onOrderClick: (order: Order) => void;
   delayedOrders?: DelayInfo[];
+  /** Непрочитанные комментарии сотрудников: orderId → count */
+  commentUnreadCounts?: Record<string, number>;
 }
 
 // ── Colors ─────────────────────────────────────────────────────────────────
@@ -122,6 +124,7 @@ export default function VerticalTimelinePanel({
   selectedDateStr,
   onOrderClick,
   delayedOrders = [],
+  commentUnreadCounts = {},
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerW, setContainerW] = useState(900);
@@ -482,6 +485,20 @@ export default function VerticalTimelinePanel({
                             <span style={{ fontWeight:700, fontSize:'12px', color: tc, flexShrink:0 }}>
                               #{order.id}
                             </span>
+                            {(commentUnreadCounts[String(order.id)] || 0) > 0 && (
+                              <span
+                                title={`Непрочитанных комментариев: ${commentUnreadCounts[String(order.id)]}`}
+                                style={{
+                                  minWidth: 16, height: 16, padding: '0 4px', borderRadius: 999,
+                                  background: '#FACC15', color: '#0F172A',
+                                  fontSize: 10, fontWeight: 800, lineHeight: 1,
+                                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                  flexShrink: 0,
+                                }}
+                              >
+                                {commentUnreadCounts[String(order.id)] > 99 ? '99+' : commentUnreadCounts[String(order.id)]}
+                              </span>
+                            )}
                             <span style={{
                               fontSize:'11px', fontWeight:600, color: tcSub,
                               overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',

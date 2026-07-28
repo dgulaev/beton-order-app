@@ -29,7 +29,17 @@ export function useMobileNotifications() {
         headers: adminCifraAuthHeaders(),
       });
       const json = await res.json();
-      if (json.success) setNotifications(json.data);
+      if (json.success) {
+        const myId = String(localStorage.getItem('userId') || '');
+        const list = (json.data as MobileNotification[]).filter((n) => {
+          // Свои комментарии себе в колокольчик не показываем
+          if (n.type === 'order_comment' && n.field_name === 'author_user_id' && n.new_value === myId) {
+            return false;
+          }
+          return true;
+        });
+        setNotifications(list);
+      }
     } catch (e) {
       console.error('[Notifications] fetch error', e);
     } finally {
@@ -48,6 +58,14 @@ export function useMobileNotifications() {
         { event: 'INSERT', schema: 'public', table: 'mobile_notifications' },
         (payload) => {
           const newNotif = payload.new as MobileNotification;
+          const myId = String(localStorage.getItem('userId') || '');
+          if (
+            newNotif.type === 'order_comment' &&
+            newNotif.field_name === 'author_user_id' &&
+            newNotif.new_value === myId
+          ) {
+            return;
+          }
           setNotifications((prev) => [newNotif, ...prev]);
           // Анимация колокольчика при новом уведомлении
           setAnimateBell(true);

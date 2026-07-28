@@ -13,7 +13,7 @@ import { useDemandChangeNotifications } from '@/hooks/useRealtimeDemand';
 import { canAccessSales, isSalesPath } from '@/lib/adminCifraSalesAccess';
 import { LEAD_SOURCE_LABEL } from '@/lib/leads';
 import { sanitizeAvitoMessageText } from '@/lib/integrations/avito/messageText';
-import { reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
+import { reconnectAllBroadcastChannels, useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import { useWakeReload } from '@/hooks/useWakeReload';
 import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
 import { formatPhoneInput } from '@/lib/phone';
@@ -775,6 +775,35 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     },
     onGradeChange: (order, oldOrder) => {
       void showVisualNotification('grade', order, oldOrder);
+    },
+  });
+
+  // Тост: новый комментарий сотрудника к заявке (не показываем автору).
+  // Лаборант не получает: у него только «Лаборатория», заявок не видит.
+  useRealtimeBroadcast({
+    topic: 'order_comments:all',
+    enabled: !!userRole && staffRoles.includes(userRole),
+    onInsert: (record) => {
+      if (!record || record.is_deleted) return;
+      const myId = Number(localStorage.getItem('userId') || 0);
+      if (myId && Number(record.user_id) === myId) return;
+
+      const orderId = record.order_id;
+      const author = record.user_name || 'Сотрудник';
+      const preview = String(record.body || '').slice(0, 100);
+      const id = `comment-${record.id}-${Date.now()}`;
+      const title = `Комментарий к заявке #${orderId}`;
+      const message = `от: ${author}${preview ? ` — ${preview}` : ''}`;
+
+      playNotificationSound();
+      createToastRef.current?.(
+        id,
+        'package',
+        title,
+        message,
+        `/adminCifra/zayavki?orderId=${orderId}&tab=comments`,
+        'order',
+      );
     },
   });
 

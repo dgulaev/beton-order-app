@@ -15,6 +15,7 @@ import {
 import { VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
+import OrderCommentsPanel from '@/app/adminCifra/components/OrderCommentsPanel';
 
 interface MobileOrderDetailModalProps {
   isOpen: boolean;
@@ -76,6 +77,8 @@ export default function MobileOrderDetailModal({
   const [orderHistory, setOrderHistory] = useState<any[]>([]);
   const [questionableSaving, setQuestionableSaving] = useState(false);
   const questionableSavingRef = useRef(false);
+  // Не помечаем прочитанным, пока пользователь не зашёл в блок комментариев
+  const [commentsActive, setCommentsActive] = useState(false);
 
   // Поиск клиента
   const [clientQuery, setClientQuery] = useState('');
@@ -108,6 +111,7 @@ export default function MobileOrderDetailModal({
 
   useEffect(() => {
     setEditedOrder(order ? { ...order } : null);
+    setCommentsActive(false);
   }, [order]);
 
   useEffect(() => {
@@ -461,9 +465,27 @@ export default function MobileOrderDetailModal({
             <FieldBlock icon={<MapPin size={15} />} label="Адрес доставки">
               <textarea value={editedOrder.address || ''} onChange={e => set('address', e.target.value)} rows={2} style={{ ...INPUT, resize: 'vertical', lineHeight: 1.5 }} />
             </FieldBlock>
-            <FieldBlock icon={<MessageSquare size={15} />} label="Комментарий">
+            <FieldBlock icon={<MessageSquare size={15} />} label="Комментарий клиента">
               <textarea value={editedOrder.comment || ''} onChange={e => set('comment', e.target.value)} rows={3} style={{ ...INPUT, resize: 'vertical', lineHeight: 1.5 }} />
             </FieldBlock>
+          </div>
+
+          {/* ── КОММЕНТАРИИ СОТРУДНИКОВ ─────────────── */}
+          <div
+            style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px' })}
+            onPointerDown={() => setCommentsActive(true)}
+            onFocusCapture={() => setCommentsActive(true)}
+          >
+            <div style={{ color: '#475569', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '12px' }}>
+              Комментарии сотрудников
+            </div>
+            <OrderCommentsPanel
+              orderId={Number(editedOrder.id)}
+              userName={currentUserName || 'Сотрудник'}
+              userRole={currentRole || 'admin'}
+              listMaxHeight="220px"
+              active={commentsActive}
+            />
           </div>
 
           {/* ── ИСТОРИЯ ──────────────────────────────── */}
