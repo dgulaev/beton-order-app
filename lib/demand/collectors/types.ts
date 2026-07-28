@@ -11,6 +11,8 @@ export type DemandDraft = {
   delivery_needed?: boolean | null;
   buyer_type?: string | null;
   raw_payload?: Record<string, unknown> | null;
+  /** Всегда слать notifyManagers при создании (например входящее Авито). */
+  force_notify?: boolean;
 };
 
 export interface DemandCollector {

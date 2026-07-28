@@ -11,6 +11,7 @@ type OpenMeteoResponse = {
     precipitation_sum?: number[];
     precipitation_probability_max?: number[];
     wind_speed_10m_max?: number[];
+    daylight_duration?: number[];
   };
   hourly?: {
     time?: string[];
@@ -114,17 +115,15 @@ export function parseOpenMeteoForecast(raw: OpenMeteoResponse): WeatherForecastP
   const days: WeatherDay[] = dailyTimes.map((date, i) => {
     const code = Number(raw.daily?.weather_code?.[i] ?? 3);
     const dayHours = hoursByDate.get(date) || [];
-    const hours: WeatherHour[] = dayHours
-      .filter((h) => h.hour >= 6 && h.hour <= 22)
-      .map((h) => ({
-        time: h.hhmm,
-        temp: h.temp != null ? Math.round(h.temp) : null,
-        weatherCode: h.code,
-        kind: weatherKindFromCode(h.code),
-        labelRu: weatherLabelRu(h.code),
-        precipProb: h.precipProb,
-        wind: h.wind != null ? Math.round(h.wind * 10) / 10 : null,
-      }));
+    const hours: WeatherHour[] = dayHours.map((h) => ({
+      time: h.hhmm,
+      temp: h.temp != null ? Math.round(h.temp) : null,
+      weatherCode: h.code,
+      kind: weatherKindFromCode(h.code),
+      labelRu: weatherLabelRu(h.code),
+      precipProb: h.precipProb,
+      wind: h.wind != null ? Math.round(h.wind * 10) / 10 : null,
+    }));
 
     return {
       date,
@@ -143,10 +142,17 @@ export function parseOpenMeteoForecast(raw: OpenMeteoResponse): WeatherForecastP
         raw.daily?.precipitation_sum?.[i] != null
           ? Math.round(raw.daily.precipitation_sum[i] * 10) / 10
           : null,
-      precipProbMax: raw.daily?.precipitation_probability_max?.[i] ?? null,
+      precipProbMax:
+        raw.daily?.precipitation_probability_max?.[i] != null
+          ? Math.round(raw.daily.precipitation_probability_max[i])
+          : null,
       windMax:
         raw.daily?.wind_speed_10m_max?.[i] != null
           ? Math.round(raw.daily.wind_speed_10m_max[i] * 10) / 10
+          : null,
+      daylightDurationSec:
+        raw.daily?.daylight_duration?.[i] != null
+          ? Math.round(raw.daily.daylight_duration[i])
           : null,
       parts: buildParts(dayHours),
       hours,

@@ -1,15 +1,25 @@
 'use client';
 
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
-import { Radar, RefreshCw, ExternalLink } from 'lucide-react';
+import { Suspense, useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { Radar, RefreshCw, ExternalLink, MessageSquare } from 'lucide-react';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
 import { DEMAND_STATUS_LABEL, demandSourceLabel } from '@/lib/demand/labels';
 import { canProcessTenders } from '@/lib/demandProcessAccess';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useUserRole } from '@/app/providers/UserRoleProvider';
 import { useRealtimeDemand, type DemandItemRow } from '@/hooks/useRealtimeDemand';
 import ProcessDemandModal from './ProcessDemandModal';
+import { DemandAvitoChat } from './DemandAvitoChat';
+
+const DEMAND_STATUS_VALUES = new Set([
+  '',
+  'new',
+  'relevant',
+  'processing',
+  'taken',
+  'ignored',
+]);
 
 const pageWrap: CSSProperties = {
   padding: 'clamp(12px, 2vw, 28px)',
@@ -20,7 +30,16 @@ const pageWrap: CSSProperties = {
 };
 
 export default function DemandPage() {
+  return (
+    <Suspense fallback={<div style={{ ...pageWrap, color: '#94A3B8' }}>Загрузка…</div>}>
+      <DemandPageInner />
+    </Suspense>
+  );
+}
+
+function DemandPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user } = useUserRole();
   const allowTenderProcess = canProcessTenders(user);
   const [items, setItems] = useState<DemandItemRow[]>([]);
@@ -29,9 +48,29 @@ export default function DemandPage() {
   const [running, setRunning] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [minScore, setMinScore] = useState(0);
-  const [status, setStatus] = useState('new');
+  const statusFromUrl = searchParams.get('status');
+  const [status, setStatus] = useState(() =>
+    statusFromUrl != null && DEMAND_STATUS_VALUES.has(statusFromUrl) ? statusFromUrl : 'new',
+  );
   const [message, setMessage] = useState<string | null>(null);
   const [processItem, setProcessItem] = useState<DemandItemRow | null>(null);
+  /** Чат Авито грузим только для раскрытой карточки — иначе N запросов к Messenger API. */
+  const [openChatDemandId, setOpenChatDemandId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (statusFromUrl == null) return;
+    if (!DEMAND_STATUS_VALUES.has(statusFromUrl)) return;
+    setStatus(statusFromUrl);
+  }, [statusFromUrl]);
+
+  const setStatusAndUrl = (next: string) => {
+    setStatus(next);
+    const qs = new URLSearchParams(searchParams.toString());
+    if (next) qs.set('status', next);
+    else qs.delete('status');
+    const q = qs.toString();
+    router.replace(q ? `/adminCifra/demand?${q}` : '/adminCifra/demand', { scroll: false });
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -339,7 +378,7 @@ export default function DemandPage() {
           <button
             key={s.value || 'all'}
             type="button"
-            onClick={() => setStatus(s.value)}
+            onClick={() => setStatusAndUrl(s.value)}
             style={{
               padding: '8px 12px',
               borderRadius: 10,
@@ -413,6 +452,25 @@ export default function DemandPage() {
               (item.status === 'new' ||
                 item.status === 'relevant' ||
                 item.status === 'processing');
+            const raw =
+              item.raw_payload && typeof item.raw_payload === 'object'
+                ? item.raw_payload
+                : {};
+            const avitoChatId =
+              item.source === 'avito' && typeof raw.chat_id === 'string'
+                ? raw.chat_id
+                : null;
+            const avitoChatUrl =
+              typeof raw.chat_url === 'string'
+                ? raw.chat_url
+                : item.external_url;
+            const buyerHint = item.title.replace(/^Авито\s*·\s*/i, '').trim() || null;
+            const openLabel =
+              item.source === 'avito'
+                ? 'Открыть в Авито'
+                : item.source === 'eis' || item.source === 'tender'
+                  ? 'Открыть на ЕИС'
+                  : 'Открыть источник';
             return (
               <div key={item.id} style={volumeCardSoftStyle({ padding: 16, height: '100%' })}>
                 <div
@@ -421,7 +479,6 @@ export default function DemandPage() {
                     justifyContent: 'space-between',
                     gap: 12,
                     flexWrap: 'wrap',
-                    height: '100%',
                   }}
                 >
                   <div style={{ flex: '1 1 220px', minWidth: 0 }}>
@@ -479,6 +536,56 @@ export default function DemandPage() {
                         }}
                       >
                         {item.body}
+                      </div>
+                    )}
+                    {avitoChatId && (
+                      <div style={{ marginTop: 12 }}>
+                        {openChatDemandId === item.id ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setOpenChatDemandId(null)}
+                              style={{
+                                marginBottom: 8,
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #334155',
+                                background: 'transparent',
+                                color: '#94A3B8',
+                                cursor: 'pointer',
+                                fontSize: 12,
+                              }}
+                            >
+                              Скрыть чат
+                            </button>
+                            <DemandAvitoChat
+                              chatId={avitoChatId}
+                              chatUrl={avitoChatUrl}
+                              buyerHint={buyerHint}
+                            />
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setOpenChatDemandId(item.id)}
+                            style={{
+                              padding: '8px 12px',
+                              borderRadius: 10,
+                              border: '1px solid #1D4ED8',
+                              background: 'rgba(37, 99, 235, 0.15)',
+                              color: '#93C5FD',
+                              cursor: 'pointer',
+                              fontSize: 13,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              fontWeight: 600,
+                            }}
+                          >
+                            <MessageSquare size={14} />
+                            Показать чат Авито
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -580,7 +687,7 @@ export default function DemandPage() {
                           fontSize: 13,
                         }}
                       >
-                        <ExternalLink size={14} /> Открыть на ЕИС
+                        <ExternalLink size={14} /> {openLabel}
                       </a>
                     )}
                     {item.lead_id && (

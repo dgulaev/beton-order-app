@@ -261,6 +261,11 @@ export function explainAvitoMessengerError(message: string): string {
   return message;
 }
 
+export {
+  isAvitoMessengerPaywallText,
+  sanitizeAvitoMessageText,
+} from './messageText';
+
 export async function updateAvitoItemPrice(itemId: string | number, price: number): Promise<void> {
   const userId = getAvitoUserId();
   if (!userId) throw new Error('AVITO_USER_ID не задан');

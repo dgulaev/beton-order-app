@@ -65,13 +65,21 @@ export async function upsertDemandDraft(draft: DemandDraft) {
   const minVol = getMinDemandVolume();
   const volumeOk = volume == null || volume >= minVol;
   const alertThreshold = peekIntegrationSettings().demand.alertScore || 60;
-  if (score >= alertThreshold && volumeOk) {
+  const likelySpam = draft.raw_payload?.likely_spam === true;
+  // force_notify (Авито без спама) — всегда; радар — по порогу score. Спам — без пуша.
+  const shouldNotify =
+    !likelySpam &&
+    (draft.force_notify === true || (score >= alertThreshold && volumeOk));
+  if (shouldNotify) {
+    const isAvito = draft.source === 'avito';
     await notifyManagers({
       type: 'demand_hit',
-      title: `Спрос ${score}% · ${demandSourceLabel(draft.source)}`,
+      title: isAvito
+        ? `Спрос · Авито`
+        : `Спрос ${score}% · ${demandSourceLabel(draft.source)}`,
       body: draft.title.slice(0, 200),
       entityId: data.id,
-      priority: score >= 80 ? 'high' : 'medium',
+      priority: isAvito || score >= 80 ? 'high' : 'medium',
     });
   }
 

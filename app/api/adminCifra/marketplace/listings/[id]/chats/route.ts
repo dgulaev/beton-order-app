@@ -56,7 +56,7 @@ export async function GET(request: NextRequest, context: Ctx) {
       let lastText = last?.content?.text ?? null;
       // Без подписки API мессенджера Авито иногда кладёт текст ошибки в last_message.
       if (lastText && /подписк|api мессенджера|402/i.test(lastText)) {
-        lastText = 'Нужна подписка API мессенджера';
+        lastText = null;
       }
       return {
         id: chat.id,

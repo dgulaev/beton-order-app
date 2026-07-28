@@ -31,6 +31,8 @@ export type WeatherDay = {
   precipSum: number | null;
   precipProbMax: number | null;
   windMax: number | null;
+  /** Продолжительность светового дня, секунды (Open-Meteo daylight_duration) */
+  daylightDurationSec: number | null;
   parts: WeatherDayPart[];
   hours: WeatherHour[];
 };

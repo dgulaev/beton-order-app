@@ -113,6 +113,17 @@ function leadPlatform(lead: Lead): string | null {
   return p || null;
 }
 
+/** Подпись кнопки внешней ссылки на карточке лида. */
+function leadExternalLinkLabel(lead: Lead, url: string): string {
+  const u = url.toLowerCase();
+  if (lead.source === 'avito' || u.includes('avito.ru')) return 'Чат Авито';
+  if (lead.source === 'tender' || lead.source === 'demand' || u.includes('zakupki.gov')) {
+    return 'Открыть закупку';
+  }
+  if (lead.source === 'site') return 'Открыть сайт';
+  return 'Открыть ссылку';
+}
+
 function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '';
   const d = new Date(iso);
@@ -136,15 +147,19 @@ function formatHistoryStatus(value: string | null | undefined): string {
 
 function historyEntryDetail(entry: LeadHistoryEntry): string | null {
   if (entry.field_name === 'status') {
-    if (entry.old_value || entry.new_value) {
-      return `${formatHistoryStatus(entry.old_value)} → ${formatHistoryStatus(entry.new_value)}`;
+    if (!entry.old_value && !entry.new_value) return null;
+    // Создание лида: статуса «до» ещё не было — не показываем «— → Новый».
+    if (!entry.old_value && entry.new_value) {
+      return formatHistoryStatus(entry.new_value);
     }
-    return null;
+    return `${formatHistoryStatus(entry.old_value)} → ${formatHistoryStatus(entry.new_value)}`;
   }
   if (entry.field_name === 'assigned_to') {
+    if (!entry.old_value && entry.new_value) return entry.new_value;
     return `${entry.old_value || '—'} → ${entry.new_value || '—'}`;
   }
   if (entry.field_name === 'co_assignees') {
+    if (!entry.old_value && entry.new_value) return entry.new_value;
     return `${entry.old_value || '—'} → ${entry.new_value || '—'}`;
   }
   if (entry.field_name === 'send_to_work' && entry.new_value) {
@@ -691,7 +706,7 @@ function LeadsPageInner() {
                       {' '}или подключите webhook Авито.
                     </>
                   ) : (
-                    <> Подключите webhook Авито или дождитесь лидов со Спроса.</>
+                    <> Сообщения Авито сначала попадают в Спрос — оттуда отправляй в работу.</>
                   )}
                 </>
               )}
@@ -1116,7 +1131,8 @@ function LeadsPageInner() {
                             gap: 6,
                           }}
                         >
-                          <ExternalLink size={14} /> ЭТП
+                          <ExternalLink size={14} />{' '}
+                          {leadExternalLinkLabel(lead, etpUrl || lead.chat_url || '')}
                         </a>
                       )}
                       {docsUrl && (

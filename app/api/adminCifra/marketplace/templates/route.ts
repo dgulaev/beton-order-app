@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SALES_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import {
+  deleteListingTemplate,
   listListingTemplates,
-  resetListingTemplate,
   saveListingTemplate,
 } from '@/lib/avitoListingTemplates';
 
@@ -19,8 +19,7 @@ export async function GET(request: NextRequest) {
   });
 }
 
-/** Создать / обновить шаблон. */
-export async function PUT(request: NextRequest) {
+async function upsertTemplate(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
@@ -41,7 +40,17 @@ export async function PUT(request: NextRequest) {
   }
 }
 
-/** Сбросить к дефолту (удалить переопределение) или удалить кастомный. */
+/** Создать / обновить шаблон. */
+export async function PUT(request: NextRequest) {
+  return upsertTemplate(request);
+}
+
+/** Создать шаблон (алиас PUT). */
+export async function POST(request: NextRequest) {
+  return upsertTemplate(request);
+}
+
+/** Удалить пользовательский шаблон или сбросить переопределение дефолта. */
 export async function DELETE(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
@@ -53,8 +62,13 @@ export async function DELETE(request: NextRequest) {
     if (!key) {
       return NextResponse.json({ success: false, error: 'Укажите key' }, { status: 400 });
     }
-    const template = await resetListingTemplate(key);
-    return NextResponse.json({ success: true, template, deleted: !template });
+    const result = await deleteListingTemplate(key);
+    return NextResponse.json({
+      success: true,
+      template: result.template,
+      deleted: result.deleted,
+      reset: result.reset,
+    });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Ошибка';
     return NextResponse.json({ success: false, error: message }, { status: 400 });

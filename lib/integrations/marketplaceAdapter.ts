@@ -1,4 +1,5 @@
 import type { LeadDraft } from '@/lib/leads';
+import type { DemandDraft } from '@/lib/demand/collectors/types';
 
 export type MarketplaceListingDraft = {
   source: string;
@@ -32,7 +33,10 @@ export interface MarketplaceAdapter {
   }): Promise<{ external_id: string; url?: string | null }>;
   normalizeLead?(raw: unknown): LeadDraft | null;
   handleWebhook?(body: unknown, headers: Headers): Promise<{
-    leads: LeadDraft[];
+    /** Устаревший путь: сразу в лиды (если demands пуст). */
+    leads?: LeadDraft[];
+    /** Предпочтительный путь: сначала Спрос → потом в лиды вручную. */
+    demands?: DemandDraft[];
     skipped?: number;
   }>;
 }

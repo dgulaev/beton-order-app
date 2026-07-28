@@ -23,6 +23,7 @@ async function fetchOpenMeteo(): Promise<WeatherForecastPayload> {
       'precipitation_sum',
       'precipitation_probability_max',
       'wind_speed_10m_max',
+      'daylight_duration',
     ].join(','),
     hourly: [
       'temperature_2m',

@@ -7,9 +7,11 @@ import {
   fetchAvitoItemsStats,
 } from './client';
 import {
+  avitoChatToDemand,
   avitoChatToLead,
   avitoItemToListing,
   normalizeAvitoWebhookPayload,
+  normalizeAvitoWebhookToDemand,
 } from './normalize';
 
 export const avitoAdapter: MarketplaceAdapter = {
@@ -56,14 +58,23 @@ export const avitoAdapter: MarketplaceAdapter = {
   },
 
   async handleWebhook(body) {
-    const leads = normalizeAvitoWebhookPayload(body);
-    return { leads, skipped: leads.length === 0 ? 1 : 0 };
+    // Входящие сообщения Авито → Спрос; в лиды менеджер отправляет вручную.
+    const demands = normalizeAvitoWebhookToDemand(body);
+    return { demands, skipped: demands.length === 0 ? 1 : 0 };
   },
 };
 
-/** Fallback: непрочитанные чаты → лиды (если webhook протух). */
+/** @deprecated Используй pollAvitoIncomingDemand — Авито идёт в Спрос. */
 export async function pollAvitoIncomingLeads() {
   const chats = await fetchAvitoChats({ unreadOnly: true });
   const leads = chats.map(avitoChatToLead).filter(Boolean);
   return leads as NonNullable<ReturnType<typeof avitoChatToLead>>[];
+}
+
+/** Fallback: непрочитанные чаты → Спрос (если webhook протух). */
+export async function pollAvitoIncomingDemand() {
+  const chats = await fetchAvitoChats({ unreadOnly: true });
+  return chats.map(avitoChatToDemand).filter(Boolean) as NonNullable<
+    ReturnType<typeof avitoChatToDemand>
+  >[];
 }

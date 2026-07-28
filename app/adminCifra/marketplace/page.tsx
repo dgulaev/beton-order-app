@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Store, RefreshCw, Pencil, Plus, RotateCcw, X, Webhook } from 'lucide-react';
+import { Store, RefreshCw, Pencil, Plus, RotateCcw, Trash2, X, Webhook } from 'lucide-react';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import type { ListingTemplate } from '@/lib/avitoListingTemplates';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
@@ -27,6 +27,10 @@ const emptyForm = (): TemplateForm => ({
   grade: '',
 });
 
+function newTemplateKey(): string {
+  return `custom_${Date.now().toString(36)}`;
+}
+
 function formFromTemplate(t: ListingTemplate): TemplateForm {
   return {
     key: t.key,
@@ -35,6 +39,10 @@ function formFromTemplate(t: ListingTemplate): TemplateForm {
     price: String(t.price),
     grade: t.grade ? String(t.grade) : '',
   };
+}
+
+function isUserTemplate(t: ListingTemplate): boolean {
+  return t.is_builtin === false;
 }
 
 function isActiveStatus(status: string): boolean {
@@ -68,6 +76,7 @@ function MarketplacePageInner() {
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<TemplateForm>(emptyForm);
   const [savingTemplate, setSavingTemplate] = useState(false);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [webhookInfo, setWebhookInfo] = useState<{
     subscribed?: boolean;
@@ -189,9 +198,17 @@ function MarketplacePageInner() {
   };
 
   const startCreate = () => {
+    if (!templatesPersistable) {
+      setMessage('Сначала выполни SQL-скрипт marketplace-listing-templates.sql в Supabase');
+      return;
+    }
     setEditingKey(null);
     setCreating(true);
-    setForm(emptyForm());
+    setForm({ ...emptyForm(), key: newTemplateKey() });
+    setMessage(null);
+    requestAnimationFrame(() => {
+      document.getElementById('template-form-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   };
 
   const cancelEdit = () => {
@@ -201,18 +218,44 @@ function MarketplacePageInner() {
   };
 
   const saveTemplate = async () => {
+    const key = form.key.trim();
+    const title = form.title.trim();
+    const description = form.description.trim();
+    const price = Number(form.price);
+
+    if (!key) {
+      setMessage('Укажи ключ шаблона');
+      return;
+    }
+    if (!/^[a-zA-Z0-9_\-]+$/.test(key)) {
+      setMessage('Ключ: только латиница, цифры, _ и -');
+      return;
+    }
+    if (!title) {
+      setMessage('Укажи название');
+      return;
+    }
+    if (!description) {
+      setMessage('Укажи текст объявления');
+      return;
+    }
+    if (!Number.isFinite(price) || price < 0) {
+      setMessage('Укажи корректную цену');
+      return;
+    }
+
     setSavingTemplate(true);
     setMessage(null);
     try {
       const res = await fetch('/api/adminCifra/marketplace/templates', {
-        method: 'PUT',
+        method: creating ? 'POST' : 'PUT',
         headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
-          key: form.key,
-          title: form.title,
-          description: form.description,
-          price: Number(form.price),
-          grade: form.grade || null,
+          key,
+          title,
+          description,
+          price,
+          grade: form.grade.trim() || null,
         }),
       });
       const json = await res.json();
@@ -220,7 +263,7 @@ function MarketplacePageInner() {
         setMessage(json.error || 'Не удалось сохранить шаблон');
         return;
       }
-      setMessage('Шаблон сохранён');
+      setMessage(creating ? 'Шаблон добавлен' : 'Шаблон сохранён');
       cancelEdit();
       await load();
     } finally {
@@ -228,24 +271,36 @@ function MarketplacePageInner() {
     }
   };
 
-  const resetTemplate = async (key: string) => {
-    if (!confirm('Сбросить шаблон к значениям по умолчанию из прайса?')) return;
-    setMessage(null);
-    const res = await fetch(
-      `/api/adminCifra/marketplace/templates?key=${encodeURIComponent(key)}`,
-      {
-        method: 'DELETE',
-        headers: adminCifraAuthHeaders(),
-      },
+  const removeTemplate = async (t: ListingTemplate) => {
+    const userOwned = isUserTemplate(t);
+    const ok = confirm(
+      userOwned
+        ? `Удалить шаблон «${t.title}» безвозвратно?`
+        : `Сбросить «${t.title}» к значениям из прайса?`,
     );
-    const json = await res.json();
-    if (!json.success) {
-      setMessage(json.error || 'Не удалось сбросить');
-      return;
+    if (!ok) return;
+
+    setDeletingKey(t.key);
+    setMessage(null);
+    try {
+      const res = await fetch(
+        `/api/adminCifra/marketplace/templates?key=${encodeURIComponent(t.key)}`,
+        {
+          method: 'DELETE',
+          headers: adminCifraAuthHeaders(),
+        },
+      );
+      const json = await res.json();
+      if (!json.success) {
+        setMessage(json.error || 'Не удалось удалить');
+        return;
+      }
+      setMessage(json.deleted ? 'Шаблон удалён' : 'Шаблон сброшен к дефолту');
+      if (editingKey === t.key) cancelEdit();
+      await load();
+    } finally {
+      setDeletingKey(null);
     }
-    setMessage(json.deleted ? 'Шаблон удалён' : 'Шаблон сброшен к дефолту');
-    if (editingKey === key) cancelEdit();
-    await load();
   };
 
   const formOpen = creating || editingKey != null;
@@ -487,12 +542,13 @@ function MarketplacePageInner() {
           </div>
 
           <p style={{ margin: '0 0 12px', color: '#64748B', fontSize: 12 }}>
-            Шаблоны хранятся в Цифре. Применение к объявлению меняет локальную карточку; на Авито
-            уходит только цена по кнопке «Цена на Авито».
+            Шаблоны хранятся в Цифре. «+ Новый шаблон» добавляет свой; у своих есть «Удалить».
+            У шаблонов из прайса — только правка и «Сброс» к дефолту. На Авито уходит цена по кнопке
+            «Цена на Авито».
           </p>
 
           {formOpen && (
-            <div style={volumeCardStyle({ padding: 16, marginBottom: 12 })}>
+            <div id="template-form-card" style={volumeCardStyle({ padding: 16, marginBottom: 12 })}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
                 <div style={{ color: '#F8FAFC', fontWeight: 700 }}>
                   {creating ? 'Новый шаблон' : `Редактирование · ${editingKey}`}
@@ -507,12 +563,12 @@ function MarketplacePageInner() {
               </div>
               <div style={{ display: 'grid', gap: 10 }}>
                 <label style={{ fontSize: 13, color: '#94A3B8' }}>
-                  Ключ (латиница)
+                  Ключ (латиница, уникальный)
                   <input
                     value={form.key}
                     disabled={!creating}
                     onChange={(e) => setForm((f) => ({ ...f, key: e.target.value }))}
-                    placeholder="grade_M250"
+                    placeholder="custom_m250_promo"
                     style={inputStyle}
                   />
                 </label>
@@ -557,7 +613,7 @@ function MarketplacePageInner() {
                   <button
                     type="button"
                     onClick={() => void saveTemplate()}
-                    disabled={savingTemplate}
+                    disabled={savingTemplate || !templatesPersistable}
                     style={{
                       padding: '10px 14px',
                       borderRadius: 10,
@@ -566,10 +622,14 @@ function MarketplacePageInner() {
                       color: '#fff',
                       fontWeight: 600,
                       cursor: 'pointer',
-                      opacity: savingTemplate ? 0.6 : 1,
+                      opacity: savingTemplate || !templatesPersistable ? 0.6 : 1,
                     }}
                   >
-                    {savingTemplate ? 'Сохранение…' : 'Сохранить'}
+                    {savingTemplate
+                      ? 'Сохранение…'
+                      : creating
+                        ? 'Добавить шаблон'
+                        : 'Сохранить'}
                   </button>
                   <button
                     type="button"
@@ -585,19 +645,61 @@ function MarketplacePageInner() {
                   >
                     Отмена
                   </button>
+                  {!creating &&
+                    editingKey &&
+                    (() => {
+                      const editing = templates.find((x) => x.key === editingKey);
+                      if (!editing || (!isUserTemplate(editing) && !editing.is_custom)) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => void removeTemplate(editing)}
+                          disabled={deletingKey === editing.key}
+                          style={{
+                            padding: '10px 14px',
+                            borderRadius: 10,
+                            border: '1px solid #7F1D1D',
+                            background: 'rgba(127, 29, 29, 0.35)',
+                            color: '#FCA5A5',
+                            cursor: 'pointer',
+                            opacity: deletingKey === editing.key ? 0.6 : 1,
+                          }}
+                        >
+                          {isUserTemplate(editing) ? 'Удалить' : 'Сбросить'}
+                        </button>
+                      );
+                    })()}
                 </div>
               </div>
             </div>
           )}
 
           <div style={{ display: 'grid', gap: 8 }}>
-            {templates.map((t) => (
+            {templates.map((t) => {
+              const userOwned = isUserTemplate(t);
+              return (
               <div key={t.key} style={volumeCardSoftStyle({ padding: 12 })}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
                   <div style={{ flex: 1, minWidth: 200 }}>
                     <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: 17, lineHeight: 1.35 }}>
                       {t.title}
-                      {t.is_custom && (
+                      {userOwned && (
+                        <span
+                          style={{
+                            marginLeft: 8,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: '#BFDBFE',
+                            background: '#1E3A8A',
+                            padding: '2px 8px',
+                            borderRadius: 6,
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          свой
+                        </span>
+                      )}
+                      {!userOwned && t.is_custom && (
                         <span
                           style={{
                             marginLeft: 8,
@@ -636,22 +738,46 @@ function MarketplacePageInner() {
                       {t.description}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                     <button
                       type="button"
                       onClick={() => startEdit(t)}
                       disabled={!templatesPersistable}
                       title="Редактировать"
-                      style={iconBtnStyle}
+                      style={{
+                        ...iconBtnStyle,
+                        opacity: templatesPersistable ? 1 : 0.5,
+                        cursor: templatesPersistable ? 'pointer' : 'not-allowed',
+                      }}
                     >
                       <Pencil size={14} /> Изменить
                     </button>
-                    {t.is_custom && (
+                    {userOwned && (
                       <button
                         type="button"
-                        onClick={() => void resetTemplate(t.key)}
+                        onClick={() => void removeTemplate(t)}
+                        disabled={!templatesPersistable || deletingKey === t.key}
+                        title="Удалить шаблон"
+                        style={{
+                          ...iconBtnStyle,
+                          border: '1px solid #7F1D1D',
+                          color: '#FCA5A5',
+                          opacity: !templatesPersistable || deletingKey === t.key ? 0.5 : 1,
+                        }}
+                      >
+                        <Trash2 size={14} /> Удалить
+                      </button>
+                    )}
+                    {!userOwned && t.is_custom && (
+                      <button
+                        type="button"
+                        onClick={() => void removeTemplate(t)}
+                        disabled={!templatesPersistable || deletingKey === t.key}
                         title="Сбросить к дефолту"
-                        style={iconBtnStyle}
+                        style={{
+                          ...iconBtnStyle,
+                          opacity: !templatesPersistable || deletingKey === t.key ? 0.5 : 1,
+                        }}
                       >
                         <RotateCcw size={14} /> Сброс
                       </button>
@@ -659,7 +785,8 @@ function MarketplacePageInner() {
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </>
       )}

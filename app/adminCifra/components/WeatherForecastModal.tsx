@@ -6,7 +6,9 @@ import { ExternalLink, X } from 'lucide-react';
 import { modalCloseButtonStyle, volumeCardSoftStyle, volumeModalStyle } from '../cardStyles';
 import WeatherIcon from './WeatherIcon';
 import type { WeatherDay, WeatherForecastPayload } from '@/lib/weather/types';
+import { formatDaylightDuration } from '@/lib/weather/format';
 import { formatRuDateWithWeekday } from '@/lib/ruLocale';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 type RangeDays = 7 | 10;
 
@@ -16,6 +18,8 @@ type Props = {
   forecast: WeatherForecastPayload | null;
   /** YYYY-MM-DD — день, с которого открыли карточку */
   initialDateKey: string;
+  /** Полноэкранная адаптация под смартфон */
+  mobile?: boolean;
 };
 
 function parseLocalDate(dateKey: string): Date {
@@ -28,11 +32,13 @@ export default function WeatherForecastModal({
   onClose,
   forecast,
   initialDateKey,
+  mobile = false,
 }: Props) {
   const [mounted, setMounted] = useState(false);
   const [range, setRange] = useState<RangeDays>(7);
   const [activeDate, setActiveDate] = useState(initialDateKey);
 
+  useBodyScrollLock(open);
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
@@ -63,6 +69,9 @@ export default function WeatherForecastModal({
   const dateLabel = activeDay
     ? formatRuDateWithWeekday(parseLocalDate(activeDay.date), 'nominative')
     : '—';
+  const daylightLabel = activeDay
+    ? formatDaylightDuration(activeDay.daylightDurationSec)
+    : null;
 
   return createPortal(
     <div
@@ -76,21 +85,26 @@ export default function WeatherForecastModal({
         zIndex: 9999,
         background: 'rgba(2, 6, 23, 0.72)',
         display: 'flex',
-        alignItems: 'center',
+        alignItems: mobile ? 'stretch' : 'center',
         justifyContent: 'center',
-        padding: 'clamp(16px, 2.5vw, 40px)',
+        padding: mobile ? 0 : 'clamp(16px, 2.5vw, 40px)',
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         style={volumeModalStyle({
-          // 1920 ≈ 54vw (~1030px), 4K упирается в 1120 — без «гигантского» окна
-          width: 'min(1120px, max(680px, 54vw), calc(100vw - 48px))',
-          maxHeight: 'min(90vh, 900px)',
+          width: mobile
+            ? '100%'
+            : 'min(1180px, max(720px, 56vw), calc(100vw - 48px))',
+          maxHeight: mobile ? '100%' : 'min(90vh, calc(100vh - 48px))',
+          height: mobile ? '100%' : undefined,
+          borderRadius: mobile ? 0 : undefined,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          padding: '20px 22px 16px',
+          padding: mobile
+            ? 'max(12px, env(safe-area-inset-top)) 14px max(12px, env(safe-area-inset-bottom))'
+            : '22px 24px 18px',
           boxSizing: 'border-box',
         })}
       >
@@ -100,20 +114,20 @@ export default function WeatherForecastModal({
             alignItems: 'flex-start',
             justifyContent: 'space-between',
             gap: 12,
-            marginBottom: 14,
+            marginBottom: mobile ? 10 : 14,
             flexShrink: 0,
           }}
         >
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#F1F5F9' }}>
+            <div style={{ fontSize: mobile ? 17 : 20, fontWeight: 700, color: '#F1F5F9' }}>
               Погода · {dateLabel}
             </div>
-            <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 4 }}>
+            <div style={{ fontSize: mobile ? 12 : 13, color: '#94A3B8', marginTop: 4 }}>
               {forecast?.locationLabel || 'Брянск'} · данные Open-Meteo
             </div>
           </div>
           <button type="button" onClick={onClose} style={modalCloseButtonStyle()} aria-label="Закрыть">
-            <X size={18} />
+            <X size={mobile ? 18 : 20} />
           </button>
         </div>
 
@@ -134,12 +148,12 @@ export default function WeatherForecastModal({
                 type="button"
                 onClick={() => setRange(n)}
                 style={{
-                  padding: '6px 12px',
+                  padding: mobile ? '6px 12px' : '7px 14px',
                   borderRadius: 9999,
                   border: on ? '1px solid rgba(96,165,250,0.55)' : '1px solid rgba(148,163,184,0.28)',
                   background: on ? 'rgba(59,130,246,0.22)' : 'rgba(15,23,42,0.65)',
                   color: on ? '#BFDBFE' : '#94A3B8',
-                  fontSize: 12,
+                  fontSize: mobile ? 12 : 13,
                   fontWeight: 700,
                   cursor: 'pointer',
                 }}
@@ -150,15 +164,28 @@ export default function WeatherForecastModal({
           })}
         </div>
 
-        {/* Список дней — сетка на всю ширину, без обрезания */}
+        {/* Дни: на десктопе сетка, на мобиле — горизонтальный скролл */}
         <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${daysInRange.length || 1}, minmax(0, 1fr))`,
-            gap: range === 10 ? 6 : 8,
-            marginBottom: 14,
-            flexShrink: 0,
-          }}
+          className={mobile ? 'scroll-hidden' : undefined}
+          style={
+            mobile
+              ? {
+                  display: 'flex',
+                  gap: 8,
+                  overflowX: 'auto',
+                  WebkitOverflowScrolling: 'touch',
+                  paddingBottom: 4,
+                  marginBottom: 12,
+                  flexShrink: 0,
+                }
+              : {
+                  display: 'grid',
+                  gridTemplateColumns: `repeat(${daysInRange.length || 1}, minmax(0, 1fr))`,
+                  gap: range === 10 ? 6 : 8,
+                  marginBottom: 14,
+                  flexShrink: 0,
+                }
+          }
         >
           {daysInRange.map((d) => {
             const on = d.date === activeDay?.date;
@@ -169,28 +196,29 @@ export default function WeatherForecastModal({
                 onClick={() => setActiveDate(d.date)}
                 style={{
                   ...volumeCardSoftStyle({
-                    minWidth: 0,
-                    width: '100%',
-                    padding: range === 10 ? '8px 6px' : '10px 8px',
+                    minWidth: mobile ? 80 : 0,
+                    width: mobile ? undefined : '100%',
+                    flex: mobile ? '0 0 auto' : undefined,
+                    padding: mobile ? '10px 10px' : range === 10 ? '10px 8px' : '12px 10px',
                     cursor: 'pointer',
                     border: on
                       ? '1px solid rgba(96,165,250,0.65)'
                       : '1px solid rgba(148,163,184,0.35)',
-                    // Не передавать background: undefined — button тогда становится белым
                     background: on
                       ? 'linear-gradient(165deg, rgba(59,130,246,0.28) 0%, rgba(15,23,42,0.95) 100%)'
                       : 'linear-gradient(165deg, #1E2937 0%, #0F172A 100%)',
                     textAlign: 'left',
                     color: '#F1F5F9',
+                    WebkitTapHighlightColor: 'transparent',
                   }),
                 }}
               >
                 <div
                   style={{
-                    fontSize: range === 10 ? 10 : 11,
+                    fontSize: mobile ? 11 : range === 10 ? 11 : 12,
                     color: on ? '#BFDBFE' : '#CBD5E1',
                     fontWeight: 600,
-                    marginBottom: 4,
+                    marginBottom: 5,
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -199,14 +227,14 @@ export default function WeatherForecastModal({
                   {parseLocalDate(d.date).toLocaleDateString('ru-RU', {
                     weekday: 'short',
                     day: 'numeric',
-                    month: 'short',
+                    month: mobile ? 'numeric' : 'short',
                   })}
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-                  <WeatherIcon kind={d.kind} size={range === 10 ? 18 : 22} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                  <WeatherIcon kind={d.kind} size={mobile ? 22 : range === 10 ? 22 : 24} />
                   <span
                     style={{
-                      fontSize: range === 10 ? 12 : 14,
+                      fontSize: mobile ? 14 : range === 10 ? 14 : 15,
                       fontWeight: 700,
                       color: '#F8FAFC',
                       whiteSpace: 'nowrap',
@@ -226,30 +254,51 @@ export default function WeatherForecastModal({
         {/* Детали дня */}
         <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           {!activeDay ? (
-            <div style={{ color: '#94A3B8', fontSize: 14 }}>Нет данных по выбранному дню</div>
+            <div style={{ color: '#94A3B8', fontSize: 15 }}>Нет данных по выбранному дню</div>
           ) : (
             <>
               <div
                 style={volumeCardSoftStyle({
-                  padding: '14px 16px',
-                  marginBottom: 12,
+                  padding: mobile ? '14px 16px' : '16px 18px',
+                  marginBottom: 14,
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 14,
+                  gap: mobile ? 14 : 16,
                 })}
               >
-                <WeatherIcon kind={activeDay.kind} size={40} strokeWidth={1.75} />
+                <WeatherIcon kind={activeDay.kind} size={mobile ? 44 : 52} strokeWidth={1.7} />
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 28, fontWeight: 700, color: '#F8FAFC', lineHeight: 1.1 }}>
+                  <div
+                    style={{
+                      fontSize: mobile ? 30 : 34,
+                      fontWeight: 700,
+                      color: '#F8FAFC',
+                      lineHeight: 1.1,
+                    }}
+                  >
                     {activeDay.tempMax ?? '—'}° / {activeDay.tempMin ?? '—'}°
                   </div>
-                  <div style={{ fontSize: 14, color: '#CBD5E1', marginTop: 4, fontWeight: 600 }}>
+                  <div
+                    style={{
+                      fontSize: mobile ? 15 : 16,
+                      color: '#CBD5E1',
+                      marginTop: 4,
+                      fontWeight: 600,
+                    }}
+                  >
                     {activeDay.labelRu}
                   </div>
-                  <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 4 }}>
-                    Осадки {activeDay.precipSum ?? 0} мм
-                    {activeDay.precipProbMax != null ? ` · вер. ${activeDay.precipProbMax}%` : ''}
-                    {activeDay.windMax != null ? ` · ветер до ${activeDay.windMax} м/с` : ''}
+                  <div style={{ fontSize: mobile ? 12 : 13, color: '#94A3B8', marginTop: 5 }}>
+                    {[
+                      `Осадки ${activeDay.precipSum ?? 0} мм`,
+                      activeDay.precipProbMax != null
+                        ? `макс. вер. осадков ${activeDay.precipProbMax}%`
+                        : null,
+                      activeDay.windMax != null ? `ветер до ${activeDay.windMax} м/с` : null,
+                      daylightLabel ? `свет ${daylightLabel}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </div>
                 </div>
               </div>
@@ -258,55 +307,145 @@ export default function WeatherForecastModal({
                 style={{
                   display: 'grid',
                   gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-                  gap: 8,
-                  marginBottom: 14,
+                  gap: mobile ? 6 : 10,
+                  marginBottom: 16,
                 }}
               >
                 {activeDay.parts.map((p) => (
-                  <div key={p.key} style={volumeCardSoftStyle({ padding: '10px 12px' })}>
-                    <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 600, marginBottom: 6 }}>
+                  <div
+                    key={p.key}
+                    style={volumeCardSoftStyle({ padding: mobile ? '10px 10px' : '12px 14px' })}
+                  >
+                    <div
+                      style={{
+                        fontSize: mobile ? 11 : 12,
+                        color: '#94A3B8',
+                        fontWeight: 600,
+                        marginBottom: 8,
+                      }}
+                    >
                       {p.label}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <WeatherIcon kind={p.kind} size={22} />
-                      <div>
-                        <div style={{ fontSize: 18, fontWeight: 700, color: '#E2E8F0', lineHeight: 1 }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: mobile ? 6 : 10,
+                        minWidth: 0,
+                      }}
+                    >
+                      <WeatherIcon kind={p.kind} size={mobile ? 22 : 26} />
+                      <div style={{ minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontSize: mobile ? 18 : 20,
+                            fontWeight: 700,
+                            color: '#E2E8F0',
+                            lineHeight: 1,
+                          }}
+                        >
                           {p.tempAvg != null ? `${Math.round(p.tempAvg)}°` : '—'}
                         </div>
-                        <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>{p.labelRu}</div>
+                        <div
+                          style={{
+                            fontSize: mobile ? 11 : 12,
+                            color: '#94A3B8',
+                            marginTop: 3,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {p.labelRu}
+                          {p.precipProb != null ? ` · ${p.precipProb}%` : ''}
+                        </div>
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
 
-              <div style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600, marginBottom: 8 }}>
-                По часам (6:00–22:00)
+              <div
+                style={{
+                  fontSize: mobile ? 12 : 13,
+                  color: '#94A3B8',
+                  fontWeight: 600,
+                  marginBottom: 10,
+                }}
+              >
+                По часам (00:00–23:00)
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: mobile ? 4 : 5 }}>
                 {activeDay.hours.map((h) => (
                   <div
                     key={h.time}
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: '48px 28px 1fr auto auto',
-                      gap: 10,
+                      gridTemplateColumns: mobile
+                        ? '48px 28px minmax(0, 1fr) auto'
+                        : '56px 32px minmax(0, 1fr) auto',
+                      gap: mobile ? 8 : 12,
                       alignItems: 'center',
-                      padding: '6px 8px',
+                      padding: mobile ? '9px 10px' : '8px 12px',
                       borderRadius: 10,
                       background: 'rgba(15,23,42,0.45)',
                     }}
                   >
-                    <span style={{ fontSize: 13, color: '#CBD5E1', fontVariantNumeric: 'tabular-nums' }}>
+                    <span
+                      style={{
+                        fontSize: mobile ? 13 : 14,
+                        color: '#CBD5E1',
+                        fontVariantNumeric: 'tabular-nums',
+                        fontWeight: 600,
+                      }}
+                    >
                       {h.time}
                     </span>
-                    <WeatherIcon kind={h.kind} size={18} />
-                    <span style={{ fontSize: 12, color: '#94A3B8' }}>{h.labelRu}</span>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: '#E2E8F0' }}>
-                      {h.temp != null ? `${h.temp}°` : '—'}
+                    <WeatherIcon kind={h.kind} size={mobile ? 20 : 24} />
+                    <span
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        minWidth: 0,
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: mobile ? 13 : 14,
+                          color: '#94A3B8',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          minWidth: 0,
+                        }}
+                      >
+                        {h.labelRu}
+                      </span>
+                      {h.precipProb != null && (
+                        <span
+                          style={{
+                            fontSize: mobile ? 12 : 13,
+                            color: '#64748B',
+                            fontWeight: 600,
+                            fontVariantNumeric: 'tabular-nums',
+                            flexShrink: 0,
+                          }}
+                        >
+                          {h.precipProb}%
+                        </span>
+                      )}
                     </span>
-                    <span style={{ fontSize: 11, color: '#64748B', minWidth: 42, textAlign: 'right' }}>
-                      {h.precipProb != null ? `${h.precipProb}%` : ''}
+                    <span
+                      style={{
+                        fontSize: mobile ? 14 : 15,
+                        fontWeight: 700,
+                        color: '#E2E8F0',
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                    >
+                      {h.temp != null ? `${h.temp}°` : '—'}
                     </span>
                   </div>
                 ))}
@@ -318,8 +457,9 @@ export default function WeatherForecastModal({
         <div
           style={{
             display: 'flex',
+            flexDirection: mobile ? 'column' : 'row',
             justifyContent: 'space-between',
-            alignItems: 'center',
+            alignItems: mobile ? 'stretch' : 'center',
             gap: 10,
             marginTop: 14,
             flexShrink: 0,
@@ -334,28 +474,31 @@ export default function WeatherForecastModal({
             style={{
               display: 'inline-flex',
               alignItems: 'center',
+              justifyContent: mobile ? 'center' : 'flex-start',
               gap: 6,
               color: '#93C5FD',
-              fontSize: 12,
+              fontSize: mobile ? 12 : 13,
               fontWeight: 600,
               textDecoration: 'none',
+              padding: mobile ? '10px 12px' : 0,
             }}
           >
-            <ExternalLink size={14} />
+            <ExternalLink size={mobile ? 14 : 15} />
             Открыть в Яндекс.Погоде
           </a>
           <button
             type="button"
             onClick={onClose}
             style={{
-              padding: '8px 14px',
+              padding: mobile ? '12px 14px' : '9px 16px',
               borderRadius: 10,
               border: '1px solid rgba(148,163,184,0.35)',
               background: 'rgba(15,23,42,0.8)',
               color: '#E2E8F0',
-              fontSize: 13,
+              fontSize: mobile ? 14 : 15,
               fontWeight: 600,
               cursor: 'pointer',
+              WebkitTapHighlightColor: 'transparent',
             }}
           >
             Закрыть

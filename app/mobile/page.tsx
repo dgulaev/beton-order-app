@@ -18,6 +18,7 @@ import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { CARD_BORDER, CARD_GRADIENT_SOFT, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 import { appAlert, appConfirm } from '@/app/adminCifra/components/appDialog';
+import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
 import { formatTimeHHMM } from '@/lib/ruLocale';
 
 export default function MobileDashboard() {
@@ -748,6 +749,10 @@ useWakeRefresh(() => {
               )}
             </div>
           </div>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <WeatherKpiCard dateKey={selectedDateStr} mobile />
         </div>
 
                {/* Таймлайн с переключением дней */}

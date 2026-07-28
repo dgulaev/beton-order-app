@@ -4,9 +4,72 @@ import {
   scoreLeadText,
   type LeadDraft,
 } from '@/lib/leads';
+import type { DemandDraft } from '@/lib/demand/collectors/types';
 import type { MarketplaceListingDraft } from '@/lib/integrations/marketplaceAdapter';
 import { peekIntegrationSettings } from '@/lib/integrations/settings';
+import { sanitizeAvitoMessageText } from './messageText';
 import type { AvitoChat, AvitoItem } from './client';
+
+function avitoDemandExternalId(chatId: string, messageId: string): string {
+  return `avito-chat:${chatId}:${messageId}`;
+}
+
+function buildAvitoDemandDraft(input: {
+  chatId: string;
+  messageId: string;
+  text: string;
+  authorName: string | null;
+  itemId: string | number | null | undefined;
+  itemTitle?: string | null;
+  itemUrl?: string | null;
+  publishedAt?: string | null;
+  rawPayload: Record<string, unknown>;
+}): DemandDraft {
+  const text = sanitizeAvitoMessageText(input.text);
+  const bodyText = text || 'Текст в Авито — откройте чат на площадке';
+  const title = input.itemTitle
+    ? `Авито · ${input.itemTitle}`
+    : input.authorName
+      ? `Авито · ${input.authorName}`
+      : 'Запрос из чата Авито';
+  const chatUrl = `https://www.avito.ru/profile/messenger/channel/${input.chatId}`;
+  const enriched = extractLeadFields(text);
+  const grades = enriched.grade ? [enriched.grade] : null;
+  const likelySpam = text ? isLikelySpam(text) : false;
+
+  return {
+    source: 'avito',
+    external_id: avitoDemandExternalId(input.chatId, input.messageId),
+    // В лид уходит как chat_url/etp_url — нужна ссылка на мессенджер, не на объявление.
+    external_url: chatUrl,
+    title,
+    body: [
+      input.authorName ? `От: ${input.authorName}` : null,
+      bodyText,
+      input.itemTitle ? `Объявление: ${input.itemTitle}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
+    region: null,
+    published_at: input.publishedAt ?? new Date().toISOString(),
+    volume_m3: enriched.volume_m3 ?? null,
+    grades,
+    delivery_needed: null,
+    buyer_type: 'b2c',
+    // Спам всё равно в Спрос (менеджер решит), но без пуша/тоста.
+    force_notify: !likelySpam,
+    raw_payload: {
+      ...input.rawPayload,
+      legal: 'messenger_only',
+      chat_id: input.chatId,
+      message_id: input.messageId,
+      listing_id: input.itemId != null ? String(input.itemId) : null,
+      item_url: input.itemUrl ?? null,
+      chat_url: chatUrl,
+      likely_spam: likelySpam,
+    },
+  };
+}
 
 function extractCity(item: AvitoItem): string | null {
   if (typeof item.city === 'string' && item.city.trim()) return item.city.trim();
@@ -53,13 +116,13 @@ export function avitoChatToLead(chat: AvitoChat): LeadDraft | null {
   const stableMsgId = msg.id || (msg.created != null ? String(msg.created) : '');
   if (!chat.id || !stableMsgId) return null;
 
-  const text = msg.content?.text?.trim() || '';
+  const text = sanitizeAvitoMessageText(msg.content?.text);
   const ourUserIdSync = Number(peekIntegrationSettings().avito.userId);
   const buyer = (chat.users || []).find((u) => u.id !== ourUserIdSync);
   const item = chat.context?.type === 'item' ? chat.context.value : undefined;
   const externalId = `${chat.id}:${stableMsgId}`;
 
-  if (isLikelySpam(text)) {
+  if (text && isLikelySpam(text)) {
     return {
       source: 'avito',
       external_id: externalId,
@@ -78,7 +141,7 @@ export function avitoChatToLead(chat: AvitoChat): LeadDraft | null {
     source: 'avito',
     external_id: externalId,
     status: 'new',
-    raw_text: text || item?.title || 'Сообщение из Авито',
+    raw_text: text || 'Откройте чат в Авито',
     name: buyer?.name ?? null,
     phone: extracted.phone ?? null,
     chat_url: `https://www.avito.ru/profile/messenger/channel/${chat.id}`,
@@ -88,6 +151,34 @@ export function avitoChatToLead(chat: AvitoChat): LeadDraft | null {
     score: extracted.score ?? scoreLeadText(text),
     raw_payload: chat as unknown as Record<string, unknown>,
   };
+}
+
+/** Непрочитанный чат → черновик Спроса (fallback cron / webhook-путь). */
+export function avitoChatToDemand(chat: AvitoChat): DemandDraft | null {
+  const msg = chat.last_message;
+  if (!msg || msg.direction === 'out') return null;
+
+  const stableMsgId = msg.id || (msg.created != null ? String(msg.created) : '');
+  if (!chat.id || !stableMsgId) return null;
+
+  const ourUserIdSync = Number(peekIntegrationSettings().avito.userId);
+  const buyer = (chat.users || []).find((u) => u.id !== ourUserIdSync);
+  const item = chat.context?.type === 'item' ? chat.context.value : undefined;
+  const text = msg.content?.text?.trim() || '';
+
+  return buildAvitoDemandDraft({
+    chatId: chat.id,
+    messageId: stableMsgId,
+    text,
+    authorName: buyer?.name ?? null,
+    itemId: item?.id,
+    itemTitle: item?.title ?? null,
+    itemUrl: item?.url ?? null,
+    publishedAt: msg.created
+      ? new Date(msg.created * (msg.created < 2e10 ? 1000 : 1)).toISOString()
+      : null,
+    rawPayload: chat as unknown as Record<string, unknown>,
+  });
 }
 
 /** Нормализация webhook payload Авито Messenger (несколько возможных форм). */
@@ -115,10 +206,11 @@ export function normalizeAvitoWebhookPayload(body: unknown): LeadDraft[] {
   const messageId = messageIdRaw != null && String(messageIdRaw).trim() !== ''
     ? String(messageIdRaw)
     : '';
-  const text =
+  const text = sanitizeAvitoMessageText(
     (v.content as { text?: string } | undefined)?.text ||
-    (typeof v.text === 'string' ? v.text : '') ||
-    '';
+      (typeof v.text === 'string' ? v.text : '') ||
+      '',
+  );
   const authorName =
     (v.author as { name?: string } | undefined)?.name ||
     (v.user as { name?: string } | undefined)?.name ||
@@ -144,7 +236,7 @@ export function normalizeAvitoWebhookPayload(body: unknown): LeadDraft[] {
   }
 
   const externalId = `${chatId}:${messageId}`;
-  if (isLikelySpam(text)) {
+  if (text && isLikelySpam(text)) {
     return [{
       source: 'avito',
       external_id: externalId,
@@ -163,7 +255,7 @@ export function normalizeAvitoWebhookPayload(body: unknown): LeadDraft[] {
     source: 'avito',
     external_id: externalId,
     status: 'new',
-    raw_text: text || 'Сообщение из Авито',
+    raw_text: text || 'Откройте чат в Авито',
     name: authorName,
     phone: extracted.phone ?? null,
     chat_url: chatId ? `https://www.avito.ru/profile/messenger/channel/${chatId}` : null,
@@ -173,4 +265,85 @@ export function normalizeAvitoWebhookPayload(body: unknown): LeadDraft[] {
     score: extracted.score ?? scoreLeadText(text),
     raw_payload: payload,
   }];
+}
+
+/**
+ * Webhook Messenger → Спрос (не сразу в лиды).
+ * Менеджер потом: в работу / отказ / спам.
+ */
+export function normalizeAvitoWebhookToDemand(body: unknown): DemandDraft[] {
+  if (!body || typeof body !== 'object') return [];
+  const payload = body as Record<string, unknown>;
+
+  const value =
+    (payload.payload as Record<string, unknown> | undefined)?.value ||
+    payload.value ||
+    payload;
+
+  if (!value || typeof value !== 'object') return [];
+  const v = value as Record<string, unknown>;
+
+  const chatId = String(v.chat_id || v.chatId || (v.chat as { id?: string } | undefined)?.id || '');
+  const messageIdRaw =
+    v.id ??
+    v.message_id ??
+    v.messageId ??
+    v.created ??
+    (v.content as { created?: number | string } | undefined)?.created;
+  const messageId =
+    messageIdRaw != null && String(messageIdRaw).trim() !== '' ? String(messageIdRaw) : '';
+  const text = sanitizeAvitoMessageText(
+    (v.content as { text?: string } | undefined)?.text ||
+      (typeof v.text === 'string' ? v.text : '') ||
+      '',
+  );
+  const authorName =
+    (v.author as { name?: string } | undefined)?.name ||
+    (v.user as { name?: string } | undefined)?.name ||
+    null;
+  const itemIdRaw = v.item_id ?? (v.item as { id?: number | string } | undefined)?.id;
+  const itemId =
+    typeof itemIdRaw === 'string' || typeof itemIdRaw === 'number' ? itemIdRaw : null;
+  const itemTitle =
+    (v.item as { title?: string } | undefined)?.title ||
+    (typeof v.item_title === 'string' ? v.item_title : null);
+
+  const authorId =
+    v.author_id ??
+    (v.author as { id?: number } | undefined)?.id ??
+    (v.user as { id?: number } | undefined)?.id;
+  const ourUserId = Number(peekIntegrationSettings().avito.userId);
+  if (Number.isFinite(ourUserId) && authorId != null && Number(authorId) === ourUserId) {
+    return [];
+  }
+  const direction = v.direction || (v.type === 'system' ? 'out' : 'in');
+  if (direction === 'out') return [];
+
+  if (!chatId || !messageId) {
+    console.warn('[avito] skip webhook demand: нет chat_id или стабильного message id');
+    return [];
+  }
+
+  const createdRaw =
+    typeof v.created === 'number'
+      ? v.created
+      : typeof (v.content as { created?: number } | undefined)?.created === 'number'
+        ? (v.content as { created: number }).created
+        : null;
+  const publishedAt = createdRaw != null
+    ? new Date(createdRaw * (createdRaw < 2e10 ? 1000 : 1)).toISOString()
+    : null;
+
+  return [
+    buildAvitoDemandDraft({
+      chatId,
+      messageId,
+      text,
+      authorName,
+      itemId,
+      itemTitle,
+      publishedAt,
+      rawPayload: payload,
+    }),
+  ];
 }

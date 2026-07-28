@@ -15,6 +15,25 @@ export const LEAD_SOURCE_LABEL: Record<string, string> = {
 export const LEAD_MANUAL_CREATE_SOURCES = ['tender', 'manual', 'site'] as const;
 export type LeadManualCreateSource = (typeof LEAD_MANUAL_CREATE_SOURCES)[number];
 
+/** Подписи и подсказки для формы «Новый лид» (не путать с фильтром списка). */
+export const LEAD_CREATE_SOURCE_META: Record<
+  LeadManualCreateSource,
+  { label: string; subtitle: string }
+> = {
+  tender: {
+    label: 'Тендер',
+    subtitle: 'Площадка, реквизиты закупки, НМЦК, контракты и исполнитель',
+  },
+  site: {
+    label: 'Сайт',
+    subtitle: 'Заявка с сайта завода: контакт, поставка и комментарий',
+  },
+  manual: {
+    label: 'Физлицо / звонок',
+    subtitle: 'Простой заказ: ФИО, телефон, марка и адрес поставки',
+  },
+};
+
 /** Площадки для специалиста по торгам. */
 export const LEAD_PLATFORM_OPTIONS = [
   'ЕИС (zakupki.gov.ru)',
@@ -24,6 +43,15 @@ export const LEAD_PLATFORM_OPTIONS = [
   'Фабрикант',
   'B2B-Center',
   'Авито',
+  'Другое',
+] as const;
+
+/** Типичные источники для лида «Сайт». */
+export const LEAD_SITE_ORIGIN_OPTIONS = [
+  'Сайт завода',
+  'Форма на сайте',
+  'Landing',
+  'WhatsApp с сайта',
   'Другое',
 ] as const;
 

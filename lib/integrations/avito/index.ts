@@ -29,9 +29,15 @@ export {
   listAvitoWebhookSubscriptions,
   explainAvitoMessengerError,
 } from './client';
-export { pollAvitoIncomingLeads } from './adapter';
+export {
+  isAvitoMessengerPaywallText,
+  sanitizeAvitoMessageText,
+} from './messageText';
+export { pollAvitoIncomingLeads, pollAvitoIncomingDemand } from './adapter';
 export {
   normalizeAvitoWebhookPayload,
+  normalizeAvitoWebhookToDemand,
   avitoItemToListing,
   avitoChatToLead,
+  avitoChatToDemand,
 } from './normalize';

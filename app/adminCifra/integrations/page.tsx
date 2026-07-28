@@ -488,7 +488,7 @@ export default function IntegrationsPage() {
         >
           <Section
             title="Авито"
-            subtitle="Объявления, чаты, webhook → лиды. После смены webhook-секрета переподпиши на «Площадках»."
+            subtitle="Объявления, чаты, webhook → Спрос (потом в лиды вручную). После смены webhook-секрета переподпиши на «Площадках»."
             status={
               <StatusPill
                 ok={settings.avito.configured}

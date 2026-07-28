@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isAvitoConfigured, pollAvitoIncomingLeads } from '@/lib/integrations/avito';
+import { isAvitoConfigured, pollAvitoIncomingDemand } from '@/lib/integrations/avito';
 import { upsertMarketplaceListing } from '@/lib/integrations/avito/upsertListing';
 import { registerAllMarketplaceAdapters } from '@/lib/integrations/registerAll';
 import { getMarketplaceAdapter } from '@/lib/integrations/marketplaceAdapter';
 import { getIntegrationSettings } from '@/lib/integrations/settings';
-import { upsertLead } from '@/lib/leadService';
+import { upsertDemandDraft } from '@/lib/demand/demandService';
 import { requireCronAuth } from '@/lib/cronAuth';
 
 /**
- * Fallback: если webhook Авито протух — подтягиваем непрочитанные чаты
+ * Fallback: если webhook Авито протух — подтягиваем непрочитанные чаты в Спрос
  * и синхронизируем объявления.
  */
 export async function GET(req: NextRequest) {
@@ -23,18 +23,18 @@ export async function GET(req: NextRequest) {
   registerAllMarketplaceAdapters();
   const adapter = getMarketplaceAdapter('avito');
 
-  let leadsCreated = 0;
+  let demandsCreated = 0;
   let listingsUpserted = 0;
   const errors: string[] = [];
 
   try {
-    const drafts = await pollAvitoIncomingLeads();
+    const drafts = await pollAvitoIncomingDemand();
     for (const d of drafts) {
-      const r = await upsertLead(d);
-      if (r?.created) leadsCreated += 1;
+      const r = await upsertDemandDraft(d);
+      if (r?.created) demandsCreated += 1;
     }
   } catch (e: unknown) {
-    errors.push(`leads: ${e instanceof Error ? e.message : String(e)}`);
+    errors.push(`demands: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   try {
@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     success: errors.length === 0,
-    leadsCreated,
+    demandsCreated,
     listingsUpserted,
     errors,
   });

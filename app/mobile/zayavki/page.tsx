@@ -10,6 +10,7 @@ import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle } from '@/app/adminCifra/cardStyles';
 import { appConfirm } from '@/app/adminCifra/components/appDialog';
+import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
 
@@ -328,6 +329,10 @@ const { user } = useUserRole();   // ← Берём роль из провайд
     </div>
   </div>
 </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <WeatherKpiCard dateKey={selectedDateStr} mobile />
+        </div>
 
         {/* ==================== НАВИГАЦИЯ ПО ДАТАМ ==================== */}
         {(() => {

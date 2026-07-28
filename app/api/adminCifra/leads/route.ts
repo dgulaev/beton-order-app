@@ -184,7 +184,12 @@ export async function POST(request: NextRequest) {
         created_by: auth.user.user_id,
         created_by_name: auth.user.full_name || 'Сотрудник',
         created_by_role: auth.user.role,
-        customer_type: organizationName || inn ? 'legal' : 'physical',
+        customer_type:
+          body.customer_type === 'legal' || body.customer_type === 'physical'
+            ? body.customer_type
+            : organizationName || inn
+              ? 'legal'
+              : 'physical',
         organization_name: organizationName,
         contact_name: contactName,
         full_name: contactName,

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { registerAllMarketplaceAdapters } from '@/lib/integrations/registerAll';
 import { getMarketplaceAdapter } from '@/lib/integrations/marketplaceAdapter';
 import { getIntegrationSettings } from '@/lib/integrations/settings';
+import { upsertDemandDraft } from '@/lib/demand/demandService';
 import { upsertLead } from '@/lib/leadService';
 
 async function verifyWebhookSecret(request: NextRequest): Promise<boolean> {
@@ -41,10 +42,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, created: 0, skipped: 1, total: 0 });
     }
 
-    const { leads } = await adapter.handleWebhook(body, request.headers);
+    const { leads = [], demands = [] } = await adapter.handleWebhook(body, request.headers);
 
     let created = 0;
     let skipped = 0;
+
+    // Предпочтительный путь: Спрос → менеджер → лиды / отказ / спам.
+    for (const draft of demands) {
+      const result = await upsertDemandDraft(draft);
+      if (!result) skipped += 1;
+      else if (result.created) created += 1;
+      else skipped += 1;
+    }
+
+    // Legacy: если адаптер ещё отдаёт leads (другие площадки).
     for (const draft of leads) {
       const result = await upsertLead(draft);
       if (!result) skipped += 1;
@@ -52,8 +63,15 @@ export async function POST(request: NextRequest) {
       else skipped += 1;
     }
 
-    // Быстрый ответ Авито (лиды уже в БД + notifyManagers / realtime).
-    return NextResponse.json({ success: true, created, skipped, total: leads.length });
+    const total = demands.length + leads.length;
+    return NextResponse.json({
+      success: true,
+      created,
+      skipped,
+      total,
+      demands: demands.length,
+      leads: leads.length,
+    });
   } catch (e: unknown) {
     console.error('[webhooks/avito]', e);
     const message = e instanceof Error ? e.message : 'Ошибка';

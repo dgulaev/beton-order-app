@@ -9,8 +9,10 @@ import Image from 'next/image';
 import { useUserRole } from '../providers/UserRoleProvider';
 import { useOrderChangeNotifications } from '@/hooks/useRealtimeOrders';
 import { useLeadChangeNotifications } from '@/hooks/useRealtimeLeads';
+import { useDemandChangeNotifications } from '@/hooks/useRealtimeDemand';
 import { canAccessSales, isSalesPath } from '@/lib/adminCifraSalesAccess';
 import { LEAD_SOURCE_LABEL } from '@/lib/leads';
+import { sanitizeAvitoMessageText } from '@/lib/integrations/avito/messageText';
 import { reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
 import { useWakeReload } from '@/hooks/useWakeReload';
 import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
@@ -130,23 +132,12 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const salesFlyoutRef = useRef<HTMLDivElement | null>(null);
 
   // Подменю «Продажи»: в развёрнутом режиме авто-открывать на дочерних страницах;
-  // в свёрнутом — закрывать при уходе со страниц раздела / при сворачивании сайдбара.
+  // закрывается только вручную (клик по «Продажи») или при сворачивании сайдбара —
+  // не по клику снаружи.
   useEffect(() => {
     if (!isCollapsed && isSalesSection) setSalesMenuOpen(true);
     if (isCollapsed) setSalesMenuOpen(false);
   }, [isCollapsed, isSalesSection, pathname]);
-
-  useEffect(() => {
-    if (!salesMenuOpen) return;
-    const onPointerDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      const inTrigger = salesMenuRef.current?.contains(target);
-      const inFlyout = salesFlyoutRef.current?.contains(target);
-      if (!inTrigger && !inFlyout) setSalesMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [salesMenuOpen]);
 
   // Реальная высота окна в пикселях (100%/100vh ненадёжны в цепочке flex-родителей —
   // считаем сами и передаём вниз конкретное число, а не проценты)
@@ -312,7 +303,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
   // ==================== 2. СОСТОЯНИЯ УВЕДОМЛЕНИЙ ====================
   const [newOrdersCount, setNewOrdersCount] = useState(0);
+  const [newLeadsCount, setNewLeadsCount] = useState(0);
+  const [newDemandCount, setNewDemandCount] = useState(0);
   const [lastNotificationId, setLastNotificationId] = useState<number | null>(null);
+  const salesBadgeCount = newLeadsCount + newDemandCount;
 
   // Ref для функции создания тоста — позволяет вызывать её из mount-эффекта
   // без проблем с замыканиями (всегда последняя версия функции)
@@ -422,8 +416,9 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   ) => {
     const notif = document.createElement('div');
     notif.dataset.notifId = id;
-    const isLead = tone === 'lead' || id.startsWith('lead-');
-    // Заявки — салатовый; лиды — жёлтый (чтобы сразу отличались в стеке).
+    const isLead =
+      tone === 'lead' || id.startsWith('lead-') || id.startsWith('demand-');
+    // Заявки — салатовый; лиды/спрос — жёлтый (чтобы сразу отличались в стеке).
     // Одна ширина со стеком заявок — иначе жёлтый баннер «выпирает».
     const widthPx = 420;
     const bg = isLead
@@ -813,6 +808,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     enabled: !!userRole && canAccessSales(userRole),
     currentUserId,
     onTakeRequired: (lead) => {
+      setNewLeadsCount((prev) => prev + 1);
       const preview = (lead.raw_text || lead.phone || 'Новый лид').slice(0, 160);
       showLeadToast(
         `lead-take-${lead.id}-${Date.now()}`,
@@ -822,11 +818,17 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       );
     },
     onNewLead: (lead) => {
+      setNewLeadsCount((prev) => prev + 1);
       // Жёлтый тост лида (крупнее текст) — отдельно от зелёных заявок.
       const sourceLabel = LEAD_SOURCE_LABEL[lead.source] || lead.source;
       const clientName = (lead.name || '').trim();
-      const preview = (lead.raw_text || lead.phone || 'Без текста').slice(0, 160);
       const isAvito = lead.source === 'avito';
+      const avitoPreview = isAvito
+        ? sanitizeAvitoMessageText(lead.raw_text) || 'Откройте чат в Авито'
+        : '';
+      const preview = (
+        isAvito ? avitoPreview : lead.raw_text || lead.phone || 'Без текста'
+      ).slice(0, 160);
       const payload =
         lead.raw_payload && typeof lead.raw_payload === 'object' ? lead.raw_payload : {};
       const actorName = String(
@@ -851,11 +853,46 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       }
 
       const href = isAvito
-        ? lead.listing_id
-          ? `/adminCifra/marketplace?open=${encodeURIComponent(lead.listing_id)}&chat=1`
-          : '/adminCifra/marketplace'
+        ? lead.chat_url || '/adminCifra/demand?status=new'
         : '/adminCifra/leads';
       showLeadToast(`lead-${lead.id}`, title, preview, href);
+    },
+  });
+
+  useDemandChangeNotifications({
+    enabled: !!userRole && canAccessSales(userRole),
+    onNewDemand: (item) => {
+      setNewDemandCount((prev) => prev + 1);
+      const isAvito = item.source === 'avito';
+      let previewRaw = item.body || '';
+      // Убираем служебную строку «От: …» и paywall Авито из превью.
+      previewRaw = previewRaw
+        .replace(/^От:\s*[^\n]+\n*/i, '')
+        .replace(/\n*Объявление:\s*[^\n]+$/i, '')
+        .trim();
+      const preview = (
+        isAvito
+          ? sanitizeAvitoMessageText(previewRaw) ||
+            (item.title.includes('·')
+              ? `По объявлению: ${item.title.replace(/^Авито\s*·\s*/i, '').trim()}`
+              : 'Откройте чат в Авито')
+          : previewRaw || item.title || 'Новый спрос'
+      ).slice(0, 160);
+      const title = isAvito
+        ? item.title.includes('·')
+          ? `${item.title.replace(/^Авито\s*·\s*/i, '').trim() || 'Клиент'} · запрос в Авито`
+          : 'Новый запрос · Авито'
+        : `Новый спрос · ${item.source}`;
+      const chatUrl =
+        item.raw_payload && typeof item.raw_payload.chat_url === 'string'
+          ? item.raw_payload.chat_url
+          : null;
+      showLeadToast(
+        `demand-${item.id}`,
+        title,
+        preview,
+        chatUrl || '/adminCifra/demand?status=new',
+      );
     },
   });
 
@@ -863,6 +900,12 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   useEffect(() => {
     if (pathname === '/adminCifra/zayavki') {
       setNewOrdersCount(0);
+    }
+    if (pathname?.startsWith('/adminCifra/leads')) {
+      setNewLeadsCount(0);
+    }
+    if (pathname?.startsWith('/adminCifra/demand')) {
+      setNewDemandCount(0);
     }
   }, [pathname]);
 
@@ -1254,12 +1297,61 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   fontSize: 'inherit',
                   lineHeight: 'inherit',
                   textAlign: 'left',
+                  position: 'relative',
                 }}
               >
-                <Megaphone size={22} style={{ flexShrink: 0 }} />
+                <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
+                  <Megaphone size={22} />
+                  {isCollapsed && salesBadgeCount > 0 && (
+                    <span
+                      aria-label={`Новых: ${salesBadgeCount}`}
+                      style={{
+                        position: 'absolute',
+                        top: -6,
+                        right: -8,
+                        minWidth: 16,
+                        height: 16,
+                        padding: '0 4px',
+                        borderRadius: 9999,
+                        background: '#EAB308',
+                        color: '#0F172A',
+                        fontSize: 10,
+                        fontWeight: 800,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        boxShadow: '0 0 0 2px #0F172A',
+                      }}
+                    >
+                      {salesBadgeCount > 99 ? '99+' : salesBadgeCount}
+                    </span>
+                  )}
+                </span>
                 <span style={{ ...navTextStyle(isCollapsed), flex: isCollapsed ? undefined : 1 }}>
                   Продажи
                 </span>
+                {!isCollapsed && salesBadgeCount > 0 && (
+                  <span
+                    aria-label={`Новых: ${salesBadgeCount}`}
+                    style={{
+                      minWidth: 20,
+                      height: 20,
+                      padding: '0 6px',
+                      borderRadius: 9999,
+                      background: '#EAB308',
+                      color: '#0F172A',
+                      fontSize: 12,
+                      fontWeight: 800,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                      marginRight: 4,
+                    }}
+                  >
+                    {salesBadgeCount > 99 ? '99+' : salesBadgeCount}
+                  </span>
+                )}
                 {!isCollapsed && (
                   <ChevronDown
                     size={16}
@@ -1293,6 +1385,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                         <Link
                           key={item.href}
                           href={item.href}
+                          onClick={() => {
+                            if (item.href === '/adminCifra/leads') setNewLeadsCount(0);
+                            if (item.href === '/adminCifra/demand') setNewDemandCount(0);
+                          }}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -1371,19 +1467,15 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                               alignItems: 'center',
                               gap: 10,
                               padding: '9px 10px',
-                              borderRadius: 10,
-                              background: active ? 'rgba(74, 222, 128, 0.12)' : 'transparent',
-                              border: active
-                                ? '1px solid rgba(74, 222, 128, 0.35)'
-                                : '1px solid transparent',
                               minWidth: 0,
+                              // Без фона/рамки: активный подпункт — только зелёная точка и текст
                             }}
                           >
                             <Icon
                               size={17}
                               style={{
                                 flexShrink: 0,
-                                opacity: active ? 1 : 0.85,
+                                opacity: active ? 1 : 0.75,
                                 color: active ? ACCENT : '#94A3B8',
                               }}
                             />
@@ -1392,10 +1484,56 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                                 overflow: 'hidden',
                                 textOverflow: 'ellipsis',
                                 whiteSpace: 'nowrap',
+                                color: active ? ACCENT : '#CBD5E1',
+                                fontWeight: active ? 600 : 500,
                               }}
                             >
                               {item.label}
                             </span>
+                            {item.href === '/adminCifra/leads' && newLeadsCount > 0 && (
+                              <span
+                                aria-label={`Новых лидов: ${newLeadsCount}`}
+                                style={{
+                                  minWidth: 18,
+                                  height: 18,
+                                  padding: '0 5px',
+                                  borderRadius: 9999,
+                                  background: '#EAB308',
+                                  color: '#0F172A',
+                                  fontSize: 11,
+                                  fontWeight: 800,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  flexShrink: 0,
+                                  marginLeft: 'auto',
+                                }}
+                              >
+                                {newLeadsCount > 99 ? '99+' : newLeadsCount}
+                              </span>
+                            )}
+                            {item.href === '/adminCifra/demand' && newDemandCount > 0 && (
+                              <span
+                                aria-label={`Новый спрос: ${newDemandCount}`}
+                                style={{
+                                  minWidth: 18,
+                                  height: 18,
+                                  padding: '0 5px',
+                                  borderRadius: 9999,
+                                  background: '#EAB308',
+                                  color: '#0F172A',
+                                  fontSize: 11,
+                                  fontWeight: 800,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  flexShrink: 0,
+                                  marginLeft: 'auto',
+                                }}
+                              >
+                                {newDemandCount > 99 ? '99+' : newDemandCount}
+                              </span>
+                            )}
                           </span>
                         </Link>
                       );
@@ -1445,7 +1583,11 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                         key={item.href}
                         href={item.href}
                         role="menuitem"
-                        onClick={() => setSalesMenuOpen(false)}
+                        onClick={() => {
+                          setSalesMenuOpen(false);
+                          if (item.href === '/adminCifra/leads') setNewLeadsCount(0);
+                          if (item.href === '/adminCifra/demand') setNewDemandCount(0);
+                        }}
                         style={{
                           ...navLinkStyle(active, false),
                           padding: '10px 12px',
@@ -1454,7 +1596,47 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                         }}
                       >
                         <Icon size={18} />
-                        <span style={{ paddingLeft: 12 }}>{item.label}</span>
+                        <span style={{ paddingLeft: 12, flex: 1 }}>{item.label}</span>
+                        {item.href === '/adminCifra/leads' && newLeadsCount > 0 && (
+                          <span
+                            style={{
+                              minWidth: 18,
+                              height: 18,
+                              padding: '0 5px',
+                              borderRadius: 9999,
+                              background: '#EAB308',
+                              color: '#0F172A',
+                              fontSize: 11,
+                              fontWeight: 800,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flexShrink: 0,
+                            }}
+                          >
+                            {newLeadsCount > 99 ? '99+' : newLeadsCount}
+                          </span>
+                        )}
+                        {item.href === '/adminCifra/demand' && newDemandCount > 0 && (
+                          <span
+                            style={{
+                              minWidth: 18,
+                              height: 18,
+                              padding: '0 5px',
+                              borderRadius: 9999,
+                              background: '#EAB308',
+                              color: '#0F172A',
+                              fontSize: 11,
+                              fontWeight: 800,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flexShrink: 0,
+                            }}
+                          >
+                            {newDemandCount > 99 ? '99+' : newDemandCount}
+                          </span>
+                        )}
                       </Link>
                     );
                   })}

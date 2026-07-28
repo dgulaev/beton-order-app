@@ -10,10 +10,11 @@ import {
 } from '@/lib/leadContracts';
 import { formatPhoneInput } from '@/lib/phone';
 import {
+  LEAD_CREATE_SOURCE_META,
   LEAD_LAW_OPTIONS,
   LEAD_MANUAL_CREATE_SOURCES,
   LEAD_PLATFORM_OPTIONS,
-  LEAD_SOURCE_LABEL,
+  LEAD_SITE_ORIGIN_OPTIONS,
   type Lead,
   type LeadManualCreateSource,
 } from '@/lib/leads';
@@ -31,8 +32,11 @@ type Employee = {
   role: string;
 };
 
+type CustomerType = 'physical' | 'legal';
+
 export type CreateLeadForm = {
   source: LeadManualCreateSource;
+  customer_type: CustomerType;
   platform: string;
   platform_custom: string;
   purchase_number: string;
@@ -57,6 +61,7 @@ export type CreateLeadForm = {
 
 const EMPTY_FORM: CreateLeadForm = {
   source: 'tender',
+  customer_type: 'legal',
   platform: 'ЕИС (zakupki.gov.ru)',
   platform_custom: '',
   purchase_number: '',
@@ -86,6 +91,64 @@ const sectionTitle: CSSProperties = {
   fontWeight: 700,
   color: '#F8FAFC',
 };
+const gridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+  gap: 10,
+  marginTop: 8,
+};
+const gridTightStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+  gap: 10,
+  marginTop: 8,
+};
+
+function defaultsForSource(source: LeadManualCreateSource): Partial<CreateLeadForm> {
+  if (source === 'tender') {
+    return {
+      source,
+      customer_type: 'legal',
+      platform: 'ЕИС (zakupki.gov.ru)',
+      platform_custom: '',
+      law: '223-ФЗ',
+      grade: 'М300',
+      city: 'Брянск',
+    };
+  }
+  if (source === 'site') {
+    return {
+      source,
+      customer_type: 'physical',
+      platform: 'Сайт завода',
+      platform_custom: '',
+      law: '',
+      purchase_number: '',
+      nmck: '',
+      deadline: '',
+      etp_url: '',
+      docs_url: '',
+      grade: 'М300',
+      city: 'Брянск',
+    };
+  }
+  return {
+    source,
+    customer_type: 'physical',
+    platform: '',
+    platform_custom: '',
+    law: '',
+    purchase_number: '',
+    nmck: '',
+    organization_name: '',
+    inn: '',
+    deadline: '',
+    etp_url: '',
+    docs_url: '',
+    grade: 'М300',
+    city: 'Брянск',
+  };
+}
 
 type Props = {
   open: boolean;
@@ -99,6 +162,12 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
   const [files, setFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const busy = saving;
+
+  const isTender = form.source === 'tender';
+  const isSite = form.source === 'site';
+  const isManual = form.source === 'manual';
+  const isLegal = isTender || form.customer_type === 'legal';
+  const meta = LEAD_CREATE_SOURCE_META[form.source];
 
   useEffect(() => {
     if (!open) return;
@@ -161,6 +230,26 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
     setForm((f) => ({ ...f, [key]: value }));
   };
 
+  const changeSource = (source: LeadManualCreateSource) => {
+    setForm((f) => ({
+      ...f,
+      ...defaultsForSource(source),
+      // сохраняем уже введённые контакт/поставку при смене типа
+      contact_name: f.contact_name,
+      phone: f.phone,
+      grade: f.grade || 'М300',
+      volume_m3: f.volume_m3,
+      city: f.city || 'Брянск',
+      address: f.address,
+      desired_date: f.desired_date,
+      comment: f.comment,
+      assigned_to: f.assigned_to,
+      co_assignees: f.co_assignees,
+      organization_name: source === 'manual' ? '' : f.organization_name,
+      inn: source === 'manual' ? '' : f.inn,
+    }));
+  };
+
   const onPickFiles = (list: FileList | null) => {
     if (!list?.length) return;
     const next: File[] = [...files];
@@ -176,22 +265,36 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
     setFiles(next.slice(0, 10));
   };
 
+  const resolvePlatform = (): string | null => {
+    if (isManual) return null;
+    if (form.platform === 'Другое') {
+      return form.platform_custom.trim() || 'Другое';
+    }
+    return form.platform.trim() || null;
+  };
+
   const submit = async () => {
-    const organization = form.organization_name.trim();
+    const organization = isLegal ? form.organization_name.trim() : '';
     const contact = form.contact_name.trim();
     const phone = form.phone.trim();
     const comment = form.comment.trim();
-    const purchase = form.purchase_number.trim();
+    const purchase = isTender ? form.purchase_number.trim() : '';
+    const phoneOk = phone && phone !== '+7';
 
-    if (!organization && !contact && (!phone || phone === '+7') && !comment && !purchase) {
-      alert('Укажите заказчика, контакт, номер закупки или комментарий');
+    if (isTender) {
+      if (!organization && !contact && !phoneOk && !comment && !purchase) {
+        alert('Укажите заказчика, № закупки, контакт или комментарий');
+        return;
+      }
+    } else if (isSite) {
+      if (!contact && !phoneOk && !comment && !organization) {
+        alert('Укажите имя, телефон или комментарий по заявке с сайта');
+        return;
+      }
+    } else if (!contact && !phoneOk && !comment) {
+      alert('Укажите ФИО, телефон или комментарий');
       return;
     }
-
-    const platform =
-      form.platform === 'Другое'
-        ? form.platform_custom.trim() || 'Другое'
-        : form.platform;
 
     setSaving(true);
     try {
@@ -200,26 +303,27 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
         headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           source: form.source,
-          platform,
-          purchase_number: purchase || null,
-          law: form.law || null,
-          nmck: form.nmck || null,
-          organization_name: organization || null,
-          inn: form.inn.trim() || null,
+          platform: resolvePlatform(),
+          purchase_number: isTender ? purchase || null : null,
+          law: isTender ? form.law || null : null,
+          nmck: isTender ? form.nmck || null : null,
+          organization_name: isLegal ? organization || null : null,
+          inn: isLegal ? form.inn.trim() || null : null,
           contact_name: contact || null,
           name: contact || organization || null,
-          phone: phone && phone !== '+7' ? phone : null,
+          phone: phoneOk ? phone : null,
           grade: form.grade.trim() || null,
           volume_m3: form.volume_m3 ? Number(form.volume_m3) : null,
           city: form.city.trim() || null,
           address: form.address.trim() || null,
           desired_date: form.desired_date || null,
-          deadline: form.deadline || null,
-          etp_url: form.etp_url.trim() || null,
-          docs_url: form.docs_url.trim() || null,
+          deadline: isTender ? form.deadline || null : null,
+          etp_url: isTender ? form.etp_url.trim() || null : null,
+          docs_url: isTender ? form.docs_url.trim() || null : null,
           comment: comment || null,
           assigned_to: form.assigned_to || null,
           co_assignees: form.co_assignees.map(Number).filter((n) => Number.isFinite(n)),
+          customer_type: isLegal ? 'legal' : 'physical',
         }),
       });
       const json = await res.json();
@@ -256,6 +360,10 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
     }
   };
 
+  const platformOptions = isTender
+    ? LEAD_PLATFORM_OPTIONS
+    : LEAD_SITE_ORIGIN_OPTIONS;
+
   return (
     <div
       style={{
@@ -291,9 +399,9 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
           }}
         >
           <div>
-            <h2 style={{ margin: 0, fontSize: 18, color: '#F8FAFC' }}>Новый лид с площадки</h2>
+            <h2 style={{ margin: 0, fontSize: 18, color: '#F8FAFC' }}>Новый лид</h2>
             <p style={{ margin: '4px 0 0', fontSize: 13, color: '#94A3B8' }}>
-              Для специалиста по торгам: площадка, реквизиты закупки, контракты и исполнитель
+              {meta.subtitle}
             </p>
           </div>
           <button
@@ -309,121 +417,146 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <section>
-            <h3 style={sectionTitle}>Источник и площадка</h3>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                gap: 10,
-                marginTop: 8,
-              }}
-            >
+            <h3 style={sectionTitle}>Тип лида</h3>
+            <div style={gridStyle}>
               <label style={labelStyle}>
-                Тип источника
+                Источник
                 <div style={{ marginTop: 4 }}>
                   <ModalSelect
                     value={form.source}
-                    onChange={(v) => set('source', v as LeadManualCreateSource)}
+                    onChange={(v) => changeSource(v as LeadManualCreateSource)}
                     options={LEAD_MANUAL_CREATE_SOURCES.map((s) => ({
                       value: s,
-                      label: LEAD_SOURCE_LABEL[s] || s,
-                      text: LEAD_SOURCE_LABEL[s] || s,
+                      label: LEAD_CREATE_SOURCE_META[s].label,
+                      text: LEAD_CREATE_SOURCE_META[s].label,
                     }))}
                   />
                 </div>
               </label>
-              <label style={labelStyle}>
-                Площадка
-                <div style={{ marginTop: 4 }}>
-                  <ModalSelect
-                    value={form.platform}
-                    onChange={(v) => set('platform', v)}
-                    options={LEAD_PLATFORM_OPTIONS.map((p) => ({
-                      value: p,
-                      label: p,
-                      text: p,
-                    }))}
-                  />
-                </div>
-              </label>
-              {form.platform === 'Другое' && (
+
+              {(isSite || isManual) && (
                 <label style={labelStyle}>
-                  Название площадки
+                  Клиент
+                  <div style={{ marginTop: 4 }}>
+                    <ModalSelect
+                      value={form.customer_type}
+                      onChange={(v) => set('customer_type', v as CustomerType)}
+                      options={[
+                        { value: 'physical', label: 'Физлицо', text: 'Физлицо' },
+                        { value: 'legal', label: 'Юрлицо / ИП', text: 'Юрлицо / ИП' },
+                      ]}
+                    />
+                  </div>
+                </label>
+              )}
+
+              {(isTender || isSite) && (
+                <label style={labelStyle}>
+                  {isTender ? 'Площадка' : 'Откуда заявка'}
+                  <div style={{ marginTop: 4 }}>
+                    <ModalSelect
+                      value={
+                        (platformOptions as readonly string[]).includes(form.platform)
+                          ? form.platform
+                          : 'Другое'
+                      }
+                      onChange={(v) => set('platform', v)}
+                      options={platformOptions.map((p) => ({
+                        value: p,
+                        label: p,
+                        text: p,
+                      }))}
+                    />
+                  </div>
+                </label>
+              )}
+
+              {(isTender || isSite) && form.platform === 'Другое' && (
+                <label style={labelStyle}>
+                  {isTender ? 'Название площадки' : 'Уточните источник'}
                   <input
                     value={form.platform_custom}
                     onChange={(e) => set('platform_custom', e.target.value)}
                     style={modalFieldStyle({ marginTop: 4 })}
-                    placeholder="Например, региональный портал"
+                    placeholder={isTender ? 'Региональный портал' : 'Страница / канал'}
                   />
                 </label>
               )}
-              <label style={labelStyle}>
-                № закупки / извещения
-                <input
-                  value={form.purchase_number}
-                  onChange={(e) => set('purchase_number', e.target.value)}
-                  style={modalFieldStyle({ marginTop: 4 })}
-                  placeholder="32616135594"
-                />
-              </label>
-              <label style={labelStyle}>
-                Закон
-                <div style={{ marginTop: 4 }}>
-                  <ModalSelect
-                    value={form.law}
-                    onChange={(v) => set('law', v)}
-                    options={LEAD_LAW_OPTIONS.map((l) => ({ value: l, label: l, text: l }))}
-                  />
-                </div>
-              </label>
-              <label style={labelStyle}>
-                НМЦК, ₽
-                <input
-                  value={form.nmck}
-                  onChange={(e) => set('nmck', e.target.value)}
-                  style={modalFieldStyle({ marginTop: 4 })}
-                  placeholder="184933"
-                  inputMode="decimal"
-                />
-              </label>
+
+              {isTender && (
+                <>
+                  <label style={labelStyle}>
+                    № закупки / извещения
+                    <input
+                      value={form.purchase_number}
+                      onChange={(e) => set('purchase_number', e.target.value)}
+                      style={modalFieldStyle({ marginTop: 4 })}
+                      placeholder="32616135594"
+                    />
+                  </label>
+                  <label style={labelStyle}>
+                    Закон
+                    <div style={{ marginTop: 4 }}>
+                      <ModalSelect
+                        value={form.law}
+                        onChange={(v) => set('law', v)}
+                        options={LEAD_LAW_OPTIONS.map((l) => ({
+                          value: l,
+                          label: l,
+                          text: l,
+                        }))}
+                      />
+                    </div>
+                  </label>
+                  <label style={labelStyle}>
+                    НМЦК, ₽
+                    <input
+                      value={form.nmck}
+                      onChange={(e) => set('nmck', e.target.value)}
+                      style={modalFieldStyle({ marginTop: 4 })}
+                      placeholder="184933"
+                      inputMode="decimal"
+                    />
+                  </label>
+                </>
+              )}
             </div>
           </section>
 
           <section>
-            <h3 style={sectionTitle}>Заказчик</h3>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                gap: 10,
-                marginTop: 8,
-              }}
-            >
-              <label style={{ ...labelStyle, gridColumn: '1 / -1' }}>
-                Организация
-                <input
-                  value={form.organization_name}
-                  onChange={(e) => set('organization_name', e.target.value)}
-                  style={modalFieldStyle({ marginTop: 4 })}
-                  placeholder="ООО «…»"
-                />
-              </label>
+            <h3 style={sectionTitle}>
+              {isTender ? 'Заказчик' : isLegal ? 'Клиент (юрлицо)' : 'Клиент'}
+            </h3>
+            <div style={gridStyle}>
+              {isLegal && (
+                <>
+                  <label style={{ ...labelStyle, gridColumn: '1 / -1' }}>
+                    Организация
+                    <input
+                      value={form.organization_name}
+                      onChange={(e) => set('organization_name', e.target.value)}
+                      style={modalFieldStyle({ marginTop: 4 })}
+                      placeholder="ООО «…»"
+                    />
+                  </label>
+                  <label style={labelStyle}>
+                    ИНН
+                    <input
+                      value={form.inn}
+                      onChange={(e) => set('inn', e.target.value)}
+                      style={modalFieldStyle({ marginTop: 4 })}
+                      placeholder="1234567890"
+                    />
+                  </label>
+                </>
+              )}
               <label style={labelStyle}>
-                ИНН
-                <input
-                  value={form.inn}
-                  onChange={(e) => set('inn', e.target.value)}
-                  style={modalFieldStyle({ marginTop: 4 })}
-                  placeholder="1234567890"
-                />
-              </label>
-              <label style={labelStyle}>
-                Контактное лицо
+                {isLegal ? 'Контактное лицо' : 'ФИО'}
                 <input
                   value={form.contact_name}
                   onChange={(e) => set('contact_name', e.target.value)}
                   style={modalFieldStyle({ marginTop: 4 })}
-                  placeholder="ФИО"
+                  placeholder={isLegal ? 'ФИО' : 'Иванов Иван'}
                 />
               </label>
               <label style={labelStyle}>
@@ -440,14 +573,7 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
 
           <section>
             <h3 style={sectionTitle}>Поставка</h3>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                gap: 10,
-                marginTop: 8,
-              }}
-            >
+            <div style={gridTightStyle}>
               <label style={labelStyle}>
                 Марка
                 <input
@@ -484,68 +610,91 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
                   style={modalFieldStyle({ marginTop: 4 })}
                 />
               </label>
-              <label style={labelStyle}>
-                Дедлайн задания
-                <input
-                  type="date"
-                  value={form.deadline}
-                  onChange={(e) => set('deadline', e.target.value)}
-                  style={modalFieldStyle({ marginTop: 4 })}
-                />
-              </label>
+              {isTender && (
+                <label style={labelStyle}>
+                  Дедлайн задания
+                  <input
+                    type="date"
+                    value={form.deadline}
+                    onChange={(e) => set('deadline', e.target.value)}
+                    style={modalFieldStyle({ marginTop: 4 })}
+                  />
+                </label>
+              )}
               <label style={{ ...labelStyle, gridColumn: '1 / -1' }}>
                 Адрес поставки
                 <input
                   value={form.address}
                   onChange={(e) => set('address', e.target.value)}
                   style={modalFieldStyle({ marginTop: 4 })}
+                  placeholder={isManual ? 'Улица, дом, объект' : undefined}
                 />
               </label>
             </div>
           </section>
 
           <section>
-            <h3 style={sectionTitle}>Ссылки и комментарий</h3>
+            <h3 style={sectionTitle}>
+              {isTender ? 'Ссылки и комментарий' : 'Комментарий'}
+            </h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
+              {isTender && (
+                <>
+                  <label style={labelStyle}>
+                    Ссылка на закупку (ЭТП)
+                    <input
+                      value={form.etp_url}
+                      onChange={(e) => set('etp_url', e.target.value)}
+                      style={modalFieldStyle({ marginTop: 4 })}
+                      placeholder="https://…"
+                    />
+                  </label>
+                  <label style={labelStyle}>
+                    Ссылка на документацию
+                    <input
+                      value={form.docs_url}
+                      onChange={(e) => set('docs_url', e.target.value)}
+                      style={modalFieldStyle({ marginTop: 4 })}
+                      placeholder="https://…"
+                    />
+                  </label>
+                </>
+              )}
               <label style={labelStyle}>
-                Ссылка на закупку (ЭТП)
-                <input
-                  value={form.etp_url}
-                  onChange={(e) => set('etp_url', e.target.value)}
-                  style={modalFieldStyle({ marginTop: 4 })}
-                  placeholder="https://…"
-                />
-              </label>
-              <label style={labelStyle}>
-                Ссылка на документацию
-                <input
-                  value={form.docs_url}
-                  onChange={(e) => set('docs_url', e.target.value)}
-                  style={modalFieldStyle({ marginTop: 4 })}
-                  placeholder="https://…"
-                />
-              </label>
-              <label style={labelStyle}>
-                Комментарий / суть поставки
+                {isTender
+                  ? 'Комментарий / суть поставки'
+                  : isSite
+                    ? 'Текст заявки с сайта'
+                    : 'Что нужно / комментарий'}
                 <textarea
                   value={form.comment}
                   onChange={(e) => set('comment', e.target.value)}
                   rows={3}
                   style={modalFieldStyle({ marginTop: 4, resize: 'vertical' })}
-                  placeholder="Поставка бетона М200 B15…"
+                  placeholder={
+                    isTender
+                      ? 'Поставка бетона М200 B15…'
+                      : isSite
+                        ? 'Клиент оставил заявку на…'
+                        : 'Нужен бетон М300, 8 м³, завтра…'
+                  }
                 />
               </label>
             </div>
           </section>
 
           <section>
-            <h3 style={sectionTitle}>Исполнитель и соисполнители</h3>
+            <h3 style={sectionTitle}>
+              {isTender ? 'Исполнитель и соисполнители' : 'Исполнитель'}
+            </h3>
             <p style={{ margin: '6px 0 8px', fontSize: 12, color: '#64748B' }}>
-              Им придёт уведомление: «Вам необходимо взять лид в работу!»
+              {isTender
+                ? 'Им придёт уведомление: «Вам необходимо взять лид в работу!»'
+                : 'Если не указать — лид закрепится за вами.'}
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <label style={labelStyle}>
-                Ответственный исполнитель
+                {isTender ? 'Ответственный исполнитель' : 'Ответственный'}
                 <div style={{ marginTop: 4 }}>
                   <ModalSelect
                     value={form.assigned_to}
@@ -558,81 +707,96 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
                           : f.co_assignees,
                       }));
                     }}
-                    placeholder="Выберите сотрудника"
-                    options={employeeOptions}
+                    placeholder={isTender ? 'Выберите сотрудника' : 'Я (создатель)'}
+                    options={
+                      isTender
+                        ? employeeOptions
+                        : employeeOptions.map((o) =>
+                            o.value === ''
+                              ? { ...o, label: 'Я (создатель)', text: 'Я (создатель)' }
+                              : o,
+                          )
+                    }
                   />
                 </div>
               </label>
-              <label style={labelStyle}>
-                Добавить соисполнителя
-                <div style={{ marginTop: 4 }}>
-                  <ModalSelect
-                    value=""
-                    onChange={(v) => {
-                      if (!v) return;
-                      setForm((f) => ({
-                        ...f,
-                        co_assignees: f.co_assignees.includes(v)
-                          ? f.co_assignees
-                          : [...f.co_assignees, v],
-                      }));
-                    }}
-                    placeholder="Выберите соисполнителя"
-                    options={[
-                      { value: '', label: 'Выберите…', text: 'Выберите…' },
-                      ...coAddOptions,
-                    ]}
-                  />
-                </div>
-              </label>
-              {form.co_assignees.length > 0 && (
-                <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
-                  {form.co_assignees.map((id) => (
-                    <li
-                      key={id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 8,
-                        padding: '6px 0',
-                        borderBottom: '1px solid #1E293B',
-                        fontSize: 13,
-                        color: '#E2E8F0',
-                      }}
-                    >
-                      <span>{empLabel(id)}</span>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
+              {isTender && (
+                <>
+                  <label style={labelStyle}>
+                    Добавить соисполнителя
+                    <div style={{ marginTop: 4 }}>
+                      <ModalSelect
+                        value=""
+                        onChange={(v) => {
+                          if (!v) return;
                           setForm((f) => ({
                             ...f,
-                            co_assignees: f.co_assignees.filter((x) => x !== id),
-                          }))
-                        }
-                        style={{
-                          border: 'none',
-                          background: 'none',
-                          color: '#FCA5A5',
-                          cursor: 'pointer',
-                          fontSize: 12,
+                            co_assignees: f.co_assignees.includes(v)
+                              ? f.co_assignees
+                              : [...f.co_assignees, v],
+                          }));
                         }}
-                      >
-                        Убрать
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                        placeholder="Выберите соисполнителя"
+                        options={[
+                          { value: '', label: 'Выберите…', text: 'Выберите…' },
+                          ...coAddOptions,
+                        ]}
+                      />
+                    </div>
+                  </label>
+                  {form.co_assignees.length > 0 && (
+                    <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+                      {form.co_assignees.map((id) => (
+                        <li
+                          key={id}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 8,
+                            padding: '6px 0',
+                            borderBottom: '1px solid #1E293B',
+                            fontSize: 13,
+                            color: '#E2E8F0',
+                          }}
+                        >
+                          <span>{empLabel(id)}</span>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              setForm((f) => ({
+                                ...f,
+                                co_assignees: f.co_assignees.filter((x) => x !== id),
+                              }))
+                            }
+                            style={{
+                              border: 'none',
+                              background: 'none',
+                              color: '#FCA5A5',
+                              cursor: 'pointer',
+                              fontSize: 12,
+                            }}
+                          >
+                            Убрать
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
               )}
             </div>
           </section>
 
           <section>
-            <h3 style={sectionTitle}>Контракты и документы</h3>
+            <h3 style={sectionTitle}>
+              {isTender ? 'Контракты и документы' : 'Документы'}
+            </h3>
             <p style={{ margin: '6px 0 8px', fontSize: 12, color: '#64748B' }}>
-              PDF, Word, Excel, изображения · до {Math.round(LEAD_CONTRACT_MAX_BYTES / (1024 * 1024))} МБ
-              · до 10 файлов
+              {isTender
+                ? `PDF, Word, Excel, изображения · до ${Math.round(LEAD_CONTRACT_MAX_BYTES / (1024 * 1024))} МБ · до 10 файлов`
+                : 'Необязательно · PDF, Word, Excel, изображения'}
             </p>
             <label
               style={{
@@ -650,7 +814,7 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
               }}
             >
               <FileUp size={18} color="#FACC15" />
-              Выбрать файлы контрактов
+              {isTender ? 'Выбрать файлы контрактов' : 'Прикрепить файлы'}
               <input
                 type="file"
                 accept={LEAD_CONTRACT_ACCEPT}

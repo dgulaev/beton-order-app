@@ -62,3 +62,23 @@ export function useRealtimeDemand(
     },
   });
 }
+
+/** Desktop-тосты / бейдж меню при новом спросе (в т.ч. Авито). */
+export function useDemandChangeNotifications(options: {
+  enabled?: boolean;
+  onNewDemand?: (item: DemandItemRow) => void;
+}) {
+  return useRealtimeBroadcast({
+    topic: 'demand_items:all',
+    enabled: options?.enabled,
+    onInsert: (record) => {
+      const item = record as DemandItemRow;
+      if (item.status === 'ignored') return;
+      const raw =
+        item.raw_payload && typeof item.raw_payload === 'object' ? item.raw_payload : null;
+      // Спам в ленте Спроса есть, тост/бейдж не шумим.
+      if (raw?.likely_spam === true) return;
+      options.onNewDemand?.(item);
+    },
+  });
+}

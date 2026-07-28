@@ -9,6 +9,8 @@ export type ListingTemplate = {
   grade?: ConcreteGrade | string;
   /** Есть сохранённое переопределение в БД */
   is_custom?: boolean;
+  /** Ключ из дефолтного прайса (код/рецепты); иначе — пользовательский */
+  is_builtin?: boolean;
 };
 
 const ZONE = 'Брянск и область';
@@ -144,13 +146,16 @@ export function buildListingTemplates(): ListingTemplate[] {
   return buildDefaultListingTemplates();
 }
 
-function rowToTemplate(row: {
-  key: string;
-  title: string;
-  description: string;
-  price: number | string;
-  grade?: string | null;
-}): ListingTemplate {
+function rowToTemplate(
+  row: {
+    key: string;
+    title: string;
+    description: string;
+    price: number | string;
+    grade?: string | null;
+  },
+  opts?: { is_builtin?: boolean },
+): ListingTemplate {
   return {
     key: row.key,
     title: row.title,
@@ -158,6 +163,7 @@ function rowToTemplate(row: {
     price: Number(row.price),
     grade: row.grade || undefined,
     is_custom: true,
+    is_builtin: opts?.is_builtin === true,
   };
 }
 
@@ -195,22 +201,27 @@ export async function listListingTemplates(): Promise<ListTemplatesResult> {
     const missing =
       /does not exist|relation .* does not exist|Could not find the table/i.test(error.message);
     return {
-      templates: defaults.map((t) => ({ ...t, is_custom: false })),
+      templates: defaults.map((t) => ({ ...t, is_custom: false, is_builtin: true })),
       persistable: !missing,
       persistError: error.message,
     };
   }
 
-  const byKey = new Map((data || []).map((r) => [r.key, rowToTemplate(r)]));
+  const defaultKeys = new Set(defaults.map((d) => d.key));
+  const byKey = new Map(
+    (data || []).map((r) => [r.key, rowToTemplate(r, { is_builtin: defaultKeys.has(r.key) })]),
+  );
   const merged: ListingTemplate[] = defaults.map((d) => {
     const custom = byKey.get(d.key);
-    if (!custom) return { ...d, is_custom: false };
+    if (!custom) return { ...d, is_custom: false, is_builtin: true };
     byKey.delete(d.key);
-    return custom;
+    return { ...custom, is_builtin: true };
   });
 
   // Пользовательские ключи, которых нет в дефолтах
-  for (const extra of byKey.values()) merged.push(extra);
+  for (const extra of byKey.values()) {
+    merged.push({ ...extra, is_builtin: false, is_custom: true });
+  }
 
   return { templates: merged, persistable: true };
 }
@@ -257,18 +268,46 @@ export async function saveListingTemplate(input: SaveTemplateInput): Promise<Lis
     .single();
 
   if (error) throw new Error(error.message);
-  return rowToTemplate(data);
+  const listed = await listListingTemplates();
+  return listed.templates.find((t) => t.key === key) ?? rowToTemplate(data, { is_builtin: false });
 }
 
-/** Удалить переопределение — вернётся дефолт из кода/рецептов (если был). */
-export async function resetListingTemplate(key: string): Promise<ListingTemplate | null> {
+export type DeleteTemplateResult = {
+  /** Шаблон снова в списке (сброс к дефолту) */
+  template: ListingTemplate | null;
+  /** Полностью удалён пользовательский шаблон */
+  deleted: boolean;
+  /** Сброшено переопределение дефолта */
+  reset: boolean;
+};
+
+/**
+ * Удалить пользовательский шаблон или сбросить переопределение дефолта.
+ * Дефолтные ключи из прайса из списка не исчезают — только возвращаются к исходным текстам/цене.
+ */
+export async function deleteListingTemplate(key: string): Promise<DeleteTemplateResult> {
+  const trimmed = key.trim();
+  if (!trimmed) throw new Error('Укажите ключ шаблона');
+
+  const before = await getListingTemplate(trimmed);
+  if (!before) throw new Error('Шаблон не найден');
+
   const { error } = await supabaseAdmin
     .from('marketplace_listing_templates')
     .delete()
-    .eq('key', key);
+    .eq('key', trimmed);
 
   if (error) throw new Error(error.message);
 
-  const { templates } = await listListingTemplates();
-  return templates.find((t) => t.key === key) ?? null;
+  const after = await getListingTemplate(trimmed);
+  if (after) {
+    return { template: after, deleted: false, reset: true };
+  }
+  return { template: null, deleted: true, reset: false };
+}
+
+/** @deprecated используйте deleteListingTemplate */
+export async function resetListingTemplate(key: string): Promise<ListingTemplate | null> {
+  const result = await deleteListingTemplate(key);
+  return result.template;
 }
