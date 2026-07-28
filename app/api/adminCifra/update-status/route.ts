@@ -1,12 +1,15 @@
 // app/api/adminCifra/update-status/route.ts
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
+import { ADMIN_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 
 const supabaseUrl = process.env.SUPABASE_URL!;
-// Используем service role — route серверный, RLS bypass нужен для UPDATE
 const supabase = createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 
 export async function POST(request: NextRequest) {
+  const auth = await requireAdminCifraStaff(request, ADMIN_MUTATION_ROLES);
+  if (auth.error) return auth.error;
+
   try {
     const { orderId, status } = await request.json();
 
@@ -22,6 +25,13 @@ export async function POST(request: NextRequest) {
     if (error) {
       console.error('Supabase update error:', error);
       return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    try {
+      const { maybeAutoFulfillLeadByOrderId } = await import('@/lib/leadShipments');
+      await maybeAutoFulfillLeadByOrderId(Number(orderId));
+    } catch (e) {
+      console.error('maybeAutoFulfillLeadByOrderId after order status:', e);
     }
 
     return NextResponse.json({ success: true });

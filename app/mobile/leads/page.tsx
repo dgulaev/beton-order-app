@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Phone, Plus, Radar, RefreshCw, X } from 'lucide-react';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
@@ -9,6 +9,8 @@ import { canActOnAssignedLeadWork, parseIdList } from '@/lib/leadAssigneeIds';
 import { formatPhoneInput } from '@/lib/phone';
 import {
   canManagerRejectOrSpamLead,
+  formatLeadDateRu,
+  getLeadDateHints,
   isLeadWorkOpenToAll,
   LEAD_SOURCE_LABEL,
   LEAD_STATUS_LABEL,
@@ -26,6 +28,25 @@ import {
 import ProcessLeadModal from '@/app/adminCifra/leads/ProcessLeadModal';
 import MobileNewOrderModal from '../components/MobileNewOrderModal';
 import { useUserRole } from '../../providers/UserRoleProvider';
+
+const MOBILE_STATUS_FILTERS: Array<LeadStatus | ''> = [
+  '',
+  'new',
+  'in_progress',
+  'converted',
+  'fulfilled',
+  'rejected',
+  'spam',
+];
+
+type LeadShipmentsInfo = {
+  plan_m3: number | null;
+  ordered_m3: number;
+  shipped_m3: number;
+  remaining_m3: number | null;
+  percent: number | null;
+  orders: Array<{ order_id: number; shipped_m3: number; volume: number | null }>;
+};
 
 type Employee = {
   user_id: number;
@@ -88,8 +109,6 @@ const btnGhost: CSSProperties = {
   color: '#94A3B8',
 };
 
-const INBOX_STATUSES: LeadStatus[] = ['new', 'in_progress'];
-
 const EMPTY_FORM = {
   name: '',
   phone: '+7',
@@ -101,9 +120,10 @@ const EMPTY_FORM = {
 };
 
 export default function MobileLeadsPage() {
-  const { user } = useUserRole();
+  const { user, isAdmin: isAdminRole } = useUserRole();
   const userRole = user?.role;
   const userName = user?.full_name;
+  const isAdmin = isAdminRole || (userRole || '').toLowerCase() === 'admin';
   const allowTenderProcess = canProcessTenders(user);
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -117,6 +137,10 @@ export default function MobileLeadsPage() {
   const [processLead, setProcessLead] = useState<Lead | null>(null);
   const [sendingWorkId, setSendingWorkId] = useState<number | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [statusFilter, setStatusFilter] = useState<string>('new');
+  const [mineOnly, setMineOnly] = useState(() => !allowTenderProcess && !isAdmin);
+  const [shipmentsByLead, setShipmentsByLead] = useState<Record<number, LeadShipmentsInfo>>({});
+  const loadSeqRef = useRef(0);
 
   useEffect(() => {
     const raw = localStorage.getItem('userId');
@@ -139,31 +163,88 @@ export default function MobileLeadsPage() {
     })();
   }, [allowTenderProcess]);
 
+  const loadShipments = useCallback(async (leadList: Lead[]) => {
+    const ids = leadList
+      .filter((l) => l.status === 'converted' || l.status === 'fulfilled' || l.order_id != null)
+      .map((l) => l.id);
+    if (ids.length === 0) {
+      setShipmentsByLead({});
+      return;
+    }
+    const entries = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const res = await fetch(`/api/adminCifra/leads/${id}/shipments`, {
+            headers: adminCifraAuthHeaders(),
+          });
+          const json = await res.json();
+          if (!res.ok || !json.success) return null;
+          return [
+            id,
+            {
+              plan_m3: json.plan_m3 ?? null,
+              ordered_m3: json.ordered_m3 ?? 0,
+              shipped_m3: json.shipped_m3 ?? 0,
+              remaining_m3: json.remaining_m3 ?? null,
+              percent: json.percent ?? null,
+              orders: json.orders || [],
+            } as LeadShipmentsInfo,
+          ] as const;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    const map: Record<number, LeadShipmentsInfo> = {};
+    for (const row of entries) {
+      if (row) map[row[0]] = row[1];
+    }
+    setShipmentsByLead(map);
+  }, []);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     try {
-      const res = await fetch('/api/adminCifra/leads?limit=100', {
+      const qs = new URLSearchParams({ limit: mineOnly ? '300' : '100' });
+      if (statusFilter) qs.set('status', statusFilter);
+      if (mineOnly) qs.set('mine', '1');
+      const res = await fetch(`/api/adminCifra/leads?${qs}`, {
         headers: adminCifraAuthHeaders(),
       });
       const json = await res.json();
+      if (seq !== loadSeqRef.current) return;
       if (json.success) {
-        const list = (json.leads || []).filter((l: Lead) =>
-          INBOX_STATUSES.includes(l.status),
-        );
+        const list = (json.leads || []) as Lead[];
         setLeads(list);
+        void loadShipments(list);
       }
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
-  }, []);
+  }, [statusFilter, mineOnly, loadShipments]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  useRealtimeLeads(setLeads, { enabled: true, statusFilter: INBOX_STATUSES });
+  const statusFilterArr = useMemo(
+    () => (statusFilter ? [statusFilter as LeadStatus] : undefined),
+    [statusFilter],
+  );
 
-  const patchStatus = async (id: number, status: LeadStatus) => {
+  useRealtimeLeads(setLeads, {
+    enabled: true,
+    statusFilter: statusFilterArr,
+    mineOnly,
+    currentUserId,
+  });
+
+  const patchStatus = async (
+    id: number,
+    status: LeadStatus,
+    opts?: { keepInList?: boolean },
+  ) => {
     const res = await fetch(`/api/adminCifra/leads/${id}`, {
       method: 'PATCH',
       headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
@@ -174,7 +255,7 @@ export default function MobileLeadsPage() {
       alert(json.error || 'Не удалось обновить статус');
       return false;
     }
-    if (!INBOX_STATUSES.includes(status)) {
+    if (statusFilter && status !== statusFilter && !opts?.keepInList) {
       setLeads((prev) => prev.filter((l) => l.id !== id));
     } else {
       setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, status } : l)));
@@ -184,10 +265,33 @@ export default function MobileLeadsPage() {
 
   const openConvert = async (lead: Lead) => {
     setActiveLeadId(lead.id);
+    let working = lead;
     if (lead.status === 'new') {
-      await patchStatus(lead.id, 'in_progress');
+      const ok = await patchStatus(lead.id, 'in_progress', { keepInList: true });
+      if (!ok) {
+        setActiveLeadId(null);
+        return;
+      }
+      working = { ...lead, status: 'in_progress' };
     }
-    setInitialData(leadToOrderInitialData(lead));
+    let remaining: number | null = null;
+    if (working.status === 'converted' || working.order_id != null) {
+      try {
+        const res = await fetch(`/api/adminCifra/leads/${working.id}/shipments`, {
+          headers: adminCifraAuthHeaders(),
+        });
+        const json = await res.json();
+        if (res.ok && json.success && json.plan_m3 != null) {
+          remaining =
+            json.remaining_m3 != null
+              ? Math.max(0, Number(json.remaining_m3))
+              : Math.max(0, Number(json.plan_m3) - Number(json.ordered_m3 ?? json.shipped_m3 ?? 0));
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    setInitialData(leadToOrderInitialData(working, { remainingVolumeM3: remaining }));
     setShowModal(true);
   };
 
@@ -313,10 +417,44 @@ export default function MobileLeadsPage() {
         </div>
       </div>
 
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+        {MOBILE_STATUS_FILTERS.map((s) => (
+          <button
+            key={s || 'all'}
+            type="button"
+            onClick={() => setStatusFilter(s)}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 8,
+              fontSize: 12,
+              color: '#E2E8F0',
+              border: statusFilter === s ? '1px solid #60A5FA' : '1px solid #334155',
+              background: statusFilter === s ? '#1E3A5F' : '#0F172A',
+            }}
+          >
+            {s ? LEAD_STATUS_LABEL[s] : 'Все'}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setMineOnly((v) => !v)}
+          style={{
+            padding: '6px 10px',
+            borderRadius: 8,
+            fontSize: 12,
+            border: mineOnly ? '1px solid #FACC15' : '1px solid #334155',
+            background: mineOnly ? 'rgba(234, 179, 8, 0.2)' : '#0F172A',
+            color: mineOnly ? '#FEF08A' : '#E2E8F0',
+          }}
+        >
+          Мои
+        </button>
+      </div>
+
       {loading && <p style={{ color: '#94A3B8' }}>Загрузка…</p>}
       {!loading && leads.length === 0 && (
         <div style={volumeCardSoftStyle({ padding: 18, color: '#94A3B8' })}>
-          Новых лидов нет. Можно создать вручную кнопкой «+».
+          Лидов нет. Можно создать вручную кнопкой «+».
         </div>
       )}
 
@@ -336,6 +474,17 @@ export default function MobileLeadsPage() {
           const coIds = parseIdList(payload?.co_assignees).filter(
             (id) => id !== lead.assigned_to,
           );
+          const dateHints = getLeadDateHints(lead);
+          const shipments = shipmentsByLead[lead.id];
+          const canCreateOrder =
+            canWork &&
+            lead.status !== 'spam' &&
+            lead.status !== 'rejected' &&
+            lead.status !== 'fulfilled';
+          const canMarkFulfilled =
+            canWork &&
+            (lead.status === 'converted' ||
+              (lead.status === 'in_progress' && lead.order_id != null));
 
           return (
           <div
@@ -393,7 +542,78 @@ export default function MobileLeadsPage() {
                   <Phone size={12} /> {lead.phone}
                 </a>
               )}
+              {lead.volume_m3 != null && <span>{lead.volume_m3} м³</span>}
+              {dateHints.submissionDeadline && (
+                <span style={{ color: '#94A3B8', fontWeight: 500 }}>
+                  Подача до: {formatLeadDateRu(dateHints.submissionDeadline)}
+                </span>
+              )}
+              {dateHints.deliveryDate && (
+                <span style={{ color: dateHints.deliveryOverdue ? '#FCA5A5' : '#FDE68A', fontWeight: dateHints.deliveryOverdue ? 700 : 500 }}>
+                  Поставка: {formatLeadDateRu(dateHints.deliveryDate)}
+                  {dateHints.deliveryOverdue ? ' · просрочена' : ''}
+                </span>
+              )}
             </div>
+
+            {shipments && (shipments.orders.length > 0 || shipments.plan_m3 != null) && (
+              <div
+                style={{
+                  marginBottom: 8,
+                  padding: 8,
+                  borderRadius: 8,
+                  background: 'rgba(15, 23, 42, 0.7)',
+                  border: '1px solid #334155',
+                  fontSize: 12,
+                  color: '#CBD5E1',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span>
+                    Отгрузка: {shipments.shipped_m3}
+                    {shipments.plan_m3 != null ? ` / ${shipments.plan_m3}` : ''} м³
+                    {shipments.plan_m3 != null
+                      ? ` · в заявках ${shipments.ordered_m3 ?? 0}`
+                      : ''}
+                    {shipments.remaining_m3 != null
+                      ? ` · остаток ${shipments.remaining_m3}`
+                      : ''}
+                  </span>
+                  {shipments.percent != null && (
+                    <span style={{ color: '#86EFAC' }}>{shipments.percent}%</span>
+                  )}
+                </div>
+                <div style={{ height: 6, borderRadius: 999, background: '#1E293B', overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      height: '100%',
+                      width: `${Math.min(100, shipments.percent ?? 0)}%`,
+                      background: (shipments.percent ?? 0) >= 100 ? '#22C55E' : '#2563EB',
+                    }}
+                  />
+                </div>
+                {shipments.orders.length > 0 && (
+                  <div style={{ marginTop: 6, color: '#94A3B8' }}>
+                    {shipments.orders.map((o) => (
+                      <Link
+                        key={o.order_id}
+                        href={`/adminCifra/zayavki?orderId=${o.order_id}`}
+                        style={{
+                          display: 'block',
+                          color: '#93C5FD',
+                          textDecoration: 'none',
+                          fontWeight: 600,
+                          padding: '2px 0',
+                        }}
+                      >
+                        #{o.order_id}: {o.shipped_m3}
+                        {o.volume != null ? ` / ${o.volume}` : ''} м³ →
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {(() => {
               const assigneeName = String(payload?.assigned_to_name ?? '').trim();
               const coNames = Array.isArray(payload?.co_assignee_names)
@@ -547,7 +767,7 @@ export default function MobileLeadsPage() {
                 alignItems: 'stretch',
               }}
             >
-              {allowTenderProcess && lead.status !== 'converted' && (
+              {allowTenderProcess && lead.status !== 'fulfilled' && (
                 <button
                   type="button"
                   onClick={() => setProcessLead(lead)}
@@ -580,13 +800,22 @@ export default function MobileLeadsPage() {
                     В работу
                   </button>
                 )}
-              {canWork && lead.status !== 'converted' && lead.status !== 'spam' && (
+              {canCreateOrder && (
                 <button
                   type="button"
                   onClick={() => void openConvert(lead)}
                   style={btnBlue}
                 >
-                  Заказ
+                  {lead.status === 'converted' || lead.order_id != null ? 'Ещё' : 'Заказ'}
+                </button>
+              )}
+              {canMarkFulfilled && (
+                <button
+                  type="button"
+                  onClick={() => void patchStatus(lead.id, 'fulfilled')}
+                  style={{ ...btnBase, background: '#16A34A', color: '#fff' }}
+                >
+                  Исполнен
                 </button>
               )}
               {(etpUrl || lead.chat_url) && (
@@ -607,6 +836,7 @@ export default function MobileLeadsPage() {
               {canReject &&
                 lead.status !== 'rejected' &&
                 lead.status !== 'converted' &&
+                lead.status !== 'fulfilled' &&
                 lead.status !== 'spam' && (
                   <button
                     type="button"
@@ -616,13 +846,44 @@ export default function MobileLeadsPage() {
                     Отказ
                   </button>
                 )}
-              {canReject && lead.status !== 'spam' && lead.status !== 'converted' && (
+              {canReject &&
+                lead.status !== 'spam' &&
+                lead.status !== 'converted' &&
+                lead.status !== 'fulfilled' && (
                 <button
                   type="button"
                   onClick={() => void patchStatus(lead.id, 'spam')}
                   style={btnGhost}
                 >
                   Спам
+                </button>
+              )}
+              {allowTenderProcess &&
+                (lead.status === 'rejected' || lead.status === 'spam') && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void patchStatus(lead.id, 'new')}
+                    style={{ ...btnBase, background: 'rgba(234,179,8,0.25)', color: '#FEF08A', border: '1px solid #FACC15' }}
+                  >
+                    В новые
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void patchStatus(lead.id, 'in_progress')}
+                    style={{ ...btnBase, background: 'rgba(37,99,235,0.25)', color: '#BFDBFE', border: '1px solid #3B82F6' }}
+                  >
+                    В работу
+                  </button>
+                </>
+              )}
+              {allowTenderProcess && lead.status === 'fulfilled' && (
+                <button
+                  type="button"
+                  onClick={() => void patchStatus(lead.id, 'converted')}
+                  style={{ ...btnBase, background: 'rgba(37,99,235,0.25)', color: '#BFDBFE', border: '1px solid #3B82F6' }}
+                >
+                  В отгрузку
                 </button>
               )}
             </div>
@@ -636,9 +897,11 @@ export default function MobileLeadsPage() {
         lead={processLead}
         onClose={() => setProcessLead(null)}
         onSaved={(updated) => {
-          setLeads((prev) =>
-            prev.map((l) => (l.id === updated.id ? { ...l, ...updated } : l)),
-          );
+          setLeads((prev) => {
+            const next = prev.map((l) => (l.id === updated.id ? { ...l, ...updated } : l));
+            void loadShipments(next);
+            return next;
+          });
           setProcessLead(null);
         }}
       />
@@ -652,8 +915,15 @@ export default function MobileLeadsPage() {
         }}
         onSuccess={(_order, meta) => {
           setShowModal(false);
-          if (activeLeadId && meta?.leadConverted && !meta?.warning) {
-            setLeads((prev) => prev.filter((l) => l.id !== activeLeadId));
+          if (activeLeadId && (meta?.leadConverted || meta?.leadOrderAdded) && !meta?.warning) {
+            setLeads((prev) => {
+              if (statusFilter && statusFilter !== 'converted' && statusFilter !== '') {
+                return prev.filter((l) => l.id !== activeLeadId);
+              }
+              return prev.map((l) =>
+                l.id === activeLeadId ? { ...l, status: 'converted' as LeadStatus } : l,
+              );
+            });
           }
           setActiveLeadId(null);
           void load();

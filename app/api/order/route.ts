@@ -11,6 +11,7 @@ import {
 } from '@/lib/clientUsers';
 import { canProcessTenders } from '@/lib/demandProcessAccess';
 import { canActOnAssignedLeadWork } from '@/lib/leadAssigneeIds';
+import { getLeadShipmentsSummary } from '@/lib/leadShipments';
 import { phonesMatch, toStoredPhone } from '@/lib/phone';
 import { upsertLead } from '@/lib/leadService';
 import { writeLeadHistory } from '@/lib/leadHistory';
@@ -349,7 +350,7 @@ export async function POST(request: NextRequest) {
     const leadSource = payload.lead_source || payload.leadSource || null;
     const externalRef = payload.external_ref || payload.externalRef || null;
 
-    // Защита от повторной конверсии: один лид → максимум один заказ
+    // Связь с лидом (1:N заявок на один lead_id)
     if (leadId) {
       const { data: existingLead, error: leadFetchError } = await supabase
         .from('leads')
@@ -370,16 +371,21 @@ export async function POST(request: NextRequest) {
           { status: 400 },
         );
       }
-      if (existingLead.status === 'converted' || existingLead.order_id) {
+      // 1 лид → N заявок: блокируем только отказ/спам/исполнен.
+      if (
+        existingLead.status === 'rejected' ||
+        existingLead.status === 'spam' ||
+        existingLead.status === 'fulfilled'
+      ) {
         return NextResponse.json(
           {
             success: false,
-            message: existingLead.order_id
-              ? `Лид уже конвертирован в заявку #${existingLead.order_id}`
-              : 'Лид уже конвертирован в заявку',
-            orderId: existingLead.order_id ?? undefined,
+            message:
+              existingLead.status === 'fulfilled'
+                ? 'Лид уже исполнен — новую заявку создать нельзя'
+                : `Нельзя создать заявку из лида со статусом «${existingLead.status}»`,
           },
-          { status: 409 },
+          { status: 400 },
         );
       }
 
@@ -397,11 +403,34 @@ export async function POST(request: NextRequest) {
           { status: 403 },
         );
       }
-      if (existingLead.status === 'spam') {
-        return NextResponse.json(
-          { success: false, message: 'Нельзя создать заявку из лида со статусом «Спам»' },
-          { status: 400 },
-        );
+
+      // Не даём задвоить план: остаток = plan − уже заказанный volume по заявкам.
+      const volumeNum = parseFloat(String(volume));
+      if (Number.isFinite(volumeNum) && volumeNum > 0) {
+        const summary = await getLeadShipmentsSummary(leadId);
+        if (!summary) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: `Не удалось проверить остаток объёма по лиду #${leadId}`,
+            },
+            { status: 500 },
+          );
+        }
+        if (summary.plan_m3 != null && summary.remaining_m3 != null) {
+          if (volumeNum > summary.remaining_m3 + 0.05) {
+            return NextResponse.json(
+              {
+                success: false,
+                message:
+                  summary.remaining_m3 <= 0
+                    ? `По лиду #${leadId} план ${summary.plan_m3} м³ уже полностью заказан (${summary.ordered_m3} м³)`
+                    : `По лиду #${leadId} осталось заказать не больше ${summary.remaining_m3} м³ (план ${summary.plan_m3}, уже в заявках ${summary.ordered_m3})`,
+              },
+              { status: 400 },
+            );
+          }
+        }
       }
     }
 
@@ -443,71 +472,119 @@ export async function POST(request: NextRequest) {
 
     if (insertError) {
       console.error('Insert order error:', insertError);
-      // Unique index orders_lead_id_unique — гонка двойной конверсии
-      if (insertError.code === '23505' && leadId) {
-        return NextResponse.json(
-          {
-            success: false,
-            message: `Лид #${leadId} уже конвертирован в другую заявку`,
-          },
-          { status: 409 },
-        );
-      }
       return NextResponse.json({ success: false, message: 'Ошибка создания заказа в базе' }, { status: 500 });
     }
 
     const orderId = orderData.id;
     console.log(`✅ Заказ #${orderId} успешно создан | created_by: ${createdByStaff} | curator: ${curatorName}`);
 
-    // Конверсия лида → заказ (если заявка создана из inbox).
-    // Не делаем early return: история/рефералка ниже должны выполниться всегда.
+    // Связь лид → заявка (1:N). Первая заявка ставит converted + order_id;
+    // следующие только пишут историю и bump updated_at (для realtime прогресса).
     let leadWarning: string | null = null;
     let leadConverted = false;
+    let leadOrderAdded = false;
     if (leadId && orderId) {
-      const { data: convertedLead, error: leadUpdateError } = await supabase
+      const { data: leadBefore } = await supabase
         .from('leads')
-        .update({ status: 'converted', order_id: orderId })
+        .select('id, status, order_id')
         .eq('id', leadId)
-        .is('order_id', null)
-        .select('id')
         .maybeSingle();
 
-      if (leadUpdateError) {
-        console.error('Ошибка обновления лида после заказа:', leadUpdateError);
-        leadWarning = 'Заявка создана, но лид не помечен как converted. Обнови статус лида вручную.';
-        // Снимаем связь, чтобы не висел «чужой» lead_id без converted
-        await supabase.from('orders').update({ lead_id: null }).eq('id', orderId);
+      const creatorName = payload.userName && payload.userName !== 'Сотрудник'
+        ? payload.userName
+        : (curatorName || (isFromAdmin ? 'Администратор' : 'Клиент'));
+      const creatorRole = payload.userRole || (isFromAdmin ? 'admin' : 'client');
+      const creatorUserIdRaw = payload.userId ?? payload.user_id ?? null;
+      const creatorUserId =
+        creatorUserIdRaw != null && Number.isFinite(Number(creatorUserIdRaw))
+          ? Number(creatorUserIdRaw)
+          : null;
+      const nowIso = new Date().toISOString();
+
+      if (!leadBefore) {
+        leadWarning = 'Заявка создана, но лид не найден для обновления статуса.';
+      } else if (
+        leadBefore.status === 'fulfilled' ||
+        leadBefore.status === 'rejected' ||
+        leadBefore.status === 'spam'
+      ) {
+        // Гонка: между check и insert лид успели закрыть — отвязываем.
+        await supabase
+          .from('orders')
+          .update({ lead_id: null, lead_source: null, external_ref: null })
+          .eq('id', orderId);
         leadId = null;
-      } else if (!convertedLead) {
-        // Гонка: другой запрос уже успел привязать лид
-        console.warn(`Лид #${leadId} уже был конвертирован параллельно; отвязываем от заказа #${orderId}`);
-        leadWarning = 'Заявка создана, но лид уже был конвертирован в другую заявку. Связь с лидом снята.';
-        await supabase.from('orders').update({ lead_id: null }).eq('id', orderId);
-        leadId = null;
-      } else {
-        leadConverted = true;
-        const convertedLeadId = leadId;
-        const creatorName = payload.userName && payload.userName !== 'Сотрудник'
-          ? payload.userName
-          : (curatorName || (isFromAdmin ? 'Администратор' : 'Клиент'));
-        const creatorRole = payload.userRole || (isFromAdmin ? 'admin' : 'client');
-        const creatorUserIdRaw = payload.userId ?? payload.user_id ?? null;
-        const creatorUserId =
-          creatorUserIdRaw != null && Number.isFinite(Number(creatorUserIdRaw))
-            ? Number(creatorUserIdRaw)
-            : null;
-        if (convertedLeadId) {
+        leadWarning =
+          leadBefore.status === 'fulfilled'
+            ? 'Заявка создана, но лид уже исполнен — связь с лидом снята.'
+            : 'Заявка создана, но лид закрыт — связь с лидом снята.';
+      } else if (!leadBefore.order_id) {
+        const { data: convertedLead, error: leadUpdateError } = await supabase
+          .from('leads')
+          .update({ status: 'converted', order_id: orderId, updated_at: nowIso })
+          .eq('id', leadId)
+          .is('order_id', null)
+          .in('status', ['new', 'in_progress'])
+          .select('id')
+          .maybeSingle();
+
+        if (leadUpdateError) {
+          console.error('Ошибка обновления лида после заказа:', leadUpdateError);
+          leadWarning = 'Заявка создана, но лид не помечен как converted. Обнови статус лида вручную.';
+        } else if (convertedLead) {
+          leadConverted = true;
           await writeLeadHistory({
-            lead_id: convertedLeadId,
+            lead_id: leadId,
             action: `Создал заказ #${orderId}`,
             user_id: creatorUserId,
             user_name: creatorName,
             user_role: creatorRole,
             field_name: 'status',
-            old_value: 'in_progress',
+            old_value: leadBefore.status,
+            new_value: `converted:#${orderId}`,
+          });
+        } else {
+          // Гонка: другая заявка уже стала первой — наша остаётся привязанной
+          leadOrderAdded = true;
+          await supabase
+            .from('leads')
+            .update({ updated_at: nowIso })
+            .eq('id', leadId)
+            .in('status', ['converted', 'in_progress', 'new']);
+          await writeLeadHistory({
+            lead_id: leadId,
+            action: `Создал заказ #${orderId}`,
+            user_id: creatorUserId,
+            user_name: creatorName,
+            user_role: creatorRole,
+            field_name: 'status',
+            old_value: 'converted',
             new_value: `converted:#${orderId}`,
           });
         }
+      } else {
+        // Доп. заявка по уже конвертированному лиду
+        if (leadBefore.status === 'new' || leadBefore.status === 'in_progress') {
+          await supabase
+            .from('leads')
+            .update({ status: 'converted', updated_at: nowIso })
+            .eq('id', leadId)
+            .in('status', ['new', 'in_progress']);
+          leadConverted = leadBefore.status !== 'converted';
+        } else {
+          await supabase.from('leads').update({ updated_at: nowIso }).eq('id', leadId);
+        }
+        leadOrderAdded = true;
+        await writeLeadHistory({
+          lead_id: leadId,
+          action: `Создал заказ #${orderId}`,
+          user_id: creatorUserId,
+          user_name: creatorName,
+          user_role: creatorRole,
+          field_name: 'status',
+          old_value: leadBefore.status === 'converted' ? 'converted' : leadBefore.status,
+          new_value: `converted:#${orderId}`,
+        });
       }
     }
 
@@ -570,6 +647,7 @@ export async function POST(request: NextRequest) {
       message: 'Заявка успешно создана',
       ...(leadWarning ? { warning: leadWarning } : {}),
       leadConverted,
+      leadOrderAdded,
     });
 
   } catch (error: any) {

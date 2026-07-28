@@ -3,6 +3,7 @@ import {
   LEAD_CONTRACTS_BUCKET,
   type LeadContract,
 } from '@/lib/leadContracts';
+import { safeStorageFileName } from '@/lib/safeStorageFileName';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 export async function ensureLeadContractsBucket(): Promise<void> {
@@ -27,7 +28,7 @@ export async function uploadLeadContractFile(opts: {
 }): Promise<LeadContract> {
   await ensureLeadContractsBucket();
 
-  const safeName = opts.fileName.replace(/[^\w.\-а-яА-ЯёЁ ]+/gi, '_').slice(0, 120);
+  const safeName = safeStorageFileName(opts.fileName);
   const storagePath = `${opts.leadId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
 
   const buffer = Buffer.from(await opts.file.arrayBuffer());

@@ -202,10 +202,18 @@ export default function MobileOrderDetailModal({
     }
   };
 
-  const handleCopyOrder = () => {
+  const handleCopyOrder = async () => {
+    const { resolveLeadLinkForOrderCopy } = await import('@/lib/leadOrderCopy');
+    const leadLink = await resolveLeadLinkForOrderCopy({
+      leadId: editedOrder.lead_id ?? editedOrder.leadId ?? null,
+      leadSource: editedOrder.lead_source ?? editedOrder.leadSource ?? null,
+      externalRef: editedOrder.external_ref ?? editedOrder.externalRef ?? null,
+      volume: editedOrder.volume ?? null,
+    });
+
     const copiedData = {
       grade: editedOrder.grade,
-      volume: editedOrder.volume,
+      volume: leadLink.volume != null ? leadLink.volume : editedOrder.volume,
       deliveryDate: editedOrder.delivery_date || editedOrder.deliveryDate,
       deliveryTime: editedOrder.delivery_time || editedOrder.deliveryTime,
       address: editedOrder.address,
@@ -215,6 +223,9 @@ export default function MobileOrderDetailModal({
       phone: editedOrder.phone || '',
       inn: editedOrder.inn || '',
       comment: editedOrder.comment || '',
+      lead_id: leadLink.lead_id,
+      lead_source: leadLink.lead_source,
+      external_ref: leadLink.external_ref,
     };
     onClose();
     if (onCopyOrder) onCopyOrder(copiedData);

@@ -15,6 +15,7 @@ import OperatorStatsDetailModal, {
 import { formatPhoneDisplay, formatPhoneInput } from '@/lib/phone';
 import { adminCifraFetch } from '@/lib/adminCifraFetch';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { formatLeadDateRu } from '@/lib/leads';
 import { Users } from 'lucide-react';
 import { CARD_BORDER, CARD_VOLUME_SOFT, modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import { appConfirm } from '../components/appDialog';
@@ -759,6 +760,15 @@ const handleSelectProfile = async (profile: any) => {
         // === НОВЫЕ ДИНАМИЧЕСКИЕ МЕТРИКИ ===
         selected.new_clients_30d = data.new_clients_30d ?? 0;
         selected.repeat_order_percent = data.repeat_order_percent ?? 0;
+
+        // Лиды сотрудника
+        selected.leads_total = data.leads_total ?? 0;
+        selected.leads_open = data.leads_open ?? 0;
+        selected.leads_overdue = data.leads_overdue ?? 0;
+        selected.leads_volume_m3 = data.leads_volume_m3 ?? 0;
+        selected.leads_volume_all_m3 = data.leads_volume_all_m3 ?? 0;
+        selected.leads_by_status = data.leads_by_status || {};
+        selected.leads = Array.isArray(data.leads) ? data.leads : [];
 
         if (data.clients && Array.isArray(data.clients)) {
           // Убираем дубликаты + сортируем
@@ -1649,12 +1659,20 @@ const shareOrder = (order: any) => {
 };
 
 // ==================== ДУБЛИРОВАНИЕ ЗАКАЗА ====================
-const duplicateOrder = (order: any) => {
+const duplicateOrder = async (order: any) => {
   if (!order) return alert('Нет данных заказа');
 
   const clientData = selectedProfile?.clients?.[0] || selectedProfile || {};
 
   const today = new Date().toISOString().split('T')[0]; // ← сегодняшняя дата
+
+  const { resolveLeadLinkForOrderCopy } = await import('@/lib/leadOrderCopy');
+  const leadLink = await resolveLeadLinkForOrderCopy({
+    leadId: order.lead_id ?? order.leadId ?? null,
+    leadSource: order.lead_source ?? order.leadSource ?? null,
+    externalRef: order.external_ref ?? order.externalRef ?? null,
+    volume: order.volume ?? null,
+  });
 
   const duplicated = {
     id: undefined,
@@ -1672,7 +1690,7 @@ const duplicateOrder = (order: any) => {
 
     // === ДАННЫЕ ЗАКАЗА ===
     grade: order.grade || 'М300',
-    volume: order.volume || '',
+    volume: leadLink.volume != null ? leadLink.volume : (order.volume || ''),
     
     // ←←← ИСПРАВЛЕНИЕ: всегда сегодняшняя дата при дублировании
     delivery_date: today,
@@ -1685,6 +1703,9 @@ const duplicateOrder = (order: any) => {
       : `Копия заказа #${order.id}`,
 
     customerType: order.customer_type?.includes('Юрид') || order.customerType === 'legal' ? 'legal' : 'physical',
+    lead_id: leadLink.lead_id,
+    lead_source: leadLink.lead_source,
+    external_ref: leadLink.external_ref,
   };
 
   console.log('📋 Дублируем заказ → Дата доставки установлена на сегодня:', today);
@@ -3245,6 +3266,158 @@ const changeStaffPassword = async (staffMember: any) => {
     </div>
   </div>
 )}
+
+{/* ==================== ЛИДЫ СОТРУДНИКА ==================== */}
+{selectedProfile.isStaff && (selectedProfile.leads_total > 0) && (() => {
+  const byStatus = selectedProfile.leads_by_status || {};
+  const openLeads = Array.isArray(selectedProfile.leads) ? selectedProfile.leads : [];
+  const statusChips: Array<{ key: string; label: string; color: string }> = [
+    { key: 'new', label: 'Новые', color: '#60A5FA' },
+    { key: 'in_progress', label: 'В работе', color: '#FBBF24' },
+    { key: 'converted', label: 'В отгрузке', color: '#A78BFA' },
+    { key: 'fulfilled', label: 'Исполнены', color: '#34D399' },
+    { key: 'rejected', label: 'Отказ', color: '#F87171' },
+  ];
+  const roleLabel = (role: string) =>
+    role === 'assignee' ? 'исполнитель' : role === 'co_assignee' ? 'соисполнитель' : 'создал';
+
+  return (
+    <div style={{ marginBottom: '16px', flexShrink: 0 }}>
+      <h3 style={{ marginBottom: '10px', color: '#94A3B8', fontSize: '15px' }}>
+        Лиды ({selectedProfile.leads_total})
+      </h3>
+
+      <div style={volumeCardSoftStyle({
+        borderRadius: 16,
+        padding: '16px',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(2, 1fr)',
+        gap: '12px',
+        marginBottom: '8px',
+      })}>
+        <div>
+          <div style={{ fontSize: '26px', fontWeight: '700', color: '#60A5FA' }}>
+            {selectedProfile.leads_open ?? 0}
+          </div>
+          <div style={{ fontSize: '13px', color: '#94A3B8' }}>открытых</div>
+        </div>
+        <div>
+          <div style={{
+            fontSize: '26px',
+            fontWeight: '700',
+            color: (selectedProfile.leads_overdue ?? 0) > 0 ? '#F87171' : '#94A3B8',
+          }}>
+            {selectedProfile.leads_overdue ?? 0}
+          </div>
+          <div style={{ fontSize: '13px', color: '#94A3B8' }}>просрочена поставка</div>
+        </div>
+        <div>
+          <div style={{ fontSize: '26px', fontWeight: '700', color: '#FBBF24' }}>
+            {selectedProfile.leads_volume_m3 ?? 0}
+          </div>
+          <div style={{ fontSize: '13px', color: '#94A3B8' }}>м³ в открытых</div>
+        </div>
+        <div>
+          <div style={{ fontSize: '26px', fontWeight: '700', color: '#34D399' }}>
+            {byStatus.fulfilled ?? 0}
+          </div>
+          <div style={{ fontSize: '13px', color: '#94A3B8' }}>исполнено</div>
+        </div>
+      </div>
+
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '6px',
+        marginBottom: openLeads.length > 0 ? '10px' : 0,
+      }}>
+        {statusChips
+          .filter((c) => (byStatus[c.key] ?? 0) > 0)
+          .map((c) => (
+            <div
+              key={c.key}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 999,
+                background: 'rgba(37, 51, 74, 0.9)',
+                border: `1px solid ${c.color}55`,
+                color: c.color,
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              {c.label}: {byStatus[c.key]}
+            </div>
+          ))}
+      </div>
+
+      {openLeads.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: 280, overflowY: 'auto' }} className="scroll-hidden">
+          {openLeads.map((lead: any) => (
+            <a
+              key={lead.id}
+              href={`/adminCifra/leads?leadId=${lead.id}`}
+              style={{
+                ...volumeCardSoftStyle({
+                  padding: '12px 14px',
+                  borderRadius: 12,
+                  display: 'block',
+                  textDecoration: 'none',
+                  color: 'inherit',
+                  border: lead.overdue ? '1px solid rgba(248, 113, 113, 0.45)' : undefined,
+                }),
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, lineHeight: 1.3 }}>
+                    {lead.title}
+                  </div>
+                  <div style={{ color: '#94A3B8', fontSize: 12.5, marginTop: 4 }}>
+                    {lead.status_label}
+                    {' · '}
+                    {lead.source_label}
+                    {' · '}
+                    {roleLabel(lead.role)}
+                  </div>
+                  {(lead.submission_deadline || lead.deadline) && (
+                    <div style={{ marginTop: 4, fontSize: 12.5, color: '#94A3B8', fontWeight: 500 }}>
+                      Подача до: {formatLeadDateRu(lead.submission_deadline || lead.deadline)}
+                    </div>
+                  )}
+                  {lead.delivery_date && (
+                    <div style={{
+                      marginTop: 2,
+                      fontSize: 12.5,
+                      color: lead.overdue ? '#FCA5A5' : '#FDE68A',
+                      fontWeight: lead.overdue ? 700 : 500,
+                    }}>
+                      Поставка: {formatLeadDateRu(lead.delivery_date)}
+                      {lead.overdue ? ' · просрочена' : ''}
+                    </div>
+                  )}
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  {lead.volume_m3 != null ? (
+                    <div style={{ color: '#60A5FA', fontWeight: 700, fontSize: 15 }}>
+                      {lead.volume_m3} м³
+                    </div>
+                  ) : lead.nmck != null ? (
+                    <div style={{ color: '#A78BFA', fontWeight: 700, fontSize: 13 }}>
+                      {Math.round(lead.nmck).toLocaleString('ru-RU')} ₽
+                    </div>
+                  ) : (
+                    <div style={{ color: '#64748B', fontSize: 13 }}>—</div>
+                  )}
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+})()}
 
 {/* Список клиентов — растягивается до низа бокового окна */}
 {selectedProfile.clients && selectedProfile.clients.length > 0 ? (

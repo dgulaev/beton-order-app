@@ -29,10 +29,37 @@ function numOrNull(v: unknown): number | null {
 
 type Ctx = { params: Promise<{ id: string }> };
 
-const LOCKED_FOR_NON_ADMIN: LeadStatus[] = ['rejected', 'spam'];
+const LOCKED_FOR_NON_ADMIN: LeadStatus[] = ['rejected', 'spam', 'fulfilled'];
 
 function asPayload(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' ? { ...(raw as Record<string, unknown>) } : {};
+}
+
+export async function GET(request: NextRequest, context: Ctx) {
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
+  if (auth.error) return auth.error;
+
+  const { id: idRaw } = await context.params;
+  const id = Number(idRaw);
+  if (!Number.isFinite(id) || id <= 0) {
+    return NextResponse.json({ success: false, error: 'Некорректный id' }, { status: 400 });
+  }
+
+  const { data: lead, error } = await supabaseAdmin
+    .from('leads')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[leads GET id]', error);
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+  if (!lead) {
+    return NextResponse.json({ success: false, error: 'Лид не найден' }, { status: 404 });
+  }
+
+  return NextResponse.json({ success: true, lead });
 }
 
 export async function PATCH(request: NextRequest, context: Ctx) {
@@ -57,13 +84,6 @@ export async function PATCH(request: NextRequest, context: Ctx) {
         { status: 400 },
       );
     }
-    if (body.status === 'converted') {
-      return NextResponse.json(
-        { success: false, error: 'Статус «В заказ» выставляется только при создании заявки' },
-        { status: 400 },
-      );
-    }
-
     const { data: existing, error: existingError } = await supabaseAdmin
       .from('leads')
       .select('id, status, order_id, assigned_to, raw_payload, raw_text, source')
@@ -82,19 +102,51 @@ export async function PATCH(request: NextRequest, context: Ctx) {
     let coChanged = false;
     let coNamesForHistory: string | null = null;
 
+    // «В отгрузке» вручную — только reopen из fulfilled (админ/торги).
+    if (body.status === 'converted' && body.status !== existing.status) {
+      if (existing.status !== 'fulfilled' || !canProcessTenders(auth.user)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              existing.status === 'fulfilled'
+                ? 'Вернуть в отгрузку могут админ и специалист по торгам'
+                : 'Статус «В отгрузке» выставляется при создании заявки',
+          },
+          { status: existing.status === 'fulfilled' ? 403 : 400 },
+        );
+      }
+    }
+
+    // Из converted нельзя уйти в произвольный статус — только fulfilled.
     if (
       existing.status === 'converted' &&
       body.status != null &&
-      body.status !== 'converted'
+      body.status !== 'converted' &&
+      body.status !== 'fulfilled'
     ) {
       return NextResponse.json(
         {
           success: false,
-          error: existing.order_id
-            ? `Лид уже в заказе #${existing.order_id} — статус менять нельзя`
-            : 'Лид уже конвертирован — статус менять нельзя',
+          error: 'Лид в отгрузке — можно только отметить «Исполнен»',
         },
         { status: 409 },
+      );
+    }
+
+    if (
+      existing.status === 'fulfilled' &&
+      body.status != null &&
+      body.status !== 'fulfilled' &&
+      body.status !== 'converted' &&
+      !canProcessTenders(auth.user)
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Исполненный лид могут вернуть только админ и специалист по торгам',
+        },
+        { status: 403 },
       );
     }
 
@@ -148,6 +200,39 @@ export async function PATCH(request: NextRequest, context: Ctx) {
           },
           { status: 403 },
         );
+      }
+
+      // «Исполнен» — назначенный / админ / торги; нужен converted или хотя бы одна заявка.
+      if (body.status === 'fulfilled' && body.status !== existing.status) {
+        if (
+          !canProcessTenders(auth.user) &&
+          !canActOnAssignedLeadWork(existing as Lead, auth.user.user_id)
+        ) {
+          return NextResponse.json(
+            { success: false, error: 'Отметить исполненным может назначенный исполнитель или админ' },
+            { status: 403 },
+          );
+        }
+        let hasOrders = existing.status === 'converted' || existing.order_id != null;
+        if (!hasOrders) {
+          const { count } = await supabaseAdmin
+            .from('orders')
+            .select('id', { count: 'exact', head: true })
+            .eq('lead_id', id);
+          hasOrders = (count ?? 0) > 0;
+        }
+        if (!hasOrders) {
+          return NextResponse.json(
+            { success: false, error: 'Нельзя отметить исполненным лид без заявок' },
+            { status: 400 },
+          );
+        }
+        if (existing.status !== 'converted' && existing.status !== 'in_progress') {
+          return NextResponse.json(
+            { success: false, error: 'Исполненным можно отметить лид в отгрузке' },
+            { status: 400 },
+          );
+        }
       }
 
       patch.status = body.status;
@@ -294,6 +379,18 @@ export async function PATCH(request: NextRequest, context: Ctx) {
           assigneeNameForHistory = refs[0].name;
           nextPayload.assigned_to = nextAssigned;
           nextPayload.assigned_to_name = assigneeNameForHistory;
+          // Новый основной не должен оставаться в соисполнителях
+          if (body.co_assignees === undefined) {
+            const prevCo = parseIdList(nextPayload.co_assignees);
+            const nextCo = prevCo.filter((uid) => uid !== nextAssigned);
+            if (nextCo.length !== prevCo.length) {
+              const coRefs = await resolveStaffRefs(nextCo);
+              nextPayload.co_assignees = coRefs.map((r) => r.user_id);
+              nextPayload.co_assignee_names = coRefs.map((r) => r.name);
+              coChanged = true;
+              coNamesForHistory = coRefs.map((r) => r.name).join(', ') || '—';
+            }
+          }
         } else {
           assigneeNameForHistory = '—';
           nextPayload.assigned_to = null;
@@ -360,7 +457,7 @@ export async function PATCH(request: NextRequest, context: Ctx) {
       const grade = strOrNull(p.grade);
       const city = strOrNull(p.city);
       const address = strOrNull(p.address);
-      const desiredDate = strOrNull(p.desired_date) || deadline;
+      const desiredDate = strOrNull(p.desired_date);
       const volume = numOrNull(p.volume_m3);
       const nmck = numOrNull(p.nmck);
 
@@ -438,11 +535,18 @@ export async function PATCH(request: NextRequest, context: Ctx) {
       if (body.status === 'in_progress') action = 'Взял в работу';
       else if (body.status === 'rejected') action = 'Отметил отказ';
       else if (body.status === 'spam') action = 'Отметил спам';
+      else if (body.status === 'fulfilled') action = 'Отметил исполненным';
+      else if (body.status === 'converted' && existing.status === 'fulfilled') {
+        action = 'Вернул в отгрузку';
+      }
       else if (
         LOCKED_FOR_NON_ADMIN.includes(existing.status as LeadStatus) &&
         (body.status === 'new' || body.status === 'in_progress')
       ) {
-        action = 'Вернул из отказа/спама';
+        action =
+          existing.status === 'fulfilled'
+            ? 'Вернул из исполненных'
+            : 'Вернул из отказа/спама';
       }
 
       await writeLeadHistory({

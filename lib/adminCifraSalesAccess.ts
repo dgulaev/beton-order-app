@@ -11,6 +11,7 @@ export function isSalesPath(pathname: string | null | undefined): boolean {
     pathname.startsWith('/adminCifra/leads') ||
     pathname.startsWith('/adminCifra/marketplace') ||
     pathname.startsWith('/adminCifra/demand') ||
+    pathname.startsWith('/adminCifra/callout') ||
     pathname.startsWith('/adminCifra/integrations')
   );
 }

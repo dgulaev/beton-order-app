@@ -1,5 +1,6 @@
 import { CONCRETE_CONFIG } from '@/lib/config/concrete';
 import { peekIntegrationSettings } from '@/lib/integrations/settings';
+import { extractGrades, extractVolume, normalizeGrade } from './extractFields';
 
 export type DemandScoreInput = {
   title?: string | null;
@@ -9,6 +10,8 @@ export type DemandScoreInput = {
   grades?: string[] | null;
   delivery_needed?: boolean | null;
 };
+
+export { extractGrades, extractVolume, normalizeGrade } from './extractFields';
 
 /** Регион работы завода (БД → env → дефолт). Перед радаром прогрей getIntegrationSettings(). */
 export function getHomeRegions(): string[] {
@@ -60,25 +63,6 @@ export function scoreDemandItem(item: DemandScoreInput): number {
   if (/срочн|сегодня|завтра/i.test(text)) score += 5;
 
   return Math.min(100, score);
-}
-
-export function extractVolume(text: string): number | null {
-  const m = text.match(/(\d+[.,]?\d*)\s*(м3|м³|куб|м\^3)/i);
-  return m ? parseFloat(m[1].replace(',', '.')) : null;
-}
-
-export function extractGrades(text: string): string[] {
-  const found = new Set<string>();
-  const re = /\b(М\s*\d{2,3}|M\s*\d{2,3}|В\s*\d{1,2}(?:[.,]\d)?)\b/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    found.add(normalizeGrade(m[1]));
-  }
-  return Array.from(found);
-}
-
-function normalizeGrade(g: string): string {
-  return g.replace(/\s+/g, '').toUpperCase().replace(/^M/, 'М');
 }
 
 export function enrichDemandFields(title: string, body?: string | null) {

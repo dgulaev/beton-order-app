@@ -863,7 +863,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
         `lead-take-${lead.id}-${Date.now()}`,
         `Вам необходимо взять лид №${lead.id} в работу!`,
         preview,
-        '/adminCifra/leads?status=new',
+        `/adminCifra/leads?leadId=${lead.id}`,
       );
     },
     onNewLead: (lead) => {
@@ -1824,6 +1824,7 @@ const SALES_SUBMENU = [
   { href: '/adminCifra/leads', label: 'Лиды', icon: Inbox },
   { href: '/adminCifra/marketplace', label: 'Площадки', icon: Store },
   { href: '/adminCifra/demand', label: 'Спрос', icon: Radar },
+  { href: '/adminCifra/callout', label: 'Обзвон', icon: Megaphone },
   {
     href: '/adminCifra/integrations',
     label: 'Интеграции',

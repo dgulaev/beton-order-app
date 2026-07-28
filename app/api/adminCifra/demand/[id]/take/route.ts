@@ -89,7 +89,7 @@ export async function POST(request: NextRequest, context: Ctx) {
   const grade = str(merged.grade) || item.grades?.[0] || null;
   const city = str(merged.city) || str(item.region);
   const address = str(merged.address) || city;
-  const desiredDate = str(merged.desired_date) || deadline;
+  const desiredDate = str(merged.desired_date);
 
   let volume = numOrNull(merged.volume_m3);
   if (volume == null) volume = item.volume_m3 != null ? Number(item.volume_m3) : null;
@@ -189,6 +189,23 @@ export async function POST(request: NextRequest, context: Ctx) {
       userIds: notifyIds,
       preview: lead.raw_text || undefined,
     });
+
+    if (purchaseNumber || etpUrl) {
+      try {
+        const { watchLeadForCallout } = await import('@/lib/callout/calloutService');
+        await watchLeadForCallout({
+          leadId: lead.id,
+          purchaseUrl: etpUrl,
+          purchaseNumber,
+          law,
+          objectInfo: organizationName || lead.raw_text,
+          nmck,
+          deadline,
+        });
+      } catch (e) {
+        console.error('[demand take retry] callout watch', e);
+      }
+    }
 
     return NextResponse.json({
       success: true,
@@ -346,6 +363,29 @@ export async function POST(request: NextRequest, context: Ctx) {
     preview: result.lead.raw_text || undefined,
   });
 
+  // Спрос с №/ссылкой ЕИС → наблюдение победителя в «Обзвон» (как у tender-лида)
+  let calloutWatch: { ok: boolean; message: string; tender_id?: number } | null = null;
+  if (purchaseNumber || etpUrl) {
+    try {
+      const { watchLeadForCallout } = await import('@/lib/callout/calloutService');
+      calloutWatch = await watchLeadForCallout({
+        leadId: result.lead.id,
+        purchaseUrl: etpUrl,
+        purchaseNumber,
+        law,
+        objectInfo: organizationName || result.lead.raw_text,
+        nmck,
+        deadline,
+      });
+    } catch (e) {
+      console.error('[demand take] callout watch', e);
+      calloutWatch = {
+        ok: false,
+        message: e instanceof Error ? e.message : 'Ошибка постановки на обзвон',
+      };
+    }
+  }
+
   const actorName = auth.user.full_name || 'Сотрудник';
   await writeLeadHistory({
     lead_id: result.lead.id,
@@ -363,6 +403,7 @@ export async function POST(request: NextRequest, context: Ctx) {
     lead: result.lead,
     created: result.created,
     sent_to_work: true,
+    callout_watch: calloutWatch,
     ...(contractsWarning ? { warning: contractsWarning } : {}),
   });
 }

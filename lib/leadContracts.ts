@@ -3,19 +3,31 @@
 export const LEAD_CONTRACTS_BUCKET = 'lead-contracts';
 export const LEAD_CONTRACT_MAX_BYTES = 20 * 1024 * 1024;
 
-export const LEAD_CONTRACT_ACCEPT =
-  '.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.txt';
+/** PDF и архивы — остальные типы отсекаем. */
+export const LEAD_CONTRACT_ALLOWED_EXT = [
+  'pdf',
+  'zip',
+  'rar',
+  '7z',
+  'tar',
+  'gz',
+  'tgz',
+  'bz2',
+] as const;
+
+export const LEAD_CONTRACT_ACCEPT = '.pdf,.zip,.rar,.7z,.tar,.gz,.tgz,.bz2';
 
 const ALLOWED_MIME = new Set([
   'application/pdf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'image/png',
-  'image/jpeg',
-  'image/webp',
-  'text/plain',
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-rar-compressed',
+  'application/vnd.rar',
+  'application/x-7z-compressed',
+  'application/x-tar',
+  'application/gzip',
+  'application/x-gzip',
+  'application/x-bzip2',
   'application/octet-stream',
 ]);
 
@@ -34,11 +46,17 @@ export type LeadContract = {
 export function isAllowedContractFile(file: { name: string; type: string; size: number }): string | null {
   if (file.size <= 0) return 'Пустой файл';
   if (file.size > LEAD_CONTRACT_MAX_BYTES) return 'Файл больше 20 МБ';
-  const ext = file.name.split('.').pop()?.toLowerCase() || '';
-  const okExt = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg', 'webp', 'txt'].includes(ext);
-  if (!okExt) return 'Недопустимый тип файла';
+  const lower = file.name.toLowerCase();
+  const ext = lower.endsWith('.tar.gz')
+    ? 'tar.gz'
+    : lower.split('.').pop() || '';
+  const okExt =
+    (LEAD_CONTRACT_ALLOWED_EXT as readonly string[]).includes(ext) || ext === 'tar.gz';
+  if (!okExt) {
+    return 'Допустимы только PDF и архивы (zip, rar, 7z, tar, gz)';
+  }
   if (file.type && !ALLOWED_MIME.has(file.type)) {
-    // расширение уже проверили — пропускаем строгий mime
+    // расширение уже проверили — пропускаем строгий mime (браузеры часто шлют octet-stream)
   }
   return null;
 }

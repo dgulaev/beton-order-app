@@ -4,6 +4,7 @@ import {
   type DemandContract,
 } from '@/lib/demandContracts';
 import { uploadLeadContractFile } from '@/lib/leadContractsServer';
+import { safeStorageFileName } from '@/lib/safeStorageFileName';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 export async function ensureDemandContractsBucket(): Promise<void> {
@@ -41,7 +42,7 @@ export async function uploadDemandContractFile(opts: {
 }): Promise<DemandContract> {
   await ensureDemandContractsBucket();
 
-  const safeName = opts.fileName.replace(/[^\w.\-а-яА-ЯёЁ ]+/gi, '_').slice(0, 120);
+  const safeName = safeStorageFileName(opts.fileName);
   const storagePath = `${opts.demandId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
 
   const buffer = Buffer.from(await opts.file.arrayBuffer());

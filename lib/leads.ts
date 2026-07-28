@@ -37,6 +37,7 @@ export const LEAD_CREATE_SOURCE_META: Record<
 /** Площадки для специалиста по торгам. */
 export const LEAD_PLATFORM_OPTIONS = [
   'ЕИС (zakupki.gov.ru)',
+  'Lot-online (РАД)',
   'Сбербанк-АСТ',
   'РТС-тендер',
   'ТЭК-Торг',
@@ -57,13 +58,14 @@ export const LEAD_SITE_ORIGIN_OPTIONS = [
 
 export const LEAD_LAW_OPTIONS = ['44-ФЗ', '223-ФЗ', 'Коммерция', 'Иное'] as const;
 
-export const LEAD_STATUSES = ['new', 'in_progress', 'converted', 'rejected', 'spam'] as const;
+export const LEAD_STATUSES = ['new', 'in_progress', 'converted', 'fulfilled', 'rejected', 'spam'] as const;
 export type LeadStatus = (typeof LEAD_STATUSES)[number];
 
 export const LEAD_STATUS_LABEL: Record<LeadStatus, string> = {
   new: 'Новый',
   in_progress: 'В работе',
-  converted: 'В заказ',
+  converted: 'В отгрузке',
+  fulfilled: 'Исполнен',
   rejected: 'Отказ',
   spam: 'Спам',
 };
@@ -131,7 +133,10 @@ export type LeadDraft = {
 };
 
 /** Prefill для NewOrderModal / MobileNewOrderModal */
-export function leadToOrderInitialData(lead: Lead) {
+export function leadToOrderInitialData(
+  lead: Lead,
+  opts?: { remainingVolumeM3?: number | null },
+) {
   const payload = (lead.raw_payload && typeof lead.raw_payload === 'object')
     ? lead.raw_payload
     : {};
@@ -163,23 +168,37 @@ export function leadToOrderInitialData(lead: Lead) {
         `Источник: ${sourceLabel}`,
       ];
 
+  const hasPriorOrders = lead.status === 'converted' || lead.order_id != null;
+  let volumeStr = '';
+  if (
+    opts?.remainingVolumeM3 != null &&
+    Number.isFinite(opts.remainingVolumeM3)
+  ) {
+    const rem = Math.round(Math.max(0, opts.remainingVolumeM3) * 10) / 10;
+    volumeStr = rem > 0 ? String(rem) : '';
+  } else if (!hasPriorOrders && lead.volume_m3 != null) {
+    volumeStr = String(lead.volume_m3);
+  } else if (!hasPriorOrders && payload.volume != null) {
+    volumeStr = String(payload.volume);
+  }
+
   return {
     phone: lead.phone || String(payload.phone ?? ''),
     fullName: isLegal ? '' : fullName,
     organizationName: isLegal ? (organizationName || fullName) : organizationName,
     grade: lead.grade || String(payload.grade ?? '') || 'М300',
-    volume: lead.volume_m3 != null
-      ? String(lead.volume_m3)
-      : (payload.volume != null ? String(payload.volume) : ''),
+    volume: volumeStr,
     address: lead.address || String(payload.address ?? ''),
-    delivery_date: lead.desired_date
-      || (payload.delivery_date ? String(payload.delivery_date) : undefined)
-      || (payload.deliveryDate ? String(payload.deliveryDate) : undefined),
+    delivery_date: getLeadDeliveryDateIso(lead)
+      || (payload.delivery_date ? String(payload.delivery_date).slice(0, 10) : undefined)
+      || (payload.deliveryDate ? String(payload.deliveryDate).slice(0, 10) : undefined)
+      || undefined,
     delivery_time: deliveryTime || undefined,
     // camelCase — для MobileNewOrderModal
-    deliveryDate: lead.desired_date
-      || (payload.delivery_date ? String(payload.delivery_date) : undefined)
-      || (payload.deliveryDate ? String(payload.deliveryDate) : undefined),
+    deliveryDate: getLeadDeliveryDateIso(lead)
+      || (payload.delivery_date ? String(payload.delivery_date).slice(0, 10) : undefined)
+      || (payload.deliveryDate ? String(payload.deliveryDate).slice(0, 10) : undefined)
+      || undefined,
     deliveryTime: deliveryTime || undefined,
     inn: inn || undefined,
     comment: commentParts.filter(Boolean).join('\n\n'),
@@ -190,6 +209,105 @@ export function leadToOrderInitialData(lead: Lead) {
     lead_source: lead.source,
     external_ref: lead.external_id || lead.listing_id || undefined,
   };
+}
+
+/** YYYY-MM-DD или null. */
+export function toLeadDateIso(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const iso = raw.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : null;
+}
+
+/** Сегодня YYYY-MM-DD в Europe/Moscow. */
+export function todayMoscowYmd(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Moscow',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+export function formatLeadDateRu(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return `${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}.${y}`;
+}
+
+/**
+ * Срок подачи заявок на торги (ЕИС / ЭТП).
+ * Живёт в raw_payload.deadline — это НЕ срок поставки и НЕ дедлайн работы менеджера.
+ */
+export function getLeadSubmissionDeadlineIso(
+  lead: Pick<Lead, 'raw_payload'>,
+): string | null {
+  const payload =
+    lead.raw_payload && typeof lead.raw_payload === 'object'
+      ? (lead.raw_payload as Record<string, unknown>)
+      : null;
+  return toLeadDateIso(payload?.deadline);
+}
+
+/**
+ * Реальная дата поставки / желаемая дата.
+ * Если desired_date совпадает со сроком подачи заявок — считаем, что дату
+ * поставки когда-то ошибочно скопировали из ЕИС, и игнорируем.
+ */
+export function getLeadDeliveryDateIso(
+  lead: Pick<Lead, 'desired_date' | 'raw_payload'>,
+): string | null {
+  const desired = toLeadDateIso(lead.desired_date);
+  if (!desired) return null;
+  const submission = getLeadSubmissionDeadlineIso(lead);
+  if (submission && desired === submission) return null;
+  return desired;
+}
+
+/** Просрочка работы/поставки — только по дате поставки, не по сроку подачи заявок. */
+export function isLeadDeliveryOverdue(
+  lead: Pick<Lead, 'desired_date' | 'raw_payload' | 'status'>,
+): boolean {
+  if (lead.status === 'fulfilled' || lead.status === 'rejected' || lead.status === 'spam') {
+    return false;
+  }
+  const delivery = getLeadDeliveryDateIso(lead);
+  if (!delivery) return false;
+  return delivery < todayMoscowYmd();
+}
+
+export type LeadDateHints = {
+  /** Окончание подачи заявок (ЕИС). */
+  submissionDeadline: string | null;
+  /** Дата поставки (если известна и не спутана с подачей заявок). */
+  deliveryDate: string | null;
+  /** Просрочена ли поставка. */
+  deliveryOverdue: boolean;
+};
+
+export function getLeadDateHints(
+  lead: Pick<Lead, 'desired_date' | 'raw_payload' | 'status'>,
+): LeadDateHints {
+  const submissionDeadline = getLeadSubmissionDeadlineIso(lead);
+  const deliveryDate = getLeadDeliveryDateIso(lead);
+  return {
+    submissionDeadline,
+    deliveryDate,
+    deliveryOverdue: isLeadDeliveryOverdue(lead),
+  };
+}
+
+/**
+ * Для форм: если в desired_date лежит копия срока подачи — очищаем поле «Дата поставки».
+ */
+export function sanitizeDesiredDateForForm(
+  desiredDate: unknown,
+  submissionDeadline: unknown,
+): string {
+  const desired = toLeadDateIso(desiredDate) || '';
+  const submission = toLeadDateIso(submissionDeadline) || '';
+  if (desired && submission && desired === submission) return '';
+  return desired;
 }
 
 const CONCRETE_KEYWORDS =

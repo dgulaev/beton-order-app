@@ -10,7 +10,8 @@ import {
   type LeadContract,
 } from '@/lib/leadContracts';
 import { formatPhoneInput } from '@/lib/phone';
-import { LEAD_LAW_OPTIONS, LEAD_PLATFORM_OPTIONS, type Lead } from '@/lib/leads';
+import { LEAD_LAW_OPTIONS, LEAD_PLATFORM_OPTIONS, sanitizeDesiredDateForForm, type Lead } from '@/lib/leads';
+import { extractFieldsFromStoredPayload, type ParsedTenderFields } from '@/lib/tender/parseTenderPage';
 import { useNarrowViewport } from '@/hooks/useNarrowViewport';
 import {
   modalCloseButtonStyle,
@@ -73,44 +74,148 @@ const sectionTitle: CSSProperties = {
   color: '#F8FAFC',
 };
 
+function pickStr(...vals: Array<string | null | undefined>): string {
+  for (const v of vals) {
+    if (v != null && String(v).trim()) return String(v).trim();
+  }
+  return '';
+}
+
+function applyParsedToForm(
+  base: ProcessLeadForm,
+  parsed: ParsedTenderFields,
+  opts?: { overwrite?: boolean },
+): ProcessLeadForm {
+  const o = opts?.overwrite === true;
+  const keep = (cur: string, next: string | null | undefined) => {
+    if (next == null || !String(next).trim()) return cur;
+    if (o || !cur.trim() || cur === '+7' || cur === EMPTY_FORM.grade || cur === EMPTY_FORM.city) {
+      return String(next).trim();
+    }
+    return cur;
+  };
+
+  const platformRaw = pickStr(parsed.platform);
+  let platform = base.platform;
+  let platform_custom = base.platform_custom;
+  if (platformRaw) {
+    if ((LEAD_PLATFORM_OPTIONS as readonly string[]).includes(platformRaw)) {
+      platform = platformRaw;
+      platform_custom = '';
+    } else if (o || !base.platform || base.platform === EMPTY_FORM.platform) {
+      platform = 'Другое';
+      platform_custom = platformRaw;
+    }
+  }
+
+  return {
+    ...base,
+    platform,
+    platform_custom,
+    purchase_number: keep(base.purchase_number, parsed.purchase_number),
+    law: keep(base.law, parsed.law),
+    nmck: keep(base.nmck, parsed.nmck),
+    organization_name: keep(base.organization_name, parsed.organization_name),
+    inn: keep(base.inn, parsed.inn),
+    contact_name: keep(base.contact_name, parsed.contact_name),
+    phone: keep(base.phone, parsed.phone),
+    grade: keep(base.grade, parsed.grade),
+    volume_m3: keep(
+      base.volume_m3,
+      parsed.volume_m3 != null ? String(parsed.volume_m3) : null,
+    ),
+    city: keep(base.city, parsed.city),
+    address: keep(base.address, parsed.address),
+    deadline: keep(base.deadline, parsed.deadline?.slice(0, 10)),
+    etp_url: keep(base.etp_url, parsed.etp_url),
+    docs_url: keep(base.docs_url, parsed.docs_url),
+    comment: keep(base.comment, parsed.comment),
+  };
+}
+
 function formFromLead(lead: Lead): ProcessLeadForm {
   const p =
     lead.raw_payload && typeof lead.raw_payload === 'object'
       ? lead.raw_payload
       : {};
 
-  const platformRaw = String(p.platform || p.platform_name || '').trim();
+  const extracted = extractFieldsFromStoredPayload({
+    raw: p as Record<string, unknown>,
+    body: String(p.comment || lead.raw_text || ''),
+    title: lead.name,
+    externalUrl: lead.chat_url,
+    volumeM3: lead.volume_m3,
+    grades: lead.grade ? [lead.grade] : null,
+    region: lead.city,
+  });
+
+  const platformRaw = pickStr(
+    String(p.platform || p.platform_name || ''),
+    extracted.platform || undefined,
+  );
   const knownPlatform = (LEAD_PLATFORM_OPTIONS as readonly string[]).includes(platformRaw)
     ? platformRaw
     : platformRaw
       ? 'Другое'
-      : EMPTY_FORM.platform;
+      : extracted.platform &&
+          (LEAD_PLATFORM_OPTIONS as readonly string[]).includes(extracted.platform)
+        ? extracted.platform
+        : EMPTY_FORM.platform;
 
   return {
     platform: knownPlatform,
     platform_custom:
       knownPlatform === 'Другое' && platformRaw && platformRaw !== 'Другое' ? platformRaw : '',
-    purchase_number: String(p.purchase_number || ''),
-    law: String(p.law || EMPTY_FORM.law),
-    nmck: p.nmck != null && p.nmck !== '' ? String(p.nmck) : '',
-    organization_name: String(p.organization_name || ''),
-    inn: String(p.inn || ''),
-    contact_name: String(p.contact_name || p.full_name || lead.name || ''),
-    phone: String(lead.phone || p.phone || '+7'),
-    grade: String(lead.grade || p.grade || EMPTY_FORM.grade),
-    volume_m3:
-      lead.volume_m3 != null
-        ? String(lead.volume_m3)
-        : p.volume_m3 != null && p.volume_m3 !== ''
-          ? String(p.volume_m3)
-          : '',
-    city: String(lead.city || p.city || EMPTY_FORM.city),
-    address: String(lead.address || p.address || ''),
-    desired_date: String(lead.desired_date || p.desired_date || '').slice(0, 10),
-    deadline: String(p.deadline || '').slice(0, 10),
-    etp_url: String(p.etp_url || lead.chat_url || ''),
-    docs_url: String(p.docs_url || ''),
-    comment: String(p.comment || ''),
+    purchase_number: pickStr(String(p.purchase_number || ''), extracted.purchase_number || undefined),
+    law: pickStr(String(p.law || ''), extracted.law || undefined, EMPTY_FORM.law),
+    nmck: pickStr(
+      p.nmck != null && p.nmck !== '' ? String(p.nmck) : '',
+      extracted.nmck || undefined,
+    ),
+    organization_name: pickStr(
+      String(p.organization_name || ''),
+      extracted.organization_name || undefined,
+    ),
+    inn: pickStr(String(p.inn || ''), extracted.inn || undefined),
+    contact_name: pickStr(
+      String(p.contact_name || p.full_name || ''),
+      extracted.contact_name || undefined,
+      // lead.name часто = организация — в «контакт» не подставляем
+      lead.name && lead.name.length < 40 && !/унитарн|обществ|муницип/i.test(lead.name)
+        ? lead.name
+        : undefined,
+    ),
+    phone: pickStr(lead.phone || undefined, String(p.phone || ''), extracted.phone || undefined, '+7'),
+    grade: pickStr(
+      lead.grade || undefined,
+      String(p.grade || ''),
+      extracted.grade || undefined,
+      EMPTY_FORM.grade,
+    ),
+    volume_m3: pickStr(
+      lead.volume_m3 != null ? String(lead.volume_m3) : '',
+      p.volume_m3 != null && p.volume_m3 !== '' ? String(p.volume_m3) : '',
+      extracted.volume_m3 != null ? String(extracted.volume_m3) : '',
+    ),
+    city: pickStr(
+      lead.city || undefined,
+      String(p.city || ''),
+      extracted.city || undefined,
+      EMPTY_FORM.city,
+    ),
+    address: pickStr(lead.address || undefined, String(p.address || ''), extracted.address || undefined),
+    desired_date: sanitizeDesiredDateForForm(
+      lead.desired_date || p.desired_date,
+      pickStr(String(p.deadline || ''), extracted.deadline || undefined),
+    ),
+    deadline: pickStr(String(p.deadline || ''), extracted.deadline || undefined).slice(0, 10),
+    etp_url: pickStr(
+      String(p.etp_url || ''),
+      lead.chat_url || undefined,
+      extracted.etp_url || undefined,
+    ),
+    docs_url: pickStr(String(p.docs_url || ''), extracted.docs_url || undefined),
+    comment: pickStr(String(p.comment || ''), lead.raw_text || undefined, extracted.comment || undefined),
   };
 }
 
@@ -127,12 +232,14 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
   const [savedFiles, setSavedFiles] = useState<SavedContract[]>([]);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const busy = saving || uploading;
+  const [parsing, setParsing] = useState(false);
+  const busy = saving || uploading || parsing;
   const fieldPad = narrow ? { padding: '10px 12px', fontSize: 14 } : {};
 
   useEffect(() => {
     if (!open || !lead) return;
-    setForm(formFromLead(lead));
+    const initial = formFromLead(lead);
+    setForm(initial);
     setSavedFiles([]);
     void (async () => {
       try {
@@ -145,6 +252,27 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
         }
       } catch {
         /* ignore */
+      }
+
+      if (initial.etp_url && (!initial.organization_name || !initial.purchase_number)) {
+        try {
+          setParsing(true);
+          const res = await fetch('/api/adminCifra/tender/parse', {
+            method: 'POST',
+            headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ url: initial.etp_url }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (res.ok && json.success && json.fields) {
+            setForm((f) =>
+              applyParsedToForm(f, json.fields as ParsedTenderFields, { overwrite: true }),
+            );
+          }
+        } catch {
+          /* ignore */
+        } finally {
+          setParsing(false);
+        }
       }
     })();
   }, [open, lead]);
@@ -181,6 +309,34 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
       docs_url: form.docs_url.trim() || null,
       comment: form.comment.trim() || null,
     };
+  };
+
+  const fillFromEtpUrl = async (overwrite = false) => {
+    const url = form.etp_url.trim();
+    if (!url) {
+      alert('Сначала укажи ссылку на закупку (ЭТП)');
+      return;
+    }
+    setParsing(true);
+    try {
+      const res = await fetch('/api/adminCifra/tender/parse', {
+        method: 'POST',
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ url }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        alert(json.error || 'Не удалось разобрать страницу');
+        return;
+      }
+      setForm((f) =>
+        applyParsedToForm(f, json.fields as ParsedTenderFields, { overwrite }),
+      );
+    } catch {
+      alert('Ошибка соединения при разборе ЭТП');
+    } finally {
+      setParsing(false);
+    }
   };
 
   const onPickFiles = async (list: FileList | null) => {
@@ -475,7 +631,7 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
                 />
               </label>
               <label style={labelStyle}>
-                Дедлайн задания
+                Окончание подачи заявок
                 <input
                   type="date"
                   value={form.deadline}
@@ -503,8 +659,44 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
                   value={form.etp_url}
                   onChange={(e) => set('etp_url', e.target.value)}
                   style={modalFieldStyle({ marginTop: 4, ...fieldPad })}
+                  placeholder="https://tender.lot-online.ru/…"
                 />
               </label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button
+                  type="button"
+                  disabled={busy || !form.etp_url.trim()}
+                  onClick={() => void fillFromEtpUrl(true)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 10,
+                    border: '1px solid #334155',
+                    background: '#1E2937',
+                    color: '#E2E8F0',
+                    cursor: busy ? 'wait' : 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  {parsing ? 'Читаю ЕИС…' : 'Заполнить из ЕИС'}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || !form.etp_url.trim()}
+                  onClick={() => void fillFromEtpUrl(false)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 10,
+                    border: '1px solid #334155',
+                    background: 'transparent',
+                    color: '#94A3B8',
+                    cursor: busy ? 'wait' : 'pointer',
+                    fontSize: 13,
+                  }}
+                >
+                  Дозаполнить пустые
+                </button>
+              </div>
               <label style={labelStyle}>
                 Ссылка на документацию
                 <input
@@ -528,7 +720,7 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
           <section>
             <h3 style={sectionTitle}>Контракты и документы</h3>
             <p style={{ margin: '6px 0 8px', fontSize: 12, color: '#64748B' }}>
-              Хранятся в Supabase Storage · до{' '}
+              PDF и архивы (zip, rar, 7z…) · до{' '}
               {Math.round(LEAD_CONTRACT_MAX_BYTES / (1024 * 1024))} МБ · до 10 за раз
             </p>
             <label

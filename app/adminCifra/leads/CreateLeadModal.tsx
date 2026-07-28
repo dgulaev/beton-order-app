@@ -612,7 +612,7 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
               </label>
               {isTender && (
                 <label style={labelStyle}>
-                  Дедлайн задания
+                  Окончание подачи заявок
                   <input
                     type="date"
                     value={form.deadline}

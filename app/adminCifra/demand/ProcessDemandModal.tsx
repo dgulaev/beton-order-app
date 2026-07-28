@@ -10,7 +10,8 @@ import {
   type DemandContract,
 } from '@/lib/demandContracts';
 import { formatPhoneInput } from '@/lib/phone';
-import { LEAD_LAW_OPTIONS, LEAD_PLATFORM_OPTIONS } from '@/lib/leads';
+import { LEAD_LAW_OPTIONS, LEAD_PLATFORM_OPTIONS, sanitizeDesiredDateForForm } from '@/lib/leads';
+import { extractFieldsFromStoredPayload, type ParsedTenderFields } from '@/lib/tender/parseTenderPage';
 import { useNarrowViewport } from '@/hooks/useNarrowViewport';
 import type { DemandItemRow } from '@/hooks/useRealtimeDemand';
 import {
@@ -85,6 +86,65 @@ const sectionTitle: CSSProperties = {
   color: '#F8FAFC',
 };
 
+function pickStr(...vals: Array<string | null | undefined>): string {
+  for (const v of vals) {
+    if (v != null && String(v).trim()) return String(v).trim();
+  }
+  return '';
+}
+
+function applyParsedToForm(
+  base: ProcessDemandForm,
+  parsed: ParsedTenderFields,
+  opts?: { overwrite?: boolean },
+): ProcessDemandForm {
+  const o = opts?.overwrite === true;
+  const keep = (cur: string, next: string | null | undefined) => {
+    if (next == null || !String(next).trim()) return cur;
+    if (o || !cur.trim() || cur === '+7' || cur === EMPTY_FORM.grade || cur === EMPTY_FORM.city) {
+      return String(next).trim();
+    }
+    return cur;
+  };
+
+  const platformRaw = pickStr(parsed.platform);
+  let platform = base.platform;
+  let platform_custom = base.platform_custom;
+  if (platformRaw) {
+    if ((LEAD_PLATFORM_OPTIONS as readonly string[]).includes(platformRaw)) {
+      platform = platformRaw;
+      platform_custom = '';
+    } else if (o || !base.platform || base.platform === EMPTY_FORM.platform) {
+      platform = 'Другое';
+      platform_custom = platformRaw;
+    }
+  }
+
+  return {
+    ...base,
+    platform,
+    platform_custom,
+    purchase_number: keep(base.purchase_number, parsed.purchase_number),
+    law: keep(base.law, parsed.law),
+    nmck: keep(base.nmck, parsed.nmck),
+    organization_name: keep(base.organization_name, parsed.organization_name),
+    inn: keep(base.inn, parsed.inn),
+    contact_name: keep(base.contact_name, parsed.contact_name),
+    phone: keep(base.phone, parsed.phone),
+    grade: keep(base.grade, parsed.grade),
+    volume_m3: keep(
+      base.volume_m3,
+      parsed.volume_m3 != null ? String(parsed.volume_m3) : null,
+    ),
+    city: keep(base.city, parsed.city),
+    address: keep(base.address, parsed.address),
+    deadline: keep(base.deadline, parsed.deadline?.slice(0, 10)),
+    etp_url: keep(base.etp_url, parsed.etp_url),
+    docs_url: keep(base.docs_url, parsed.docs_url),
+    comment: keep(base.comment, parsed.comment),
+  };
+}
+
 function formFromItem(item: DemandItemRow): ProcessDemandForm {
   const raw = item.raw_payload && typeof item.raw_payload === 'object' ? item.raw_payload : {};
   const p =
@@ -92,43 +152,85 @@ function formFromItem(item: DemandItemRow): ProcessDemandForm {
       ? (raw.processing as Record<string, unknown>)
       : {};
 
-  const platformRaw = String(p.platform || p.platform_name || '').trim();
+  const extracted = extractFieldsFromStoredPayload({
+    raw,
+    body: item.body,
+    title: item.title,
+    externalUrl: item.external_url,
+    volumeM3: item.volume_m3,
+    grades: item.grades,
+    region: item.region,
+  });
+
+  const platformRaw = pickStr(
+    String(p.platform || p.platform_name || ''),
+    extracted.platform || undefined,
+  );
   const knownPlatform = (LEAD_PLATFORM_OPTIONS as readonly string[]).includes(platformRaw)
     ? platformRaw
     : platformRaw
       ? 'Другое'
-      : EMPTY_FORM.platform;
+      : extracted.platform &&
+          (LEAD_PLATFORM_OPTIONS as readonly string[]).includes(extracted.platform)
+        ? extracted.platform
+        : EMPTY_FORM.platform;
 
-  return {
+  const base: ProcessDemandForm = {
     platform: knownPlatform,
     platform_custom:
       knownPlatform === 'Другое' && platformRaw && platformRaw !== 'Другое' ? platformRaw : '',
-    purchase_number: String(p.purchase_number || ''),
-    law: String(p.law || EMPTY_FORM.law),
-    nmck: p.nmck != null && p.nmck !== '' ? String(p.nmck) : '',
-    organization_name: String(p.organization_name || ''),
-    inn: String(p.inn || ''),
-    contact_name: String(p.contact_name || p.name || ''),
-    phone: String(p.phone || '+7'),
-    grade: String(p.grade || item.grades?.[0] || EMPTY_FORM.grade),
-    volume_m3:
-      p.volume_m3 != null && p.volume_m3 !== ''
-        ? String(p.volume_m3)
-        : item.volume_m3 != null
-          ? String(item.volume_m3)
-          : '',
-    city: String(p.city || item.region || EMPTY_FORM.city),
-    address: String(p.address || ''),
-    desired_date: String(p.desired_date || ''),
-    deadline: String(p.deadline || ''),
-    etp_url: String(p.etp_url || item.external_url || ''),
-    docs_url: String(p.docs_url || ''),
-    comment: String(p.comment || item.body || ''),
+    purchase_number: pickStr(String(p.purchase_number || ''), extracted.purchase_number || undefined),
+    law: pickStr(String(p.law || ''), extracted.law || undefined, EMPTY_FORM.law),
+    nmck: pickStr(
+      p.nmck != null && p.nmck !== '' ? String(p.nmck) : '',
+      extracted.nmck || undefined,
+    ),
+    organization_name: pickStr(
+      String(p.organization_name || ''),
+      extracted.organization_name || undefined,
+    ),
+    inn: pickStr(String(p.inn || ''), extracted.inn || undefined),
+    contact_name: pickStr(
+      String(p.contact_name || p.name || ''),
+      extracted.contact_name || undefined,
+    ),
+    phone: pickStr(String(p.phone || ''), extracted.phone || undefined, '+7'),
+    grade: pickStr(
+      String(p.grade || ''),
+      item.grades?.[0],
+      extracted.grade || undefined,
+      EMPTY_FORM.grade,
+    ),
+    volume_m3: pickStr(
+      p.volume_m3 != null && p.volume_m3 !== '' ? String(p.volume_m3) : '',
+      item.volume_m3 != null ? String(item.volume_m3) : '',
+      extracted.volume_m3 != null ? String(extracted.volume_m3) : '',
+    ),
+    city: pickStr(
+      String(p.city || ''),
+      item.region || undefined,
+      extracted.city || undefined,
+      EMPTY_FORM.city,
+    ),
+    address: pickStr(String(p.address || ''), extracted.address || undefined),
+    desired_date: sanitizeDesiredDateForForm(
+      p.desired_date,
+      pickStr(String(p.deadline || ''), extracted.deadline || undefined),
+    ),
+    deadline: pickStr(String(p.deadline || ''), extracted.deadline || undefined).slice(0, 10),
+    etp_url: pickStr(
+      String(p.etp_url || ''),
+      item.external_url || undefined,
+      extracted.etp_url || undefined,
+    ),
+    docs_url: pickStr(String(p.docs_url || ''), extracted.docs_url || undefined),
+    comment: pickStr(String(p.comment || ''), item.body || undefined, extracted.comment || undefined),
     assigned_to: p.assigned_to != null && p.assigned_to !== '' ? String(p.assigned_to) : '',
     co_assignees: Array.isArray(p.co_assignees)
       ? p.co_assignees.map((id) => String(id)).filter(Boolean)
       : [],
   };
+  return base;
 }
 
 type Props = {
@@ -152,12 +254,14 @@ export default function ProcessDemandModal({
   const [savedFiles, setSavedFiles] = useState<SavedContract[]>([]);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [parsing, setParsing] = useState(false);
   const fieldPad = narrow ? { padding: '10px 12px', fontSize: 14 } : {};
-  const busy = saving || uploading;
+  const busy = saving || uploading || parsing;
 
   useEffect(() => {
     if (!open || !item) return;
-    setForm(formFromItem(item));
+    const initial = formFromItem(item);
+    setForm(initial);
     setSavedFiles([]);
     void (async () => {
       try {
@@ -175,6 +279,28 @@ export default function ProcessDemandModal({
         setEmployees(empJson.employees || []);
       } catch {
         /* ignore */
+      }
+
+      // Если клиент пустой / нет номера закупки — подтянуть с ЕИС (даже по ссылке lot-online).
+      if (initial.etp_url && (!initial.organization_name || !initial.purchase_number)) {
+        try {
+          setParsing(true);
+          const res = await fetch('/api/adminCifra/tender/parse', {
+            method: 'POST',
+            headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ url: initial.etp_url }),
+          });
+          const json = await res.json().catch(() => ({}));
+          if (res.ok && json.success && json.fields) {
+            setForm((f) =>
+              applyParsedToForm(f, json.fields as ParsedTenderFields, { overwrite: true }),
+            );
+          }
+        } catch {
+          /* ignore */
+        } finally {
+          setParsing(false);
+        }
       }
     })();
   }, [open, item]);
@@ -251,6 +377,34 @@ export default function ProcessDemandModal({
       assigned_to: form.assigned_to || null,
       co_assignees: form.co_assignees.map(Number).filter((n) => Number.isFinite(n)),
     };
+  };
+
+  const fillFromEtpUrl = async (overwrite = false) => {
+    const url = form.etp_url.trim();
+    if (!url) {
+      alert('Сначала укажи ссылку на закупку (ЭТП)');
+      return;
+    }
+    setParsing(true);
+    try {
+      const res = await fetch('/api/adminCifra/tender/parse', {
+        method: 'POST',
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ url }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        alert(json.error || 'Не удалось разобрать страницу');
+        return;
+      }
+      setForm((f) =>
+        applyParsedToForm(f, json.fields as ParsedTenderFields, { overwrite }),
+      );
+    } catch {
+      alert('Ошибка соединения при разборе ЭТП');
+    } finally {
+      setParsing(false);
+    }
   };
 
   const onPickFiles = async (list: FileList | null) => {
@@ -627,7 +781,7 @@ export default function ProcessDemandModal({
                 />
               </label>
               <label style={labelStyle}>
-                Дедлайн задания
+                Окончание подачи заявок
                 <input
                   type="date"
                   value={form.deadline}
@@ -655,9 +809,44 @@ export default function ProcessDemandModal({
                   value={form.etp_url}
                   onChange={(e) => set('etp_url', e.target.value)}
                   style={modalFieldStyle({ marginTop: 4, ...fieldPad })}
-                  placeholder="https://…"
+                  placeholder="https://tender.lot-online.ru/…"
                 />
               </label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button
+                  type="button"
+                  disabled={busy || !form.etp_url.trim()}
+                  onClick={() => void fillFromEtpUrl(true)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 10,
+                    border: '1px solid #334155',
+                    background: '#1E2937',
+                    color: '#E2E8F0',
+                    cursor: busy ? 'wait' : 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  {parsing ? 'Читаю ЕИС…' : 'Заполнить из ЕИС'}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || !form.etp_url.trim()}
+                  onClick={() => void fillFromEtpUrl(false)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 10,
+                    border: '1px solid #334155',
+                    background: 'transparent',
+                    color: '#94A3B8',
+                    cursor: busy ? 'wait' : 'pointer',
+                    fontSize: 13,
+                  }}
+                >
+                  Дозаполнить пустые
+                </button>
+              </div>
               <label style={labelStyle}>
                 Ссылка на документацию
                 <input
@@ -773,9 +962,9 @@ export default function ProcessDemandModal({
           <section>
             <h3 style={sectionTitle}>Контракты и документы</h3>
             <p style={{ margin: '6px 0 8px', fontSize: 12, color: '#64748B' }}>
-              Файлы сразу сохраняются в хранилище Supabase (не на Vercel). PDF, Word, Excel,
-              изображения · до {Math.round(DEMAND_CONTRACT_MAX_BYTES / (1024 * 1024))} МБ · до 10 за
-              раз. При отправке в лиды переносятся на карточку лида.
+              Файлы сразу сохраняются в хранилище Supabase. Допустимы PDF и архивы (zip, rar, 7z,
+              tar, gz) — до {Math.round(DEMAND_CONTRACT_MAX_BYTES / (1024 * 1024))} МБ, до 10 за раз.
+              При отправке в лиды файлы переносятся на карточку лида.
             </p>
             <label
               style={{

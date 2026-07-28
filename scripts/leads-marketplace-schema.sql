@@ -16,7 +16,7 @@ create table if not exists public.leads (
   source          text not null,
   external_id     text,
   status          text not null default 'new'
-                    check (status in ('new', 'in_progress', 'converted', 'rejected', 'spam')),
+                    check (status in ('new', 'in_progress', 'converted', 'fulfilled', 'rejected', 'spam')),
   phone           text,
   name            text,
   chat_url        text,
@@ -68,10 +68,10 @@ comment on column public.orders.external_ref is 'Внешний id объявл�
 
 create index if not exists orders_lead_id_idx on public.orders (lead_id);
 
--- Один лид → один заказ (защита от гонки двойной конверсии)
-create unique index if not exists orders_lead_id_unique
-  on public.orders (lead_id)
-  where lead_id is not null;
+-- Один лид → несколько заявок (прогресс отгрузки).
+-- Unique index больше не создаём — см. scripts/leads-fulfillment.sql
+
+create index if not exists orders_lead_id_idx on public.orders (lead_id);
 
 -- ── marketplace_listings ───────────────────────────────────
 create table if not exists public.marketplace_listings (

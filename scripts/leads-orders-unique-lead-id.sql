@@ -1,9 +1,5 @@
--- Один лид → максимум один заказ (защита от гонки двойной конверсии).
--- Применить в Supabase SQL Editor один раз.
+-- Устарело: один лид → один заказ.
+-- Теперь 1:N — выполните scripts/leads-fulfillment.sql
+-- Этот файл оставлен, чтобы не ломать старые инструкции.
 
-create unique index if not exists orders_lead_id_unique
-  on public.orders (lead_id)
-  where lead_id is not null;
-
-comment on index public.orders_lead_id_unique is
-  'Запрещает два заказа с одним lead_id';
+drop index if exists public.orders_lead_id_unique;

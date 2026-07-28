@@ -32,14 +32,16 @@ values (
   20971520, -- 20 MB
   array[
     'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'image/png',
-    'image/jpeg',
-    'image/webp',
-    'text/plain'
+    'application/zip',
+    'application/x-zip-compressed',
+    'application/x-rar-compressed',
+    'application/vnd.rar',
+    'application/x-7z-compressed',
+    'application/x-tar',
+    'application/gzip',
+    'application/x-gzip',
+    'application/x-bzip2',
+    'application/octet-stream'
   ]
 )
 on conflict (id) do update set

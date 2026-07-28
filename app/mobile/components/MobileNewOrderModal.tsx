@@ -37,7 +37,7 @@ interface MobileNewOrderModalProps {
   onClose: () => void;
   onSuccess?: (
     newOrder?: any,
-    meta?: { warning?: string; leadConverted?: boolean },
+    meta?: { warning?: string; leadConverted?: boolean; leadOrderAdded?: boolean },
   ) => void;
   defaultDeliveryDate?: string;
   currentRole?: string;
@@ -209,6 +209,7 @@ export default function MobileNewOrderModal({
   // ==================== 8. СОЗДАНИЕ ЗАЯВКИ ====================
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setIsSubmitting(true);
 
     // Валидация телефона
@@ -265,6 +266,7 @@ export default function MobileNewOrderModal({
 
       if (data.success) {
         const leadConverted = Boolean(data.leadConverted);
+        const leadOrderAdded = Boolean(data.leadOrderAdded);
         const warning = typeof data.warning === 'string' ? data.warning : undefined;
         alert(
           warning
@@ -275,7 +277,9 @@ export default function MobileNewOrderModal({
         // (delivery_date/delivery_time), а не form.deliveryDate/deliveryTime —
         // иначе оптимистично добавленная заявка не проходила фильтр по дню
         // (страница фильтрует именно по delivery_date) и "не показывалась".
-        if (onSuccess) onSuccess({ ...payload, id: data.orderId }, { warning, leadConverted });
+        if (onSuccess) {
+          onSuccess({ ...payload, id: data.orderId }, { warning, leadConverted, leadOrderAdded });
+        }
         onClose();
       } else {
         alert(data.message || 'Ошибка создания заявки');
@@ -317,9 +321,27 @@ export default function MobileNewOrderModal({
           padding: '14px 16px',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         })}>
-          <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>
-            {isCopy ? 'Копия заявки' : 'Новая заявка'}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>
+              {isCopy ? 'Копия заявки' : 'Новая заявка'}
+            </span>
+            {(initialData?.lead_id ?? initialData?.leadId) != null && (
+              <span
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: 6,
+                  background: 'rgba(37, 99, 235, 0.25)',
+                  border: '1px solid #3B82F6',
+                  color: '#BFDBFE',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+                title="Новая заявка будет привязана к этому лиду"
+              >
+                К лиду #{initialData.lead_id ?? initialData.leadId}
+              </span>
+            )}
+          </div>
           <button type="button" onClick={onClose} aria-label="Закрыть" style={modalCloseButtonStyle({ width: 32, height: 32, fontSize: '18px' })}>
             <X size={16} color="#94A3B8" />
           </button>

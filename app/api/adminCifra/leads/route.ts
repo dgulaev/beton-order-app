@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SALES_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { canProcessTenders } from '@/lib/demandProcessAccess';
-import { parseIdList } from '@/lib/leadAssigneeIds';
+import { isLeadAssignee, parseIdList } from '@/lib/leadAssigneeIds';
 import { notifyLeadTakeRequired, resolveStaffRefs } from '@/lib/leadAssigneesServer';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { upsertLead } from '@/lib/leadService';
 import {
   LEAD_MANUAL_CREATE_SOURCES,
+  type Lead,
   type LeadDraft,
   type LeadManualCreateSource,
 } from '@/lib/leads';
@@ -17,6 +18,7 @@ export async function GET(request: NextRequest) {
 
   const status = request.nextUrl.searchParams.get('status');
   const source = request.nextUrl.searchParams.get('source');
+  const mine = request.nextUrl.searchParams.get('mine') === '1';
   const limit = Math.min(Number(request.nextUrl.searchParams.get('limit') || 100), 300);
 
   let query = supabaseAdmin
@@ -28,13 +30,26 @@ export async function GET(request: NextRequest) {
   if (status) query = query.eq('status', status);
   if (source) query = query.eq('source', source);
 
+  // Исполнитель или соисполнитель (jsonb array contains).
+  if (mine) {
+    const uid = auth.user.user_id;
+    query = query.or(`assigned_to.eq.${uid},raw_payload->co_assignees.cs.[${uid}]`);
+  }
+
   const { data, error } = await query;
   if (error) {
     console.error('[leads GET]', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ success: true, leads: data ?? [] });
+  let leads = (data ?? []) as Lead[];
+  // Страховка: post-filter на случай кривого jsonb-фильтра.
+  if (mine) {
+    const uid = auth.user.user_id;
+    leads = leads.filter((l) => isLeadAssignee(l, uid));
+  }
+
+  return NextResponse.json({ success: true, leads });
 }
 
 /** Ручное создание лида (торги / вручную / сайт). */
@@ -176,7 +191,7 @@ export async function POST(request: NextRequest) {
       volume_m3: volume,
       address: body.address ?? null,
       city: body.city ?? null,
-      desired_date: body.desired_date || deadline || null,
+      desired_date: body.desired_date || null,
       status: 'new',
       score: source === 'tender' ? 70 : 50,
       assigned_to: assignedTo,
@@ -215,6 +230,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Не удалось создать лид' }, { status: 400 });
     }
 
+    // Тендер → наблюдение в «Обзвон» (через ~15 дней после дедлайна подтянем победителя)
+    let calloutWatch: { ok: boolean; message: string; tender_id?: number } | null = null;
+    if (source === 'tender' && (purchaseNumber || etpUrl)) {
+      try {
+        const { watchLeadForCallout } = await import('@/lib/callout/calloutService');
+        calloutWatch = await watchLeadForCallout({
+          leadId: result.lead.id,
+          purchaseUrl: etpUrl,
+          purchaseNumber,
+          law,
+          objectInfo: comment || result.lead.raw_text,
+          nmck,
+          deadline,
+        });
+      } catch (e) {
+        console.error('[leads] callout watch', e);
+        calloutWatch = {
+          ok: false,
+          message: e instanceof Error ? e.message : 'Ошибка постановки на обзвон',
+        };
+      }
+    }
+
     const notifyIds = [
       ...(assignedTo ? [assignedTo] : []),
       ...coAssigneeIds,
@@ -232,6 +270,7 @@ export async function POST(request: NextRequest) {
       success: true,
       lead: result.lead,
       created: result.created,
+      callout_watch: calloutWatch,
     });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Ошибка';

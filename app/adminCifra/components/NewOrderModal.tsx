@@ -20,7 +20,7 @@ interface NewOrderModalProps {
   onClose: () => void;
   onSuccess?: (
     newOrder?: any,
-    meta?: { warning?: string; leadConverted?: boolean },
+    meta?: { warning?: string; leadConverted?: boolean; leadOrderAdded?: boolean },
   ) => void;
   userId?: any;                       // ID клиента
   userName?: string;                  // Имя клиента (для отображения)
@@ -254,6 +254,7 @@ export default function NewOrderModal({
       // ==================== 9. СОЗДАНИЕ ЗАЯВКИ ====================
 const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
+  if (isSubmitting) return;
   setIsSubmitting(true);
 
   // ================================================
@@ -371,6 +372,7 @@ const handleSubmit = async (e: React.FormEvent) => {
       setNotificationSent(false);
 
       const leadConverted = Boolean(data.leadConverted);
+      const leadOrderAdded = Boolean(data.leadOrderAdded);
       const warning = typeof data.warning === 'string' ? data.warning : undefined;
       alert(
         warning
@@ -379,7 +381,7 @@ const handleSubmit = async (e: React.FormEvent) => {
       );
 
       if (typeof onSuccess === 'function') {
-        onSuccess(createdOrder, { warning, leadConverted });
+        onSuccess(createdOrder, { warning, leadConverted, leadOrderAdded });
       }
 
       setTimeout(() => {
@@ -435,7 +437,25 @@ const handleSubmit = async (e: React.FormEvent) => {
       <div className="w-full max-w-[920px] lg:max-w-[1080px] max-h-[90vh] overflow-auto mx-auto scroll-hidden" style={volumeModalStyle({ borderRadius: 24, padding: s('20px 32px 24px', '32px') })} onClick={e => e.stopPropagation()}>
         
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: s('14px', '24px') }}>
-          <h2 style={{ margin: 0, fontSize: s('22px', '28px') }}>Новая заявка на бетон</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <h2 style={{ margin: 0, fontSize: s('22px', '28px') }}>Новая заявка на бетон</h2>
+            {(initialData?.lead_id ?? initialData?.leadId) != null && (
+              <span
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: 8,
+                  background: 'rgba(37, 99, 235, 0.25)',
+                  border: '1px solid #3B82F6',
+                  color: '#BFDBFE',
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+                title="Новая заявка будет привязана к этому лиду"
+              >
+                К лиду #{initialData.lead_id ?? initialData.leadId}
+              </span>
+            )}
+          </div>
           <button onClick={onClose} style={modalCloseButtonStyle()}>×</button>
         </div>
 

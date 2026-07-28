@@ -642,6 +642,16 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
     }
   }
 
+  // Лид: авто «Исполнен», если суммарная отгрузка по всем заявкам ≥ плана лида
+  if (status && status !== oldStatus && orderId) {
+    try {
+      const { maybeAutoFulfillLeadByOrderId } = await import('@/lib/leadShipments');
+      await maybeAutoFulfillLeadByOrderId(Number(orderId));
+    } catch (e) {
+      console.error('maybeAutoFulfillLeadByOrderId:', e);
+    }
+  }
+
   if (historyEntries.length > 0) {
     const { error: historyError } = await supabase.from('order_history').insert(historyEntries);
     if (historyError) console.error('Ошибка записи истории при смене статуса миксера:', historyError);
@@ -807,6 +817,16 @@ export async function updateOrderMixerVolume(params: UpdateOrderMixerVolumeParam
 
   const { error: historyError } = await supabase.from('order_history').insert(historyEntries);
   if (historyError) console.error('Ошибка записи истории при правке объёма миксера:', historyError);
+
+  // Правка объёма тоже может дотянуть план лида до закрытия
+  if (orderId) {
+    try {
+      const { maybeAutoFulfillLeadByOrderId } = await import('@/lib/leadShipments');
+      await maybeAutoFulfillLeadByOrderId(Number(orderId));
+    } catch (e) {
+      console.error('maybeAutoFulfillLeadByOrderId after volume edit:', e);
+    }
+  }
 
   return {
     httpStatus: 200,

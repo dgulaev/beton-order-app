@@ -91,7 +91,8 @@ async function seedMissingLeadHistory(): Promise<void> {
       user_role: actor.user_role || (isStaff ? null : 'system'),
       field_name: 'status',
       old_value: null,
-      new_value: lead.status,
+      // Всегда «Новый» при создании — текущий статус лида здесь врёт (fulfilled и т.п.)
+      new_value: 'new',
       created_at: lead.created_at,
     };
   });

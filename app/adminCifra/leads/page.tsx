@@ -1,6 +1,7 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
   FileText,
@@ -21,7 +22,13 @@ import {
 import type { LeadHistoryEntry } from '@/lib/leadHistory';
 import { canProcessTenders } from '@/lib/demandProcessAccess';
 import {
+  LEAD_CONTRACT_ACCEPT,
+  isAllowedContractFile,
+} from '@/lib/leadContracts';
+import {
   canManagerRejectOrSpamLead,
+  formatLeadDateRu,
+  getLeadDateHints,
   isLeadWorkOpenToAll,
   LEAD_SOURCE_LABEL,
   leadToOrderInitialData,
@@ -40,12 +47,36 @@ import styles from './leads.module.css';
 const STATUS_LABEL: Record<LeadStatus, string> = {
   new: 'Новый',
   in_progress: 'В работе',
-  converted: 'В заказ',
+  converted: 'В отгрузке',
+  fulfilled: 'Исполнен',
   rejected: 'Отказ',
   spam: 'Спам',
 };
 
-const STATUS_FILTERS = ['new', 'in_progress', 'converted', 'rejected', 'spam'] as const;
+const STATUS_FILTERS = [
+  'new',
+  'in_progress',
+  'converted',
+  'fulfilled',
+  'rejected',
+  'spam',
+] as const;
+
+type LeadShipmentsInfo = {
+  plan_m3: number | null;
+  ordered_m3: number;
+  shipped_m3: number;
+  remaining_m3: number | null;
+  percent: number | null;
+  orders: Array<{
+    order_id: number;
+    status: string;
+    grade: string | null;
+    volume: number | null;
+    delivery_date: string | null;
+    shipped_m3: number;
+  }>;
+};
 
 type Employee = {
   user_id: number;
@@ -140,7 +171,7 @@ function formatDateTime(iso: string | null | undefined): string {
 function formatHistoryStatus(value: string | null | undefined): string {
   if (!value) return '—';
   if (value.startsWith('converted:#')) {
-    return `В заказ ${value.slice('converted:'.length)}`;
+    return `В отгрузке ${value.slice('converted:'.length)}`;
   }
   return STATUS_LABEL[value as LeadStatus] || value;
 }
@@ -238,16 +269,30 @@ function LeadsPageInner() {
   const [history, setHistory] = useState<LeadHistoryEntry[]>([]);
   const [historyByLead, setHistoryByLead] = useState<Record<number, LeadHistoryEntry[]>>({});
   const [historyLoading, setHistoryLoading] = useState(true);
-  const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [expandedIds, setExpandedIds] = useState<Record<number, boolean>>({});
   const initialStatus = searchParams.get('status');
   const initialSource = searchParams.get('source');
+  const initialLeadIdRaw = searchParams.get('leadId');
+  const initialLeadId =
+    initialLeadIdRaw && Number.isFinite(Number(initialLeadIdRaw)) && Number(initialLeadIdRaw) > 0
+      ? Number(initialLeadIdRaw)
+      : null;
+  const [selectedLeadId, setSelectedLeadId] = useState<number | null>(initialLeadId);
   const [statusFilter, setStatusFilter] = useState<string>(
-    initialStatus && (STATUS_FILTERS as readonly string[]).includes(initialStatus)
-      ? initialStatus
-      : 'new',
+    initialLeadId != null
+      ? ''
+      : initialStatus && (STATUS_FILTERS as readonly string[]).includes(initialStatus)
+        ? initialStatus
+        : 'new',
   );
   const [sourceFilter, setSourceFilter] = useState<string>(initialSource || '');
+  // Менеджеры без прав торгов — сразу «Мои», без мигания чужих лидов.
+  // Deep-link leadId — не сужаем фильтр заранее, иначе карточка может не попасть в выдачу.
+  const [mineOnly, setMineOnly] = useState(
+    () => !allowTenderProcess && !isAdmin && initialLeadId == null,
+  );
+  const deepLinkLeadDoneRef = useRef(false);
+  const deepLinkFetchRef = useRef(false);
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [orderInitial, setOrderInitial] = useState<any>(null);
   const [convertingId, setConvertingId] = useState<number | null>(null);
@@ -255,6 +300,8 @@ function LeadsPageInner() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [contractsByLead, setContractsByLead] = useState<Record<number, ContractMeta[]>>({});
   const [uploadingLeadId, setUploadingLeadId] = useState<number | null>(null);
+  const [shipmentsByLead, setShipmentsByLead] = useState<Record<number, LeadShipmentsInfo>>({});
+  const loadSeqRef = useRef(0);
 
   const statusFilterArr = useMemo(
     () => (statusFilter ? [statusFilter as LeadStatus] : undefined),
@@ -325,17 +372,65 @@ function LeadsPageInner() {
     }
   }, []);
 
+  const loadShipments = useCallback(async (leadList: Lead[]) => {
+    const ids = leadList
+      .filter(
+        (l) =>
+          l.status === 'converted' ||
+          l.status === 'fulfilled' ||
+          l.order_id != null,
+      )
+      .map((l) => l.id);
+    if (ids.length === 0) {
+      setShipmentsByLead({});
+      return;
+    }
+    const entries = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const res = await fetch(`/api/adminCifra/leads/${id}/shipments`, {
+            headers: adminCifraAuthHeaders(),
+          });
+          const json = await res.json();
+          if (!res.ok || !json.success) return null;
+          return [
+            id,
+            {
+              plan_m3: json.plan_m3 ?? null,
+              ordered_m3: json.ordered_m3 ?? 0,
+              shipped_m3: json.shipped_m3 ?? 0,
+              remaining_m3: json.remaining_m3 ?? null,
+              percent: json.percent ?? null,
+              orders: json.orders || [],
+            } as LeadShipmentsInfo,
+          ] as const;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    const map: Record<number, LeadShipmentsInfo> = {};
+    for (const row of entries) {
+      if (row) map[row[0]] = row[1];
+    }
+    setShipmentsByLead(map);
+  }, []);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setLoadError(null);
     try {
       const qs = new URLSearchParams();
       if (statusFilter) qs.set('status', statusFilter);
       if (sourceFilter) qs.set('source', sourceFilter);
+      if (mineOnly) qs.set('mine', '1');
+      qs.set('limit', mineOnly ? '300' : '100');
       const res = await fetch(`/api/adminCifra/leads?${qs}`, {
         headers: adminCifraAuthHeaders(),
       });
       const json = await res.json();
+      if (seq !== loadSeqRef.current) return;
       if (!res.ok || !json.success) {
         setLoadError(json.error || `Ошибка загрузки (${res.status})`);
         setLeads([]);
@@ -344,19 +439,71 @@ function LeadsPageInner() {
       const next = (json.leads || []) as Lead[];
       setLeads(next);
       void loadContracts(next);
+      void loadShipments(next);
       void refreshHistoryFeed();
     } catch (e) {
+      if (seq !== loadSeqRef.current) return;
       console.error(e);
       setLoadError('Ошибка соединения с сервером');
       setLeads([]);
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
-  }, [statusFilter, sourceFilter, loadContracts, refreshHistoryFeed]);
+  }, [statusFilter, sourceFilter, mineOnly, loadContracts, loadShipments, refreshHistoryFeed]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Deep-link /adminCifra/leads?leadId=N — догрузить карточку, если её нет в списке
+  useEffect(() => {
+    if (!initialLeadId || deepLinkLeadDoneRef.current || loading) return;
+
+    const activate = (leadId: number) => {
+      deepLinkLeadDoneRef.current = true;
+      setSelectedLeadId(leadId);
+      const el = document.getElementById(`lead-card-${leadId}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (typeof window !== 'undefined') {
+        window.history.replaceState({}, '', '/adminCifra/leads');
+      }
+    };
+
+    if (leads.some((l) => l.id === initialLeadId)) {
+      activate(initialLeadId);
+      return;
+    }
+
+    if (deepLinkFetchRef.current) return;
+    deepLinkFetchRef.current = true;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/adminCifra/leads/${initialLeadId}`, {
+          headers: adminCifraAuthHeaders(),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok || !json.success || !json.lead) {
+          deepLinkLeadDoneRef.current = true;
+          return;
+        }
+        const lead = json.lead as Lead;
+        setStatusFilter('');
+        setMineOnly(false);
+        setLeads((prev) => (prev.some((l) => l.id === lead.id) ? prev : [lead, ...prev]));
+        // Дать React отрисовать карточку, затем проскроллить
+        requestAnimationFrame(() => activate(lead.id));
+      } catch {
+        deepLinkLeadDoneRef.current = true;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialLeadId, leads, loading]);
 
   useEffect(() => {
     void loadHistory(selectedLeadId);
@@ -380,9 +527,15 @@ function LeadsPageInner() {
     enabled: true,
     statusFilter: statusFilterArr,
     sourceFilter: sourceFilter || undefined,
+    mineOnly,
+    currentUserId,
   });
 
-  const patchStatus = async (id: number, status: LeadStatus) => {
+  const patchStatus = async (
+    id: number,
+    status: LeadStatus,
+    opts?: { keepInList?: boolean },
+  ) => {
     const res = await fetch(`/api/adminCifra/leads/${id}`, {
       method: 'PATCH',
       headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
@@ -407,11 +560,11 @@ function LeadsPageInner() {
       void loadHistory(selectedLeadId);
       return true;
     }
-    // После возврата из отказа/спама — обратно в «Новые» / «В работе».
+    // После возврата из отказа/спама / исполненных — на нужный фильтр.
     if (
       allowTenderProcess &&
-      (status === 'new' || status === 'in_progress') &&
-      (statusFilter === 'rejected' || statusFilter === 'spam')
+      (status === 'new' || status === 'in_progress' || status === 'converted') &&
+      (statusFilter === 'rejected' || statusFilter === 'spam' || statusFilter === 'fulfilled')
     ) {
       setStatusFilter(status);
       void loadHistory(selectedLeadId);
@@ -419,7 +572,7 @@ function LeadsPageInner() {
     }
 
     setLeads((prev) => {
-      if (statusFilter && status !== statusFilter) {
+      if (statusFilter && status !== statusFilter && !opts?.keepInList) {
         return prev.filter((l) => l.id !== id);
       }
       return prev.map((l) => (l.id === id ? { ...l, ...json.lead, status } : l));
@@ -430,14 +583,33 @@ function LeadsPageInner() {
 
   const openConvert = async (lead: Lead) => {
     setConvertingId(lead.id);
+    let working = lead;
     if (lead.status === 'new') {
-      const ok = await patchStatus(lead.id, 'in_progress');
+      const ok = await patchStatus(lead.id, 'in_progress', { keepInList: true });
       if (!ok) {
         setConvertingId(null);
         return;
       }
+      working = { ...lead, status: 'in_progress' };
     }
-    setOrderInitial(leadToOrderInitialData(lead));
+    let remaining: number | null = null;
+    if (working.status === 'converted' || working.order_id != null) {
+      try {
+        const res = await fetch(`/api/adminCifra/leads/${working.id}/shipments`, {
+          headers: adminCifraAuthHeaders(),
+        });
+        const json = await res.json();
+        if (res.ok && json.success && json.plan_m3 != null) {
+          remaining =
+            json.remaining_m3 != null
+              ? Math.max(0, Number(json.remaining_m3))
+              : Math.max(0, Number(json.plan_m3) - Number(json.ordered_m3 ?? json.shipped_m3 ?? 0));
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    setOrderInitial(leadToOrderInitialData(working, { remainingVolumeM3: remaining }));
     setShowOrderModal(true);
   };
 
@@ -508,10 +680,20 @@ function LeadsPageInner() {
 
   const uploadContracts = async (leadId: number, list: FileList | null) => {
     if (!list?.length) return;
+    const picked: File[] = [];
+    for (const file of Array.from(list)) {
+      const bad = isAllowedContractFile(file);
+      if (bad) {
+        alert(`${file.name}: ${bad}`);
+        continue;
+      }
+      picked.push(file);
+    }
+    if (!picked.length) return;
     setUploadingLeadId(leadId);
     try {
       const fd = new FormData();
-      Array.from(list).forEach((f) => fd.append('files', f));
+      picked.forEach((f) => fd.append('files', f));
       const res = await fetch(`/api/adminCifra/leads/${leadId}/contracts`, {
         method: 'POST',
         headers: adminCifraAuthHeaders(),
@@ -621,7 +803,7 @@ function LeadsPageInner() {
       </div>
 
       <div className={styles.filters}>
-        {['', 'new', 'in_progress', 'converted', 'rejected', 'spam'].map((s) => (
+        {['', 'new', 'in_progress', 'converted', 'fulfilled', 'rejected', 'spam'].map((s) => (
           <button
             key={s || 'all'}
             type="button"
@@ -635,6 +817,18 @@ function LeadsPageInner() {
             {s ? STATUS_LABEL[s as LeadStatus] : 'Все'}
           </button>
         ))}
+        <button
+          type="button"
+          onClick={() => setMineOnly((v) => !v)}
+          className={styles.filterChip}
+          style={{
+            border: mineOnly ? '1px solid #FACC15' : '1px solid #334155',
+            background: mineOnly ? 'rgba(234, 179, 8, 0.2)' : '#0F172A',
+            color: mineOnly ? '#FEF08A' : '#E2E8F0',
+          }}
+        >
+          Мои
+        </button>
         <select
           value={sourceFilter}
           onChange={(e) => setSourceFilter(e.target.value)}
@@ -733,6 +927,17 @@ function LeadsPageInner() {
                 const takenBy = String(payload?.taken_by_name ?? '').trim();
                 const takenAt = formatDateTime(String(payload?.taken_at ?? '').trim());
                 const cardHistory = (historyByLead[lead.id] || []).slice(0, 5);
+                const shipments = shipmentsByLead[lead.id];
+                const dateHints = getLeadDateHints(lead);
+                const canCreateOrder =
+                  (allowTenderProcess || canActOnAssignedLeadWork(lead, currentUserId)) &&
+                  lead.status !== 'spam' &&
+                  lead.status !== 'rejected' &&
+                  lead.status !== 'fulfilled';
+                const canMarkFulfilled =
+                  (allowTenderProcess || canActOnAssignedLeadWork(lead, currentUserId)) &&
+                  (lead.status === 'converted' ||
+                    (lead.status === 'in_progress' && lead.order_id != null));
                 const coAddOptions = employees
                   .filter((emp) => {
                     if (lead.assigned_to && emp.user_id === lead.assigned_to) return false;
@@ -751,6 +956,7 @@ function LeadsPageInner() {
                 return (
                   <div
                     key={lead.id}
+                    id={`lead-card-${lead.id}`}
                     role="button"
                     tabIndex={0}
                     onClick={() =>
@@ -865,8 +1071,135 @@ function LeadsPageInner() {
                         {lead.grade && <span>{lead.grade}</span>}
                         {lead.volume_m3 != null && <span>{lead.volume_m3} м³</span>}
                         {lead.city && <span>{lead.city}</span>}
+                        {dateHints.submissionDeadline && (
+                          <span style={{ color: '#94A3B8', fontWeight: 500 }}>
+                            Подача до: {formatLeadDateRu(dateHints.submissionDeadline)}
+                          </span>
+                        )}
+                        {dateHints.deliveryDate && (
+                          <span
+                            style={{
+                              color: dateHints.deliveryOverdue ? '#FCA5A5' : '#FDE68A',
+                              fontWeight: dateHints.deliveryOverdue ? 700 : 500,
+                            }}
+                          >
+                            Поставка: {formatLeadDateRu(dateHints.deliveryDate)}
+                            {dateHints.deliveryOverdue ? ' · просрочена' : ''}
+                          </span>
+                        )}
                         <span>{new Date(lead.created_at).toLocaleString('ru-RU')}</span>
                       </div>
+
+                      {shipments && (shipments.orders.length > 0 || shipments.plan_m3 != null) && (
+                        <div
+                          style={{
+                            marginTop: 10,
+                            padding: 10,
+                            borderRadius: 10,
+                            background: 'rgba(15, 23, 42, 0.7)',
+                            border: '1px solid #334155',
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              gap: 8,
+                              fontSize: 12,
+                              color: '#CBD5E1',
+                              marginBottom: 6,
+                            }}
+                          >
+                            <span>
+                              Отгрузка:{' '}
+                              <strong style={{ color: '#F1F5F9' }}>
+                                {shipments.shipped_m3}
+                                {shipments.plan_m3 != null ? ` / ${shipments.plan_m3}` : ''} м³
+                              </strong>
+                              {shipments.plan_m3 != null && (
+                                <span style={{ color: '#94A3B8', fontWeight: 400 }}>
+                                  {' · '}в заявках {shipments.ordered_m3 ?? 0} м³
+                                  {shipments.remaining_m3 != null
+                                    ? ` · остаток ${shipments.remaining_m3} м³`
+                                    : ''}
+                                </span>
+                              )}
+                            </span>
+                            {shipments.percent != null && (
+                              <span style={{ color: '#86EFAC' }}>{shipments.percent}%</span>
+                            )}
+                          </div>
+                          <div
+                            style={{
+                              height: 8,
+                              borderRadius: 999,
+                              background: '#1E293B',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: '100%',
+                                width: `${Math.min(100, shipments.percent ?? 0)}%`,
+                                background:
+                                  (shipments.percent ?? 0) >= 100
+                                    ? '#22C55E'
+                                    : 'linear-gradient(90deg, #2563EB, #38BDF8)',
+                                transition: 'width 0.3s ease',
+                              }}
+                            />
+                          </div>
+                          {shipments.orders.length > 0 && (
+                            <ul
+                              style={{
+                                margin: '8px 0 0',
+                                padding: 0,
+                                listStyle: 'none',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 4,
+                              }}
+                            >
+                              {shipments.orders.map((o) => (
+                                <li
+                                  key={o.order_id}
+                                  style={{
+                                    fontSize: 12,
+                                    color: '#94A3B8',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    gap: 8,
+                                    alignItems: 'center',
+                                  }}
+                                >
+                                  <Link
+                                    href={`/adminCifra/zayavki?orderId=${o.order_id}`}
+                                    onClick={(e) => e.stopPropagation()}
+                                    style={{
+                                      color: '#93C5FD',
+                                      textDecoration: 'none',
+                                      fontWeight: 600,
+                                      minWidth: 0,
+                                    }}
+                                    title={`Открыть заявку #${o.order_id}`}
+                                  >
+                                    Заявка #{o.order_id}
+                                    {o.grade ? ` · ${o.grade}` : ''}
+                                    {o.delivery_date
+                                      ? ` · ${formatLeadDateRu(String(o.delivery_date).slice(0, 10))}`
+                                      : ''}
+                                  </Link>
+                                  <span style={{ color: '#E2E8F0', whiteSpace: 'nowrap' }}>
+                                    {o.shipped_m3}
+                                    {o.volume != null ? ` / ${o.volume}` : ''} м³
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      )}
 
                       <div
                         style={{ marginTop: 10 }}
@@ -1017,7 +1350,7 @@ function LeadsPageInner() {
                               <input
                                 type="file"
                                 multiple
-                                accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.txt"
+                                accept={LEAD_CONTRACT_ACCEPT}
                                 hidden
                                 disabled={uploadingLeadId === lead.id}
                                 onChange={(e) => {
@@ -1055,7 +1388,7 @@ function LeadsPageInner() {
                     </div>
 
                     <div className={styles.actions} onClick={(e) => e.stopPropagation()}>
-                      {allowTenderProcess && lead.status !== 'converted' && (
+                      {allowTenderProcess && lead.status !== 'fulfilled' && (
                         <button
                           type="button"
                           onClick={() => setProcessLead(lead)}
@@ -1104,18 +1437,29 @@ function LeadsPageInner() {
                             Взять в работу
                           </button>
                         )}
-                      {(allowTenderProcess ||
-                        canActOnAssignedLeadWork(lead, currentUserId)) &&
-                        lead.status !== 'converted' &&
-                        lead.status !== 'spam' && (
+                      {canCreateOrder && (
                           <button
                             type="button"
                             onClick={() => void openConvert(lead)}
                             style={btnPrimary}
                           >
-                            Создать заказ
+                            {lead.status === 'converted' || lead.order_id != null
+                              ? 'Ещё заявка'
+                              : 'Создать заказ'}
                           </button>
                         )}
+                      {canMarkFulfilled && (
+                        <button
+                          type="button"
+                          onClick={() => void patchStatus(lead.id, 'fulfilled')}
+                          style={{
+                            ...btnPrimary,
+                            background: 'linear-gradient(135deg, #15803D, #22C55E)',
+                          }}
+                        >
+                          Исполнен
+                        </button>
+                      )}
                       {(etpUrl || lead.chat_url) && (
                         <a
                           href={etpUrl || lead.chat_url || '#'}
@@ -1157,6 +1501,7 @@ function LeadsPageInner() {
                       {(allowTenderProcess || canManagerRejectOrSpamLead(lead.source)) &&
                         lead.status !== 'rejected' &&
                         lead.status !== 'converted' &&
+                        lead.status !== 'fulfilled' &&
                         lead.status !== 'spam' && (
                           <button
                             type="button"
@@ -1168,7 +1513,8 @@ function LeadsPageInner() {
                         )}
                       {(allowTenderProcess || canManagerRejectOrSpamLead(lead.source)) &&
                         lead.status !== 'spam' &&
-                        lead.status !== 'converted' && (
+                        lead.status !== 'converted' &&
+                        lead.status !== 'fulfilled' && (
                           <button
                             type="button"
                             onClick={() => void patchStatus(lead.id, 'spam')}
@@ -1214,10 +1560,60 @@ function LeadsPageInner() {
                           </button>
                         </>
                       )}
-                      {lead.order_id && (
-                        <span style={{ color: '#86EFAC', fontSize: 13, textAlign: 'center' }}>
-                          Заявка #{lead.order_id}
-                        </span>
+                      {allowTenderProcess && lead.status === 'fulfilled' && (
+                        <button
+                          type="button"
+                          onClick={() => void patchStatus(lead.id, 'converted')}
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: 10,
+                            border: '1px solid #3B82F6',
+                            background: 'rgba(37, 99, 235, 0.2)',
+                            color: '#BFDBFE',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            fontSize: 13,
+                          }}
+                        >
+                          Вернуть в отгрузку
+                        </button>
+                      )}
+                      {shipments && shipments.orders.length > 0 ? (
+                        shipments.orders.length === 1 ? (
+                          <Link
+                            href={`/adminCifra/zayavki?orderId=${shipments.orders[0].order_id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                              color: '#86EFAC',
+                              fontSize: 13,
+                              textAlign: 'center',
+                              textDecoration: 'none',
+                              fontWeight: 600,
+                            }}
+                          >
+                            Заявка #{shipments.orders[0].order_id} →
+                          </Link>
+                        ) : (
+                          <span style={{ color: '#86EFAC', fontSize: 13, textAlign: 'center' }}>
+                            Заявок: {shipments.orders.length}
+                          </span>
+                        )
+                      ) : (
+                        lead.order_id && (
+                          <Link
+                            href={`/adminCifra/zayavki?orderId=${lead.order_id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                              color: '#86EFAC',
+                              fontSize: 13,
+                              textAlign: 'center',
+                              textDecoration: 'none',
+                              fontWeight: 600,
+                            }}
+                          >
+                            Заявка #{lead.order_id} →
+                          </Link>
+                        )
                       )}
                     </div>
                   </div>
@@ -1324,9 +1720,9 @@ function LeadsPageInner() {
           onSuccess={(_order, meta) => {
             setShowOrderModal(false);
             setOrderInitial(null);
-            if (convertingId && meta?.leadConverted && !meta?.warning) {
+            if (convertingId && (meta?.leadConverted || meta?.leadOrderAdded) && !meta?.warning) {
               setLeads((prev) => {
-                if (statusFilter && statusFilter !== 'converted') {
+                if (statusFilter && statusFilter !== 'converted' && statusFilter !== '') {
                   return prev.filter((l) => l.id !== convertingId);
                 }
                 return prev.map((l) =>
@@ -1363,6 +1759,7 @@ function LeadsPageInner() {
           setLeads((prev) => {
             const next = prev.map((l) => (l.id === updated.id ? { ...l, ...updated } : l));
             void loadContracts(next);
+            void loadShipments(next);
             return next;
           });
           setProcessLead(null);

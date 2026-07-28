@@ -1105,10 +1105,18 @@ ${order.customer_type?.includes('Юридическое')
   };
 
   // ==================== КОПИРОВАТЬ ЗАЯВКУ ====================
-  const copyOrder = (order: any) => {
+  const copyOrder = async (order: any) => {
+    const { resolveLeadLinkForOrderCopy } = await import('@/lib/leadOrderCopy');
+    const leadLink = await resolveLeadLinkForOrderCopy({
+      leadId: order.lead_id ?? order.leadId ?? null,
+      leadSource: order.lead_source ?? order.leadSource ?? null,
+      externalRef: order.external_ref ?? order.externalRef ?? null,
+      volume: order.volume ?? null,
+    });
+
     const copiedData = {
       grade: order.grade,
-      volume: order.volume,
+      volume: leadLink.volume != null ? leadLink.volume : order.volume,
       deliveryDate: order.delivery_date,
       deliveryTime: order.delivery_time,
       address: order.address,
@@ -1118,6 +1126,9 @@ ${order.customer_type?.includes('Юридическое')
       phone: order.phone,
       inn: order.inn || '',
       comment: order.comment || '',
+      lead_id: leadLink.lead_id,
+      lead_source: leadLink.lead_source,
+      external_ref: leadLink.external_ref,
     };
 
     setSelectedOrder(null);
@@ -2600,6 +2611,24 @@ ${order.customer_type?.includes('Юридическое')
             <h2 style={{ margin: 0, fontSize: '21px', color: '#F1F5F9', whiteSpace: 'nowrap' }}>
               Заявка #{selectedOrder.id}
             </h2>
+            {(selectedOrder.lead_id ?? selectedOrder.leadId) != null && (
+              <a
+                href={`/adminCifra/leads?leadId=${selectedOrder.lead_id ?? selectedOrder.leadId}`}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: 8,
+                  background: 'rgba(37, 99, 235, 0.25)',
+                  border: '1px solid #3B82F6',
+                  color: '#BFDBFE',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  textDecoration: 'none',
+                }}
+                title="Открыть лид"
+              >
+                Лид #{selectedOrder.lead_id ?? selectedOrder.leadId} →
+              </a>
+            )}
 
             {/* Статус — компактный read-only бейдж, в одном стиле с кнопками действий
                 (тонкая рамка + акцентный цвет, без сплошной "таблеточной" заливки) */}

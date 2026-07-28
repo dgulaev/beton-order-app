@@ -91,6 +91,24 @@ export default function OrderViewModal({ order, onClose, onDuplicate }: OrderVie
           <h2 style={{ margin: 0, fontSize: '22px', color: '#F1F5F9', whiteSpace: 'nowrap' }}>
             Заявка #{order.id}
           </h2>
+          {(order.lead_id ?? order.leadId) != null && (
+            <a
+              href={`/adminCifra/leads?leadId=${order.lead_id ?? order.leadId}`}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 8,
+                background: 'rgba(37, 99, 235, 0.25)',
+                border: '1px solid #3B82F6',
+                color: '#BFDBFE',
+                fontSize: 13,
+                fontWeight: 600,
+                textDecoration: 'none',
+              }}
+              title="Открыть лид"
+            >
+              Лид #{order.lead_id ?? order.leadId} →
+            </a>
+          )}
           <div style={{
             backgroundColor: statusStyle.color + '20',
             color: statusStyle.color,
