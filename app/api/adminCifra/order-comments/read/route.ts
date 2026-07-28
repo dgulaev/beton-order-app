@@ -47,7 +47,17 @@ export async function POST(request: NextRequest) {
 
     if (upsertError) throw upsertError;
 
-    return NextResponse.json({ success: true, marked: rows.length });
+    const readerName = auth.user.full_name || 'Сотрудник';
+    return NextResponse.json({
+      success: true,
+      marked: rows.length,
+      reader: {
+        user_id: auth.user.user_id,
+        user_name: readerName,
+        read_at: now,
+      },
+      comment_ids: comments.map((c) => c.id),
+    });
   } catch (error: any) {
     console.error('order-comments/read POST:', error);
     return NextResponse.json({

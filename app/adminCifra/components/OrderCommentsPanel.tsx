@@ -5,6 +5,12 @@ import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import { CARD_BORDER, modalFieldStyle, volumeCardSoftStyle } from '../cardStyles';
 
+export type CommentReader = {
+  user_id: number;
+  user_name: string;
+  read_at: string;
+};
+
 export type OrderComment = {
   id: number;
   order_id: number;
@@ -14,7 +20,24 @@ export type OrderComment = {
   body: string;
   created_at: string;
   is_read?: boolean;
+  /** Кто открыл вкладку / прочитал (включая автора) */
+  read_by?: CommentReader[];
 };
+
+function mergeReader(list: CommentReader[] | undefined, reader: CommentReader): CommentReader[] {
+  const prev = list || [];
+  if (prev.some((r) => Number(r.user_id) === Number(reader.user_id))) return prev;
+  return [...prev, reader];
+}
+
+/** Имена прочитавших, кроме автора комментария */
+function readerNamesExcludingAuthor(c: OrderComment): string[] {
+  const authorId = Number(c.user_id);
+  return (c.read_by || [])
+    .filter((r) => Number(r.user_id) !== authorId)
+    .map((r) => r.user_name.trim())
+    .filter(Boolean);
+}
 
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Админ',
@@ -66,6 +89,8 @@ export default function OrderCommentsPanel({
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  /** id комментария, у которого раскрыт список прочитавших */
+  const [expandedReadersId, setExpandedReadersId] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const markReadInFlightRef = useRef(false);
   const markReadPendingRef = useRef(false);
@@ -76,6 +101,8 @@ export default function OrderCommentsPanel({
   onUnreadChangeRef.current = onUnreadChange;
   const activeRef = useRef(active);
   activeRef.current = active;
+  const commentsRef = useRef<OrderComment[]>([]);
+  commentsRef.current = comments;
 
   useEffect(() => {
     const id = Number(localStorage.getItem('userId') || 0);
@@ -110,7 +137,28 @@ export default function OrderCommentsPanel({
         console.error('mark comments read: HTTP', res.status);
         return;
       }
-      setComments((prev) => prev.map((c) => ({ ...c, is_read: true })));
+      const json = await res.json().catch(() => ({}));
+      const reader: CommentReader | null = json.reader
+        ? {
+            user_id: Number(json.reader.user_id),
+            user_name: String(json.reader.user_name || userName || 'Сотрудник'),
+            read_at: String(json.reader.read_at || new Date().toISOString()),
+          }
+        : currentUserIdRef.current
+          ? {
+              user_id: currentUserIdRef.current,
+              user_name: userName || 'Сотрудник',
+              read_at: new Date().toISOString(),
+            }
+          : null;
+
+      setComments((prev) =>
+        prev.map((c) => ({
+          ...c,
+          is_read: true,
+          read_by: reader ? mergeReader(c.read_by, reader) : c.read_by,
+        }))
+      );
       onUnreadChangeRef.current?.(0);
     } catch (e) {
       console.error('mark comments read:', e);
@@ -121,13 +169,14 @@ export default function OrderCommentsPanel({
         void markRead(oid);
       }
     }
-  }, []);
+  }, [userName]);
 
   // Загрузка только при смене orderId — без зависимости от колбэков родителя
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setComments([]);
+    setExpandedReadersId(null);
 
     (async () => {
       try {
@@ -171,9 +220,23 @@ export default function OrderCommentsPanel({
       if (record.is_deleted) return;
       const mine = Number(record.user_id) === currentUserIdRef.current;
       const tabOpen = activeRef.current;
+      const authorReader: CommentReader | undefined = mine
+        ? {
+            user_id: Number(record.user_id),
+            user_name: String(record.user_name || 'Сотрудник'),
+            read_at: String(record.created_at || new Date().toISOString()),
+          }
+        : undefined;
       setComments((prev) => {
         if (prev.some((c) => String(c.id) === String(record.id))) return prev;
-        const next = [...prev, { ...record, is_read: mine || tabOpen }];
+        const next = [
+          ...prev,
+          {
+            ...record,
+            is_read: mine || tabOpen,
+            read_by: authorReader ? [authorReader] : [],
+          },
+        ];
         if (!tabOpen && !mine) {
           const unread = next.filter(
             (c) => !c.is_read && Number(c.user_id) !== currentUserIdRef.current
@@ -188,6 +251,39 @@ export default function OrderCommentsPanel({
       }
     },
   });
+
+  // Live: кто-то прочитал комментарий (нужен триггер order_comment_reads_broadcast)
+  const orderIdRef = useRef(orderId);
+  orderIdRef.current = orderId;
+  const refreshReadersTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useRealtimeBroadcast({
+    topic: 'order_comment_reads:all',
+    onInsert: (record) => {
+      if (!record?.comment_id) return;
+      const cid = Number(record.comment_id);
+      if (!commentsRef.current.some((c) => Number(c.id) === cid)) return;
+
+      if (refreshReadersTimer.current) clearTimeout(refreshReadersTimer.current);
+      refreshReadersTimer.current = setTimeout(async () => {
+        try {
+          const res = await fetch(
+            `/api/adminCifra/order-comments?orderId=${orderIdRef.current}`,
+            { headers: adminCifraAuthHeaders(), cache: 'no-store' }
+          );
+          if (!res.ok) return;
+          const json = await res.json();
+          const list: OrderComment[] = Array.isArray(json.data) ? json.data : [];
+          setComments(list);
+        } catch (e) {
+          console.error('refresh readers:', e);
+        }
+      }, 250);
+    },
+  });
+
+  useEffect(() => () => {
+    if (refreshReadersTimer.current) clearTimeout(refreshReadersTimer.current);
+  }, []);
 
   const send = async () => {
     const body = text.trim();
@@ -253,6 +349,9 @@ export default function OrderCommentsPanel({
         )}
         {comments.map((c) => {
           const role = c.user_role ? (ROLE_LABELS[c.user_role] || c.user_role) : '';
+          const readerNames = readerNamesExcludingAuthor(c);
+          const readCount = readerNames.length;
+          const expanded = expandedReadersId === Number(c.id);
           return (
             <div
               key={c.id}
@@ -299,6 +398,49 @@ export default function OrderCommentsPanel({
                 wordBreak: 'break-word',
               }}>
                 {c.body}
+              </div>
+              <div style={{ marginLeft: 36, marginTop: 2 }}>
+                {readCount > 0 ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedReadersId((prev) =>
+                          prev === Number(c.id) ? null : Number(c.id)
+                        )
+                      }
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        padding: 0,
+                        margin: 0,
+                        color: '#64748B',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        lineHeight: 1.35,
+                      }}
+                      title={expanded ? 'Скрыть список' : 'Показать кто прочитал'}
+                    >
+                      Прочитало {readCount}
+                    </button>
+                    {expanded && (
+                      <div style={{
+                        marginTop: 2,
+                        fontSize: 11,
+                        color: '#94A3B8',
+                        lineHeight: 1.35,
+                        wordBreak: 'break-word',
+                      }}>
+                        {readerNames.join(', ')}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <span style={{ fontSize: 11, color: '#475569', lineHeight: 1.35 }}>
+                    Прочитало 0
+                  </span>
+                )}
               </div>
             </div>
           );

@@ -12,7 +12,57 @@ const supabase = createClient(
  *  Лаборант сюда не входит: у него только «Лаборатория», модалок заявок нет. */
 const COMMENT_ROLES = ORDER_MUTATION_ROLES;
 
-// GET ?orderId= — список комментариев заявки (+ is_read для текущего пользователя)
+export type CommentReader = {
+  user_id: number;
+  user_name: string;
+  read_at: string;
+};
+
+/** Прочитавшие по comment_id — имена из users.full_name */
+async function loadReadersByCommentIds(
+  commentIds: number[]
+): Promise<Map<number, CommentReader[]>> {
+  const map = new Map<number, CommentReader[]>();
+  if (commentIds.length === 0) return map;
+
+  const { data: reads } = await supabase
+    .from('order_comment_reads')
+    .select('comment_id, user_id, read_at')
+    .in('comment_id', commentIds)
+    .order('read_at', { ascending: true });
+
+  if (!reads || reads.length === 0) return map;
+
+  const userIds = [...new Set(reads.map((r) => Number(r.user_id)).filter((n) => n > 0))];
+  const nameById = new Map<number, string>();
+
+  if (userIds.length > 0) {
+    const { data: users } = await supabase
+      .from('users')
+      .select('user_id, full_name')
+      .in('user_id', userIds);
+    for (const u of users || []) {
+      const name = String(u.full_name || '').trim() || 'Сотрудник';
+      nameById.set(Number(u.user_id), name);
+    }
+  }
+
+  for (const r of reads) {
+    const cid = Number(r.comment_id);
+    const uid = Number(r.user_id);
+    const list = map.get(cid) || [];
+    list.push({
+      user_id: uid,
+      user_name: nameById.get(uid) || 'Сотрудник',
+      read_at: r.read_at,
+    });
+    map.set(cid, list);
+  }
+
+  return map;
+}
+
+// GET ?orderId= — список комментариев заявки (+ is_read + read_by)
 export async function GET(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request, COMMENT_ROLES);
   if (auth.error) return auth.error;
@@ -36,23 +86,18 @@ export async function GET(request: NextRequest) {
   }
 
   const comments = data || [];
-  const ids = comments.map((c) => c.id);
-  let readSet = new Set<number>();
+  const ids = comments.map((c) => Number(c.id));
+  const readersMap = await loadReadersByCommentIds(ids);
 
-  if (ids.length > 0) {
-    const { data: reads } = await supabase
-      .from('order_comment_reads')
-      .select('comment_id')
-      .eq('user_id', auth.user.user_id)
-      .in('comment_id', ids);
-
-    readSet = new Set((reads || []).map((r) => Number(r.comment_id)));
+  const readSet = new Set<number>();
+  for (const [cid, list] of readersMap) {
+    if (list.some((r) => r.user_id === auth.user.user_id)) readSet.add(cid);
   }
 
   const enriched = comments.map((c) => ({
     ...c,
-    // Свой комментарий всегда «прочитан»
     is_read: Number(c.user_id) === auth.user.user_id || readSet.has(Number(c.id)),
+    read_by: readersMap.get(Number(c.id)) || [],
   }));
 
   return NextResponse.json({ success: true, data: enriched });
@@ -98,15 +143,13 @@ export async function POST(request: NextRequest) {
 
     if (error) throw error;
 
-    // Автор сразу помечает свой комментарий прочитанным
+    const readAt = new Date().toISOString();
     await supabase.from('order_comment_reads').upsert({
       comment_id: data.id,
       user_id: auth.user.user_id,
-      read_at: new Date().toISOString(),
+      read_at: readAt,
     });
 
-    // Уведомления: admin_notifications через notifyManagers; mobile — отдельно,
-    // чтобы записать author_user_id и скрыть уведомление у автора на клиенте.
     const preview = text.length > 120 ? `${text.slice(0, 117)}…` : text;
     const title = `Комментарий к заявке #${orderId}`;
     const notifBody = `от: ${userName} — ${preview}`;
@@ -132,7 +175,16 @@ export async function POST(request: NextRequest) {
       new_value: String(auth.user.user_id),
     });
 
-    return NextResponse.json({ success: true, data: { ...data, is_read: true } });
+    const authorReader: CommentReader = {
+      user_id: auth.user.user_id,
+      user_name: userName,
+      read_at: readAt,
+    };
+
+    return NextResponse.json({
+      success: true,
+      data: { ...data, is_read: true, read_by: [authorReader] },
+    });
   } catch (error: any) {
     console.error('order-comments POST:', error);
     return NextResponse.json({

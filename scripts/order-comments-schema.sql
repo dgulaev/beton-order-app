@@ -40,6 +40,14 @@ create trigger order_comments_broadcast
 
 -- Топик: order_comments:all
 
+-- 4) Broadcast прочтений — чтобы «Прочитали: …» обновлялось live
+drop trigger if exists order_comment_reads_broadcast on public.order_comment_reads;
+create trigger order_comment_reads_broadcast
+  after insert or update or delete on public.order_comment_reads
+  for each row execute function public.broadcast_table_change();
+
+-- Топик: order_comment_reads:all
+
 comment on table public.order_comments is
   'Комментарии сотрудников к заявкам (не путать с comment клиента в orders)';
 comment on table public.order_comment_reads is
