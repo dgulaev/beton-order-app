@@ -37,8 +37,8 @@ interface PersistedNotif {
   timestamp: number;
   /** Куда вести по клику (по умолчанию — заявки). */
   href?: string;
-  /** Визуальный вариант: заявки — зелёный, лиды — жёлтый. */
-  tone?: 'order' | 'lead';
+  /** Визуальный вариант: заявки — зелёный, лиды — жёлтый, комментарии — голубой. */
+  tone?: 'order' | 'lead' | 'comment';
 }
 
 function escapeToastHtml(s: string): string {
@@ -317,7 +317,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       title: string,
       message: string,
       href?: string,
-      tone?: 'order' | 'lead',
+      tone?: 'order' | 'lead' | 'comment',
     ) => void) | null
   >(null);
 
@@ -412,21 +412,27 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     title: string,
     message: string,
     href = '/adminCifra/zayavki',
-    tone: 'order' | 'lead' = 'order',
+    tone: 'order' | 'lead' | 'comment' = 'order',
   ) => {
     const notif = document.createElement('div');
     notif.dataset.notifId = id;
     const isLead =
       tone === 'lead' || id.startsWith('lead-') || id.startsWith('demand-');
-    // Заявки — салатовый; лиды/спрос — жёлтый (чтобы сразу отличались в стеке).
-    // Одна ширина со стеком заявок — иначе жёлтый баннер «выпирает».
+    const isComment =
+      !isLead && (tone === 'comment' || id.startsWith('comment-'));
+    // Заявки — салатовый; лиды/спрос — жёлтый; комментарии — голубой (sky).
+    // Одна ширина со стеком — чтобы баннеры не «выпирали».
     const widthPx = 420;
     const bg = isLead
       ? 'linear-gradient(135deg, #eab308, #fde047)'
-      : 'linear-gradient(135deg, #22c55e, #86efac)';
+      : isComment
+        ? 'linear-gradient(135deg, #0ea5e9, #7dd3fc)'
+        : 'linear-gradient(135deg, #22c55e, #86efac)';
     const shadow = isLead
       ? '0 20px 40px rgba(234, 179, 8, 0.45)'
-      : '0 20px 40px rgba(34, 197, 94, 0.45)';
+      : isComment
+        ? '0 20px 40px rgba(14, 165, 233, 0.45)'
+        : '0 20px 40px rgba(34, 197, 94, 0.45)';
     const padY = isLead ? 20 : 16;
     const titleSize = isLead ? 18 : 16;
     const msgSize = isLead ? 15 : 14;
@@ -551,7 +557,12 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     const timer = setTimeout(() => {
       saved.forEach(n => {
         const tone =
-          n.tone || (n.id.startsWith('lead-') ? 'lead' : 'order');
+          n.tone ||
+          (n.id.startsWith('lead-') || n.id.startsWith('demand-')
+            ? 'lead'
+            : n.id.startsWith('comment-')
+              ? 'comment'
+              : 'order');
         createToastRef.current?.(
           n.id,
           n.icon || n.emoji || 'package',
@@ -791,19 +802,28 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       const orderId = record.order_id;
       const author = record.user_name || 'Сотрудник';
       const preview = String(record.body || '').slice(0, 100);
-      const id = `comment-${record.id}-${Date.now()}`;
+      // Стабильный id — без Date.now(), чтобы не плодить дубли после reconnect
+      // и чтобы тост пережил обновление страницы (как заявки/лиды).
+      const id = `comment-${record.id}`;
       const title = `Комментарий к заявке #${orderId}`;
       const message = `от: ${author}${preview ? ` — ${preview}` : ''}`;
+      const href = `/adminCifra/zayavki?orderId=${orderId}&tab=comments`;
 
-      playNotificationSound();
-      createToastRef.current?.(
+      savePersistedNotif({
         id,
-        'package',
+        icon: 'package',
         title,
         message,
-        `/adminCifra/zayavki?orderId=${orderId}&tab=comments`,
-        'order',
-      );
+        timestamp: Date.now(),
+        href,
+        tone: 'comment',
+      });
+
+      // Уже висит в DOM (повторный broadcast) — не дублируем
+      if (document.querySelector(`[data-notif-id="${id}"]`)) return;
+
+      playNotificationSound();
+      createToastRef.current?.(id, 'package', title, message, href, 'comment');
     },
   });
 
