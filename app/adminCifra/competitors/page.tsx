@@ -2,7 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Store, RefreshCw } from 'lucide-react';
-import { modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
+import {
+  CARD_GRADIENT_SOFT,
+  modalFieldStyle,
+  volumeCardSoftStyle,
+  volumeCardStyle,
+  volumeModalStyle,
+} from '../cardStyles';
 import ModalSelect from '../components/ModalSelect';
 import { appAlert, appConfirm } from '../components/appDialog';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
@@ -19,7 +25,7 @@ import { resolveCompetitorPriceUrl } from '@/lib/competitorsCatalog';
 import { buildCompetitorsAnalytics } from '@/lib/competitorsAnalytics';
 import CompetitorsAnalyticsPanel from './CompetitorsAnalytics';
 
-type Tab = 'matrix' | 'grades' | 'list';
+type Tab = 'matrix' | 'analytics' | 'grades' | 'list';
 
 type EditCell = {
   competitorId: number;
@@ -589,6 +595,7 @@ export default function CompetitorsPage() {
         {(
           [
             { key: 'matrix' as const, label: 'Матрица цен' },
+            { key: 'analytics' as const, label: 'Аналитика' },
             { key: 'grades' as const, label: 'Марки' },
             { key: 'list' as const, label: 'Справочник' },
           ] as const
@@ -616,6 +623,23 @@ export default function CompetitorsPage() {
 
       {loading ? (
         <div style={{ color: '#94A3B8', padding: 40, textAlign: 'center' }}>Загрузка…</div>
+      ) : tab === 'analytics' ? (
+        <div
+          className="scroll-hidden"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            width: '100%',
+            boxSizing: 'border-box',
+            borderRadius: 16,
+            border: '1px solid rgba(148, 163, 184, 0.28)',
+            background: CARD_GRADIENT_SOFT,
+            padding: '16px 18px 20px',
+          }}
+        >
+          <CompetitorsAnalyticsPanel data={analytics} />
+        </div>
       ) : tab === 'grades' ? (
         <div
           className="scroll-hidden"
@@ -885,14 +909,15 @@ export default function CompetitorsPage() {
             </div>
           </div>
 
-          {/* Матрица — горизонтальный скролл на узких экранах */}
+          {/* Матрица — на всю высоту панели (аналитика вынесена во вкладку) */}
           <div
+            className="scroll-hidden"
             style={{
-              flex: '0 0 auto',
+              flex: 1,
+              minHeight: 0,
               width: '100%',
-              overflowX: 'auto',
+              overflow: 'auto',
               WebkitOverflowScrolling: 'touch',
-              borderBottom: '1px solid #334155',
               background: '#0F172A',
             }}
           >
@@ -941,13 +966,10 @@ export default function CompetitorsPage() {
                     );
                   })}
                 </tr>
-                {activeCompetitors.map((c, idx) => {
+                {activeCompetitors.map((c) => {
                   const pricePageUrl = resolveCompetitorPriceUrl(c);
                   return (
-                  <tr
-                    key={c.id}
-                    style={{ background: idx % 2 === 0 ? 'rgba(30,41,59,0.45)' : '#0F172A' }}
-                  >
+                  <tr key={c.id}>
                     <td style={{ ...tdSticky, fontSize: 14 }} title={c.name}>
                       {pricePageUrl ? (
                         <a
@@ -1077,21 +1099,6 @@ export default function CompetitorsPage() {
               </tbody>
             </table>
           </div>
-
-          {/* Аналитика — скролл в оставшемся месте под полной таблицей */}
-          <div
-            className="scroll-hidden"
-            style={{
-              flex: 1,
-              minHeight: 180,
-              overflow: 'auto',
-              padding: '14px 14px 16px',
-              boxSizing: 'border-box',
-              background: 'linear-gradient(180deg, #1E2937 0%, #152033 100%)',
-            }}
-          >
-            <CompetitorsAnalyticsPanel data={analytics} />
-          </div>
         </div>
       )}
 
@@ -1218,29 +1225,40 @@ export default function CompetitorsPage() {
   );
 }
 
+/** Полупрозрачная сетка матрицы — строки и столбцы читаются без «зебры». */
+const MATRIX_GRID = '1px solid rgba(148, 163, 184, 0.28)';
+const MATRIX_GRID_V = '1px solid rgba(148, 163, 184, 0.2)';
+
 const thStyle: CSSProperties = {
   position: 'sticky',
   top: 0,
   zIndex: 2,
-  background: '#1E293B',
+  background: 'linear-gradient(180deg, #2A3649 0%, #1E2937 100%)',
   color: '#CBD5E1',
   fontWeight: 700,
   fontSize: 13,
   padding: '12px 6px',
-  borderBottom: '1px solid #334155',
+  borderRight: MATRIX_GRID_V,
+  borderBottom: '1px solid rgba(148, 163, 184, 0.42)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 6px rgba(0,0,0,0.22)',
   textAlign: 'center',
   whiteSpace: 'normal',
   lineHeight: 1.25,
   verticalAlign: 'bottom',
+  boxSizing: 'border-box',
 };
 
 const tdStyle: CSSProperties = {
   padding: '12px 6px',
-  borderBottom: '1px solid #1E293B',
+  background: 'linear-gradient(180deg, rgba(36,48,66,0.95) 0%, rgba(30,41,59,0.98) 100%)',
+  borderRight: MATRIX_GRID_V,
+  borderBottom: MATRIX_GRID,
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
   textAlign: 'center',
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
+  boxSizing: 'border-box',
 };
 
 const tdSticky: CSSProperties = {
@@ -1248,7 +1266,10 @@ const tdSticky: CSSProperties = {
   position: 'sticky',
   left: 0,
   zIndex: 1,
-  background: '#0F172A',
+  // Непрозрачный фон — иначе при горизонтальном скролле просвечивает таблица.
+  background: 'linear-gradient(90deg, #243044 0%, #1E2937 100%)',
+  borderRight: '1px solid rgba(148, 163, 184, 0.38)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06), 6px 0 14px rgba(0,0,0,0.28)',
   fontWeight: 700,
   textAlign: 'left',
   paddingLeft: 14,

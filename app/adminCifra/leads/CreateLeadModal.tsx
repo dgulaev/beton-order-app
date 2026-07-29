@@ -18,6 +18,7 @@ import {
   type Lead,
   type LeadManualCreateSource,
 } from '@/lib/leads';
+import type { ParsedTenderFields } from '@/lib/tender/types';
 import {
   modalCloseButtonStyle,
   modalFieldStyle,
@@ -71,9 +72,10 @@ const EMPTY_FORM: CreateLeadForm = {
   inn: '',
   contact_name: '',
   phone: '+7',
-  grade: 'М300',
+  // Для тендера марка/город не угадываем — только из ЕИС или вручную
+  grade: '',
   volume_m3: '',
-  city: 'Брянск',
+  city: '',
   address: '',
   desired_date: '',
   deadline: '',
@@ -104,6 +106,75 @@ const gridTightStyle: CSSProperties = {
   marginTop: 8,
 };
 
+function pickStr(...vals: Array<string | null | undefined>): string {
+  for (const v of vals) {
+    if (v != null && String(v).trim()) return String(v).trim();
+  }
+  return '';
+}
+
+function applyParsedToForm(
+  base: CreateLeadForm,
+  parsed: ParsedTenderFields,
+  opts?: { overwrite?: boolean },
+): CreateLeadForm {
+  const o = opts?.overwrite === true;
+  const keep = (cur: string, next: string | null | undefined) => {
+    if (next == null || !String(next).trim()) return cur;
+    if (o || !cur.trim() || cur === '+7') {
+      return String(next).trim();
+    }
+    return cur;
+  };
+
+  const platformRaw = pickStr(parsed.platform);
+  let platform = base.platform;
+  let platform_custom = base.platform_custom;
+  if (platformRaw) {
+    if ((LEAD_PLATFORM_OPTIONS as readonly string[]).includes(platformRaw)) {
+      platform = platformRaw;
+      platform_custom = '';
+    } else if (o || !base.platform || base.platform === EMPTY_FORM.platform) {
+      platform = 'Другое';
+      platform_custom = platformRaw;
+    }
+  }
+
+  const hasGrade = parsed.grade != null && String(parsed.grade).trim() !== '';
+  const hasVolume =
+    parsed.volume_m3 != null && Number.isFinite(Number(parsed.volume_m3));
+
+  return {
+    ...base,
+    customer_type: 'legal',
+    platform,
+    platform_custom,
+    purchase_number: keep(base.purchase_number, parsed.purchase_number),
+    law: keep(base.law, parsed.law),
+    nmck: keep(base.nmck, parsed.nmck),
+    organization_name: keep(base.organization_name, parsed.organization_name),
+    inn: keep(base.inn, parsed.inn),
+    contact_name: keep(base.contact_name, parsed.contact_name),
+    phone: keep(base.phone, parsed.phone),
+    grade: hasGrade ? keep(base.grade, parsed.grade) : o ? '' : base.grade,
+    volume_m3: hasVolume
+      ? keep(base.volume_m3, String(parsed.volume_m3))
+      : o
+        ? ''
+        : base.volume_m3,
+    city: keep(base.city, parsed.city),
+    address: keep(base.address, parsed.address),
+    desired_date: keep(
+      base.desired_date,
+      parsed.desired_date ? String(parsed.desired_date).slice(0, 10) : null,
+    ),
+    deadline: keep(base.deadline, parsed.deadline?.slice(0, 10)),
+    etp_url: keep(base.etp_url, parsed.etp_url),
+    docs_url: keep(base.docs_url, parsed.docs_url),
+    comment: keep(base.comment, parsed.comment),
+  };
+}
+
 function defaultsForSource(source: LeadManualCreateSource): Partial<CreateLeadForm> {
   if (source === 'tender') {
     return {
@@ -112,8 +183,9 @@ function defaultsForSource(source: LeadManualCreateSource): Partial<CreateLeadFo
       platform: 'ЕИС (zakupki.gov.ru)',
       platform_custom: '',
       law: '223-ФЗ',
-      grade: 'М300',
-      city: 'Брянск',
+      grade: '',
+      city: '',
+      volume_m3: '',
     };
   }
   if (source === 'site') {
@@ -128,6 +200,7 @@ function defaultsForSource(source: LeadManualCreateSource): Partial<CreateLeadFo
       deadline: '',
       etp_url: '',
       docs_url: '',
+      // Ручная заявка с сайта — типичный бетон, можно подсказать
       grade: 'М300',
       city: 'Брянск',
     };
@@ -161,7 +234,8 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
-  const busy = saving;
+  const [parsing, setParsing] = useState(false);
+  const busy = saving || parsing;
 
   const isTender = form.source === 'tender';
   const isSite = form.source === 'site';
@@ -237,9 +311,9 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
       // сохраняем уже введённые контакт/поставку при смене типа
       contact_name: f.contact_name,
       phone: f.phone,
-      grade: f.grade || 'М300',
+      grade: f.grade,
       volume_m3: f.volume_m3,
-      city: f.city || 'Брянск',
+      city: f.city,
       address: f.address,
       desired_date: f.desired_date,
       comment: f.comment,
@@ -263,6 +337,42 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
       next.push(file);
     }
     setFiles(next.slice(0, 10));
+  };
+
+  const fillFromEtpUrl = async (overwrite = true, urlOverride?: string) => {
+    const url = (urlOverride ?? form.etp_url).trim();
+    if (!url) {
+      alert('Вставь ссылку на извещение или контракт ЕИС');
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      alert('Ссылка должна начинаться с https://');
+      return;
+    }
+    setParsing(true);
+    try {
+      const res = await fetch('/api/adminCifra/tender/parse', {
+        method: 'POST',
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ url }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        alert(json.error || 'Не удалось разобрать страницу ЕИС');
+        return;
+      }
+      setForm((f) =>
+        applyParsedToForm(
+          { ...f, etp_url: url },
+          json.fields as ParsedTenderFields,
+          { overwrite },
+        ),
+      );
+    } catch {
+      alert('Ошибка соединения при разборе ЕИС');
+    } finally {
+      setParsing(false);
+    }
   };
 
   const resolvePlatform = (): string | null => {
@@ -334,6 +444,9 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
 
       const lead = json.lead as Lead;
 
+      const calloutMsg =
+        typeof json.callout_watch?.message === 'string' ? json.callout_watch.message : '';
+
       if (files.length > 0 && lead?.id) {
         const fd = new FormData();
         for (const file of files) fd.append('files', file);
@@ -349,6 +462,14 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
               || 'Лид создан, но файлы не загрузились. Проверьте SQL lead-contracts и Storage.',
           );
         }
+      }
+
+      if (calloutMsg) {
+        alert(
+          json.callout_watch?.prospect_id
+            ? `Лид создан.\n${calloutMsg}\nКарточка победителя — в разделе «Обзвон».`
+            : `Лид создан.\n${calloutMsg}`,
+        );
       }
 
       onCreated(lead);
@@ -523,6 +644,70 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
             </div>
           </section>
 
+          {isTender && (
+            <section>
+              <h3 style={sectionTitle}>Ссылка на торги ЕИС</h3>
+              <p style={{ margin: '6px 0 8px', fontSize: 12, color: '#64748B' }}>
+                Вставь ссылку на извещение или контракт zakupki.gov.ru — поля заполнятся
+                автоматически (заказчик, № закупки, цена, адрес и т.д.).
+              </p>
+              <label style={labelStyle}>
+                Ссылка на закупку / контракт
+                <input
+                  value={form.etp_url}
+                  onChange={(e) => set('etp_url', e.target.value)}
+                  onBlur={(e) => {
+                    const url = e.target.value.trim();
+                    if (
+                      /^https?:\/\//i.test(url) &&
+                      /zakupki\.gov\.ru|lot-online|regNumber=|reestrNumber=/i.test(url) &&
+                      !form.organization_name.trim()
+                    ) {
+                      void fillFromEtpUrl(true, url);
+                    }
+                  }}
+                  style={modalFieldStyle({ marginTop: 4 })}
+                  placeholder="https://zakupki.gov.ru/epz/contract/… или …/order/notice/…"
+                />
+              </label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                <button
+                  type="button"
+                  disabled={busy || !form.etp_url.trim()}
+                  onClick={() => void fillFromEtpUrl(true)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 10,
+                    border: '1px solid #334155',
+                    background: '#1E2937',
+                    color: '#E2E8F0',
+                    cursor: busy ? 'wait' : 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  {parsing ? 'Читаю ЕИС…' : 'Подтянуть из ЕИС'}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || !form.etp_url.trim()}
+                  onClick={() => void fillFromEtpUrl(false)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 10,
+                    border: '1px solid #334155',
+                    background: 'transparent',
+                    color: '#94A3B8',
+                    cursor: busy ? 'wait' : 'pointer',
+                    fontSize: 13,
+                  }}
+                >
+                  Дозаполнить пустые
+                </button>
+              </div>
+            </section>
+          )}
+
           <section>
             <h3 style={sectionTitle}>
               {isTender ? 'Заказчик' : isLegal ? 'Клиент (юрлицо)' : 'Клиент'}
@@ -575,11 +760,12 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
             <h3 style={sectionTitle}>Поставка</h3>
             <div style={gridTightStyle}>
               <label style={labelStyle}>
-                Марка
+                Марка бетона
                 <input
                   value={form.grade}
                   onChange={(e) => set('grade', e.target.value)}
                   style={modalFieldStyle({ marginTop: 4 })}
+                  placeholder="если есть в закупке, напр. М300"
                 />
               </label>
               <label style={labelStyle}>
@@ -591,6 +777,7 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
                   value={form.volume_m3}
                   onChange={(e) => set('volume_m3', e.target.value)}
                   style={modalFieldStyle({ marginTop: 4 })}
+                  placeholder="если указан в спецификации"
                 />
               </label>
               <label style={labelStyle}>
@@ -599,6 +786,7 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
                   value={form.city}
                   onChange={(e) => set('city', e.target.value)}
                   style={modalFieldStyle({ marginTop: 4 })}
+                  placeholder="из адреса поставки"
                 />
               </label>
               <label style={labelStyle}>
@@ -639,26 +827,15 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
             </h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
               {isTender && (
-                <>
-                  <label style={labelStyle}>
-                    Ссылка на закупку (ЭТП)
-                    <input
-                      value={form.etp_url}
-                      onChange={(e) => set('etp_url', e.target.value)}
-                      style={modalFieldStyle({ marginTop: 4 })}
-                      placeholder="https://…"
-                    />
-                  </label>
-                  <label style={labelStyle}>
-                    Ссылка на документацию
-                    <input
-                      value={form.docs_url}
-                      onChange={(e) => set('docs_url', e.target.value)}
-                      style={modalFieldStyle({ marginTop: 4 })}
-                      placeholder="https://…"
-                    />
-                  </label>
-                </>
+                <label style={labelStyle}>
+                  Ссылка на документацию / ЭТП
+                  <input
+                    value={form.docs_url}
+                    onChange={(e) => set('docs_url', e.target.value)}
+                    style={modalFieldStyle({ marginTop: 4 })}
+                    placeholder="https://… (если отличается от ссылки выше)"
+                  />
+                </label>
               )}
               <label style={labelStyle}>
                 {isTender

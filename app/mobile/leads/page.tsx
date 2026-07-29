@@ -25,6 +25,7 @@ import {
   volumeCardSoftStyle,
   volumeModalStyle,
 } from '@/app/adminCifra/cardStyles';
+import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import ProcessLeadModal from '@/app/adminCifra/leads/ProcessLeadModal';
 import MobileNewOrderModal from '../components/MobileNewOrderModal';
 import { useUserRole } from '../../providers/UserRoleProvider';
@@ -261,6 +262,34 @@ export default function MobileLeadsPage() {
       setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, status } : l)));
     }
     return true;
+  };
+
+  const deleteLead = async (lead: Lead) => {
+    if (!allowTenderProcess) return;
+    const ok = await appConfirm(
+      [
+        `Удалить лид #${lead.id} безвозвратно?`,
+        '',
+        'Удалится лид, история и контракты.',
+        'Заявки останутся — ссылка на лид снимется.',
+      ].join('\n'),
+      { title: 'Удаление лида', okLabel: 'Удалить', cancelLabel: 'Отмена', variant: 'danger' },
+    );
+    if (!ok) return;
+
+    const res = await fetch(`/api/adminCifra/leads/${lead.id}`, {
+      method: 'DELETE',
+      headers: adminCifraAuthHeaders(),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.success) {
+      alert(json.error || 'Не удалось удалить лид');
+      return;
+    }
+
+    setLeads((prev) => prev.filter((l) => l.id !== lead.id));
+    if (activeLeadId === lead.id) setActiveLeadId(null);
+    if (processLead?.id === lead.id) setProcessLead(null);
   };
 
   const openConvert = async (lead: Lead) => {
@@ -884,6 +913,15 @@ export default function MobileLeadsPage() {
                   style={{ ...btnBase, background: 'rgba(37,99,235,0.25)', color: '#BFDBFE', border: '1px solid #3B82F6' }}
                 >
                   В отгрузку
+                </button>
+              )}
+              {allowTenderProcess && (
+                <button
+                  type="button"
+                  onClick={() => void deleteLead(lead)}
+                  style={btnDanger}
+                >
+                  Удалить
                 </button>
               )}
             </div>

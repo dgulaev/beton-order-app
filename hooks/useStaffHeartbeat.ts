@@ -53,6 +53,9 @@ export function useStaffHeartbeat(enabled: boolean) {
       const signal = controller.signal;
 
       try {
+        // Сервер выключен / перезапуск — не долбим и не шумим в консоль
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+
         const res = await fetch('/api/adminCifra/heartbeat', {
           method: 'POST',
           headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
@@ -66,21 +69,28 @@ export function useStaffHeartbeat(enabled: boolean) {
       } catch (e) {
         if (cancelled || signal.aborted) return;
         const msg = e instanceof Error ? e.message : String(e);
-        // Холодный старт / HMR — один тихий повтор через 2с
-        if (!isRetry && (msg.includes('Failed to fetch') || msg.includes('NetworkError'))) {
-          retryTimer = window.setTimeout(() => {
-            void sendHeartbeat(true);
-          }, 2000);
+        const isNet =
+          msg.includes('Failed to fetch') ||
+          msg.includes('NetworkError') ||
+          msg.includes('Load failed') ||
+          msg.includes('network');
+        // Перезапуск Next/Turbopack, HMR, краткий оффлайн — ожидаемо, без warn в консоль
+        if (isNet) {
+          if (!isRetry) {
+            retryTimer = window.setTimeout(() => {
+              void sendHeartbeat(true);
+            }, 2500);
+          }
           return;
         }
-        if (isRetry) console.warn('Heartbeat failed:', e);
+        console.warn('Heartbeat failed:', e);
       }
     };
 
-    // Даём Next/Turbopack поднять API-роут после Ready
+    // Даём Next/Turbopack поднять API-роут после Ready (+ компиляция роута)
     const startTimer = window.setTimeout(() => {
       void sendHeartbeat();
-    }, 800);
+    }, 1500);
 
     const interval = window.setInterval(() => {
       void sendHeartbeat();
@@ -89,8 +99,12 @@ export function useStaffHeartbeat(enabled: boolean) {
     const onVisible = () => {
       if (document.visibilityState === 'visible') void sendHeartbeat();
     };
+    const onOnline = () => {
+      void sendHeartbeat();
+    };
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onVisible);
+    window.addEventListener('online', onOnline);
 
     return () => {
       cancelled = true;
@@ -100,6 +114,7 @@ export function useStaffHeartbeat(enabled: boolean) {
       controller?.abort();
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onVisible);
+      window.removeEventListener('online', onOnline);
     };
   }, [enabled]);
 }

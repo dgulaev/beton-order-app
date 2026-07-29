@@ -1622,12 +1622,13 @@ const handleDeleteOrder = async (orderId: number | string) => {
       method: 'DELETE',
       headers: adminCifraAuthHeaders(),
     });
+    const json = await res.json().catch(() => ({}));
     if (res.ok) {
       alert('✅ Заказ успешно удалён');
       setSelectedOrder(null);
       window.location.reload();
     } else {
-      alert('Не удалось удалить заказ');
+      alert(json.message || json.error || 'Не удалось удалить заказ');
     }
   } catch (err) {
     console.error(err);

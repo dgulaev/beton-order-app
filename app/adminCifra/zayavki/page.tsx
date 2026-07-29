@@ -20,6 +20,7 @@ import { isOrderGradeRecipe } from '@/app/adminCifra/recipes/productCatalog';
 import { formatPhoneDisplay, formatPhoneInput } from '@/lib/phone';
 import {
   CARD_BORDER,
+  CARD_GRADIENT_SOFT,
   CARD_VOLUME_SOFT,
   modalCloseButtonStyle,
   modalFieldStyle,
@@ -976,13 +977,14 @@ useEffect(() => {
         method: 'DELETE',
         headers: adminCifraAuthHeaders(),
       });
+      const json = await res.json().catch(() => ({}));
 
       if (res.ok) {
         alert('✅ Заявка успешно удалена');
         setSelectedOrder(null);
         setAllOrders(prev => prev.filter(o => String(o.id) !== String(orderId)));
       } else {
-        alert('Ошибка при удалении заявки');
+        alert(json.message || json.error || 'Ошибка при удалении заявки');
       }
     } catch (err) {
       console.error(err);
@@ -1983,227 +1985,229 @@ ${order.customer_type?.includes('Юридическое')
 
       <div style={{ display: 'flex', gap: '24px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
         
-                {/* ==================== ЛЕВАЯ КОЛОНКА — ЗАЯВКИ НА НЕДЕЛЮ ==================== */}
-        <div style={{ 
-          width: '340px', 
-          flexShrink: 0,
+                {/* ==================== ЛЕВАЯ КОЛОНКА — ЗАЯВКИ НА НЕДЕЛЮ ====================
+            Фон = CARD_GRADIENT_SOFT как у правой панели (трёхстоповый CARD_GRADIENT
+            на узкой высокой колонке давал другой оттенок).
+            Дни фиксированной высоты; на 4K свободное место уходит в распорку —
+            график+итоги прижимаются вниз. На 1600 при нехватке — скролл карточки. */}
+        <div style={{
+          width: 340,
+          flex: '0 0 340px',
           height: '100%',
           minHeight: 0,
           boxSizing: 'border-box',
-          overflow: 'hidden'
+          overflow: 'hidden',
         }}>
-          <div style={volumeCardStyle({ 
-            borderRadius: 22, 
-            padding: '20px',
-            height: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          })}>
-            
-            <h3 style={{ marginBottom: '10px', color: '#94A3B8', fontSize: '16px', flexShrink: 0 }}>
+          <div
+            className="scroll-hidden"
+            style={volumeCardStyle({
+              background: CARD_GRADIENT_SOFT,
+              borderRadius: 22,
+              padding: 20,
+              height: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              overflowX: 'hidden',
+              overflowY: 'auto',
+              boxSizing: 'border-box',
+            })}
+          >
+            <h3 style={{ marginBottom: 10, color: '#94A3B8', fontSize: '16px', flexShrink: 0 }}>
               ЗАЯВКИ НА НЕДЕЛЮ
             </h3>
 
             {/* ==================== НАВИГАЦИЯ ПО НЕДЕЛЯМ ==================== */}
-            <div style={{ 
-              display: 'flex', 
-              justifyContent: 'space-between', 
-              alignItems: 'center', 
-              marginBottom: '10px',
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: 10,
               color: '#CBD5E1',
               flexShrink: 0,
-              gap: '16px'
+              gap: 16,
             }}>
-              <button 
+              <button
                 onClick={() => {
                   const newDate = new Date(selectedDate);
                   newDate.setDate(newDate.getDate() - 7);
                   setSelectedDate(newDate);
                 }}
-                style={{ 
-                  background: 'none', 
-                  border: 'none', 
-                  color: '#94A3B8', 
-                  fontSize: '32px', 
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#94A3B8',
+                  fontSize: '32px',
                   cursor: 'pointer',
                   padding: '8px 16px',
                   flexShrink: 0,
-                  userSelect: 'none'
+                  userSelect: 'none',
                 }}
               >
                 ←
               </button>
 
-              <div style={{ 
-                fontWeight: '700', 
-                fontSize: '18px', 
+              <div style={{
+                fontWeight: 700,
+                fontSize: '18px',
                 textAlign: 'center',
                 flex: 1,
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
-                textOverflow: 'ellipsis'
+                textOverflow: 'ellipsis',
               }}>
-                {selectedDate.toLocaleDateString('ru-RU', { 
-                  month: 'long', 
-                  year: 'numeric' 
+                {selectedDate.toLocaleDateString('ru-RU', {
+                  month: 'long',
+                  year: 'numeric',
                 })}
               </div>
 
-              <button 
+              <button
                 onClick={() => {
                   const newDate = new Date(selectedDate);
                   newDate.setDate(newDate.getDate() + 7);
                   setSelectedDate(newDate);
                 }}
-                style={{ 
-                  background: 'none', 
-                  border: 'none', 
-                  color: '#94A3B8', 
-                  fontSize: '32px', 
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#94A3B8',
+                  fontSize: '32px',
                   cursor: 'pointer',
                   padding: '8px 16px',
                   flexShrink: 0,
-                  userSelect: 'none'
+                  userSelect: 'none',
                 }}
               >
                 →
               </button>
             </div>
 
-            {/* ==================== СПИСОК ДНЕЙ НЕДЕЛИ (все 7 всегда видны, без скролла; на больших экранах не растягиваются выше меры) ==================== */}
-<div style={{ 
-  flex: 1, 
-  minHeight: 0,
-  display: 'flex',
-  flexDirection: 'column',
-  justifyContent: 'flex-start',
-  gap: '6px',
-  overflow: 'hidden'
-}}>
-  {weekDays.map((d: Date, dIdx: number) => {
-    const dateStr = d.toISOString().split('T')[0];
-    const count = weekOrderCounts[dIdx];
-    const isSelected = dateStr === selectedDateStr;
-    const isToday = d.toDateString() === new Date().toDateString();
-
-    // Количество отменённых заявок в этот день
-    const cancelledCount = dayOrders.filter(o => {
-      const orderDate = typeof o.delivery_date === 'string' 
-        ? o.delivery_date.substring(0, 10) 
-        : new Date(o.delivery_date).toISOString().substring(0, 10);
-      return orderDate === dateStr && o.status === 'cancelled';
-    }).length;
-
-    return (
-      <div
-        key={dateStr}
-        onClick={() => setSelectedDate(d)}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          maxHeight: '58px',
-          padding: '0 16px',
-          borderRadius: 10,
-          cursor: 'pointer',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          transition: 'all 0.2s ease',
-          userSelect: 'none',
-          overflow: 'hidden',
-          boxSizing: 'border-box',
-          // Без тёмного градиента карточки — иначе плашки сливаются с панелью.
-          // Мягкая обводка + лёгкое сланцевое свечение, чтобы дни читались.
-          background: isSelected
-            ? 'linear-gradient(165deg, rgba(59,130,246,0.28) 0%, rgba(30,58,95,0.45) 100%)'
-            : 'rgba(148, 163, 184, 0.07)',
-          border: isSelected
-            ? '1.5px solid rgba(96, 165, 250, 0.85)'
-            : '1px solid rgba(148, 163, 184, 0.38)',
-          boxShadow: isSelected
-            ? '0 0 0 1px rgba(59,130,246,0.25), 0 0 18px rgba(59,130,246,0.28), inset 0 1px 0 rgba(255,255,255,0.12)'
-            : '0 0 0 1px rgba(148,163,184,0.08), 0 0 14px rgba(148,163,184,0.14), inset 0 1px 0 rgba(255,255,255,0.1)',
-        }}
-      >
-        <div style={{ fontWeight: '600', fontSize: '14px', whiteSpace: 'nowrap' }}>
-          {d.toLocaleDateString('ru-RU', { 
-            weekday: 'short', 
-            day: 'numeric', 
-            month: 'short' 
-          })}
-          {isToday && <span style={{ color: '#60A5FA', marginLeft: '6px' }}>●</span>}
-        </div>
-        
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-          {/* Бейдж отменённых заявок — теперь СЛЕВА */}
-          {cancelledCount > 0 && (
+            {/* Дни — фиксированный размер строк, без растягивания */}
             <div style={{
-              background: '#EF444420',
-              color: '#EF4444',
-              padding: '3px 9px',
-              borderRadius: '9999px',
-              fontSize: '12px',
-              fontWeight: '600',
-              border: '1px solid #EF444440'
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              flexShrink: 0,
             }}>
-              -{cancelledCount}
+              {weekDays.map((d: Date, dIdx: number) => {
+                const dateStr = d.toISOString().split('T')[0];
+                const count = weekOrderCounts[dIdx];
+                const isSelected = dateStr === selectedDateStr;
+                const isToday = d.toDateString() === new Date().toDateString();
+
+                const cancelledCount = dayOrders.filter(o => {
+                  const orderDate = typeof o.delivery_date === 'string'
+                    ? o.delivery_date.substring(0, 10)
+                    : new Date(o.delivery_date).toISOString().substring(0, 10);
+                  return orderDate === dateStr && o.status === 'cancelled';
+                }).length;
+
+                return (
+                  <div
+                    key={dateStr}
+                    onClick={() => setSelectedDate(d)}
+                    style={{
+                      height: 48,
+                      flexShrink: 0,
+                      padding: '0 16px',
+                      borderRadius: 10,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      transition: 'all 0.2s ease',
+                      userSelect: 'none',
+                      overflow: 'hidden',
+                      boxSizing: 'border-box',
+                      background: isSelected
+                        ? 'linear-gradient(165deg, rgba(59,130,246,0.28) 0%, rgba(30,58,95,0.45) 100%)'
+                        : 'rgba(148, 163, 184, 0.07)',
+                      border: isSelected
+                        ? '1.5px solid rgba(96, 165, 250, 0.85)'
+                        : '1px solid rgba(148, 163, 184, 0.38)',
+                      boxShadow: isSelected
+                        ? '0 0 0 1px rgba(59,130,246,0.25), 0 0 18px rgba(59,130,246,0.28), inset 0 1px 0 rgba(255,255,255,0.12)'
+                        : '0 0 0 1px rgba(148,163,184,0.08), 0 0 14px rgba(148,163,184,0.14), inset 0 1px 0 rgba(255,255,255,0.1)',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: '14px', whiteSpace: 'nowrap' }}>
+                      {d.toLocaleDateString('ru-RU', {
+                        weekday: 'short',
+                        day: 'numeric',
+                        month: 'short',
+                      })}
+                      {isToday && <span style={{ color: '#60A5FA', marginLeft: 6 }}>●</span>}
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                      {cancelledCount > 0 && (
+                        <div style={{
+                          background: '#EF444420',
+                          color: '#EF4444',
+                          padding: '3px 9px',
+                          borderRadius: '9999px',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          border: '1px solid #EF444440',
+                        }}>
+                          -{cancelledCount}
+                        </div>
+                      )}
+                      <div style={{
+                        background: '#334155',
+                        color: '#CBD5E1',
+                        padding: '3px 11px',
+                        borderRadius: '9999px',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                        minWidth: 26,
+                        textAlign: 'center',
+                      }}>
+                        {count}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          )}
 
-          {/* Основной счётчик активных заявок */}
-          <div style={{ 
-            background: '#334155', 
-            color: '#CBD5E1', 
-            padding: '3px 11px', 
-            borderRadius: '9999px',
-            fontSize: '13px',
-            fontWeight: '600',
-            minWidth: '26px',
-            textAlign: 'center'
-          }}>
-            {count}
-          </div>
-        </div>
-      </div>
-    );
-  })}
-</div>
+            {/* Распорка: на 4K отодвигает график и прижимает итоги к низу */}
+            <div style={{ flex: '1 1 auto', minHeight: 12 }} aria-hidden />
 
-{/* ==================== ГРАФИК ЗА НЕДЕЛЮ ==================== */}
-            <WeekVolumeChart
-              days={weekDays}
-              series={weekChartSeries}
-              selectedDateStr={selectedDateStr}
-              onSelectDay={setSelectedDate}
-              onShiftWeek={(delta) => {
-                setSelectedDate((prev) => {
-                  const next = new Date(prev);
-                  next.setDate(next.getDate() + delta * 7);
-                  return next;
-                });
-              }}
-            />
+            {/* ==================== ГРАФИК ЗА НЕДЕЛЮ ==================== */}
+            <div style={{ flexShrink: 0 }}>
+              <WeekVolumeChart
+                days={weekDays}
+                series={weekChartSeries}
+                selectedDateStr={selectedDateStr}
+                onSelectDay={setSelectedDate}
+                onShiftWeek={(delta) => {
+                  setSelectedDate((prev) => {
+                    const next = new Date(prev);
+                    next.setDate(next.getDate() + delta * 7);
+                    return next;
+                  });
+                }}
+              />
+            </div>
 
-                                    {/* ==================== РАЗДЕЛИТЕЛЬ + СВОДКА ЗА НЕДЕЛЮ ==================== */}
-            <div style={{ marginTop: '8px', paddingTop: '10px', borderTop: '1px solid #334155', flexShrink: 0 }}>
-              <div style={volumeCardSoftStyle({ 
-                borderRadius: 16, 
+            {/* ==================== СВОДКА ЗА НЕДЕЛЮ + КНОПКА ==================== */}
+            <div style={{ marginTop: 8, paddingTop: 10, borderTop: '1px solid #334155', flexShrink: 0 }}>
+              <div style={volumeCardSoftStyle({
+                borderRadius: 16,
                 padding: '12px 16px',
                 fontSize: '15px',
               })}>
-                <div style={{ color: '#94A3B8', marginBottom: '8px', fontWeight: '600' }}>Итого за неделю</div>
-                
-                {/* 1. Количество заявок */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <div style={{ color: '#94A3B8', marginBottom: 8, fontWeight: 600 }}>Итого за неделю</div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                   <span style={{ fontSize: '15px' }}>Всего заявок:</span>
                   <strong style={{ fontSize: '17px' }}>
                     {weekOrderCounts.reduce((sum, c) => sum + c, 0)}
                   </strong>
                 </div>
-                
-                {/* 2. Запланировано */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                   <span style={{ fontSize: '15px' }}>Запланировано:</span>
                   <strong style={{ fontSize: '17px' }}>
                     {Math.round(weekDays.reduce((sum, d) => {
@@ -2211,8 +2215,8 @@ ${order.customer_type?.includes('Юридическое')
                       return sum + allOrders
                         .filter(o => {
                           if (!o?.delivery_date) return false;
-                          const orderDate = typeof o.delivery_date === 'string' 
-                            ? o.delivery_date.substring(0, 10) 
+                          const orderDate = typeof o.delivery_date === 'string'
+                            ? o.delivery_date.substring(0, 10)
                             : getLocalDateString(new Date(o.delivery_date));
                           return orderDate === dateStr;
                         })
@@ -2221,7 +2225,6 @@ ${order.customer_type?.includes('Юридическое')
                   </strong>
                 </div>
 
-                {/* 3. Отгружено — те же м³, что зелёная линия графика (разгруженные рейсы) */}
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span style={{ fontSize: '15px' }}>Отгружено:</span>
                   <strong style={{ fontSize: '17px', color: '#10B981' }}>
@@ -2230,26 +2233,24 @@ ${order.customer_type?.includes('Юридическое')
                 </div>
               </div>
 
-              <button 
+              <button
                 onClick={() => setShowNewOrderModal(true)}
                 style={{
                   width: '100%',
-                  marginTop: '8px',
-                  padding: '12px',
+                  marginTop: 8,
+                  padding: 12,
                   background: '#10B981',
                   color: 'white',
                   border: 'none',
-                  borderRadius: '12px',
-                  fontWeight: '600',
+                  borderRadius: 12,
+                  fontWeight: 600,
                   cursor: 'pointer',
-                  fontSize: '16px'
+                  fontSize: '16px',
                 }}
               >
                 + Новая заявка
               </button>
-              
             </div>
-
           </div>
         </div>
 
@@ -2399,10 +2400,11 @@ ${order.customer_type?.includes('Юридическое')
   </div>
 
     {/* ==================== СПИСОК ЗАЯВОК СО СКРОЛЛОМ ==================== */}
-<div style={volumeCardStyle({ 
+<div style={volumeCardStyle({
+  background: CARD_GRADIENT_SOFT,
   flex: 1,
   minHeight: 0,
-  borderRadius: 24, 
+  borderRadius: 24,
   padding: '24px 32px',
   display: 'flex',
   flexDirection: 'column',

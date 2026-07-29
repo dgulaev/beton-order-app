@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import {
   detectLawFromUrl,
+  extractContractReestrFromUrl,
   extractInnFromText,
   extractPhoneFromText,
   extractPurchaseNumberFromUrl,
@@ -41,6 +42,8 @@ export type CalloutTender = {
   purchase_number: string | null;
   law: string | null;
   object_info: string | null;
+  /** Заказчик торгов (не победитель). */
+  customer_name: string | null;
   nmck: number | null;
   contract_price: number | null;
   deadline: string | null;
@@ -57,6 +60,8 @@ export type CalloutTender = {
 };
 
 const POLL_DELAY_DAYS = 15;
+/** После уже сделанной попытки resolve — не ждать deadline+15, а через N дней. */
+const POLL_AFTER_ATTEMPT_DAYS = 3;
 
 export function pollAfterFromDeadline(deadline: string | null | undefined): string {
   const base = deadline ? new Date(`${deadline}T12:00:00+03:00`) : new Date();
@@ -67,6 +72,14 @@ export function pollAfterFromDeadline(deadline: string | null | undefined): stri
   }
   base.setDate(base.getDate() + POLL_DELAY_DAYS);
   return base.toISOString();
+}
+
+/** Следующий опрос после неудачной/пустой попытки (контракт — сразу в очередь). */
+function pollAfterAttempt(opts?: { immediate?: boolean }): string {
+  if (opts?.immediate) return new Date().toISOString();
+  const d = new Date();
+  d.setDate(d.getDate() + POLL_AFTER_ATTEMPT_DAYS);
+  return d.toISOString();
 }
 
 export async function findClientIdByInn(inn: string | null): Promise<number | null> {
@@ -220,13 +233,12 @@ export async function upsertProspect(input: {
       else if (
         name &&
         !isWeakOrgName(name, inn) &&
-        isWeakOrgName(existing.organization_name, inn)
+        (existingWeak || !existing.organization_name)
       ) {
         patch.organization_name = name;
       }
-      if (!existing.phone && (input.phone || phoneFromClient)) {
-        patch.phone = input.phone || phoneFromClient;
-      }
+      if (input.phone && !existing.phone) patch.phone = input.phone;
+      else if (!existing.phone && phoneFromClient) patch.phone = phoneFromClient;
       if (input.email && !existing.email) patch.email = input.email;
       if (input.address && !existing.address) patch.address = input.address;
       const { data } = await supabaseAdmin
@@ -457,7 +469,9 @@ export async function refreshTenderWinner(tenderId: number): Promise<{
   const winner = await resolveWinnerFromEis({
     purchaseNumber: tender.purchase_number,
     purchaseUrl: tender.purchase_url,
+    contractReestrNumber: tender.contract_reg_num,
     law: lawHint,
+    enrichDetail: true,
   });
 
   const attempts = Number(tender.winner_attempts || 0) + 1;
@@ -486,11 +500,10 @@ export async function refreshTenderWinner(tenderId: number): Promise<{
     };
   }
 
-  // Контакты из raw_contacts, если ЕИС не дал телефон
+  // Контакты: ЕИС «Информация о поставщиках» → raw_contacts → DaData
   const fromRaw = parseContactsBlob(tender.raw_contacts);
   const inn = winner.inn || fromRaw.inn;
 
-  // ГосПлан в индексе даёт только ИНН — название тянем из DaData
   let orgName = winner.organization_name || null;
   let phone = winner.phone || fromRaw.phone;
   let email = winner.email || fromRaw.email;
@@ -532,7 +545,8 @@ export async function refreshTenderWinner(tenderId: number): Promise<{
     .from('callout_tenders')
     .update({
       prospect_id: prospect.id,
-      contract_reg_num: winner.contract_reg_num,
+      purchase_number: tender.purchase_number || winner.purchase_number || null,
+      contract_reg_num: winner.contract_reg_num || tender.contract_reg_num,
       contract_price: winner.contract_price ?? tender.contract_price,
       object_info: tender.object_info || winner.object_info,
       winner_status: 'found',
@@ -589,41 +603,163 @@ export async function runCalloutWinnerPoll(limit = 40): Promise<{
   return { checked: (rows || []).length, found, pending, errors };
 }
 
-/** Поставить тендер-лид на наблюдение (ожидание контракта / победителя). */
+/**
+ * Поставить тендер-лид в «Обзвон»:
+ * — ссылка на контракт (reestrNumber) → сразу карточка победителя из «Информация о поставщиках»;
+ * — ссылка на извещение → если контракт уже есть, тоже сразу; иначе pending до появления победителя.
+ */
 export async function watchLeadForCallout(input: {
   leadId: number;
   purchaseUrl?: string | null;
   purchaseNumber?: string | null;
+  contractReestrNumber?: string | null;
   law?: string | null;
   objectInfo?: string | null;
+  /** Организация-заказчик (кто проводит торги). */
+  customerName?: string | null;
   nmck?: number | null;
   deadline?: string | null;
-}): Promise<{ ok: boolean; tender_id?: number; message: string }> {
-  const purchaseNumber =
-    String(input.purchaseNumber || '').replace(/\D/g, '') ||
-    extractPurchaseNumberFromUrl(input.purchaseUrl) ||
-    null;
+}): Promise<{
+  ok: boolean;
+  tender_id?: number;
+  prospect_id?: number;
+  message: string;
+}> {
   const purchaseUrl = String(input.purchaseUrl || '').trim() || null;
-  if (!purchaseNumber && !purchaseUrl) {
-    return { ok: false, message: 'Нет номера закупки или ссылки ЕИС' };
+  const contractReestr =
+    String(input.contractReestrNumber || '').replace(/\D/g, '') ||
+    extractContractReestrFromUrl(purchaseUrl) ||
+    null;
+  let purchaseNumber =
+    String(input.purchaseNumber || '').replace(/\D/g, '') ||
+    extractPurchaseNumberFromUrl(purchaseUrl) ||
+    null;
+  const customerName = String(input.customerName || '').trim() || null;
+
+  if (!purchaseNumber && !purchaseUrl && !contractReestr) {
+    return { ok: false, message: 'Нет номера закупки, контракта или ссылки ЕИС' };
   }
 
-  // Всегда дедуп по lead_id (даже без номера закупки)
+  // Дедуп по lead_id — при смене № закупки/ссылки в обработке лида обновляем запись
   {
     const { data: existing } = await supabaseAdmin
       .from('callout_tenders')
-      .select('id')
+      .select(
+        'id, prospect_id, winner_status, purchase_number, purchase_url, contract_reg_num, object_info, nmck, deadline, law',
+      )
       .eq('lead_id', input.leadId)
       .maybeSingle();
     if (existing) {
-      return { ok: true, tender_id: existing.id, message: 'Уже на наблюдении' };
+      const nextPn = purchaseNumber;
+      const nextUrl = purchaseUrl;
+      const nextReg = contractReestr;
+      const pnChanged =
+        Boolean(nextPn) &&
+        String(existing.purchase_number || '').replace(/\D/g, '') !== nextPn;
+      const urlChanged =
+        Boolean(nextUrl) && String(existing.purchase_url || '').trim() !== nextUrl;
+      const regChanged =
+        Boolean(nextReg) &&
+        String(existing.contract_reg_num || '').replace(/\D/g, '') !== nextReg;
+
+      if (!existing.prospect_id && (pnChanged || urlChanged || regChanged || customerName)) {
+        const lawRaw = String(input.law || '');
+        const lawLabel =
+          /223/i.test(lawRaw) || /notice223/i.test(nextUrl || '')
+            ? '223-ФЗ'
+            : /44/i.test(lawRaw) || /\/epz\/contract\//i.test(nextUrl || '')
+              ? '44-ФЗ'
+              : existing.law;
+        const patch: Record<string, unknown> = {
+          purchase_number: nextPn || existing.purchase_number,
+          purchase_url: nextUrl || existing.purchase_url,
+          contract_reg_num: nextReg || existing.contract_reg_num,
+          object_info:
+            String(input.objectInfo || '').trim() || existing.object_info,
+          nmck: input.nmck ?? existing.nmck,
+          deadline: input.deadline
+            ? String(input.deadline).slice(0, 10)
+            : existing.deadline,
+          law: lawLabel,
+          updated_at: new Date().toISOString(),
+        };
+        if (customerName) patch.customer_name = customerName;
+        if (pnChanged || urlChanged || regChanged) {
+          patch.winner_status = 'pending';
+          patch.winner_poll_after = new Date().toISOString();
+          patch.winner_attempts = 0;
+        }
+        const { error: updErr } = await supabaseAdmin
+          .from('callout_tenders')
+          .update(patch)
+          .eq('id', existing.id);
+        // Колонка customer_name может ещё не быть в БД — повторим без неё
+        if (updErr && customerName && /customer_name/i.test(updErr.message)) {
+          delete patch.customer_name;
+          await supabaseAdmin.from('callout_tenders').update(patch).eq('id', existing.id);
+        }
+      }
+
+      if (!existing.prospect_id) {
+        const refreshed = await refreshTenderWinner(existing.id);
+        return {
+          ok: true,
+          tender_id: existing.id,
+          prospect_id: refreshed.prospect_id,
+          message: refreshed.ok
+            ? refreshed.message
+            : pnChanged || urlChanged || regChanged
+              ? 'Закупка в обзвоне обновлена — ждём победителя в ЕИС'
+              : 'Уже на наблюдении (победитель пока не найден)',
+        };
+      }
+      return {
+        ok: true,
+        tender_id: existing.id,
+        prospect_id: existing.prospect_id ?? undefined,
+        message: 'Уже на наблюдении',
+      };
+    }
+  }
+
+  if (contractReestr) {
+    const { data: byReg } = await supabaseAdmin
+      .from('callout_tenders')
+      .select('id, lead_id, prospect_id, winner_status')
+      .eq('contract_reg_num', contractReestr)
+      .limit(1)
+      .maybeSingle();
+    if (byReg) {
+      if (!byReg.lead_id) {
+        await supabaseAdmin
+          .from('callout_tenders')
+          .update({ lead_id: input.leadId, updated_at: new Date().toISOString() })
+          .eq('id', byReg.id);
+      }
+      if (!byReg.prospect_id) {
+        const refreshed = await refreshTenderWinner(byReg.id);
+        return {
+          ok: true,
+          tender_id: byReg.id,
+          prospect_id: refreshed.prospect_id,
+          message: refreshed.ok
+            ? refreshed.message
+            : 'Контракт уже в обзвоне (ожидание победителя)',
+        };
+      }
+      return {
+        ok: true,
+        tender_id: byReg.id,
+        prospect_id: byReg.prospect_id ?? undefined,
+        message: 'Контракт уже в обзвоне',
+      };
     }
   }
 
   if (purchaseNumber) {
     const { data: byPn } = await supabaseAdmin
       .from('callout_tenders')
-      .select('id, lead_id')
+      .select('id, lead_id, prospect_id, winner_status')
       .eq('purchase_number', purchaseNumber)
       .limit(1)
       .maybeSingle();
@@ -633,47 +769,184 @@ export async function watchLeadForCallout(input: {
           .from('callout_tenders')
           .update({ lead_id: input.leadId, updated_at: new Date().toISOString() })
           .eq('id', byPn.id);
-        return { ok: true, tender_id: byPn.id, message: 'Связано с существующей закупкой' };
+      }
+      if (!byPn.prospect_id) {
+        const refreshed = await refreshTenderWinner(byPn.id);
+        return {
+          ok: true,
+          tender_id: byPn.id,
+          prospect_id: refreshed.prospect_id,
+          message: refreshed.ok
+            ? refreshed.message
+            : 'Связано с существующей закупкой (ожидание победителя)',
+        };
       }
       return {
         ok: true,
         tender_id: byPn.id,
-        message: 'Закупка уже наблюдается (другой лид) — победитель общий',
+        prospect_id: byPn.prospect_id ?? undefined,
+        message: byPn.prospect_id
+          ? 'Закупка уже в обзвоне с победителем'
+          : 'Закупка уже наблюдается (другой лид)',
       };
     }
   }
 
-  const lawRaw = String(input.law || '');
-  const law =
-    /223/i.test(lawRaw) || /notice223/i.test(purchaseUrl || '')
+  const lawHint: 'fz44' | 'fz223' | null =
+    /223/i.test(String(input.law || '')) || /notice223/i.test(purchaseUrl || '')
+      ? 'fz223'
+      : /44/i.test(String(input.law || '')) ||
+          /\/epz\/contract\//i.test(purchaseUrl || '') ||
+          detectLawFromUrl(purchaseUrl) === 'fz44'
+        ? 'fz44'
+        : detectLawFromUrl(purchaseUrl);
+
+  // Сразу ищем победителя: карточка контракта или уже заключённый контракт по извещению
+  let winner = await resolveWinnerFromEis({
+    purchaseNumber,
+    purchaseUrl,
+    contractReestrNumber: contractReestr,
+    law: lawHint,
+    enrichDetail: true,
+  });
+
+  if (winner?.purchase_number && !purchaseNumber) {
+    purchaseNumber = String(winner.purchase_number).replace(/\D/g, '') || null;
+  }
+
+  const lawLabel =
+    winner?.law === 'fz223' || lawHint === 'fz223'
       ? '223-ФЗ'
-      : /44/i.test(lawRaw) || /notice(?!223)/i.test(purchaseUrl || '')
+      : winner?.law === 'fz44' || lawHint === 'fz44'
         ? '44-ФЗ'
-        : null;
+        : /223/i.test(String(input.law || ''))
+          ? '223-ФЗ'
+          : /44/i.test(String(input.law || ''))
+            ? '44-ФЗ'
+            : null;
 
   const deadline = input.deadline ? String(input.deadline).slice(0, 10) : null;
-  const { data, error } = await supabaseAdmin
-    .from('callout_tenders')
-    .insert({
+  const now = new Date().toISOString();
+
+  if (winner?.inn || winner?.organization_name) {
+    let orgName = winner.organization_name || null;
+    let phone = winner.phone || null;
+    let email = winner.email || null;
+    let address = winner.address || null;
+    const inn = winner.inn;
+
+    if (inn && isWeakOrgName(orgName, inn)) {
+      const party = await lookupPartyByInn(inn);
+      if (party?.organization_name) orgName = party.organization_name;
+      if (!phone && party?.phone) phone = party.phone;
+      if (!email && party?.email) email = party.email;
+      if (!address && party?.address) address = party.address;
+    }
+    if (!orgName && inn) orgName = `Победитель ИНН ${inn}`;
+
+    const prospect = await upsertProspect({
+      inn,
+      organization_name: orgName,
+      phone,
+      email,
+      address,
+      source: contractReestr ? 'lead:contract' : 'lead:tender',
+    });
+
+    const insertFound: Record<string, unknown> = {
       lead_id: input.leadId,
+      prospect_id: prospect?.id ?? null,
       purchase_url: purchaseUrl,
-      purchase_number: purchaseNumber,
-      law,
-      object_info: String(input.objectInfo || '').trim() || null,
+      purchase_number: purchaseNumber || winner.purchase_number || null,
+      law: lawLabel,
+      object_info:
+        String(input.objectInfo || '').trim() || winner.object_info || null,
+      customer_name: customerName,
       nmck: input.nmck ?? null,
+      contract_price: winner.contract_price ?? null,
       deadline,
-      winner_status: 'pending',
-      winner_poll_after: pollAfterFromDeadline(deadline),
-      source: 'lead:tender',
-    })
+      contract_reg_num: winner.contract_reg_num || contractReestr,
+      winner_status: prospect ? 'found' : 'pending',
+      winner_checked_at: now,
+      winner_attempts: 1,
+      // Уже пробовали resolve — не откладывать до deadline+15
+      winner_poll_after: prospect
+        ? null
+        : pollAfterAttempt({ immediate: Boolean(contractReestr) }),
+      source: contractReestr ? 'lead:contract' : 'lead:tender',
+    };
+    let { data, error } = await supabaseAdmin
+      .from('callout_tenders')
+      .insert(insertFound)
+      .select('id')
+      .single();
+    if (error && /customer_name/i.test(error.message)) {
+      delete insertFound.customer_name;
+      ({ data, error } = await supabaseAdmin
+        .from('callout_tenders')
+        .insert(insertFound)
+        .select('id')
+        .single());
+    }
+
+    if (error || !data) {
+      console.error('[callout watchLead]', error);
+      return { ok: false, message: error?.message || 'Не удалось сохранить закупку' };
+    }
+
+    return {
+      ok: true,
+      tender_id: data.id,
+      prospect_id: prospect?.id,
+      message: prospect
+        ? `В обзвон: ${prospect.organization_name || prospect.inn || 'победитель'}`
+        : 'Контракт найден, карточку обзвона создать не удалось — на наблюдении',
+    };
+  }
+
+  // Контракта ещё нет — ждём победителя
+  const insertPending: Record<string, unknown> = {
+    lead_id: input.leadId,
+    purchase_url: purchaseUrl,
+    purchase_number: purchaseNumber,
+    law: lawLabel,
+    object_info: String(input.objectInfo || '').trim() || null,
+    customer_name: customerName,
+    nmck: input.nmck ?? null,
+    deadline,
+    contract_reg_num: contractReestr,
+    winner_status: 'pending',
+    winner_checked_at: now,
+    winner_attempts: 1,
+    // Resolve уже вызывали выше — следующий опрос через 3 дня (контракт — сразу)
+    winner_poll_after: pollAfterAttempt({ immediate: Boolean(contractReestr) }),
+    source: 'lead:tender',
+  };
+  let { data, error } = await supabaseAdmin
+    .from('callout_tenders')
+    .insert(insertPending)
     .select('id')
     .single();
-
-  if (error) {
-    console.error('[callout watchLead]', error);
-    return { ok: false, message: error.message };
+  if (error && /customer_name/i.test(error.message)) {
+    delete insertPending.customer_name;
+    ({ data, error } = await supabaseAdmin
+      .from('callout_tenders')
+      .insert(insertPending)
+      .select('id')
+      .single());
   }
-  return { ok: true, tender_id: data.id, message: 'Поставлено на наблюдение' };
+
+  if (error || !data) {
+    console.error('[callout watchLead]', error);
+    return { ok: false, message: error?.message || 'Не удалось сохранить закупку' };
+  }
+  return {
+    ok: true,
+    tender_id: data.id,
+    message: contractReestr
+      ? 'Контракт на наблюдении (данные поставщика пока не найдены)'
+      : 'Поставлено на наблюдение — победитель появится после заключения контракта',
+  };
 }
 
 /**

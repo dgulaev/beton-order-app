@@ -1,7 +1,12 @@
 import https from 'node:https';
 import { URL } from 'node:url';
 import { getIntegrationSettings } from '@/lib/integrations/settings';
-import { extractPurchaseNumberFromUrl, normalizeInn } from '@/lib/callout/parseContacts';
+import {
+  extractContractReestrFromUrl,
+  extractPurchaseNumberFromUrl,
+  normalizeInn,
+} from '@/lib/callout/parseContacts';
+import { formatPhoneInput } from '@/lib/phone';
 
 const DEFAULT_BASE = 'https://v2test.gosplan.info';
 const FALLBACK_BASES = [
@@ -10,7 +15,7 @@ const FALLBACK_BASES = [
 ] as const;
 
 const INDEX_TIMEOUT_MS = 20_000;
-const DETAIL_TIMEOUT_MS = 8_000;
+const DETAIL_TIMEOUT_MS = 20_000;
 
 export type GosplanContractHit = {
   reg_num: string | null;
@@ -31,7 +36,17 @@ export type WinnerEnrichment = {
   contract_reg_num: string | null;
   contract_price: number | null;
   object_info: string | null;
+  purchase_number?: string | null;
+  law?: 'fz44' | 'fz223' | null;
   raw?: unknown;
+};
+
+export type ContractSupplierInfo = {
+  inn: string | null;
+  organization_name: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
 };
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -239,18 +254,188 @@ export async function searchContractsByPurchaseNumber(
   return [];
 }
 
+function formatSupplierPhone(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  let n = digits;
+  if (n.length === 11 && n.startsWith('8')) n = `7${n.slice(1)}`;
+  else if (n.length === 10) n = `7${n}`;
+  else if (n.startsWith('7') && n.length > 11) n = n.slice(0, 11);
+  if (n.length !== 11 || !n.startsWith('7')) return null;
+  return formatPhoneInput(n);
+}
+
 /**
- * Деталка контракта (часто тормозит) — только best-effort для названия/телефона.
+ * Блок ЕИС «Информация о поставщиках» (suppliersInfo).
+ * ИП / юрлицо: название, ИНН, телефон, почта, адрес.
+ */
+export function parseSuppliersInfoFromSource(
+  source: Record<string, unknown> | null,
+): ContractSupplierInfo {
+  const empty: ContractSupplierInfo = {
+    inn: null,
+    organization_name: null,
+    phone: null,
+    email: null,
+    address: null,
+  };
+  if (!source) return empty;
+
+  const suppliersInfo = asRecord(source.suppliersInfo);
+  let supplierInfo = asRecord(suppliersInfo?.supplierInfo);
+  if (!supplierInfo && Array.isArray(suppliersInfo?.supplierInfo)) {
+    supplierInfo = asRecord(suppliersInfo.supplierInfo[0]);
+  }
+  if (!supplierInfo) supplierInfo = suppliersInfo;
+
+  const pickOther = (node: Record<string, unknown> | null) => {
+    const other = asRecord(node?.otherInfo) || {};
+    const post = asRecord(other.postAddressInfo);
+    return {
+      phone: formatSupplierPhone(
+        String(other.contactPhone || other.phone || ''),
+      ),
+      email:
+        other.contactEMail || other.contactEmail || other.email
+          ? String(other.contactEMail || other.contactEmail || other.email)
+              .trim()
+              .toLowerCase()
+          : null,
+      address:
+        post?.mailingAdress || post?.mailingAddress || other.address
+          ? String(post?.mailingAdress || post?.mailingAddress || other.address)
+          : null,
+      isIp: other.isIP === true || other.isIP === 'true',
+    };
+  };
+
+  // ИП
+  const ip =
+    asRecord(supplierInfo?.individualPersonRFIndEntr) ||
+    asRecord(supplierInfo?.individualPersonRF) ||
+    asRecord(supplierInfo?.individualEntrepreneur);
+  if (ip) {
+    const egrip =
+      asRecord(ip.EGRIPInfo) ||
+      asRecord(ip.identityInfo) ||
+      asRecord(ip.personInfo) ||
+      ip;
+    const other = pickOther(ip);
+    const fio = [egrip.lastName, egrip.firstName, egrip.middleName]
+      .filter(Boolean)
+      .map(String)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const accounts = asRecord(supplierInfo?.supplierAccountsDetails);
+    const acc = asRecord(accounts?.supplierAccountDetails);
+    const fromAcc =
+      acc?.counterparty160Name != null ? String(acc.counterparty160Name).trim() : null;
+    // Приоритет: ФИО с пометкой ИП (как в ЕИС «Информация о поставщиках»)
+    let organization_name: string | null = null;
+    if (fio) {
+      organization_name = /^ип\b/i.test(fio) ? fio : `ИП ${fio}`;
+    } else if (fromAcc) {
+      organization_name = fromAcc;
+    }
+    return {
+      inn: normalizeInn(String(egrip.INN || egrip.inn || '')),
+      organization_name,
+      phone: other.phone,
+      email: other.email,
+      address:
+        other.address ||
+        (egrip.address != null ? String(egrip.address) : null),
+    };
+  }
+
+  // Юрлицо РФ / иностранное
+  const legal =
+    asRecord(supplierInfo?.legalEntityRF) ||
+    asRecord(supplierInfo?.legalEntityForeignState) ||
+    asRecord(supplierInfo?.legalEntity);
+  if (legal) {
+    const main =
+      asRecord(legal.EGRULInfo) ||
+      asRecord(legal.legalEntityRFInfo) ||
+      asRecord(legal.organizationInfo) ||
+      legal;
+    const other = pickOther(legal);
+    const accounts = asRecord(supplierInfo?.supplierAccountsDetails);
+    const acc = asRecord(accounts?.supplierAccountDetails);
+    const organization_name =
+      (main.fullName != null ? String(main.fullName) : null) ||
+      (main.shortName != null ? String(main.shortName) : null) ||
+      (main.organizationName != null ? String(main.organizationName) : null) ||
+      (acc?.counterparty160Name != null ? String(acc.counterparty160Name) : null);
+    return {
+      inn: normalizeInn(String(main.INN || main.inn || '')),
+      organization_name,
+      phone: other.phone,
+      email: other.email,
+      address:
+        other.address ||
+        (main.address != null ? String(main.address) : null) ||
+        (main.factualAddress != null ? String(main.factualAddress) : null),
+    };
+  }
+
+  // Fallback: счёт контрагента + обход дерева только в suppliersInfo
+  const accounts = asRecord(supplierInfo?.supplierAccountsDetails);
+  const acc = asRecord(accounts?.supplierAccountDetails);
+  let organization_name =
+    acc?.counterparty160Name != null ? String(acc.counterparty160Name).trim() : null;
+  let inn: string | null = null;
+  let phone: string | null = null;
+  let email: string | null = null;
+  let address: string | null = null;
+
+  const walk = (node: unknown, depth = 0) => {
+    if (!node || depth > 6) return;
+    if (Array.isArray(node)) {
+      for (const x of node) walk(x, depth + 1);
+      return;
+    }
+    const r = asRecord(node);
+    if (!r) return;
+    if (!inn && (r.INN || r.inn)) inn = normalizeInn(String(r.INN || r.inn));
+    if (!phone && (r.contactPhone || r.phone)) {
+      phone = formatSupplierPhone(String(r.contactPhone || r.phone));
+    }
+    if (!email && (r.contactEMail || r.contactEmail || r.email)) {
+      email = String(r.contactEMail || r.contactEmail || r.email)
+        .trim()
+        .toLowerCase();
+    }
+    if (!address && (r.mailingAdress || r.mailingAddress || r.address)) {
+      address = String(r.mailingAdress || r.mailingAddress || r.address);
+    }
+    if (!organization_name && (r.fullName || r.organizationName || r.firmName)) {
+      organization_name = String(r.fullName || r.organizationName || r.firmName);
+    }
+    for (const v of Object.values(r)) {
+      if (typeof v === 'object') walk(v, depth + 1);
+    }
+  };
+  walk(supplierInfo || source.suppliersInfo);
+
+  // Не брать заказчика из customer — только поставщик
+  return { inn, organization_name, phone, email, address };
+}
+
+/**
+ * Деталка контракта: поставщик из «Информация о поставщиках» + мета контракта.
  */
 export async function fetchContractDetailSupplier(
   regNum: string,
   law: 'fz44' | 'fz223',
-): Promise<{
-  organization_name: string | null;
-  phone: string | null;
-  email: string | null;
-  address: string | null;
-} | null> {
+): Promise<(ContractSupplierInfo & {
+  purchase_number: string | null;
+  contract_price: number | null;
+  object_info: string | null;
+  contract_reg_num: string | null;
+}) | null> {
   const { base, apiKey } = await gosplanBaseAndKey();
   const path = law === 'fz44' ? '/fz44/contracts' : '/fz223/contracts';
   const res = await gosplanGetJson(
@@ -268,46 +453,81 @@ export async function fetchContractDetailSupplier(
       ? asRecord((docs[0] as Record<string, unknown>).source)
       : asRecord(root.source);
 
-  let organization_name: string | null = null;
-  let phone: string | null = null;
-  let email: string | null = null;
-  let address: string | null = null;
+  const supplier = parseSuppliersInfoFromSource(source);
+  // ИНН из индекса suppliers[], если в suppliersInfo нет
+  if (!supplier.inn && Array.isArray(root.suppliers) && root.suppliers[0]) {
+    supplier.inn = normalizeInn(String(root.suppliers[0]));
+  }
 
-  const walk = (node: unknown, depth = 0) => {
-    if (!node || depth > 8) return;
-    if (Array.isArray(node)) {
-      for (const x of node) walk(x, depth + 1);
-      return;
-    }
-    const r = asRecord(node);
-    if (!r) return;
-    const fullName = r.fullName ?? r.organizationName ?? r.name ?? r.firmName;
-    if (!organization_name && fullName && String(fullName).length > 3) {
-      organization_name = String(fullName);
-    }
-    if (!phone && (r.phone || r.contactPhone)) {
-      phone = String(r.phone || r.contactPhone);
-    }
-    if (!email && r.email) email = String(r.email);
-    if (!address && (r.address || r.legalAddress || r.factualAddress)) {
-      address = String(r.address || r.legalAddress || r.factualAddress);
-    }
-    for (const v of Object.values(r)) {
-      if (typeof v === 'object') walk(v, depth + 1);
-    }
+  return {
+    ...supplier,
+    purchase_number:
+      root.purchase_number != null ? String(root.purchase_number) : null,
+    contract_price:
+      root.price != null && Number.isFinite(Number(root.price))
+        ? Number(root.price)
+        : null,
+    object_info: root.subject != null ? String(root.subject) : null,
+    contract_reg_num: root.reg_num != null ? String(root.reg_num) : regNum,
   };
-  walk(source || root);
-  return { organization_name, phone, email, address };
 }
 
-/** Итог: победитель по номеру/URL закупки. */
+/** Победитель по реестровому номеру контракта (карточка epz/contract). */
+export async function resolveWinnerFromContractReestr(
+  reestrNumber: string,
+  preferredLaw?: 'fz44' | 'fz223' | null,
+): Promise<WinnerEnrichment | null> {
+  const reg = String(reestrNumber || '').replace(/\D/g, '');
+  if (reg.length < 11) return null;
+
+  const order: Array<'fz44' | 'fz223'> =
+    preferredLaw === 'fz223' ? ['fz223', 'fz44'] : ['fz44', 'fz223'];
+
+  for (const law of order) {
+    try {
+      const detail = await fetchContractDetailSupplier(reg, law);
+      if (!detail) continue;
+      if (!detail.inn && !detail.organization_name && !detail.purchase_number) {
+        continue;
+      }
+      return {
+        inn: detail.inn,
+        organization_name: detail.organization_name,
+        phone: detail.phone,
+        email: detail.email,
+        address: detail.address,
+        contract_reg_num: detail.contract_reg_num,
+        contract_price: detail.contract_price,
+        object_info: detail.object_info,
+        purchase_number: detail.purchase_number,
+        law,
+      };
+    } catch {
+      /* next law */
+    }
+  }
+  return null;
+}
+
+/** Итог: победитель по номеру/URL закупки или контракта. */
 export async function resolveWinnerFromEis(opts: {
   purchaseNumber?: string | null;
   purchaseUrl?: string | null;
+  contractReestrNumber?: string | null;
   law?: 'fz44' | 'fz223' | null;
-  /** Тянуть деталку (название/телефон). По умолчанию выкл. — индекс уже даёт ИНН. */
+  /** Тянуть деталку с контактами поставщика. По умолчанию true. */
   enrichDetail?: boolean;
 }): Promise<WinnerEnrichment | null> {
+  const reestr =
+    String(opts.contractReestrNumber || '').replace(/\D/g, '') ||
+    extractContractReestrFromUrl(opts.purchaseUrl) ||
+    null;
+
+  if (reestr) {
+    const fromContract = await resolveWinnerFromContractReestr(reestr, opts.law);
+    if (fromContract) return fromContract;
+  }
+
   const fromUrl = extractPurchaseNumberFromUrl(opts.purchaseUrl || '');
   const pn = String(opts.purchaseNumber || fromUrl || '').replace(/\D/g, '');
   if (pn.length < 11) return null;
@@ -317,14 +537,14 @@ export async function resolveWinnerFromEis(opts: {
 
   const best = hits.find((h) => h.supplier_inns.length > 0) || hits[0];
   const inn = best.supplier_inns[0] || null;
+  const enrich = opts.enrichDetail !== false;
 
   let organization_name: string | null = null;
   let phone: string | null = null;
   let email: string | null = null;
   let address: string | null = null;
 
-  if (opts.enrichDetail === true && best.reg_num) {
-    // Не блокируем карточку: деталка часто таймаутится
+  if (enrich && best.reg_num) {
     try {
       const detail = await fetchContractDetailSupplier(best.reg_num, best.law);
       if (detail) {
@@ -339,7 +559,7 @@ export async function resolveWinnerFromEis(opts: {
   }
 
   return {
-    inn,
+    inn: inn || null,
     organization_name,
     phone,
     email,
@@ -347,5 +567,7 @@ export async function resolveWinnerFromEis(opts: {
     contract_reg_num: best.reg_num,
     contract_price: best.price,
     object_info: best.subject,
+    purchase_number: best.purchase_number || pn,
+    law: best.law,
   };
 }

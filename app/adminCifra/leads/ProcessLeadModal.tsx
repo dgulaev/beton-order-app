@@ -55,9 +55,10 @@ const EMPTY_FORM: ProcessLeadForm = {
   inn: '',
   contact_name: '',
   phone: '+7',
-  grade: 'М300',
+  // Марка/объём — только из ЕИС или вручную; не подставляем «М300» по умолчанию
+  grade: '',
   volume_m3: '',
-  city: 'Брянск',
+  city: '',
   address: '',
   desired_date: '',
   deadline: '',
@@ -89,7 +90,7 @@ function applyParsedToForm(
   const o = opts?.overwrite === true;
   const keep = (cur: string, next: string | null | undefined) => {
     if (next == null || !String(next).trim()) return cur;
-    if (o || !cur.trim() || cur === '+7' || cur === EMPTY_FORM.grade || cur === EMPTY_FORM.city) {
+    if (o || !cur.trim() || cur === '+7') {
       return String(next).trim();
     }
     return cur;
@@ -108,6 +109,10 @@ function applyParsedToForm(
     }
   }
 
+  const hasGrade = parsed.grade != null && String(parsed.grade).trim() !== '';
+  const hasVolume =
+    parsed.volume_m3 != null && Number.isFinite(Number(parsed.volume_m3));
+
   return {
     ...base,
     platform,
@@ -119,13 +124,19 @@ function applyParsedToForm(
     inn: keep(base.inn, parsed.inn),
     contact_name: keep(base.contact_name, parsed.contact_name),
     phone: keep(base.phone, parsed.phone),
-    grade: keep(base.grade, parsed.grade),
-    volume_m3: keep(
-      base.volume_m3,
-      parsed.volume_m3 != null ? String(parsed.volume_m3) : null,
-    ),
+    // Марка/объём только из ЕИС; при «Заполнить из ЕИС» без данных — очищаем, не оставляем М300
+    grade: hasGrade ? keep(base.grade, parsed.grade) : o ? '' : base.grade,
+    volume_m3: hasVolume
+      ? keep(base.volume_m3, String(parsed.volume_m3))
+      : o
+        ? ''
+        : base.volume_m3,
     city: keep(base.city, parsed.city),
     address: keep(base.address, parsed.address),
+    desired_date: keep(
+      base.desired_date,
+      parsed.desired_date ? String(parsed.desired_date).slice(0, 10) : null,
+    ),
     deadline: keep(base.deadline, parsed.deadline?.slice(0, 10)),
     etp_url: keep(base.etp_url, parsed.etp_url),
     docs_url: keep(base.docs_url, parsed.docs_url),
@@ -190,7 +201,6 @@ function formFromLead(lead: Lead): ProcessLeadForm {
       lead.grade || undefined,
       String(p.grade || ''),
       extracted.grade || undefined,
-      EMPTY_FORM.grade,
     ),
     volume_m3: pickStr(
       lead.volume_m3 != null ? String(lead.volume_m3) : '',
@@ -201,7 +211,6 @@ function formFromLead(lead: Lead): ProcessLeadForm {
       lead.city || undefined,
       String(p.city || ''),
       extracted.city || undefined,
-      EMPTY_FORM.city,
     ),
     address: pickStr(lead.address || undefined, String(p.address || ''), extracted.address || undefined),
     desired_date: sanitizeDesiredDateForForm(
@@ -254,19 +263,49 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
         /* ignore */
       }
 
-      if (initial.etp_url && (!initial.organization_name || !initial.purchase_number)) {
+      const parseUrl = initial.etp_url || initial.docs_url;
+      const sparse =
+        !initial.organization_name ||
+        !initial.purchase_number ||
+        !initial.nmck ||
+        !initial.address;
+      // Если в лиде висит дефолтная М300 без объёма — перепроверим по ЕИС
+      const suspectDefaultGrade =
+        /^м\s*300$/i.test(initial.grade.trim()) && !initial.volume_m3.trim();
+      if (parseUrl && (sparse || suspectDefaultGrade)) {
         try {
           setParsing(true);
           const res = await fetch('/api/adminCifra/tender/parse', {
             method: 'POST',
             headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ url: initial.etp_url }),
+            body: JSON.stringify({ url: parseUrl }),
           });
           const json = await res.json().catch(() => ({}));
           if (res.ok && json.success && json.fields) {
-            setForm((f) =>
-              applyParsedToForm(f, json.fields as ParsedTenderFields, { overwrite: true }),
-            );
+            const fields = json.fields as ParsedTenderFields;
+            setForm((f) => {
+              const overwriteAll =
+                (sparse && (!initial.organization_name || !initial.purchase_number)) ||
+                suspectDefaultGrade;
+              let next = applyParsedToForm(f, fields, { overwrite: overwriteAll });
+              // Марка/объём — только то, что реально есть в ЕИС (не дефолт М300)
+              if (!fields.grade || suspectDefaultGrade) {
+                next = {
+                  ...next,
+                  grade: fields.grade ? String(fields.grade).trim() : '',
+                };
+              }
+              if (fields.volume_m3 == null || suspectDefaultGrade) {
+                next = {
+                  ...next,
+                  volume_m3:
+                    fields.volume_m3 != null && Number.isFinite(Number(fields.volume_m3))
+                      ? String(fields.volume_m3)
+                      : '',
+                };
+              }
+              return next;
+            });
           }
         } catch {
           /* ignore */
@@ -312,9 +351,9 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
   };
 
   const fillFromEtpUrl = async (overwrite = false) => {
-    const url = form.etp_url.trim();
+    const url = form.etp_url.trim() || form.docs_url.trim();
     if (!url) {
-      alert('Сначала укажи ссылку на закупку (ЭТП)');
+      alert('Сначала укажи ссылку на закупку / контракт ЕИС');
       return;
     }
     setParsing(true);
@@ -387,6 +426,9 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
       if (!res.ok || !json.success) {
         alert(json.error || 'Не удалось сохранить');
         return;
+      }
+      if (json.callout_watch?.prospect_id && json.callout_watch?.message) {
+        alert(`${json.callout_watch.message}\nКарточка — в разделе «Обзвон».`);
       }
       onSaved(json.lead as Lead);
     } catch {
@@ -595,11 +637,12 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
               }}
             >
               <label style={labelStyle}>
-                Марка
+                Марка бетона
                 <input
                   value={form.grade}
                   onChange={(e) => set('grade', e.target.value)}
                   style={modalFieldStyle({ marginTop: 4, ...fieldPad })}
+                  placeholder="если есть в закупке, напр. М300"
                 />
               </label>
               <label style={labelStyle}>
@@ -611,6 +654,7 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
                   value={form.volume_m3}
                   onChange={(e) => set('volume_m3', e.target.value)}
                   style={modalFieldStyle({ marginTop: 4, ...fieldPad })}
+                  placeholder="если указан в спецификации"
                 />
               </label>
               <label style={labelStyle}>
@@ -619,6 +663,7 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
                   value={form.city}
                   onChange={(e) => set('city', e.target.value)}
                   style={modalFieldStyle({ marginTop: 4, ...fieldPad })}
+                  placeholder="из адреса поставки"
                 />
               </label>
               <label style={labelStyle}>
@@ -654,18 +699,18 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
             <h3 style={sectionTitle}>Ссылки и комментарий</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
               <label style={labelStyle}>
-                Ссылка на закупку (ЭТП)
+                Ссылка на закупку / контракт ЕИС
                 <input
                   value={form.etp_url}
                   onChange={(e) => set('etp_url', e.target.value)}
                   style={modalFieldStyle({ marginTop: 4, ...fieldPad })}
-                  placeholder="https://tender.lot-online.ru/…"
+                  placeholder="https://zakupki.gov.ru/epz/… или ЭТП"
                 />
               </label>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 <button
                   type="button"
-                  disabled={busy || !form.etp_url.trim()}
+                  disabled={busy || !(form.etp_url.trim() || form.docs_url.trim())}
                   onClick={() => void fillFromEtpUrl(true)}
                   style={{
                     padding: '8px 12px',
@@ -682,7 +727,7 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
                 </button>
                 <button
                   type="button"
-                  disabled={busy || !form.etp_url.trim()}
+                  disabled={busy || !(form.etp_url.trim() || form.docs_url.trim())}
                   onClick={() => void fillFromEtpUrl(false)}
                   style={{
                     padding: '8px 12px',
@@ -697,6 +742,11 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
                   Дозаполнить пустые
                 </button>
               </div>
+              {parsing && (
+                <p style={{ margin: 0, fontSize: 12, color: '#94A3B8' }}>
+                  Подтягиваю данные лота из ЕИС…
+                </p>
+              )}
               <label style={labelStyle}>
                 Ссылка на документацию
                 <input

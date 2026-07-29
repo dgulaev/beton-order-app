@@ -71,3 +71,26 @@ export async function createContractSignedUrl(storagePath: string, expiresSec = 
   }
   return data.signedUrl;
 }
+
+/** Удаляет файлы контрактов лида из Storage (строки lead_contracts уйдут каскадом с лидом). */
+export async function removeLeadContractStorageForLead(leadId: number): Promise<void> {
+  const { data: rows, error } = await supabaseAdmin
+    .from('lead_contracts')
+    .select('storage_path')
+    .eq('lead_id', leadId);
+  if (error) {
+    console.error('[lead-contracts remove list]', error.message);
+    return;
+  }
+  const paths = (rows || [])
+    .map((r) => (r as { storage_path?: string | null }).storage_path)
+    .filter((p): p is string => Boolean(p));
+  if (paths.length === 0) return;
+
+  const { error: removeError } = await supabaseAdmin.storage
+    .from(LEAD_CONTRACTS_BUCKET)
+    .remove(paths);
+  if (removeError) {
+    console.error('[lead-contracts remove storage]', removeError.message);
+  }
+}

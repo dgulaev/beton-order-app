@@ -101,22 +101,40 @@ export function isEmptyWinnerName(name: string | null | undefined): boolean {
   return /^(нет\s+сведений|ни одной заявки|все поданные заявки отклонены)/i.test(s);
 }
 
-/** Достаёт regNumber закупки из URL ЕИС. */
+/** Достаёт regNumber извещения из URL ЕИС (не путать с reestrNumber контракта). */
 export function extractPurchaseNumberFromUrl(url: string | null | undefined): string | null {
   if (!url) return null;
   const s = String(url);
+  // Карточка контракта — номер извещения только из явного regNumber=
+  if (/reestrNumber=/i.test(s) || /\/epz\/contract\//i.test(s)) {
+    return s.match(/regNumber=(\d{11,25})/i)?.[1] || null;
+  }
   const m =
     s.match(/regNumber=(\d{11,25})/i)?.[1] ||
+    s.match(/purchaseNoticeNumber=(\d{11,25})/i)?.[1] ||
     s.match(/noticeInfoId=(\d+)/i)?.[1] ||
     s.match(/\b(0?\d{18,20})\b/)?.[1] ||
     null;
   return m || null;
 }
 
+/** Реестровый номер контракта из URL карточки ЕИС. */
+export function extractContractReestrFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const s = String(url);
+  const fromQuery = s.match(/reestrNumber=(\d{11,25})/i)?.[1];
+  if (fromQuery) return fromQuery;
+  if (/\/epz\/contract\//i.test(s) || /contractCard/i.test(s)) {
+    return s.match(/\b(\d{18,25})\b/)?.[1] || null;
+  }
+  return null;
+}
+
 export function detectLawFromUrl(url: string | null | undefined): 'fz44' | 'fz223' | null {
   if (!url) return null;
   const s = String(url);
   if (/notice223|\/223\//i.test(s)) return 'fz223';
+  if (/\/epz\/contract\//i.test(s) || /reestrNumber=/i.test(s)) return 'fz44';
   if (/ea20|epz\/order\/notice/i.test(s)) return 'fz44';
   return null;
 }

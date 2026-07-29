@@ -5,7 +5,7 @@ import { fetchAndParseTenderUrl } from '@/lib/tender/parseTenderPage';
 /** POST { url } — разобрать карточку ЭТП (lot-online и др.) в поля формы. */
 export async function POST(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request, SALES_ROLES);
-  if (auth instanceof NextResponse) return auth;
+  if (auth.error) return auth.error;
 
   try {
     const body = await request.json().catch(() => ({}));

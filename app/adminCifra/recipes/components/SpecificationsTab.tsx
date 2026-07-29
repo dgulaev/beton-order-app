@@ -51,7 +51,11 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
   const [page, setPage] = useState(1);
   const listRef = useRef<HTMLDivElement>(null);
   const ROW_GAP = 8;
-  const { perPage } = useAutoRows(listRef, { rowGap: ROW_GAP, deps: [specs.length, dateFilter, filter] });
+  const { perPage } = useAutoRows(listRef, {
+    rowGap: ROW_GAP,
+    reserveBottom: 0,
+    deps: [specs.length, dateFilter, filter],
+  });
   const [editing, setEditing] = useState<any>(null);
   const [passportFor, setPassportFor] = useState<any>(null);
   // Результат поиска заказа по номеру в модалке: null — не искали,
@@ -230,9 +234,18 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
   };
 
   return (
-    <div>
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
+    >
       {/* Заголовок + действия */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexShrink: 0, gap: 10, flexWrap: 'wrap' }}>
         <h2 style={{ fontSize: '18px', color: '#fff', margin: 0 }}>Спецификации</h2>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button onClick={() => { setOrderLookup(null); setEditing(emptySpec()); }} style={primaryButton()}>+ Спецификация</button>
@@ -240,12 +253,12 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
       </div>
 
       {/* Фильтры + поиск */}
-      <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '18px', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', flexShrink: 0 }}>
         <input
           placeholder="Поиск по коду, марке, продукции..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{ ...inputStyle, width: '320px' }}
+          style={{ ...inputStyle, flex: '1 1 220px', minWidth: 180, maxWidth: 360 }}
         />
         {FILTERS.map((f) => (
           <button
@@ -270,6 +283,11 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
         </div>
       </div>
 
+      <div
+        ref={listRef}
+        className="scroll-hidden"
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column', gap: ROW_GAP }}
+      >
       {loading ? (
         <p style={{ color: COLORS.muted }}>Загрузка...</p>
       ) : filteredSpecs.length === 0 ? (
@@ -277,8 +295,8 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
           {dateFilter ? `За ${dateFilter} спецификаций нет.` : 'Спецификаций нет. Создайте первую по кнопке «+ Спецификация».'}
         </div>
       ) : (
-        <div ref={listRef} style={{ display: 'flex', flexDirection: 'column', gap: ROW_GAP }}>
-          <div data-lab-head style={{ display: 'flex', padding: '4px 16px 2px', color: '#F1F5F9', fontSize: '13px', fontWeight: 700, letterSpacing: '0.02em', gap: '10px' }}>
+        <>
+          <div data-lab-head style={{ display: 'flex', padding: '4px 16px 2px', color: '#F1F5F9', fontSize: '13px', fontWeight: 700, letterSpacing: '0.02em', gap: '10px', flexShrink: 0 }}>
             <div style={{ flex: 1.4, whiteSpace: 'nowrap' }}>Спецификация</div>
             <div style={{ flex: 1.2, whiteSpace: 'nowrap' }}>Продукция</div>
             <div style={{ flex: 1, whiteSpace: 'nowrap' }}>Рецептура</div>
@@ -299,6 +317,7 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
                   color: '#E2E8F0',
                   fontSize: '14px',
                   gap: '10px',
+                  flexShrink: 0,
                 })}
               >
                 <div style={{ flex: 1.4, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={[s.code || s.name || `Спец. #${s.id}`, s.grade, s.order_id ? `заказ №${s.order_id}` : ''].filter(Boolean).join(' · ')}>
@@ -330,10 +349,11 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
               </div>
             );
           })}
-        </div>
+        </>
       )}
+      </div>
 
-      <LabPagination page={pageSafe} totalPages={totalPages} onPage={setPage} reserveSpace style={{ height: 56 }} />
+      <LabPagination page={pageSafe} totalPages={totalPages} onPage={setPage} reserveSpace style={{ height: 56, flexShrink: 0 }} />
 
       {/* Модалка создания/редактирования */}
       {editing && (

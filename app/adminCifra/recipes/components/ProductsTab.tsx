@@ -94,48 +94,20 @@ export default function ProductsTab({ recipes, loading, onReload }: Props) {
   const [showTemplates, setShowTemplates] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
-  // Высота карточки списка: от её верха до низа экрана минус пагинация.
-  // Растягиваем список — пагинация всегда у нижнего края, без «голой» середины.
-  const [listFillH, setListFillH] = useState(0);
-  const PAG_RESERVE = 80; // кнопки пагинации + отступ (без скролла страницы)
   // Один групповой заголовок на странице типичен; лишний запас давал «голый» низ.
   const GROUP_RESERVE = 36;
   const ROW_GAP = 8; // зазор между объёмными строками
 
-  useEffect(() => {
-    const computeFill = () => {
-      const el = listRef.current;
-      if (!el || viewMode !== 'list') return;
-      const rect = el.getBoundingClientRect();
-      // adminCifra обёрнут в transform: scale — getBoundingClientRect в visual px,
-      // а minHeight в CSS задаётся в layout px. Делим на scale, как в clients/page.
-      const layoutW = el.clientWidth || el.offsetWidth;
-      const scale = layoutW > 0 ? rect.width / layoutW : 1;
-      const safeScale = scale > 0.1 && Number.isFinite(scale) ? scale : 1;
-      const visualAvail = Math.max(280, window.innerHeight - rect.top - PAG_RESERVE);
-      const layoutH = Math.max(280, Math.floor(visualAvail / safeScale));
-      setListFillH((prev) => (prev === layoutH ? prev : layoutH));
-    };
-    computeFill();
-    const t1 = setTimeout(computeFill, 60);
-    const t2 = setTimeout(computeFill, 350);
-    window.addEventListener('resize', computeFill);
-    return () => {
-      window.removeEventListener('resize', computeFill);
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
-  }, [section, viewMode, recipes.length, concreteFilter, aggregateFilter, cementFilter, search]);
-
-  // Число строк: высота заполнения минус шапка и запас на группы.
+  // Высоту списка даёт flex-оболочка (frame-layout). perPage считаем от clientHeight,
+  // без listFillH/innerHeight — на ~1600 со scale это выталкивало пагинацию за кадр.
   const { perPage: listPerPage } = useAutoRows(listRef, {
-    reserveBottom: PAG_RESERVE + GROUP_RESERVE,
+    reserveBottom: GROUP_RESERVE,
     rowGap: ROW_GAP,
     minRows: 6,
-    deps: [section, viewMode, recipes.length, concreteFilter, aggregateFilter, cementFilter, listFillH],
+    deps: [section, viewMode, recipes.length, concreteFilter, aggregateFilter, cementFilter],
   });
   const gridPerPage = useAutoGrid(gridRef, {
-    reserveBottom: PAG_RESERVE,
+    reserveBottom: 0,
     deps: [section, viewMode, recipes.length],
   });
   const inputStyle = sharedInput;
@@ -498,7 +470,7 @@ export default function ProductsTab({ recipes, loading, onReload }: Props) {
     );
 
   return (
-    <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ flex: 1, height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Одна компактная панель: секции · вид · фильтры · действие */}
       <div
         style={{
@@ -586,9 +558,9 @@ export default function ProductsTab({ recipes, loading, onReload }: Props) {
       </div>
 
       {loading ? (
-        <p style={{ color: COLORS.muted }}>Загрузка...</p>
+        <p style={{ color: COLORS.muted, flexShrink: 0 }}>Загрузка...</p>
       ) : filtered.length === 0 ? (
-        <div style={{ ...volumeCardStyle({ borderRadius: 16, padding: '40px 24px', textAlign: 'center' }), color: COLORS.muted }}>
+        <div style={{ ...volumeCardStyle({ borderRadius: 16, padding: '40px 24px', textAlign: 'center' }), color: COLORS.muted, flexShrink: 0 }}>
           {section === 'aggregate' && sectionItems.length === 0 ? (
             <>
               <div style={{ marginBottom: '12px', fontSize: '15px' }}>В секции «Щебень и песок» пока пусто.</div>
@@ -614,9 +586,11 @@ export default function ProductsTab({ recipes, loading, onReload }: Props) {
           ref={gridRef}
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
             gap: 16,
             alignItems: 'stretch',
+            alignContent: 'start',
+            flex: 1,
             minHeight: 0,
             overflow: 'auto',
           }}
@@ -689,8 +663,12 @@ export default function ProductsTab({ recipes, loading, onReload }: Props) {
       ) : (
         <div
           ref={listRef}
+          className="scroll-hidden"
           style={{
-            minHeight: listFillH || undefined,
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
             display: 'flex',
             flexDirection: 'column',
             gap: ROW_GAP,
@@ -759,8 +737,6 @@ export default function ProductsTab({ recipes, loading, onReload }: Props) {
               </div>
             );
           })}
-          {/* Распорка — пагинация не прыгает на короткой последней странице. */}
-          <div style={{ flex: 1, minHeight: 0 }} aria-hidden />
         </div>
       )}
 
@@ -769,7 +745,7 @@ export default function ProductsTab({ recipes, loading, onReload }: Props) {
           page={pageSafe}
           totalPages={totalPages}
           onPage={setPage}
-          style={{ marginTop: '10px', height: 56 }}
+          style={{ marginTop: 10, height: 56, flexShrink: 0 }}
           reserveSpace
         />
       )}

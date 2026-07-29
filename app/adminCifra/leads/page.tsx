@@ -39,6 +39,7 @@ import { useRealtimeLeads } from '@/hooks/useRealtimeLeads';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
 import NewOrderModal from '../components/NewOrderModal';
 import ModalSelect from '../components/ModalSelect';
+import { appConfirm } from '../components/appDialog';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import CreateLeadModal from './CreateLeadModal';
 import ProcessLeadModal from './ProcessLeadModal';
@@ -579,6 +580,48 @@ function LeadsPageInner() {
     });
     void loadHistory(selectedLeadId);
     return true;
+  };
+
+  const deleteLead = async (lead: Lead) => {
+    if (!allowTenderProcess) return;
+    const ok = await appConfirm(
+      [
+        `Удалить лид #${lead.id} безвозвратно?`,
+        '',
+        'Будет удалено:',
+        '• сам лид, история и прикреплённые контракты',
+        '',
+        'Останется:',
+        '• связанные заявки (ссылка на лид снимется)',
+        '• карточки обзвона / спрос (ссылка на лид снимется)',
+      ].join('\n'),
+      { title: 'Удаление лида', okLabel: 'Удалить', cancelLabel: 'Отмена', variant: 'danger' },
+    );
+    if (!ok) return;
+
+    const res = await fetch(`/api/adminCifra/leads/${lead.id}`, {
+      method: 'DELETE',
+      headers: adminCifraAuthHeaders(),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.success) {
+      alert(json.error || 'Не удалось удалить лид');
+      return;
+    }
+
+    setLeads((prev) => prev.filter((l) => l.id !== lead.id));
+    setContractsByLead((prev) => {
+      const next = { ...prev };
+      delete next[lead.id];
+      return next;
+    });
+    setShipmentsByLead((prev) => {
+      const next = { ...prev };
+      delete next[lead.id];
+      return next;
+    });
+    if (selectedLeadId === lead.id) setSelectedLeadId(null);
+    if (processLead?.id === lead.id) setProcessLead(null);
   };
 
   const openConvert = async (lead: Lead) => {
@@ -1576,6 +1619,19 @@ function LeadsPageInner() {
                           }}
                         >
                           Вернуть в отгрузку
+                        </button>
+                      )}
+                      {allowTenderProcess && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void deleteLead(lead);
+                          }}
+                          style={btnDanger}
+                          title="Удалить лид навсегда"
+                        >
+                          Удалить
                         </button>
                       )}
                       {shipments && shipments.orders.length > 0 ? (

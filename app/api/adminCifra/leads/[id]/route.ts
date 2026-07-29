@@ -3,6 +3,7 @@ import { SALES_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { canActOnAssignedLeadWork, getLeadAssigneeIds, parseIdList } from '@/lib/leadAssigneeIds';
 import { notifyLeadTakeRequired, resolveStaffRefs } from '@/lib/leadAssigneesServer';
 import { canProcessTenders } from '@/lib/demandProcessAccess';
+import { removeLeadContractStorageForLead } from '@/lib/leadContractsServer';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { maybeMarkClientSpamFromLead } from '@/lib/clientSpam';
 import { leadStatusLabel, writeLeadHistory } from '@/lib/leadHistory';
@@ -596,6 +597,13 @@ export async function PATCH(request: NextRequest, context: Ctx) {
       });
     }
 
+    let calloutWatch: {
+      ok: boolean;
+      message: string;
+      tender_id?: number;
+      prospect_id?: number;
+    } | null = null;
+
     if (body.processing != null && typeof body.processing === 'object') {
       await writeLeadHistory({
         lead_id: id,
@@ -609,6 +617,33 @@ export async function PATCH(request: NextRequest, context: Ctx) {
           || strOrNull((body.processing as Record<string, unknown>).organization_name)
           || 'реквизиты',
       });
+
+      // Тендер после обработки → обзвон (контракт сразу с победителем)
+      const leadSource = String((data as Lead)?.source || existing.source || '');
+      if (leadSource === 'tender' || leadSource === 'demand') {
+        const p = body.processing as Record<string, unknown>;
+        const etpUrl = strOrNull(p.etp_url) || strOrNull(p.docs_url);
+        const purchaseNumber = strOrNull(p.purchase_number);
+        if (etpUrl || purchaseNumber) {
+          try {
+            const { watchLeadForCallout } = await import('@/lib/callout/calloutService');
+            const { extractContractReestrFromUrl } = await import('@/lib/callout/parseContacts');
+            calloutWatch = await watchLeadForCallout({
+              leadId: id,
+              purchaseUrl: etpUrl,
+              purchaseNumber,
+              contractReestrNumber: extractContractReestrFromUrl(etpUrl),
+              law: strOrNull(p.law),
+              objectInfo: strOrNull(p.comment) || (data as Lead)?.raw_text,
+              customerName: strOrNull(p.organization_name),
+              nmck: numOrNull(p.nmck),
+              deadline: strOrNull(p.deadline),
+            });
+          } catch (e) {
+            console.error('[leads PATCH] callout watch', e);
+          }
+        }
+      }
     }
 
     // Авто-уведомление при назначении — только Авито / публичная форма.
@@ -650,10 +685,58 @@ export async function PATCH(request: NextRequest, context: Ctx) {
             clientSpamSkipped: clientSpam.skippedReason ?? null,
           }
         : {}),
+      ...(calloutWatch ? { callout_watch: calloutWatch } : {}),
       statusLabel: data?.status ? leadStatusLabel(data.status) : null,
     });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'Ошибка';
     return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
+}
+
+/** Удаление лида — только админ или специалист по торгам (can_process_tenders). */
+export async function DELETE(request: NextRequest, context: Ctx) {
+  const auth = await requireAdminCifraStaff(request, SALES_ROLES);
+  if (auth.error) return auth.error;
+
+  if (!canProcessTenders(auth.user)) {
+    return NextResponse.json(
+      { success: false, error: 'Удалять лиды могут только админ и специалист по торгам' },
+      { status: 403 },
+    );
+  }
+
+  const { id: idRaw } = await context.params;
+  const id = Number(idRaw);
+  if (!Number.isFinite(id) || id <= 0) {
+    return NextResponse.json({ success: false, error: 'Некорректный id' }, { status: 400 });
+  }
+
+  const { data: existing, error: loadError } = await supabaseAdmin
+    .from('leads')
+    .select('id')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (loadError) {
+    console.error('[leads DELETE load]', loadError);
+    return NextResponse.json({ success: false, error: loadError.message }, { status: 500 });
+  }
+  if (!existing) {
+    return NextResponse.json({ success: false, error: 'Лид не найден' }, { status: 404 });
+  }
+
+  try {
+    await removeLeadContractStorageForLead(id);
+  } catch (e) {
+    console.error('[leads DELETE storage]', e);
+  }
+
+  const { error: delError } = await supabaseAdmin.from('leads').delete().eq('id', id);
+  if (delError) {
+    console.error('[leads DELETE]', delError);
+    return NextResponse.json({ success: false, error: delError.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ success: true, id });
 }

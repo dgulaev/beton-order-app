@@ -60,7 +60,11 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
   const [page, setPage] = useState(1);
   const listRef = useRef<HTMLDivElement>(null);
   const ROW_GAP = 8;
-  const { perPage } = useAutoRows(listRef, { rowGap: ROW_GAP, deps: [journal, tests.length, dateFilter, orderFilter] });
+  const { perPage } = useAutoRows(listRef, {
+    rowGap: ROW_GAP,
+    reserveBottom: 0,
+    deps: [journal, tests.length, dateFilter, orderFilter],
+  });
   const loadedOrderMonths = useRef<Set<string>>(new Set());
   const loadingOrderMonths = useRef<Set<string>>(new Set());
 
@@ -276,9 +280,18 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
   const resultLabel = (r: string) => (r === 'pass' ? 'Соответствует' : r === 'fail' ? 'Не соответствует' : 'Ожидает');
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-        <div>
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexShrink: 0, gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
           <h2 style={{ fontSize: '18px', color: '#fff', margin: 0 }}>Журнал испытаний</h2>
           <p style={{ color: COLORS.muted, fontSize: '13px', margin: '4px 0 0' }}>
             {journal === '7'
@@ -292,7 +305,7 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
       </div>
 
       {/* Переключатель журналов: 7 суток / 28 суток — это два разных журнала */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '18px', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
         {([
           { key: '7' as JournalKey, label: 'Журнал 7 суток', count: count7 },
           { key: '28' as JournalKey, label: 'Журнал 28 суток', count: count28 },
@@ -330,6 +343,11 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
         </div>
       </div>
 
+      <div
+        ref={listRef}
+        className="scroll-hidden"
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column', gap: ROW_GAP }}
+      >
       {loading ? (
         <p style={{ color: COLORS.muted }}>Загрузка...</p>
       ) : journalTests.length === 0 ? (
@@ -339,8 +357,8 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
             : `В журнале ${journal} суток записей нет. Добавьте первое испытание партии.`}
         </div>
       ) : (
-        <div ref={listRef} style={{ display: 'flex', flexDirection: 'column', gap: ROW_GAP }}>
-          <div data-lab-head style={{ display: 'flex', padding: '4px 16px 2px', color: '#F1F5F9', fontSize: '13px', fontWeight: 700, letterSpacing: '0.02em', gap: '8px' }}>
+        <>
+          <div data-lab-head style={{ display: 'flex', padding: '4px 16px 2px', color: '#F1F5F9', fontSize: '13px', fontWeight: 700, letterSpacing: '0.02em', gap: '8px', flexShrink: 0 }}>
             <div style={{ width: '120px', whiteSpace: 'nowrap' }}>Партия</div>
             <div style={{ width: '80px', whiteSpace: 'nowrap' }}>Заявка</div>
             <div style={{ width: '80px', whiteSpace: 'nowrap' }}>Марка</div>
@@ -363,6 +381,7 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
                 color: '#E2E8F0',
                 fontSize: '14px',
                 gap: '8px',
+                flexShrink: 0,
               })}
             >
               <div style={{ width: '120px', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.batch_no || undefined}>{t.batch_no || '—'}</div>
@@ -384,10 +403,11 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
               </div>
             </div>
           ))}
-        </div>
+        </>
       )}
+      </div>
 
-      <LabPagination page={pageSafe} totalPages={totalPages} onPage={setPage} reserveSpace style={{ height: 56 }} />
+      <LabPagination page={pageSafe} totalPages={totalPages} onPage={setPage} reserveSpace style={{ height: 56, flexShrink: 0 }} />
 
       {editing && (
         <div style={overlayStyle} onClick={() => setEditing(null)}>

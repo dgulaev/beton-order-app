@@ -354,8 +354,9 @@ const loadTodayConsumption = async () => {
     const res = await fetch('/api/adminCifra/production-log?today=true', {
       cache: 'no-store',
       headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' },
-      // Добавили timeout, чтобы не висело вечно
-      signal: AbortSignal.timeout(3000)
+      // Ручка тяжёлая (JOIN + orphans); на холодном старте/параллели с 7-дневным
+      // средним легко >3с. 12с — потолок, не «висеть вечно».
+      signal: AbortSignal.timeout(12_000),
     });
 
     if (!res.ok) {
@@ -398,16 +399,14 @@ const loadTodayConsumption = async () => {
     };
 
     setTodayConsumption(newConsumption);
-
-    // Оставили только один важный лог (можно закомментировать позже)
-    // console.log(`✅ Расчёт: ${logs.length} записей | Цемент: ${newConsumption.cement}т | ПФМ: ${newConsumption.pfm}кг | Линомикс: ${newConsumption.linomix}кг`);
-
   } catch (err: any) {
-    // Тихая обработка — не спамим ошибкой при каждом обновлении
-    if (err.name !== 'AbortError' && err.name !== 'TypeError') {
+    // TimeoutError (AbortSignal.timeout) / AbortError / сеть — без шума в консоли.
+    // При таймауте не затираем уже показанные цифры нулями.
+    const name = err?.name || '';
+    if (name !== 'AbortError' && name !== 'TimeoutError' && name !== 'TypeError') {
       console.error('Ошибка загрузки расхода сегодня:', err);
+      setTodayConsumption({ cement: 0, sand: 0, gravel: 0, pfm: 0, linomix: 0 });
     }
-    setTodayConsumption({ cement: 0, sand: 0, gravel: 0, pfm: 0, linomix: 0 });
   }
 };
 
@@ -423,48 +422,61 @@ const loadTodayConsumption = async () => {
   };
 
   // Средний расход добавок за 7 календарных дней (л/день) по production-log.
+  // Не бьём 7 тяжёлых GET параллельно — на открытии склада вместе с today
+  // это забивало API и ловило TimeoutError (3–4с). Пул из 2 запросов.
   const loadAvgDailyConsumption = async () => {
     if (!recipes.length) return;
     try {
       const dates = Array.from({ length: 7 }, (_, i) => moscowDateOffset(i));
-      const results = await Promise.all(
-        dates.map(async (date) => {
-          try {
-            const res = await fetch(`/api/adminCifra/production-log?date=${date}`, {
-              cache: 'no-store',
-              signal: AbortSignal.timeout(4000),
-            });
-            if (!res.ok) return { pfmKg: 0, linKg: 0 };
-            const data = await res.json();
-            const logs = data.logs || data || [];
-            let pfmKg = 0;
-            let linKg = 0;
-            for (const log of logs) {
-              const volume = parseFloat(log.volume || log.qty || 0);
-              if (!volume || volume <= 0) continue;
-              const recipe = findRecipeByGrade(recipes, log.concrete_grade);
-              if (!recipe) continue;
-              const usage = calculateAdditiveUsage(recipe, volume, additiveDensities);
-              if (usage?.additiveId === 1) pfmKg += usage.kg;
-              else if (usage?.additiveId === 2) linKg += usage.kg;
-            }
-            return { pfmKg, linKg };
-          } catch {
-            return { pfmKg: 0, linKg: 0 };
+      const fetchDay = async (date: string) => {
+        try {
+          const res = await fetch(`/api/adminCifra/production-log?date=${date}`, {
+            cache: 'no-store',
+            signal: AbortSignal.timeout(12_000),
+          });
+          if (!res.ok) return { pfmKg: 0, linKg: 0 };
+          const data = await res.json();
+          const logs = data.logs || data || [];
+          let pfmKg = 0;
+          let linKg = 0;
+          for (const log of logs) {
+            const volume = parseFloat(log.volume || log.qty || 0);
+            if (!volume || volume <= 0) continue;
+            const recipe = findRecipeByGrade(recipes, log.concrete_grade);
+            if (!recipe) continue;
+            const usage = calculateAdditiveUsage(recipe, volume, additiveDensities);
+            if (usage?.additiveId === 1) pfmKg += usage.kg;
+            else if (usage?.additiveId === 2) linKg += usage.kg;
           }
-        })
-      );
+          return { pfmKg, linKg };
+        } catch {
+          return { pfmKg: 0, linKg: 0 };
+        }
+      };
 
-      const sumPfm = results.reduce((s, r) => s + r.pfmKg, 0);
-      const sumLin = results.reduce((s, r) => s + r.linKg, 0);
+      const results: { pfmKg: number; linKg: number }[] = new Array(dates.length);
+      let cursor = 0;
+      const workers = Array.from({ length: Math.min(2, dates.length) }, async () => {
+        while (cursor < dates.length) {
+          const idx = cursor++;
+          results[idx] = await fetchDay(dates[idx]);
+        }
+      });
+      await Promise.all(workers);
+
+      const sumPfm = results.reduce((s, r) => s + (r?.pfmKg || 0), 0);
+      const sumLin = results.reduce((s, r) => s + (r?.linKg || 0), 0);
       const densPfm = getAdditiveDensity(1, additiveDensities);
       const densLin = getAdditiveDensity(2, additiveDensities);
       setAvgDailyLiters({
         pfm: densPfm > 0 ? sumPfm / densPfm / 7 : 0,
         linomix: densLin > 0 ? sumLin / densLin / 7 : 0,
       });
-    } catch (err) {
-      console.error('Ошибка среднего расхода добавок:', err);
+    } catch (err: any) {
+      const name = err?.name || '';
+      if (name !== 'AbortError' && name !== 'TimeoutError' && name !== 'TypeError') {
+        console.error('Ошибка среднего расхода добавок:', err);
+      }
     }
   };
 
@@ -513,10 +525,10 @@ const loadTodayConsumption = async () => {
   );
 
   // ==================== 2.3 ЗАГРУЗКА ДАННЫХ И ИНИЦИАЛИЗАЦИЯ ====================
+  // Расход сегодня / среднее за 7 дней считаем только когда есть recipes
+  // (эффект ниже) — иначе лишний тяжёлый GET на холодном старте без рецептов.
   useEffect(() => {
     loadWarehouse();
-    loadTodayConsumption();
-    console.log('✅ WarehousePage загружен');
   }, []);
 
   // Лента: первичная загрузка и сброс при смене фильтров
@@ -1720,17 +1732,30 @@ const removeLastCube = async (index: number) => {
   }; 
 
   // ==================== 7. ОСНОВНОЙ РЕНДЕР ====================
+  // В лаборатории страница в frame-layout (overflow:hidden + scale).
+  // Корень заполняет кадр, контент скроллится внутри — иначе на ~1600 низ обрезается.
   return (
-    <div style={{ 
-      color: '#E2E8F0', 
+    <div style={{
+      color: '#E2E8F0',
+      flex: 1,
+      minHeight: 0,
+      height: '100%',
       display: 'flex',
       flexDirection: 'column',
-      justifyContent: 'flex-start',
-      paddingBottom: '16px',
+      overflow: 'hidden',
       boxSizing: 'border-box',
-      fontFamily: 'system-ui, sans-serif'
+      fontFamily: 'system-ui, sans-serif',
     }}>
-
+      <div
+        className="scroll-hidden"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          paddingBottom: 16,
+        }}
+      >
       {/* Слева: KPI + силосы/ФБС/добавки. Справа: лента от линии табов до низа левого блока. */}
       <div
         style={{
@@ -2965,6 +2990,7 @@ const removeLastCube = async (index: number) => {
               )}
             </div>
           </div>
+      </div>
       </div>
 
       {siloJournalOpen && (

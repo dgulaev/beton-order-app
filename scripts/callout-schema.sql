@@ -41,6 +41,7 @@ create table if not exists public.callout_tenders (
   purchase_number    text,
   law                text,
   object_info        text,
+  customer_name      text,
   nmck               numeric,
   contract_price     numeric,
   deadline           date,

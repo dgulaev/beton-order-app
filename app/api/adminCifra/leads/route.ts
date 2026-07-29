@@ -230,17 +230,26 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Не удалось создать лид' }, { status: 400 });
     }
 
-    // Тендер → наблюдение в «Обзвон» (через ~15 дней после дедлайна подтянем победителя)
-    let calloutWatch: { ok: boolean; message: string; tender_id?: number } | null = null;
-    if (source === 'tender' && (purchaseNumber || etpUrl)) {
+    // Тендер → «Обзвон»: контракт сразу с победителем, извещение — на наблюдение
+    let calloutWatch: {
+      ok: boolean;
+      message: string;
+      tender_id?: number;
+      prospect_id?: number;
+    } | null = null;
+    if (source === 'tender' && (purchaseNumber || etpUrl || docsUrl)) {
       try {
         const { watchLeadForCallout } = await import('@/lib/callout/calloutService');
+        const { extractContractReestrFromUrl } = await import('@/lib/callout/parseContacts');
+        const purchaseUrl = etpUrl || docsUrl;
         calloutWatch = await watchLeadForCallout({
           leadId: result.lead.id,
-          purchaseUrl: etpUrl,
+          purchaseUrl,
           purchaseNumber,
+          contractReestrNumber: extractContractReestrFromUrl(purchaseUrl),
           law,
           objectInfo: comment || result.lead.raw_text,
+          customerName: organizationName,
           nmck,
           deadline,
         });

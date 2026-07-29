@@ -1,8 +1,14 @@
 import { extractGrades, extractVolume } from '@/lib/demand/extractFields';
 import {
+  extractEisLinkIds,
+  extractContractReestrNumber,
+  fetchFieldsFromEisContractReestrNumber,
+} from '@/lib/tender/fetchEisContract';
+import {
   extractPurchaseRegNumber,
   fetchFieldsFromEisRegNumber,
 } from '@/lib/tender/fetchEisPurchase';
+import { fetchGovHtml } from '@/lib/tender/fetchGovHtml';
 import type { ParsedTenderFields } from '@/lib/tender/types';
 
 export type { ParsedTenderFields } from '@/lib/tender/types';
@@ -97,6 +103,65 @@ function preferGrade(grades: string[]): string | null {
   return clean.find((g) => /^М\d/i.test(g)) || clean[0] || null;
 }
 
+/** HTML карточки контракта ЕИС (fallback). */
+export function parseEisContractHtml(lines: string[], url: string): ParsedTenderFields {
+  const blob = lines.join('\n');
+  const reestr =
+    extractContractReestrNumber(url) ||
+    valueAfterLabel(lines, ['Реестровый номер контракта']) ||
+    blob.match(/№\s*(\d{18,25})/)?.[1] ||
+    null;
+  const organization =
+    valueAfterLabel(lines, ['Заказчик', 'Наименование заказчика']) || null;
+  const title =
+    valueAfterLabel(lines, ['Объекты закупки', 'Предмет контракта', 'Наименование объекта закупки']) ||
+    lines.find((l) => /бетон|раствор|ремонт|поставк/i.test(l)) ||
+    null;
+  const priceRaw =
+    valueAfterLabel(lines, ['Цена контракта', 'Цена']) || null;
+  const nmck = priceRaw
+    ? priceRaw.replace(/[^\d.,]/g, '').replace(/\s/g, '').replace(',', '.')
+    : parseNmck(blob);
+  const address =
+    valueAfterLabel(lines, ['Место поставки', 'Место выполнения работ', 'Адрес']) || null;
+  const exeEnd =
+    valueAfterLabel(lines, ['Срок исполнения', 'Дата окончания исполнения']) || null;
+  const purchaseFromText =
+    blob.match(/извещен[^\d]*(\d{11,20})/i)?.[1] ||
+    blob.match(/notificationNumber["\s:=]+(\d{11,20})/i)?.[1] ||
+    null;
+  const law = detectLaw(`${url}\n${blob}`) || '44-ФЗ';
+  const grades = extractGrades(`${title || ''} ${blob}`);
+  const volume = extractVolume(blob);
+
+  return {
+    platform: 'ЕИС (zakupki.gov.ru)',
+    purchase_number: purchaseFromText,
+    law,
+    nmck,
+    organization_name: organization,
+    inn: valueAfterLabel(lines, ['ИНН']),
+    contact_name: valueAfterLabel(lines, ['Контактное лицо']),
+    phone: valueAfterLabel(lines, ['Контактный телефон', 'Телефон']),
+    grade: preferGrade(grades),
+    volume_m3: volume,
+    city: guessCityFromOrg(organization || address || ''),
+    address,
+    deadline: null,
+    desired_date: toIsoDateRu(exeEnd),
+    etp_url: url,
+    docs_url: url,
+    comment: [
+      title ? `Контракт: ${title}` : null,
+      reestr ? `Реестр контракта № ${reestr}` : null,
+      purchaseFromText ? `Извещение № ${purchaseFromText}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    title,
+  };
+}
+
 /** HTML карточки ЕИС (fallback, если ГосПлан недоступен). */
 export function parseEisHtml(lines: string[], url: string): ParsedTenderFields {
   const blob = lines.join('\n');
@@ -141,7 +206,9 @@ export function parseEisHtml(lines: string[], url: string): ParsedTenderFields {
   const law = detectLaw(`${url}\n${blob}`) || '223-ФЗ';
   const docsUrl =
     purchase != null
-      ? `https://zakupki.gov.ru/epz/order/notice/notice223/common-info.html?regNumber=${purchase}`
+      ? /44/i.test(law)
+        ? `https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=${purchase}`
+        : `https://zakupki.gov.ru/epz/order/notice/notice223/common-info.html?regNumber=${purchase}`
       : url;
 
   return {
@@ -169,6 +236,13 @@ export function parseEisHtml(lines: string[], url: string): ParsedTenderFields {
 
 /** Парсинг текста карточки (HTML уже в lines) — lot-online / общие ЭТП. */
 export function parseTenderText(lines: string[], url: string): ParsedTenderFields {
+  if (
+    /\/epz\/contract\//i.test(url) ||
+    /reestrNumber=/i.test(url) ||
+    lines.some((l) => /Карточка контракта|Реестр контрактов/i.test(l))
+  ) {
+    return parseEisContractHtml(lines, url);
+  }
   if (/zakupki\.gov\.ru/i.test(url) || lines.some((l) => /Реестровый номер извещения/i.test(l))) {
     return parseEisHtml(lines, url);
   }
@@ -222,6 +296,10 @@ export function parseTenderText(lines: string[], url: string): ParsedTenderField
 }
 
 async function fetchHtml(url: string): Promise<string> {
+  // zakupki.gov.ru — через insecure TLS (гос. сертификаты); остальные — обычный fetch.
+  if (/zakupki\.gov\.ru|\.gov\.ru/i.test(url)) {
+    return fetchGovHtml(url);
+  }
   const res = await fetch(url, {
     cache: 'no-store',
     headers: {
@@ -243,7 +321,10 @@ async function fetchHtml(url: string): Promise<string> {
 }
 
 /**
- * Главный вход: сначала ЕИС (ГосПлан по regNumber), потом HTML ЕИС, потом HTML ЭТП.
+ * Главный вход:
+ * 1) карточка контракта ЕИС (reestrNumber) → ГосПлан /contracts + извещение;
+ * 2) извещение (regNumber) → ГосПлан /purchases;
+ * 3) HTML ЕИС (с обходом SSL) / ЭТП.
  */
 export async function fetchAndParseTenderUrl(url: string): Promise<ParsedTenderFields> {
   const trimmed = url.trim();
@@ -251,8 +332,26 @@ export async function fetchAndParseTenderUrl(url: string): Promise<ParsedTenderF
     throw new Error('Укажи корректную ссылку (https://…)');
   }
 
-  let { regNumber, law } = extractPurchaseRegNumber(trimmed);
+  const ids = extractEisLinkIds(trimmed);
+  let regNumber = ids.purchaseNumber;
+  let law = ids.law;
   let htmlFallback: ParsedTenderFields | undefined;
+
+  // Карточка контракта: https://zakupki.gov.ru/epz/contract/…?reestrNumber=…
+  if (ids.contractReestrNumber) {
+    const fromContract = await fetchFieldsFromEisContractReestrNumber(
+      ids.contractReestrNumber,
+      { originalUrl: trimmed, preferredLaw: law },
+    );
+    if (fromContract) return fromContract;
+
+    try {
+      const html = await fetchHtml(trimmed);
+      return parseEisContractHtml(htmlToLines(html), trimmed);
+    } catch {
+      /* continue to generic path */
+    }
+  }
 
   // Если вставили lot-online / нет номера — достанем реестровый номер со страницы.
   if (!regNumber || /lot-online\.ru/i.test(trimmed)) {
@@ -285,11 +384,24 @@ export async function fetchAndParseTenderUrl(url: string): Promise<ParsedTenderF
     }
 
     try {
-      const eisUrl = `https://zakupki.gov.ru/epz/order/notice/notice223/common-info.html?regNumber=${encodeURIComponent(regNumber)}`;
+      const noticePath =
+        law === 'fz44'
+          ? 'ea20/view/common-info.html'
+          : 'notice223/common-info.html';
+      const eisUrl = `https://zakupki.gov.ru/epz/order/notice/${noticePath}?regNumber=${encodeURIComponent(regNumber)}`;
       const html = await fetchHtml(eisUrl);
       return parseEisHtml(htmlToLines(html), eisUrl);
     } catch {
-      /* continue */
+      /* Если закон неизвестен — пробуем альтернативный путь */
+      if (law !== 'fz44') {
+        try {
+          const alt = `https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=${encodeURIComponent(regNumber)}`;
+          const html = await fetchHtml(alt);
+          return parseEisHtml(htmlToLines(html), alt);
+        } catch {
+          /* continue */
+        }
+      }
     }
   }
 

@@ -29,6 +29,23 @@ export async function GET(request: NextRequest, context: Ctx) {
     return NextResponse.json({ success: false, error: 'Не найдено' }, { status: 404 });
   }
 
+  // Просмотр карточки: «Новый» → «В работе» (чтобы ушёл из фильтра «Новый»)
+  let current = prospect;
+  let statusChanged = false;
+  if (prospect.status === 'new') {
+    const { data: moved } = await supabaseAdmin
+      .from('callout_prospects')
+      .update({ status: 'in_progress', updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('status', 'new')
+      .select('*')
+      .maybeSingle();
+    if (moved) {
+      current = moved;
+      statusChanged = true;
+    }
+  }
+
   const [{ data: tenders }, { data: comments }] = await Promise.all([
     supabaseAdmin
       .from('callout_tenders')
@@ -45,9 +62,10 @@ export async function GET(request: NextRequest, context: Ctx) {
 
   return NextResponse.json({
     success: true,
-    prospect,
+    prospect: current,
     tenders: tenders || [],
     comments: comments || [],
+    statusChanged,
   });
 }
 

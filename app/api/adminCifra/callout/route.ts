@@ -99,12 +99,48 @@ export async function GET(request: NextRequest) {
   );
 
   // Закупки без карточки (ждём победителя)
-  const { data: pendingTenders } = await supabaseAdmin
+  const { data: pendingRaw } = await supabaseAdmin
     .from('callout_tenders')
     .select('*')
     .is('prospect_id', null)
     .order('updated_at', { ascending: false })
     .limit(150);
+
+  // Заказчик (кто проводит торги) — из лида, пока нет победителя в «К обзвону»
+  const pendingLeadIds = Array.from(
+    new Set(
+      (pendingRaw || [])
+        .map((t) => Number(t.lead_id))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  );
+  const customerByLead: Record<number, string> = {};
+  if (pendingLeadIds.length) {
+    const { data: leads } = await supabaseAdmin
+      .from('leads')
+      .select('id, name, raw_payload')
+      .in('id', pendingLeadIds);
+    for (const lead of leads || []) {
+      const payload =
+        lead.raw_payload && typeof lead.raw_payload === 'object'
+          ? (lead.raw_payload as Record<string, unknown>)
+          : {};
+      const org = String(payload.organization_name || '').trim();
+      const name = String(lead.name || '').trim();
+      if (org) customerByLead[Number(lead.id)] = org;
+      else if (name && !/бетон|м\d/i.test(name)) customerByLead[Number(lead.id)] = name;
+    }
+  }
+
+  const pendingTenders = (pendingRaw || []).map((t) => {
+    const fromCol =
+      t.customer_name != null ? String(t.customer_name).trim() : '';
+    const fromLead = t.lead_id != null ? customerByLead[Number(t.lead_id)] : '';
+    return {
+      ...t,
+      customer_name: fromCol || fromLead || null,
+    };
+  });
 
   return NextResponse.json({
     success: true,
@@ -112,7 +148,7 @@ export async function GET(request: NextRequest) {
     tendersByProspect,
     commentCounts,
     importBatches,
-    pendingTenders: pendingTenders || [],
+    pendingTenders,
     prospectTotal: prospectTotal ?? 0,
     page,
     limit,

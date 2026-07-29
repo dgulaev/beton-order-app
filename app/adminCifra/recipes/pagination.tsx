@@ -29,16 +29,26 @@ export function useAutoRows(
       if (!el) return;
       const rowEl = el.querySelector('[data-lab-row]') as HTMLElement | null;
       const headEl = el.querySelector('[data-lab-head]') as HTMLElement | null;
-      const rowHVis = rowEl ? rowEl.getBoundingClientRect().height : 49;
-      if (rowHVis <= 0) return;
-      const headVis = headEl ? headEl.getBoundingClientRect().height : 0;
+      const rowHLayout = rowEl ? rowEl.offsetHeight : 49;
+      if (rowHLayout <= 0) return;
+      const headLayout = headEl ? headEl.offsetHeight : 0;
       // Зазор после шапки тоже съедает высоту (gap между head и первой строкой).
       const headGap = headEl && rowGap > 0 ? rowGap : 0;
-      const rowHLayout = rowEl ? rowEl.offsetHeight : 49;
-      const top = el.getBoundingClientRect().top;
-      const avail = window.innerHeight - top - reserveBottom;
-      const step = rowHVis + rowGap;
-      const n = Math.max(minRows, Math.floor((avail - headVis - headGap + rowGap) / step));
+      // В frame-layout высота списка уже выделена flex'ом — считаем от clientHeight
+      // (layout-px). Fallback на innerHeight нужен до первого layout / вне кадра.
+      // reserveBottom / SAFETY — чтобы perPage не давал 1px-overflow и лишний скролл на 4K.
+      const SAFETY = 4;
+      let avail: number;
+      if (el.clientHeight >= 40) {
+        avail = Math.max(0, el.clientHeight - reserveBottom - SAFETY);
+      } else {
+        const rect = el.getBoundingClientRect();
+        const scale = el.offsetWidth > 0 ? rect.width / el.offsetWidth : 1;
+        const safeScale = scale > 0.1 && Number.isFinite(scale) ? scale : 1;
+        avail = Math.max(0, (window.innerHeight - rect.top - reserveBottom) / safeScale - SAFETY);
+      }
+      const step = rowHLayout + rowGap;
+      const n = Math.max(minRows, Math.floor((avail - headLayout - headGap + rowGap) / step));
       setState((prev) => (prev.perPage === n && prev.rowH === rowHLayout ? prev : { perPage: n, rowH: rowHLayout }));
     };
     // Несколько отложенных замеров — после появления списка в DOM и после
@@ -74,14 +84,21 @@ export function useAutoGrid(
       if (!el) return;
       const cards = Array.from(el.querySelectorAll('[data-lab-card]')) as HTMLElement[];
       if (cards.length === 0) return;
-      const cardVis = cards[0].getBoundingClientRect();
-      const cardH = cardVis.height;
+      const cardH = cards[0].offsetHeight;
       if (cardH <= 0) return;
       const firstTop = cards[0].offsetTop;
       const cols = Math.max(1, cards.filter((c) => Math.abs(c.offsetTop - firstTop) < 4).length);
-      const gap = 20; // grid gap
-      const top = el.getBoundingClientRect().top;
-      const avail = window.innerHeight - top - reserveBottom;
+      const gap = 16; // grid gap
+      const SAFETY = 4;
+      let avail: number;
+      if (el.clientHeight >= 40) {
+        avail = Math.max(0, el.clientHeight - reserveBottom - SAFETY);
+      } else {
+        const rect = el.getBoundingClientRect();
+        const scale = el.offsetWidth > 0 ? rect.width / el.offsetWidth : 1;
+        const safeScale = scale > 0.1 && Number.isFinite(scale) ? scale : 1;
+        avail = Math.max(0, (window.innerHeight - rect.top - reserveBottom) / safeScale - SAFETY);
+      }
       const rows = Math.max(1, Math.floor((avail + gap) / (cardH + gap)));
       const n = Math.max(minCards, cols * rows);
       setPerPage((prev) => (prev === n ? prev : n));

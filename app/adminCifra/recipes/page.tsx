@@ -389,7 +389,7 @@ export default function LaboratoryPage({
 
         {/* Склад — для лаборанта (и остальных ролей на этой странице) */}
         {tab === 'warehouse' && (
-          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <WarehousePage
               recipes={recipes}
               actorName={getCurrentUser().name || null}

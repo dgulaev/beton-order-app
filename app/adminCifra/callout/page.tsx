@@ -45,6 +45,8 @@ type Tender = {
   purchase_url: string | null;
   purchase_number: string | null;
   object_info: string | null;
+  /** Кто проводит торги (заказчик), не победитель. */
+  customer_name?: string | null;
   contract_price: number | null;
   winner_status: string;
   import_batch: string | null;
@@ -119,7 +121,7 @@ export default function CalloutPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const PAGE_SIZE = 50;
-  const [status, setStatus] = useState<CalloutStatus | ''>('');
+  const [status, setStatus] = useState<CalloutStatus | ''>('new');
   const [q, setQ] = useState('');
   const [qInput, setQInput] = useState('');
   const [loading, setLoading] = useState(true);
@@ -233,15 +235,72 @@ export default function CalloutPage() {
     setMessageOk(ok);
   };
 
-  const loadDetail = useCallback(async (id: number) => {
+  /**
+   * Обновить статус карточки в списке без перезагрузки.
+   * snapshot — карточка до открытия (для отката при ошибке).
+   */
+  const applyProspectStatusLocally = useCallback(
+    (
+      id: number,
+      nextStatus: CalloutStatus,
+      opts?: { snapshot?: Prospect | null; restore?: boolean },
+    ) => {
+      const snap = opts?.snapshot;
+      setProspects((prev) => {
+        const cur = prev.find((p) => p.id === id);
+
+        if (opts?.restore && snap) {
+          // Вернуть в список «Новый», если оптимистика сняла карточку
+          if (status === 'new' && snap.status === 'new' && !cur) {
+            setFilteredTotal((n) => n + 1);
+            return [snap, ...prev];
+          }
+          if (cur) {
+            return prev.map((p) => (p.id === id ? { ...p, status: snap.status } : p));
+          }
+          return prev;
+        }
+
+        if (!cur || cur.status === nextStatus) return prev;
+
+        if (cur.status === 'new' && status === 'new') {
+          setFilteredTotal((n) => Math.max(0, n - 1));
+          return prev.filter((p) => p.id !== id);
+        }
+        return prev.map((p) => (p.id === id ? { ...p, status: nextStatus } : p));
+      });
+      setDetail((d) => {
+        if (!d || d.prospect.id !== id) return d;
+        if (opts?.restore && snap) {
+          return { ...d, prospect: { ...d.prospect, status: snap.status } };
+        }
+        if (d.prospect.status === nextStatus) return d;
+        return { ...d, prospect: { ...d.prospect, status: nextStatus } };
+      });
+    },
+    [status],
+  );
+
+  const loadDetail = useCallback(async (id: number, snapshot?: Prospect | null) => {
     setSelectedId(id);
     setSelectedPendingId(null);
+
+    const wasNew = snapshot?.status === 'new';
+
+    // Оптимистично: бейдж «В работе» сразу
+    if (wasNew && snapshot) {
+      applyProspectStatusLocally(id, 'in_progress', { snapshot });
+    }
+
     try {
       const res = await fetch(`/api/adminCifra/callout/${id}`, {
         headers: adminCifraAuthHeaders(),
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
+        if (wasNew && snapshot) {
+          applyProspectStatusLocally(id, 'new', { snapshot, restore: true });
+        }
         showBanner(json.error || 'Не удалось открыть карточку', false);
         setDetail(null);
         return;
@@ -254,6 +313,11 @@ export default function CalloutPage() {
       setPhoneDraft(
         json.prospect.phone ? formatPhoneInput(String(json.prospect.phone)) : '',
       );
+
+      const serverStatus = json.prospect?.status as CalloutStatus | undefined;
+      if (serverStatus) {
+        applyProspectStatusLocally(id, serverStatus, { snapshot });
+      }
 
       // Если телефона нет — дотянуть контакты (DaData / Excel / Клиенты)
       if (!String(json.prospect.phone || '').trim()) {
@@ -285,9 +349,12 @@ export default function CalloutPage() {
           .catch(() => {});
       }
     } catch {
+      if (wasNew && snapshot) {
+        applyProspectStatusLocally(id, 'new', { snapshot, restore: true });
+      }
       showBanner('Ошибка загрузки карточки', false);
     }
-  }, []);
+  }, [applyProspectStatusLocally]);
 
   const switchTab = (tab: MainTab) => {
     setMainTab(tab);
@@ -313,7 +380,7 @@ export default function CalloutPage() {
         return;
       }
       await load();
-      if (selectedId === id) await loadDetail(id);
+      if (selectedId === id) await loadDetail(id, detail?.prospect);
     } finally {
       setBusy(false);
     }
@@ -338,7 +405,7 @@ export default function CalloutPage() {
       }
       showBanner(phone ? `Телефон сохранён: ${formatPhoneDisplay(phone)}` : 'Телефон очищен', true);
       await load();
-      await loadDetail(selectedId);
+      await loadDetail(selectedId, detail?.prospect);
     } finally {
       setBusy(false);
     }
@@ -359,7 +426,7 @@ export default function CalloutPage() {
         return;
       }
       setCommentText('');
-      await loadDetail(selectedId);
+      await loadDetail(selectedId, detail?.prospect);
       await load();
     } finally {
       setBusy(false);
@@ -381,7 +448,7 @@ export default function CalloutPage() {
         Boolean(json.success),
       );
       await load();
-      if (selectedId) await loadDetail(selectedId);
+      if (selectedId) await loadDetail(selectedId, detail?.prospect);
     } catch {
       showBanner('Ошибка сети при запросе к ЕИС', false);
     } finally {
@@ -688,8 +755,8 @@ export default function CalloutPage() {
 
       <p className={styles.tabHint} style={{ marginTop: -4, marginBottom: 12 }}>
         {mainTab === 'prospects'
-          ? 'Выбери компанию слева — справа телефон, объекты и комментарии по звонку.'
-          : 'Закупки, где победитель ещё не известен. Выбери строку — справа можно подтянуть данные из ЕИС.'}
+          ? 'Сюда попадают победители контрактов (кого звоним). Заказчик торгов (администрация) здесь не появляется. «Новый» — ещё не открывали; при открытии → «В работе».'
+          : 'Ждём заключение контракта в ЕИС. Здесь виден заказчик и объект; карточка победителя появится во вкладке «К обзвону» после контракта.'}
       </p>
 
       <div className={styles.filters}>
@@ -763,9 +830,9 @@ export default function CalloutPage() {
                       key={p.id}
                       role="button"
                       tabIndex={0}
-                      onClick={() => void loadDetail(p.id)}
+                      onClick={() => void loadDetail(p.id, p)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') void loadDetail(p.id);
+                        if (e.key === 'Enter') void loadDetail(p.id, p);
                       }}
                       style={volumeCardSoftStyle({
                         padding: '14px 16px',
@@ -840,8 +907,9 @@ export default function CalloutPage() {
           ) : (
             <>
               <p className={styles.tabHint}>
-                Закупки без победителя (импорт Excel или лид торгов). Подтяни из ЕИС вручную или
-                дождись ночного cron.
+                Закупки без победителя (импорт Excel или лид торгов). Победитель появится после
+                заключения контракта в ЕИС — подтяни вручную кнопкой или дождись cron. Пока
+                контракта нет — карточки в «К обзвону» не будет.
               </p>
               {filteredPending.length === 0 ? (
                 <div style={volumeCardSoftStyle({ padding: 20, color: '#94a3b8' })}>
@@ -872,10 +940,35 @@ export default function CalloutPage() {
                         {t.purchase_number && (
                           <span className={styles.badge}>№ {t.purchase_number}</span>
                         )}
+                        {t.lead_id != null && (
+                          <span className={styles.badge}>Лид #{t.lead_id}</span>
+                        )}
                       </div>
+                      {t.customer_name && (
+                        <div
+                          style={{
+                            color: '#F8FAFC',
+                            fontSize: 14,
+                            fontWeight: 700,
+                            marginTop: 6,
+                            lineHeight: 1.35,
+                          }}
+                        >
+                          Заказчик: {t.customer_name}
+                        </div>
+                      )}
                       <p className={styles.preview}>{t.object_info || 'Без описания объекта'}</p>
                       <div className={styles.meta}>
                         {t.contract_price != null && <span>{money(t.contract_price)}</span>}
+                        {t.lead_id != null && (
+                          <a
+                            href={`/adminCifra/leads?leadId=${t.lead_id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ color: '#86efac' }}
+                          >
+                            Лид #{t.lead_id}
+                          </a>
+                        )}
                         {t.purchase_url && (
                           <a
                             href={t.purchase_url}
@@ -914,19 +1007,49 @@ export default function CalloutPage() {
                     </div>
                   </div>
                 </div>
+                {selectedPending.customer_name && (
+                  <p
+                    style={{
+                      color: '#F8FAFC',
+                      fontSize: 14,
+                      fontWeight: 700,
+                      lineHeight: 1.4,
+                      margin: '10px 0 6px',
+                    }}
+                  >
+                    Заказчик: {selectedPending.customer_name}
+                  </p>
+                )}
+                <p style={{ color: '#94a3b8', fontSize: 12, margin: '0 0 8px', lineHeight: 1.4 }}>
+                  В «К обзвону» попадёт не заказчик, а победитель контракта (подрядчик) — когда
+                  контракт появится в ЕИС.
+                </p>
                 <p style={{ color: '#e2e8f0', fontSize: 13, lineHeight: 1.45, margin: '8px 0' }}>
                   {selectedPending.object_info || 'Без описания'}
                 </p>
                 <div className={styles.meta} style={{ marginBottom: 12 }}>
                   <span>{money(selectedPending.contract_price)}</span>
                   <span>{WINNER_LABEL[selectedPending.winner_status]}</span>
+                  {selectedPending.lead_id != null && (
+                    <a
+                      href={`/adminCifra/leads?leadId=${selectedPending.lead_id}`}
+                      style={{ color: '#86efac' }}
+                    >
+                      Лид #{selectedPending.lead_id}
+                    </a>
+                  )}
                 </div>
                 {selectedPending.purchase_url && (
                   <a
                     href={selectedPending.purchase_url}
                     target="_blank"
                     rel="noreferrer"
-                    style={{ color: '#93c5fd', fontSize: 13, marginBottom: 12 }}
+                    style={{
+                      color: '#93c5fd',
+                      fontSize: 13,
+                      marginBottom: 12,
+                      display: 'inline-block',
+                    }}
                   >
                     Открыть в ЕИС <ExternalLink size={12} />
                   </a>
@@ -1067,6 +1190,14 @@ export default function CalloutPage() {
                     <div className={styles.meta}>
                       <span>{WINNER_LABEL[t.winner_status] || t.winner_status}</span>
                       <span>{money(t.contract_price)}</span>
+                      {t.lead_id != null && (
+                        <a
+                          href={`/adminCifra/leads?leadId=${t.lead_id}`}
+                          style={{ color: '#86efac' }}
+                        >
+                          Лид #{t.lead_id}
+                        </a>
+                      )}
                       {t.purchase_url && (
                         <a
                           href={t.purchase_url}

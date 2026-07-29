@@ -471,50 +471,22 @@ export default function OrdersTab({
     setSelectedDate(d);
   };
 
-  // ==================== АДАПТИВНАЯ ВЫСОТА КОЛОНКИ ====================
-  // Каркас админки масштабируется через transform: scale(0.80–0.84) (см. layout.tsx),
-  // поэтому CSS-px (height, 100vh, clientHeight) и визуальные px (getBoundingClientRect,
-  // innerHeight) РАЗЛИЧАЮТСЯ. Чтобы колонка ровно доставала до низа экрана с
-  // небольшим отступом на любом разрешении (4K/1920/ниже) — считаем всё в CSS-px:
-  //  scale выводим из отношения rect.width/offsetWidth, доступную высоту берём из
-  //  clientHeight скролл-контейнера (это CSS-px, уже «до» масштабирования).
-  const rowRef = useRef<HTMLDivElement>(null);
-  const [rowMinH, setRowMinH] = useState<number | undefined>(undefined);
-  const [colMaxH, setColMaxH] = useState<number | undefined>(undefined);
-  useEffect(() => {
-    const el = rowRef.current;
-    if (!el) return;
-    const recompute = () => {
-      let sc: HTMLElement | null = el.parentElement;
-      while (sc && sc !== document.body) {
-        const oy = getComputedStyle(sc).overflowY;
-        if (oy === 'auto' || oy === 'scroll') break;
-        sc = sc.parentElement;
-      }
-      if (!sc) return;
-      const rect = el.getBoundingClientRect();
-      const scale = el.offsetWidth > 0 ? rect.width / el.offsetWidth : 1;
-      if (!scale || !isFinite(scale)) return;
-      // Позиция верха строки внутри скролл-контейнера, в CSS-px.
-      const topCss = (rect.top - sc.getBoundingClientRect().top) / scale + sc.scrollTop;
-      const availCss = sc.clientHeight; // CSS-px (до масштабирования)
-      // Зазор снизу учитывает нижний паддинг страницы (24px) + небольшой запас,
-      // чтобы не появлялся лишний скролл из-за округлений.
-      const gapCss = 44; // визуально ≈ gapCss * scale
-      setRowMinH(Math.max(360, Math.round(availCss - topCss - gapCss)));
-      setColMaxH(Math.max(360, Math.round(availCss - 40)));
-    };
-    recompute();
-    window.addEventListener('resize', recompute);
-    const t = setTimeout(recompute, 200);
-    return () => {
-      window.removeEventListener('resize', recompute);
-      clearTimeout(t);
-    };
-  }, []);
+  // Лаборатория в frame-layout (layout.tsx: overflow:hidden + scale).
+  // Высоту колонок даём через flex stretch родителя — без 100vh/sticky:
+  // под transform:scale «vh» и поиск scroll-родителя ломают вёрстку (особенно ~1600px).
 
   return (
-    <div style={{ color: '#fff' }}>
+    <div
+      style={{
+        color: '#fff',
+        flex: 1,
+        minHeight: 0,
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }}
+    >
       <style>{`
         @keyframes labNewPulse {
           0%   { box-shadow: 0 0 0 0 rgba(74,222,128,0.5); }
@@ -527,14 +499,22 @@ export default function OrdersTab({
         .lab-clamp1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       `}</style>
 
-      <div ref={rowRef} style={{ display: 'flex', gap: '20px', alignItems: 'stretch' }}>
-        {/* ==================== ЛЕВАЯ КОЛОНКА — НЕДЕЛЯ + СТАТИСТИКА ====================
-            Sticky-колонка: растягивается по высоте строки (alignSelf: stretch),
-            но НЕ выше вьюпорта — maxHeight ограничивает её, чтобы на любом
-            разрешении (4K/1920/ниже) она не вылезала за нижний край экрана и не
-            создавала лишний скролл страницы. Отступ снизу 16px. Дни+статистика
-            прокручиваются внутри, если не помещаются. */}
-        <div style={volumeCardStyle({ width: '320px', flexShrink: 0, position: 'sticky', top: '16px', height: rowMinH ? `${rowMinH}px` : 'calc(100vh - 118px)', maxHeight: colMaxH ? `${colMaxH}px` : 'calc(100vh - 32px)', borderRadius: 18, padding: '18px', display: 'flex', flexDirection: 'column', overflow: 'hidden' })}>
+      <div style={{ display: 'flex', gap: 20, alignItems: 'stretch', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        {/* Левая колонка — неделя + статистика: на всю высоту кадра, скролл внутри */}
+        <div
+          style={volumeCardStyle({
+            width: 320,
+            flex: '0 0 320px',
+            alignSelf: 'stretch',
+            minHeight: 0,
+            borderRadius: 18,
+            padding: 18,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            boxSizing: 'border-box',
+          })}
+        >
           <h3 style={{ margin: '0 0 12px', color: COLORS.muted, fontSize: '14px', letterSpacing: '0.03em' }}>ЗАЯВКИ НА НЕДЕЛЮ</h3>
 
           {/* Навигация по неделям */}
@@ -649,9 +629,9 @@ export default function OrdersTab({
         </div>
 
         {/* ==================== ПРАВАЯ КОЛОНКА — ЗАЯВКИ ДНЯ ==================== */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
-            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10, flexShrink: 0 }}>
+            <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flexWrap: 'wrap' }}>
               Заявки на {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}
               {monthLoading && <span style={{ color: COLORS.muted, fontSize: '13px' }}>загрузка…</span>}
               {newOrderIds.size > 0 && (
@@ -664,7 +644,7 @@ export default function OrdersTab({
                 </span>
               )}
             </h3>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '18px', color: COLORS.muted, fontSize: '14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 18, color: COLORS.muted, fontSize: '14px', flexWrap: 'wrap' }}>
               {newOrderIds.size > 0 && (
                 <button onClick={onAcknowledgeAll} style={ghostButton}>Отметить все просмотренными</button>
               )}
@@ -674,7 +654,7 @@ export default function OrdersTab({
           </div>
 
           {/* Вид + поиск + фильтры — одна линия слева */}
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', flexShrink: 0 }}>
             <ViewModeToggle
               value={viewMode}
               onChange={(v) => {
@@ -687,9 +667,9 @@ export default function OrdersTab({
               placeholder="Поиск по клиенту, №, марке, ИНН..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              style={{ ...inputStyle, width: '300px' }}
+              style={{ ...inputStyle, flex: '1 1 220px', minWidth: 180, maxWidth: 360 }}
             />
-            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
               {STATUS_FILTERS.map((f) => (
                 <button
                   key={f.key}
@@ -710,7 +690,8 @@ export default function OrdersTab({
             </div>
           </div>
 
-          {/* Список/плитка заявок дня */}
+          {/* Список/плитка — скролл только здесь, чтобы низ не обрезался frame-layout */}
+          <div className="scroll-hidden" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', paddingBottom: 4 }}>
           {loading ? (
             <p style={{ color: COLORS.muted }}>Загрузка заявок...</p>
           ) : dayOrders.length === 0 ? (
@@ -718,7 +699,7 @@ export default function OrdersTab({
               На этот день заявок нет.
             </div>
           ) : viewMode === 'grid' ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px', alignItems: 'stretch' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16, alignItems: 'stretch' }}>
               {dayOrders.map((o) => {
                 const isNew = newOrderIds.has(String(o.id));
                 const passports = passportsByOrder.get(String(o.id)) || [];
@@ -804,7 +785,7 @@ export default function OrdersTab({
               })}
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', minWidth: 0 }}>
               {dayOrders.map((o) => {
                 const isNew = newOrderIds.has(String(o.id));
                 const passports = passportsByOrder.get(String(o.id)) || [];
@@ -820,10 +801,12 @@ export default function OrdersTab({
                     className={isNew ? 'lab-new-card' : undefined}
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: '58px minmax(0, 1fr) 78px 112px 168px',
+                      gridTemplateColumns: 'minmax(48px, 58px) minmax(0, 1fr) minmax(70px, 78px) minmax(96px, 112px) minmax(140px, 168px)',
                       alignItems: 'center',
                       columnGap: 12,
                       padding: '12px 16px',
+                      width: '100%',
+                      minWidth: 0,
                       background: isNew ? 'rgba(74,222,128,0.08)' : CARD_GRADIENT_SOFT,
                       borderRadius: 12,
                       boxShadow: isNew
@@ -900,6 +883,7 @@ export default function OrdersTab({
               })}
             </div>
           )}
+          </div>
         </div>
       </div>
 

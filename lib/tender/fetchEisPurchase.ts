@@ -118,6 +118,7 @@ function mapGosplanDetailToFields(
   let platform: string | null = 'ЕИС (zakupki.gov.ru)';
 
   if (source) {
+    // 223-ФЗ
     const cust = asRecord(asRecord(source.customer)?.mainInfo);
     if (cust?.fullName) organization_name = String(cust.fullName);
     if (cust?.inn) inn = String(cust.inn);
@@ -133,6 +134,49 @@ function mapGosplanDetailToFields(
           .trim() || null;
       phone = formatRuPhone(String(contact.phone || ''));
       email = contact.email != null ? String(contact.email) : null;
+    }
+
+    // 44-ФЗ: purchaseResponsibleInfo
+    const resp = asRecord(source.purchaseResponsibleInfo);
+    const respOrg = asRecord(resp?.responsibleOrgInfo);
+    if (!organization_name && respOrg?.fullName) {
+      organization_name = String(respOrg.fullName);
+    }
+    if (!inn && (respOrg?.INN || respOrg?.inn)) {
+      inn = String(respOrg.INN || respOrg.inn);
+    }
+    const respContact = asRecord(resp?.responsibleInfo);
+    if (respContact) {
+      const person = asRecord(respContact.contactPersonInfo) || respContact;
+      if (!contact_name) {
+        contact_name =
+          [person.lastName, person.firstName, person.middleName]
+            .filter(Boolean)
+            .map(String)
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim() || null;
+      }
+      if (!phone) {
+        phone = formatRuPhone(
+          String(respContact.contactPhone || respContact.phone || ''),
+        );
+      }
+      if (!email && (respContact.contactEMail || respContact.email)) {
+        email = String(respContact.contactEMail || respContact.email);
+      }
+    }
+
+    const common = asRecord(source.commonInfo);
+    const etp = asRecord(common?.ETP);
+    if (etp?.url) {
+      etpPlatformUrl = String(etp.url);
+      const placeName = String(etp.name || '');
+      if (/лот-онлайн|аукционный дом|lot-online|рад/i.test(placeName)) {
+        platform = 'Lot-online (РАД)';
+      } else if (/росэлторг|еэтп|eetp/i.test(placeName)) platform = 'РОСЭЛТОРГ';
+      else if (/сбербанк/i.test(placeName)) platform = 'Сбербанк-АСТ';
+      else if (/ртс/i.test(placeName)) platform = 'РТС-тендер';
     }
 
     if (source.urlVSRZ) {
@@ -224,12 +268,21 @@ async function fetchGosplanDetail(
   return json && typeof json === 'object' ? (json as GosplanDetail) : null;
 }
 
-/** Достаёт regNumber из URL ЕИС / lot-online / произвольной строки. */
+/** Достаёт regNumber извещения из URL ЕИС / lot-online / произвольной строки. */
 export function extractPurchaseRegNumber(urlOrText: string): {
   regNumber: string | null;
   law: 'fz44' | 'fz223' | null;
 } {
   const s = urlOrText.trim();
+  // Карточка контракта — не извещение (reestrNumber ≠ regNumber).
+  if (/reestrNumber=/i.test(s) || /\/epz\/contract\//i.test(s)) {
+    let law: 'fz44' | 'fz223' | null = null;
+    if (/223/i.test(s) && !/44/i.test(s)) law = 'fz223';
+    else if (/44/i.test(s)) law = 'fz44';
+    const fromReg = s.match(/regNumber=(\d{11,20})/i)?.[1] || null;
+    return { regNumber: fromReg, law };
+  }
+
   const reg =
     s.match(/regNumber=(\d{11,20})/i)?.[1] ||
     s.match(/purchaseNoticeNumber=(\d{11,20})/i)?.[1] ||
