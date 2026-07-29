@@ -26,6 +26,65 @@ type Props = {
   minPopupWidth?: number;
 };
 
+const CHEVRON_PAD_RIGHT = 32;
+
+/** Разворачивает shorthand `padding` в longhand — иначе React ругается на
+ *  конфликт с `paddingRight` под шеврон и поле визуально «схлопывается». */
+function fieldTriggerStyle(style?: CSSProperties): CSSProperties {
+  const raw = modalFieldStyle({
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    textAlign: 'left',
+    backgroundImage: `linear-gradient(transparent, transparent), ${CARD_GRADIENT_SOFT}`,
+    position: 'relative',
+  });
+  const {
+    padding: basePad,
+    paddingTop: _bpt,
+    paddingRight: _bpr,
+    paddingBottom: _bpb,
+    paddingLeft: _bpl,
+    ...baseRest
+  } = raw;
+
+  const {
+    padding: propPad,
+    paddingTop: propPt,
+    paddingRight: _propPr,
+    paddingBottom: propPb,
+    paddingLeft: propPl,
+    ...propRest
+  } = style || {};
+
+  const padSrc = propPad ?? basePad ?? 14;
+  const parts = String(padSrc).trim().split(/\s+/);
+  let top: string | number = parts[0];
+  let right: string | number = parts[0];
+  let bottom: string | number = parts[0];
+  let left: string | number = parts[0];
+  if (parts.length === 2) {
+    right = left = parts[1];
+  } else if (parts.length === 3) {
+    right = left = parts[1];
+    bottom = parts[2];
+  } else if (parts.length >= 4) {
+    right = parts[1];
+    bottom = parts[2];
+    left = parts[3];
+  }
+
+  return {
+    ...baseRest,
+    ...propRest,
+    paddingTop: propPt ?? top,
+    paddingBottom: propPb ?? bottom,
+    paddingLeft: propPl ?? left,
+    paddingRight: CHEVRON_PAD_RIGHT,
+  };
+}
+
 export default function ModalSelect({
   value,
   onChange,
@@ -78,19 +137,9 @@ export default function ModalSelect({
                 ...style,
               }
             : {
-                ...modalFieldStyle({
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  textAlign: 'left',
-                  cursor: disabled ? 'not-allowed' : 'pointer',
-                  opacity: disabled ? 0.6 : 1,
-                  backgroundImage: `linear-gradient(transparent, transparent), ${CARD_GRADIENT_SOFT}`,
-                  paddingRight: 32,
-                  position: 'relative',
-                  ...style,
-                }),
+                ...fieldTriggerStyle(style),
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                opacity: disabled ? 0.6 : 1,
               }
         }
       >

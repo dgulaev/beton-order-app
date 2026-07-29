@@ -14,10 +14,14 @@ import { nowTimeHHMM } from './modalPickerShared';
 import ModalSelect from './ModalSelect';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
-import { isBulkOrderProduct, isOrderGradeRecipe } from '@/app/adminCifra/recipes/productCatalog';
+import {
+  isOrderGradeRecipe,
+  matchesBulkShipmentProduct,
+} from '@/app/adminCifra/recipes/productCatalog';
 import {
   bulkVehicleKindOptions,
-  bulkVolumeUnitLabel,
+  bulkQuantityFieldLabel,
+  bulkVolumeUnit,
   normalizeOrderType,
   type OrderType,
 } from '@/lib/orderLogistics';
@@ -159,18 +163,53 @@ export default function NewOrderModal({
     loadPoints();
   }, []);
 
-  const recipes = useMemo(() => {
-    const filtered = allRecipes.filter((r) =>
-      orderType === 'bulk' ? isBulkOrderProduct(r) : isOrderGradeRecipe(r)
+  const loadingPointOptions = useMemo(() => {
+    // Бетон — только БСУ / смешанные.
+    if (orderType === 'concrete') {
+      return loadingPoints.filter((p) => p.kind === 'concrete' || p.kind === 'mixed');
+    }
+    // Отгрузка — список зависит от техники:
+    // • цементовоз → цементные заводы + смешанные;
+    // • самосвал / тоннар → щебень/песок + БСУ (ФБС) + смешанные.
+    if (fleetVehicleKind === 'cement_truck') {
+      return loadingPoints.filter((p) => p.kind === 'cement' || p.kind === 'mixed');
+    }
+    return loadingPoints.filter(
+      (p) => p.kind === 'aggregate' || p.kind === 'mixed' || p.kind === 'concrete',
     );
+  }, [loadingPoints, orderType, fleetVehicleKind]);
+
+  useEffect(() => {
+    // Не сбрасываем точку, если она ещё подходит (важно при копировании заявки)
+    if (loadingPointId && loadingPointOptions.some((p) => String(p.id) === loadingPointId)) return;
+    const def = loadingPointOptions.find((p) => p.is_default) || loadingPointOptions[0];
+    if (def) setLoadingPointId(String(def.id));
+    else setLoadingPointId('');
+  }, [loadingPointOptions, loadingPointId]);
+
+  // Только из допустимых для текущей техники — иначе на кадр «залипает» чужая точка.
+  const selectedLoadingPoint =
+    loadingPointOptions.find((p) => String(p.id) === loadingPointId) || null;
+  const originCoords = loadingPointCoords(selectedLoadingPoint);
+
+  const recipes = useMemo(() => {
+    const filtered = allRecipes.filter((r) => {
+      if (orderType !== 'bulk') return isOrderGradeRecipe(r);
+      return matchesBulkShipmentProduct(r, {
+        vehicleKind: fleetVehicleKind,
+        loadingPoint: selectedLoadingPoint,
+      });
+    });
     return [...filtered].sort((a: any, b: any) =>
       String(a.code || '').localeCompare(String(b.code || ''), 'ru')
     );
-  }, [allRecipes, orderType]);
+  }, [allRecipes, orderType, fleetVehicleKind, selectedLoadingPoint]);
 
   useEffect(() => {
-    if (recipes.length === 0) return;
     setForm((prev) => {
+      if (recipes.length === 0) {
+        return prev.grade ? { ...prev, grade: '' } : prev;
+      }
       const codes = new Set(recipes.map((r: any) => r.code));
       if (prev.grade && codes.has(prev.grade)) return prev;
       if (orderType === 'concrete') {
@@ -179,28 +218,9 @@ export default function NewOrderModal({
           recipes.find((r: any) => String(r.name || '').includes('М300'));
         if (m300?.code) return { ...prev, grade: m300.code };
       }
-      return recipes[0]?.code ? { ...prev, grade: recipes[0].code } : prev;
+      return recipes[0]?.code ? { ...prev, grade: recipes[0].code } : { ...prev, grade: '' };
     });
   }, [recipes, orderType]);
-
-  useEffect(() => {
-    const kindNeeded = orderType === 'bulk'
-      ? (fleetVehicleKind === 'cement_truck' ? 'cement' : 'aggregate')
-      : 'concrete';
-    const candidates = loadingPoints.filter((p) => {
-      if (orderType === 'concrete') return p.kind === 'concrete' || p.kind === 'mixed';
-      if (fleetVehicleKind === 'cement_truck') return p.kind === 'cement' || p.kind === 'mixed';
-      return p.kind === 'aggregate' || p.kind === 'mixed';
-    });
-    // Не сбрасываем точку, если она ещё подходит (важно при копировании заявки)
-    if (loadingPointId && candidates.some((p) => String(p.id) === loadingPointId)) return;
-    const def = candidates.find((p) => p.is_default) || candidates[0];
-    if (def) setLoadingPointId(String(def.id));
-    else setLoadingPointId('');
-  }, [orderType, fleetVehicleKind, loadingPoints, loadingPointId]);
-
-  const selectedLoadingPoint = loadingPoints.find((p) => String(p.id) === loadingPointId) || null;
-  const originCoords = loadingPointCoords(selectedLoadingPoint);
 
   // ==================== 4.1 ЗАГРУЗКА ТАРИФОВ ДОСТАВКИ ====================
   // Тарифы (цены за рейс, ставка за км за городом и т.п.) редактирует admin
@@ -256,6 +276,8 @@ export default function NewOrderModal({
 
   // ==================== 6. РАСЧЁТ СТОИМОСТИ ====================
   const selectedRecipe = recipes.find(r => r.code === form.grade);
+  const quantityUnit =
+    orderType === 'bulk' ? bulkVolumeUnit(fleetVehicleKind, selectedRecipe) : 'm3';
   const volume = parseFloat(form.volume) || 0;
 
   const concreteCost = useMemo(() => {
@@ -324,7 +346,21 @@ const handleSubmit = async (e: React.FormEvent) => {
   // 1. ВАЛИДАЦИЯ ВВОДА
   // ================================================
   if (!form.volume || parseFloat(form.volume) <= 0) {
-    alert('Укажите объём бетона больше 0 м³');
+    const unitLabel =
+      orderType === 'bulk'
+        ? bulkQuantityFieldLabel(fleetVehicleKind, selectedRecipe).replace(/^[^,]*,\s*/, '')
+        : 'м³';
+    alert(
+      orderType === 'bulk'
+        ? `Укажите количество больше 0 (${unitLabel})`
+        : 'Укажите объём бетона больше 0 м³',
+    );
+    setIsSubmitting(false);
+    return;
+  }
+
+  if (!form.grade || !recipes.some((r: any) => r.code === form.grade)) {
+    alert('Выберите товар из списка');
     setIsSubmitting(false);
     return;
   }
@@ -507,7 +543,9 @@ const handleSubmit = async (e: React.FormEvent) => {
         
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: s('14px', '24px') }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <h2 style={{ margin: 0, fontSize: s('22px', '28px') }}>Новая заявка на бетон</h2>
+            <h2 style={{ margin: 0, fontSize: s('22px', '28px') }}>
+              {orderType === 'bulk' ? 'Новая заявка на отгрузку' : 'Новая заявка на бетон'}
+            </h2>
             {(initialData?.lead_id ?? initialData?.leadId) != null && (
               <span
                 style={{
@@ -699,23 +737,20 @@ const handleSubmit = async (e: React.FormEvent) => {
                   />
                 )}
 
-                {loadingPoints.length > 0 && (
+                {loadingPointOptions.length > 0 && (
                   <ModalSelect
                     value={loadingPointId}
                     onChange={setLoadingPointId}
                     style={{ padding: s('12px', '14px') }}
                     placeholder="Точка погрузки"
-                    options={loadingPoints
-                      .filter((p) => {
-                        if (orderType === 'concrete') return p.kind === 'concrete' || p.kind === 'mixed';
-                        if (fleetVehicleKind === 'cement_truck') return p.kind === 'cement' || p.kind === 'mixed';
-                        return p.kind === 'aggregate' || p.kind === 'mixed';
-                      })
-                      .map((p) => ({
-                        value: String(p.id),
-                        label: `${p.name}${p.ownership === 'partner' ? ' (партнёр)' : ''}`,
-                        text: p.name,
-                      }))}
+                    options={loadingPointOptions.map((p) => {
+                      const alreadyMarked = /\(партнёр\)/i.test(p.name);
+                      const label =
+                        p.ownership === 'partner' && !alreadyMarked
+                          ? `${p.name} (партнёр)`
+                          : p.name;
+                      return { value: String(p.id), label, text: label };
+                    })}
                   />
                 )}
                 
@@ -736,13 +771,13 @@ const handleSubmit = async (e: React.FormEvent) => {
                   name="volume" 
                   placeholder={
                     orderType === 'bulk'
-                      ? `Объём, ${bulkVolumeUnitLabel(fleetVehicleKind)}`
+                      ? bulkQuantityFieldLabel(fleetVehicleKind, selectedRecipe)
                       : 'Объём, м³'
                   } 
                   value={form.volume} 
                   onChange={handleChange} 
-                  step="0.01" 
-                  min="0.01" 
+                  step={quantityUnit === 'pcs' ? '1' : '0.01'}
+                  min={quantityUnit === 'pcs' ? '1' : '0.01'}
                   style={modalFieldStyle({ padding: s('12px', '14px') })} 
                   required 
                 />

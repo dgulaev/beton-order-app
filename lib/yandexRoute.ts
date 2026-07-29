@@ -7,110 +7,17 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
-// Точка отправления — всегда завод, адрес не меняется от заявки к заявке.
-// TODO: при опечатке/переезде — просто исправить эту строку, больше менять
-// нигде не нужно.
-export const ROUTE_ORIGIN_ADDRESS = 'Брянск, Орловский тупик, 6';
+export {
+  ROUTE_ORIGIN_ADDRESS,
+  isOutsideBryansk,
+  normalizeDeliveryAddress,
+} from './bryanskAddress';
 
-// Иногда в заявке вместо точного адреса указывают ориентир/название
-// организации (например "Варяг" вместо реального адреса) — без города и
-// улицы Яндекс.Карты могут не найти нужную точку или найти в другом регионе.
-// Здесь сопоставляем такие ориентиры с их настоящим адресом в Брянске.
-// Чтобы добавить новый ориентир — впишите ключевые слова (в нижнем регистре)
-// и точный адрес с городом.
-const KNOWN_LANDMARKS: { keywords: string[]; address: string }[] = [
-  { keywords: ['варяг'], address: 'Брянск, улица Дуки, 56В' },
-];
-
-// Маркеры населённого пункта (город/посёлок/село и т.п.), кроме самого
-// Брянска — если он указан без области, Яндекс может найти одноимённый
-// населённый пункт в другом регионе России.
-const SETTLEMENT_MARKER = /(?:^|[\s,])(г\.?|город|гор\.|пос\.?|посёлок|поселок|село|с\.|дер\.?|деревня|ст\.?|станица|рп\.?|пгт\.?)\s*[А-ЯЁ]/i;
-
-// В JS \b и \w не считают кириллицу "буквой" (работают только с ASCII), поэтому
-// обычный /\bбрянск\b/i не отличает "Брянск" от "Брянская область" — приходится
-// проверять соседние символы вручную.
-const CYRILLIC_LETTER = /[а-яё]/i;
-
-function hasWholeWord(haystack: string, word: string): boolean {
-  const lower = haystack.toLowerCase();
-  let fromIndex = 0;
-  while (true) {
-    const idx = lower.indexOf(word, fromIndex);
-    if (idx === -1) return false;
-    const before = idx > 0 ? lower[idx - 1] : '';
-    const after = idx + word.length < lower.length ? lower[idx + word.length] : '';
-    if (!CYRILLIC_LETTER.test(before) && !CYRILLIC_LETTER.test(after)) return true;
-    fromIndex = idx + 1;
-  }
-}
-
-function mentionsBryanskCity(address: string): boolean {
-  return hasWholeWord(address, 'брянск');
-}
-
-function mentionsBryanskRegion(address: string): boolean {
-  return /брянск[а-яё]*\s*обл/i.test(address);
-}
-
-/**
- * true — адрес явно указывает на населённый пункт/область ЗА пределами
- * самого Брянска (другое село/город региона, либо явно написана "Брянская
- * область"). Используется для тарификации доставки «за городом» — км ×
- * ставка вместо обычных тарифов «до 10/12/50 м³» (см. lib/deliveryPricing.ts,
- * calculateDeliveryCost). Логика ветвления и приоритет проверок — те же, что
- * и в normalizeDeliveryAddress ниже: известный ориентир и явное упоминание
- * самого Брянска — это ВСЕГДА "в городе"; адрес без населённого пункта вовсе
- * (по умолчанию считается Брянском, см. normalizeDeliveryAddress) — тоже
- * "в городе", а не "за городом".
- */
-export function isOutsideBryansk(rawAddress: string | null | undefined): boolean {
-  const trimmed = (rawAddress || '').trim();
-  if (!trimmed) return false;
-
-  const lower = trimmed.toLowerCase();
-  if (KNOWN_LANDMARKS.some((l) => l.keywords.some((kw) => lower.includes(kw)))) return false;
-
-  if (mentionsBryanskCity(trimmed)) return false;
-  if (mentionsBryanskRegion(trimmed)) return true;
-  if (SETTLEMENT_MARKER.test(trimmed)) return true;
-
-  return false;
-}
-
-/**
- * Достраивает адрес доставки до вида, который Яндекс.Карты однозначно
- * распознают: подставляет известный ориентир, добавляет город Брянск (если
- * населённый пункт не указан вовсе) или область Брянская (если указан другой
- * населённый пункт региона, но не сам Брянск).
- */
-export function normalizeDeliveryAddress(rawAddress: string | null | undefined): string {
-  const trimmed = (rawAddress || '').trim();
-  if (!trimmed) return ROUTE_ORIGIN_ADDRESS;
-
-  const lower = trimmed.toLowerCase();
-
-  // 1. Известный ориентир — подставляем полный адрес целиком.
-  const landmark = KNOWN_LANDMARKS.find((l) => l.keywords.some((kw) => lower.includes(kw)));
-  if (landmark) return landmark.address;
-
-  // 2. Область уже указана явно ("... Брянская область ...") — адрес уже
-  //    однозначен, ничего не трогаем (даже если сам населённый пункт написан
-  //    без "г."/"пос." — например "Сельцо, Брянская область").
-  if (mentionsBryanskRegion(trimmed)) return trimmed;
-
-  // 3. Город Брянск указан явно — адрес уже однозначен.
-  if (mentionsBryanskCity(trimmed)) return trimmed;
-
-  // 4. Указан другой населённый пункт региона (например "г. Сельцо") —
-  //    добавляем область.
-  if (SETTLEMENT_MARKER.test(trimmed)) {
-    return `${trimmed}, Брянская область`;
-  }
-
-  // 5. Населённый пункт не указан вовсе — считаем, что это Брянск.
-  return `г. Брянск, ${trimmed}`;
-}
+import {
+  ROUTE_ORIGIN_ADDRESS,
+  mentionsBryanskCity,
+  normalizeDeliveryAddress,
+} from './bryanskAddress';
 
 /**
  * Короткая подпись адреса для подсказки на точке карты (см. `OrderRouteMap`):
@@ -156,29 +63,14 @@ export function buildYandexMapsRouteUrl(rawAddress: string | null | undefined): 
   return `https://yandex.ru/maps/?${params.toString()}`;
 }
 
-// Координаты завода (Брянск, Орловский тупик, 6) — получены геокодером один
-// раз и захардкожены, чтобы не дёргать API на каждое построение маршрута:
-// точка отправления не меняется от заявки к заявке.
-export const ROUTE_ORIGIN_COORDS = { lat: 53.25347, lon: 34.416444 };
-
-/**
- * Извлекает координаты прямо из текста адреса, если диспетчер вставил их
- * в поле адреса (например "ул. Ленина 5\n52.735700, 34.774616").
- * Это быстрее и точнее любого геокодирования — не нужен запрос к DaData.
- */
-export function extractCoordsFromAddress(address: string | null | undefined): Coords | null {
-  if (!address) return null;
-  // Ищем пару чисел вида ДД.ДДД, ДД.ДДД — широта и долгота
-  const match = address.match(/(\d{2,3}\.\d{3,})[,\s]+(\d{2,3}\.\d{3,})/);
-  if (!match) return null;
-  const lat = parseFloat(match[1]);
-  const lon = parseFloat(match[2]);
-  // Санитарная проверка: диапазон координат для России
-  if (lat >= 41 && lat <= 82 && lon >= 19 && lon <= 170) {
-    return { lat, lon };
-  }
-  return null;
-}
+// Чистые geo-хелперы живут в lib/geocodeAddress.ts (без 'use client'),
+// чтобы их могли вызывать и серверные API. Здесь — реэкспорт для клиента.
+export {
+  ROUTE_ORIGIN_COORDS,
+  extractCoordsFromAddress,
+  type Coords,
+} from './geocodeAddress';
+import { ROUTE_ORIGIN_COORDS, extractCoordsFromAddress, type Coords } from './geocodeAddress';
 
 /** Ссылка на построение маршрута в Яндекс.Картах по КООРДИНАТАМ — работает
  * одинаково надёжно и в обычном браузере, и в Яндекс.Браузере (открывает
@@ -190,8 +82,6 @@ function buildYandexMapsRouteUrlByCoords(destLat: number, destLon: number): stri
   });
   return `https://yandex.ru/maps/?${params.toString()}`;
 }
-
-export type Coords = { lat: number; lon: number };
 
 // Кэш результатов геокодирования на время сессии (вкладки). Один и тот же
 // адрес доставки часто встречается сразу в нескольких местах (список заявок

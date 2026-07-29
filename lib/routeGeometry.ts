@@ -15,7 +15,7 @@
 // без каких-либо лимитов.
 
 import { useEffect, useState } from 'react';
-import { ROUTE_ORIGIN_COORDS, type Coords } from './yandexRoute';
+import { ROUTE_ORIGIN_COORDS, type Coords } from './geocodeAddress';
 
 const OSRM_TIMEOUT_MS = 6000;
 

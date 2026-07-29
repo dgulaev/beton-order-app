@@ -9,7 +9,7 @@
 // и scripts/delivery-settings-schema.sql.
 //
 // ФОРМУЛА:
-//   • адрес ЗА ПРЕДЕЛАМИ Брянска (см. isOutsideBryansk в lib/yandexRoute.ts) —
+//   • адрес ЗА ПРЕДЕЛАМИ Брянска (см. isOutsideBryansk в lib/bryanskAddress.ts) —
 //     ПОЛНОСТЬЮ заменяет тарифы ниже: расстояние по прямой между координатами
 //     завода и геокодированного адреса × road_curvature_coefficient (поправка
 //     на то, что реальная дорога длиннее прямой) × price_per_km ₽/км,
@@ -22,7 +22,8 @@
 //       - 12 < объём ≤ 50 м³ → рейсов × price_tier_trip ₽
 //       - объём > 50 м³      → price_per_m3_over_50 ₽ за 1 м³
 
-import { ROUTE_ORIGIN_COORDS, isOutsideBryansk, type Coords } from './yandexRoute';
+import { isOutsideBryansk } from './bryanskAddress';
+import { ROUTE_ORIGIN_COORDS, type Coords } from './geocodeAddress';
 
 export interface DeliverySettings {
   price_tier_10: number;

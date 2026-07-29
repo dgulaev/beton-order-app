@@ -79,7 +79,7 @@ export default function MixersPage() {
   const [activeTripMap, setActiveTripMap] = useState<Map<string, string>>(new Map());
 
   const [filter, setFilter] = useState<'all' | 'own' | 'rented'>('all');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [showModal, setShowModal] = useState(false);
   const [editingMixer, setEditingMixer] = useState<FleetUnit | null>(null);
   const [historyMixer, setHistoryMixer] = useState<FleetUnit | null>(null);
@@ -160,8 +160,12 @@ export default function MixersPage() {
     setCurrentPage(1);
   }, [filter, viewMode, vehicleKind]);
 
-  // Подгонка числа строк списка под доступную высоту (паттерн отчётов).
-  // getComputedStyle — не getBoundingClientRect: layout adminCifra использует transform:scale.
+  // Подгонка числа строк под высоту контейнера.
+  // Важно: строки — border-box (volumeCardSoftStyle). Раньше к cs.height
+  // ещё раз прибавляли padding/border → высота строки завышалась, на 1920/1600
+  // влезало заметно меньше строк, чем реально помещается.
+  // offsetHeight = полная layout-высота в тех же единицах, что и clientHeight
+  // (transform:scale layout.tsx на них не влияет — в отличие от getBoundingClientRect).
   useEffect(() => {
     if (viewMode !== 'list') return;
     const el = mixerListRef.current;
@@ -169,29 +173,39 @@ export default function MixersPage() {
     const GAP = 5;
     const adjust = () => {
       if (el.clientHeight <= 0) return;
-      const rows = Array.from(el.children) as HTMLElement[];
-      if (rows.length === 0) return;
-      if (rows.length === 1 && rows[0].dataset.mixerPlaceholder === 'true') return;
-
-      const cs = getComputedStyle(rows[0]);
-      const rowHeight = parseFloat(cs.height)
-        + parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
-        + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+      const rows = (Array.from(el.children) as HTMLElement[]).filter(
+        (r) => r.dataset.mixerPlaceholder !== 'true',
+      );
+      let rowHeight = 0;
+      if (rows.length === 0) {
+        rowHeight = 56; // типовая строка, пока список пуст / грузится
+      } else {
+        for (const r of rows) {
+          if (r.offsetHeight > rowHeight) rowHeight = r.offsetHeight;
+        }
+      }
       if (!rowHeight || rowHeight <= 0) return;
 
-      const target = Math.max(1, Math.floor((el.clientHeight + GAP) / (rowHeight + GAP)));
-      setItemsPerPage(prev => (prev === target ? prev : target));
+      // +GAP в числителе — последний gap между строками не нужен снизу
+      const target = Math.max(4, Math.floor((el.clientHeight + GAP) / (rowHeight + GAP)));
+      setItemsPerPage((prev) => (prev === target ? prev : target));
     };
     adjust();
+    const t1 = setTimeout(adjust, 60);
+    const t2 = setTimeout(adjust, 350);
     const ro = new ResizeObserver(adjust);
     ro.observe(el);
     const mo = new MutationObserver(adjust);
     mo.observe(el, { childList: true });
+    window.addEventListener('resize', adjust);
     return () => {
       ro.disconnect();
       mo.disconnect();
+      window.removeEventListener('resize', adjust);
+      clearTimeout(t1);
+      clearTimeout(t2);
     };
-  }, [itemsPerPage, viewMode]);
+  }, [itemsPerPage, viewMode, loading, vehicleKind, filteredMixers.length]);
 
   // ==================== ФУНКЦИИ МОДАЛЬНОГО ОКНА ====================
   const openEditModal = (unit: FleetUnit) => {
@@ -378,7 +392,9 @@ export default function MixersPage() {
           Техника
         </h1>
 
-        {activeTab !== 'delivery' && (
+        {/* На «Тарифах» кнопку скрываем, но место оставляем — иначе шапка
+            сжимается и вкладки прыгают вверх/вниз при переключении. */}
+        {activeTab !== 'delivery' ? (
           <button 
             onClick={openAddModal} 
             style={volumeCardSoftStyle({
@@ -396,6 +412,22 @@ export default function MixersPage() {
           >
             {kindMeta.addLabel}
           </button>
+        ) : (
+          <div
+            aria-hidden
+            style={{
+              padding: '10px 22px',
+              borderRadius: 12,
+              fontWeight: 700,
+              fontSize: '14.5px',
+              border: '1px solid transparent',
+              visibility: 'hidden',
+              pointerEvents: 'none',
+              userSelect: 'none',
+            }}
+          >
+            {vehicleKindMeta('mixer').addLabel}
+          </div>
         )}
       </div>
 
@@ -704,6 +736,7 @@ export default function MixersPage() {
                 totalPages={totalPages}
                 onPage={setCurrentPage}
                 suffix={`· ${kindPlural(vehicleKind, filteredMixers.length)}`}
+                reserveSpace
                 style={{ marginBottom: '10px' }}
               />
 

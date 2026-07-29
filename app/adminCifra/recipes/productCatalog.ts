@@ -50,8 +50,17 @@ export const CONCRETE_KINDS: { key: ConcreteKind; label: string }[] = [
 export const CEMENT_PLANT_FILTERS: { key: CementPlantId; label: string }[] =
   CEMENT_SUPPLIER_PLANTS.map((p) => ({ key: p.id, label: p.shortName }));
 
-export function isFbs(r: { item_type?: string | null; code?: string | null }): boolean {
-  return r?.item_type === 'fbs' || (!!r?.code && String(r.code).startsWith('24-'));
+export function isFbs(r: {
+  item_type?: string | null;
+  code?: string | null;
+  name?: string | null;
+}): boolean {
+  if (r?.item_type === 'fbs') return true;
+  const code = String(r?.code || '');
+  if (code.startsWith('24-')) return true;
+  // Коды вида 30-3-6 (нестандартная длина) + название с «ФБС»
+  if (/фбс/i.test(code) || /фбс/i.test(String(r?.name || ''))) return true;
+  return false;
 }
 
 export function isAggregate(r: { item_type?: string | null }): boolean {
@@ -70,6 +79,59 @@ export function isOrderGradeRecipe(r: { item_type?: string | null; code?: string
 /** Щебень / песок / цемент — для bulk-заявок на отгрузку. */
 export function isBulkOrderProduct(r: { item_type?: string | null; code?: string | null }): boolean {
   return isAggregate(r) || isCement(r);
+}
+
+/** Товар отгрузки: инерт + цемент + ФБС. */
+export function isBulkShipmentProduct(r: { item_type?: string | null; code?: string | null }): boolean {
+  return isAggregate(r) || isCement(r) || isFbs(r);
+}
+
+/**
+ * Умный фильтр товара в заявке «Отгрузка»:
+ * • цементовоз → только цемент (и марки завода из external_key cement:…);
+ * • самосвал / тоннар → щебень/песок + ФБС (не цемент);
+ * • точка aggregate → только инерт; concrete → только ФБС; mixed → всё, что допускает техника.
+ */
+export function matchesBulkShipmentProduct(
+  r: { item_type?: string | null; code?: string | null; type?: string | null },
+  opts: {
+    vehicleKind?: string | null;
+    loadingPoint?: { kind?: string | null; external_key?: string | null } | null;
+  },
+): boolean {
+  if (!isBulkShipmentProduct(r)) return false;
+
+  const vehicle = opts.vehicleKind || 'dump_truck';
+  const point = opts.loadingPoint;
+  const pointKind = point?.kind || null;
+  const ext = String(point?.external_key || '');
+  const cementKey = ext.startsWith('cement:') ? ext.slice('cement:'.length) : null;
+
+  // Техника
+  if (vehicle === 'cement_truck') {
+    if (!isCement(r)) return false;
+  } else {
+    // Самосвал / тоннар / спец — инерт и ФБС, цемент только цементовозом
+    if (isCement(r)) return false;
+  }
+
+  // Точка погрузки уточняет ассортимент
+  if (!point) return true;
+
+  if (pointKind === 'cement' || cementKey) {
+    if (!isCement(r)) return false;
+    if (cementKey) {
+      const plant = cementPlantId(r);
+      // Без привязки к заводу или с другим заводом — не показываем
+      if (!plant || plant !== cementKey) return false;
+    }
+    return true;
+  }
+
+  if (pointKind === 'aggregate') return isAggregate(r);
+  if (pointKind === 'concrete') return isFbs(r);
+  // mixed / неизвестный — оставляем то, что пропустила техника
+  return true;
 }
 
 export function productSection(r: { item_type?: string | null; code?: string | null }): ProductSection {

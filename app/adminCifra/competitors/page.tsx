@@ -24,6 +24,7 @@ import {
 import { resolveCompetitorPriceUrl } from '@/lib/competitorsCatalog';
 import { buildCompetitorsAnalytics } from '@/lib/competitorsAnalytics';
 import CompetitorsAnalyticsPanel from './CompetitorsAnalytics';
+import CompetitorsDeliveryAnalytics from './CompetitorsDeliveryAnalytics';
 
 type Tab = 'matrix' | 'analytics' | 'grades' | 'list';
 
@@ -636,9 +637,14 @@ export default function CompetitorsPage() {
             border: '1px solid rgba(148, 163, 184, 0.28)',
             background: CARD_GRADIENT_SOFT,
             padding: '16px 18px 20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 22,
           }}
         >
           <CompetitorsAnalyticsPanel data={analytics} />
+          <div style={{ height: 1, background: 'rgba(148,163,184,0.22)', flexShrink: 0 }} />
+          <CompetitorsDeliveryAnalytics />
         </div>
       ) : tab === 'grades' ? (
         <div

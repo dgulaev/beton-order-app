@@ -19,13 +19,57 @@ export function bulkVehicleKindOptions() {
   return VEHICLE_KINDS.filter((k) => BULK_VEHICLE_KINDS.includes(k.key));
 }
 
-/** Единица объёма bulk-заявки / отгрузки: цемент — тонны, остальное — м³. */
-export function bulkVolumeUnit(kind?: string | null): 'm3' | 't' {
+export type BulkVolumeUnit = 'm3' | 't' | 'pcs';
+
+type BulkProductHint = {
+  item_type?: string | null;
+  code?: string | null;
+  name?: string | null;
+  grade?: string | null;
+} | null | undefined;
+
+function isFbsProduct(product?: BulkProductHint): boolean {
+  if (!product) return false;
+  if (product.item_type === 'fbs') return true;
+  const code = String(product.code || product.grade || '');
+  if (code.startsWith('24-')) return true;
+  if (/фбс/i.test(code) || /фбс/i.test(String(product.name || ''))) return true;
+  return false;
+}
+
+/**
+ * Единица количества bulk-заявки:
+ * • ФБС — штуки;
+ * • цементовоз — тонны;
+ * • остальное — м³.
+ */
+export function bulkVolumeUnit(
+  kind?: string | null,
+  product?: BulkProductHint,
+): BulkVolumeUnit {
+  if (isFbsProduct(product)) return 'pcs';
   return kind === 'cement_truck' ? 't' : 'm3';
 }
 
-export function bulkVolumeUnitLabel(kind?: string | null): string {
-  return bulkVolumeUnit(kind) === 't' ? 'т' : 'м³';
+export function bulkVolumeUnitLabel(
+  kind?: string | null,
+  product?: BulkProductHint,
+): string {
+  const u = bulkVolumeUnit(kind, product);
+  if (u === 'pcs') return 'шт';
+  if (u === 't') return 'т';
+  return 'м³';
+}
+
+/** Плейсхолдер поля количества в форме заявки. */
+export function bulkQuantityFieldLabel(
+  kind?: string | null,
+  product?: BulkProductHint,
+): string {
+  const u = bulkVolumeUnit(kind, product);
+  if (u === 'pcs') return 'Количество, шт';
+  if (u === 't') return 'Объём, т';
+  return 'Объём, м³';
 }
 
 export function normalizeOrderType(v: unknown): OrderType {

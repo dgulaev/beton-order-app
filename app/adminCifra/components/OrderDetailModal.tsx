@@ -677,7 +677,10 @@ const formatVolume = (value: number | string) => {
                 <div style={{ fontSize: '20px', fontWeight: '700', color: '#10B981' }}>
                   {order.volume}{' '}
                   {(order as any).order_type === 'bulk'
-                    ? bulkVolumeUnitLabel((order as any).fleet_vehicle_kind)
+                    ? bulkVolumeUnitLabel((order as any).fleet_vehicle_kind, {
+                        code: order.grade,
+                        name: order.grade,
+                      })
                     : 'м³'}
                 </div>
 
@@ -807,13 +810,13 @@ const formatVolume = (value: number | string) => {
   <div style={{ fontSize: '25px', fontWeight: '700', color: '#10B981', margin: '4px 0' }}>
     {formatVolume(assignedVolume)} / {formatVolume(orderVolume)}{' '}
     {(order as any).order_type === 'bulk'
-      ? bulkVolumeUnitLabel((order as any).fleet_vehicle_kind)
+      ? bulkVolumeUnitLabel((order as any).fleet_vehicle_kind, { code: order.grade, name: order.grade })
       : 'м³'}
   </div>
   <div style={{ fontSize: '13px', color: isFullyReady ? '#10B981' : '#F59E0B' }}>
     {isFullyReady 
       ? '✅ Полностью укомплектовано' 
-      : `Осталось ${formatVolume(orderVolume - assignedVolume)} ${(order as any).order_type === 'bulk' ? bulkVolumeUnitLabel((order as any).fleet_vehicle_kind) : 'м³'}`
+      : `Осталось ${formatVolume(orderVolume - assignedVolume)} ${(order as any).order_type === 'bulk' ? bulkVolumeUnitLabel((order as any).fleet_vehicle_kind, { code: order.grade, name: order.grade }) : 'м³'}`
     }
   </div>
 
