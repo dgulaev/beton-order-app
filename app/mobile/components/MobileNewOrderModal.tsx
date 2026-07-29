@@ -16,6 +16,7 @@ import {
 import { nowTimeHHMM } from '@/app/adminCifra/components/modalPickerShared';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
+import { isOrderGradeRecipe } from '@/app/adminCifra/recipes/productCatalog';
 
 const INPUT: React.CSSProperties = modalFieldStyle({
   padding: '11px 14px',
@@ -134,24 +135,20 @@ export default function MobileNewOrderModal({
         const res = await fetch('/api/adminCifra/recipes');
         if (res.ok) {
           const data = await res.json();
-          const isFbs = (r: any) =>
-            r?.item_type === 'fbs' || (r?.code && String(r.code).startsWith('24-'));
-          const sorted = [...(Array.isArray(data) ? data : [])].sort((a: any, b: any) => {
-            const af = isFbs(a) ? 1 : 0;
-            const bf = isFbs(b) ? 1 : 0;
-            if (af !== bf) return af - bf;
-            return String(a.code || '').localeCompare(String(b.code || ''), 'ru');
-          });
+          // В заявках — только бетон/раствор/ЦПС (без щебня/песка и ФБС).
+          const concrete = (Array.isArray(data) ? data : []).filter(isOrderGradeRecipe);
+          const sorted = [...concrete].sort((a: any, b: any) =>
+            String(a.code || '').localeCompare(String(b.code || ''), 'ru')
+          );
           setRecipes(sorted);
           setForm((prev) => {
             const codes = new Set(sorted.map((r: any) => r.code));
             if (prev.grade && codes.has(prev.grade)) return prev;
             const m300 =
               sorted.find((r: any) => r.code === 'М300') ||
-              sorted.find((r: any) => !isFbs(r) && String(r.name || '').includes('М300'));
+              sorted.find((r: any) => String(r.name || '').includes('М300'));
             if (m300?.code) return { ...prev, grade: m300.code };
-            const firstConcrete = sorted.find((r: any) => !isFbs(r));
-            return firstConcrete?.code ? { ...prev, grade: firstConcrete.code } : prev;
+            return sorted[0]?.code ? { ...prev, grade: sorted[0].code } : prev;
           });
         }
       } catch (e) {

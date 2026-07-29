@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, FlaskConical, Truck, Package, Users, UserCog, Menu, X, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown, Cable } from 'lucide-react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, Menu, X, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown, Cable, MapPin } from 'lucide-react';
 import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Image from 'next/image';
@@ -1136,7 +1136,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const scale = getGlobalScale();
   // Страницы-"каркасы": без скролла страницы целиком, со своим внутренним
   // скроллом по зонам (как дашборд) — сейчас это дашборд, заявки, оператор БСУ и миксеры.
-  const isFrameLayout = pathname === '/adminCifra/dashboard' || pathname === '/adminCifra/zayavki' || pathname === '/adminCifra/operator' || pathname === '/adminCifra/mixers' || pathname === '/adminCifra/tasks' || pathname === '/adminCifra/clients';
+  const isFrameLayout = pathname === '/adminCifra/dashboard' || pathname === '/adminCifra/zayavki' || pathname === '/adminCifra/operator' || pathname === '/adminCifra/mixers' || pathname === '/adminCifra/technika' || pathname === '/adminCifra/tasks' || pathname === '/adminCifra/clients' || pathname === '/adminCifra/recipes' || pathname === '/adminCifra/loading-points' || pathname === '/adminCifra/competitors';
   const isDashboard = isFrameLayout;
   // Высота ДО применения transform: scale — после масштабирования визуально
   // она станет равна ровно viewportH (реальной высоте окна браузера).
@@ -1713,9 +1713,19 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   <span style={navTextStyle(isCollapsed)}>Лаборатория</span>
                 </Link>
 
-                <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers'), isCollapsed)}>
+                <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers') || isActive('/adminCifra/technika'), isCollapsed)}>
                   <Truck size={22} />
-                  <span style={navTextStyle(isCollapsed)}>Миксеры</span>
+                  <span style={navTextStyle(isCollapsed)}>Техника</span>
+                </Link>
+
+                <Link href="/adminCifra/loading-points" style={navLinkStyle(isActive('/adminCifra/loading-points'), isCollapsed)}>
+                  <MapPin size={22} />
+                  <span style={navTextStyle(isCollapsed)}>Точки погрузки</span>
+                </Link>
+
+                <Link href="/adminCifra/competitors" style={navLinkStyle(isActive('/adminCifra/competitors'), isCollapsed)}>
+                  <Store size={22} />
+                  <span style={navTextStyle(isCollapsed)}>Конкуренты</span>
                 </Link>
 
                 <Link href="/adminCifra/clients" style={navLinkStyle(isActive('/adminCifra/clients'), isCollapsed)}>

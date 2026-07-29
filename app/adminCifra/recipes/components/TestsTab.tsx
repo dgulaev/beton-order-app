@@ -59,7 +59,8 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
   const [dateFilter, setDateFilter] = useState('');
   const [page, setPage] = useState(1);
   const listRef = useRef<HTMLDivElement>(null);
-  const { perPage, rowH } = useAutoRows(listRef, { deps: [journal, tests.length, dateFilter, orderFilter] });
+  const ROW_GAP = 8;
+  const { perPage } = useAutoRows(listRef, { rowGap: ROW_GAP, deps: [journal, tests.length, dateFilter, orderFilter] });
   const loadedOrderMonths = useRef<Set<string>>(new Set());
   const loadingOrderMonths = useRef<Set<string>>(new Set());
 
@@ -338,47 +339,55 @@ export default function TestsTab({ focusOrderId, focusDays, onFocusConsumed, onT
             : `В журнале ${journal} суток записей нет. Добавьте первое испытание партии.`}
         </div>
       ) : (
-        <div ref={listRef} style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
-          <div data-lab-head style={{ display: 'flex', padding: '12px 16px', color: COLORS.muted, fontSize: '13px', borderBottom: `1px solid ${COLORS.border}` }}>
-            <div style={{ width: '120px' }}>Партия</div>
-            <div style={{ width: '80px' }}>Заявка</div>
-            <div style={{ width: '80px' }}>Марка</div>
-            <div style={{ width: '100px' }}>Дата</div>
-            <div style={{ flex: 1 }}>Организация</div>
-            <div style={{ width: '100px' }}>Требуемая</div>
-            <div style={{ width: '100px' }}>Факт</div>
-            <div style={{ width: '150px' }}>Результат</div>
-            <div style={{ width: '250px' }}></div>
+        <div ref={listRef} style={{ display: 'flex', flexDirection: 'column', gap: ROW_GAP }}>
+          <div data-lab-head style={{ display: 'flex', padding: '4px 16px 2px', color: '#F1F5F9', fontSize: '13px', fontWeight: 700, letterSpacing: '0.02em', gap: '8px' }}>
+            <div style={{ width: '120px', whiteSpace: 'nowrap' }}>Партия</div>
+            <div style={{ width: '80px', whiteSpace: 'nowrap' }}>Заявка</div>
+            <div style={{ width: '80px', whiteSpace: 'nowrap' }}>Марка</div>
+            <div style={{ width: '100px', whiteSpace: 'nowrap' }}>Дата</div>
+            <div style={{ flex: 1, whiteSpace: 'nowrap' }}>Организация</div>
+            <div style={{ width: '100px', whiteSpace: 'nowrap' }}>Требуемая</div>
+            <div style={{ width: '100px', whiteSpace: 'nowrap' }}>Факт</div>
+            <div style={{ width: '170px', whiteSpace: 'nowrap' }}>Результат</div>
+            <div style={{ width: '250px', textAlign: 'right', whiteSpace: 'nowrap' }}>Действия</div>
           </div>
           {pagedTests.map((t) => (
-            <div key={t.id} data-lab-row style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: `1px solid ${COLORS.border}`, color: '#E2E8F0', fontSize: '14px' }}>
-              <div style={{ width: '120px' }}>{t.batch_no || '—'}</div>
-              <div style={{ width: '80px', color: t.order_id ? COLORS.blue : COLORS.muted }}>{t.order_id ? `№${t.order_id}` : '—'}</div>
-              <div style={{ width: '80px' }}>{t.recipe_code || '—'}</div>
-              <div style={{ width: '100px' }}>{t.sample_date || '—'}</div>
-              <div style={{ flex: 1, color: t.protocol?.consumer ? '#E2E8F0' : COLORS.muted, paddingRight: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div
+              key={t.id}
+              data-lab-row
+              style={volumeCardSoftStyle({
+                display: 'flex',
+                alignItems: 'center',
+                padding: '12px 16px',
+                borderRadius: 12,
+                color: '#E2E8F0',
+                fontSize: '14px',
+                gap: '8px',
+              })}
+            >
+              <div style={{ width: '120px', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.batch_no || undefined}>{t.batch_no || '—'}</div>
+              <div style={{ width: '80px', flexShrink: 0, whiteSpace: 'nowrap', color: t.order_id ? COLORS.blue : COLORS.muted }}>{t.order_id ? `№${t.order_id}` : '—'}</div>
+              <div style={{ width: '80px', flexShrink: 0, whiteSpace: 'nowrap' }}>{t.recipe_code || '—'}</div>
+              <div style={{ width: '100px', flexShrink: 0, whiteSpace: 'nowrap' }}>{t.sample_date || '—'}</div>
+              <div style={{ flex: 1, minWidth: 0, color: t.protocol?.consumer ? '#E2E8F0' : COLORS.muted, paddingRight: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {t.protocol?.consumer || '—'}
               </div>
-              <div style={{ width: '100px' }}>{t.required_strength ?? '—'} МПа</div>
-              <div style={{ width: '100px' }}>{t.actual_strength_mpa ?? '—'} МПа</div>
-              <div style={{ width: '150px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ width: '100px', flexShrink: 0, whiteSpace: 'nowrap' }}>{t.required_strength ?? '—'} МПа</div>
+              <div style={{ width: '100px', flexShrink: 0, whiteSpace: 'nowrap' }}>{t.actual_strength_mpa ?? '—'} МПа</div>
+              <div style={{ width: '170px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={resultPill(t.result)}>{resultLabel(t.result)}</span>
               </div>
-              <div style={{ width: '250px', display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
-                <button onClick={() => setProtocolTest(t)} style={{ ...ghostButton, padding: '6px 12px', background: 'rgba(96,165,250,0.15)', color: COLORS.blue }}>Протокол</button>
-                <button onClick={() => setEditing(t)} style={{ ...ghostButton, padding: '6px 12px' }}>Изм.</button>
-                <button onClick={() => remove(t.id)} style={{ ...ghostButton, padding: '6px 12px' }}>Удал.</button>
+              <div style={{ width: '250px', flexShrink: 0, display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                <button onClick={() => setProtocolTest(t)} style={{ ...ghostButton, padding: '6px 12px', background: 'rgba(96,165,250,0.15)', color: COLORS.blue, whiteSpace: 'nowrap' }}>Протокол</button>
+                <button onClick={() => setEditing(t)} style={{ ...ghostButton, padding: '6px 12px', whiteSpace: 'nowrap' }}>Изм.</button>
+                <button onClick={() => remove(t.id)} style={{ ...ghostButton, padding: '6px 12px', whiteSpace: 'nowrap' }}>Удал.</button>
               </div>
             </div>
           ))}
-          {/* Распорка держит высоту списка постоянной, чтобы пагинация не прыгала. */}
-          {totalPages > 1 && pagedTests.length < perPage && (
-            <div style={{ height: `${(perPage - pagedTests.length) * rowH}px` }} />
-          )}
         </div>
       )}
 
-      <LabPagination page={pageSafe} totalPages={totalPages} onPage={setPage} />
+      <LabPagination page={pageSafe} totalPages={totalPages} onPage={setPage} reserveSpace style={{ height: 56 }} />
 
       {editing && (
         <div style={overlayStyle} onClick={() => setEditing(null)}>

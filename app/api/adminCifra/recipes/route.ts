@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { sanitizeRecipePayload } from '@/app/adminCifra/recipes/productCatalog';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -31,10 +32,14 @@ export async function GET(request: NextRequest) {
 // POST — создать новый рецепт
 export async function POST(request: NextRequest) {
   const body = await request.json();
+  const sanitized = sanitizeRecipePayload(body);
+  if (!sanitized.ok) {
+    return NextResponse.json({ error: sanitized.error }, { status: 400 });
+  }
 
   const { data, error } = await supabase
     .from('recipes')
-    .insert([body])
+    .insert([sanitized.data])
     .select()
     .single();
 
@@ -45,10 +50,30 @@ export async function POST(request: NextRequest) {
   return NextResponse.json(data);
 }
 
-// PUT — обновить рецепт
+// PUT — обновить рецепт (legacy; основной путь — /recipes/[id])
 export async function PUT(request: NextRequest) {
   const body = await request.json();
-  const { id, ...updateData } = body;
+  const { id, change_note: _cn, changed_by: _cb, changed_by_name: _cbn, ...rest } = body;
+  if (!id) {
+    return NextResponse.json({ error: 'ID required' }, { status: 400 });
+  }
+
+  const { data: current, error: loadErr } = await supabase
+    .from('recipes')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (loadErr || !current) {
+    return NextResponse.json({ error: loadErr?.message || 'Рецепт не найден' }, { status: 404 });
+  }
+
+  const sanitized = sanitizeRecipePayload({ ...current, ...rest });
+  if (!sanitized.ok) {
+    return NextResponse.json({ error: sanitized.error }, { status: 400 });
+  }
+
+  const { id: _id, created_at: _ca, updated_at: _ua, ...updateData } = sanitized.data;
 
   const { data, error } = await supabase
     .from('recipes')

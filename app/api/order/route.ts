@@ -439,36 +439,75 @@ export async function POST(request: NextRequest) {
       ? Number(referredBy)
       : null;
 
-    const { data: orderData, error: insertError } = await supabase
-      .from('orders')
-      .insert([{
-        user_id: finalUserId,
-        grade,
-        volume: parseFloat(volume),
-        delivery_date: finalDeliveryDate,
-        delivery_time: finalDeliveryTime,
-        address,
-        customer_type: customerType,
-        full_name: finalFullName || null,
-        organization_name: finalOrganizationName || null,
-        inn: inn || null,
-        phone: orderPhone,
-        comment: comment || null,
-        concrete_cost: concreteCost || 0,
-        delivery_cost: deliveryCost || 0,
-        total_price: totalPrice || 0,
-        status: 'new',
-        referred_by: referredByFromPayload,
+    const orderTypeRaw = payload.order_type || payload.orderType || 'concrete';
+    const order_type = orderTypeRaw === 'bulk' ? 'bulk' : 'concrete';
+    const fleet_vehicle_kind =
+      order_type === 'bulk'
+        ? (payload.fleet_vehicle_kind || payload.fleetVehicleKind || 'dump_truck')
+        : (payload.fleet_vehicle_kind || payload.fleetVehicleKind || 'mixer');
+    const loading_point_id = (() => {
+      const raw = payload.loading_point_id ?? payload.loadingPointId;
+      if (raw == null || raw === '') return null;
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    })();
 
-        // ==================== НОВЫЕ ПОЛЯ ====================
-        created_by: createdByStaff,
-        curator_name: curatorName,
-        lead_id: leadId,
-        lead_source: leadSource,
-        external_ref: externalRef,
-      }])
+    if (order_type === 'bulk' && !['dump_truck', 'tonar', 'cement_truck'].includes(String(fleet_vehicle_kind))) {
+      return NextResponse.json(
+        { success: false, message: 'Для отгрузки укажите самосвал, тоннар или цементовоз' },
+        { status: 400 },
+      );
+    }
+
+    const orderRow: Record<string, unknown> = {
+      user_id: finalUserId,
+      grade,
+      volume: parseFloat(volume),
+      delivery_date: finalDeliveryDate,
+      delivery_time: finalDeliveryTime,
+      address,
+      customer_type: customerType,
+      full_name: finalFullName || null,
+      organization_name: finalOrganizationName || null,
+      inn: inn || null,
+      phone: orderPhone,
+      comment: comment || null,
+      concrete_cost: concreteCost || 0,
+      delivery_cost: deliveryCost || 0,
+      total_price: totalPrice || 0,
+      status: 'new',
+      referred_by: referredByFromPayload,
+      created_by: createdByStaff,
+      curator_name: curatorName,
+      lead_id: leadId,
+      lead_source: leadSource,
+      external_ref: externalRef,
+      order_type,
+      fleet_vehicle_kind,
+      loading_point_id,
+    };
+
+    let { data: orderData, error: insertError } = await supabase
+      .from('orders')
+      .insert([orderRow])
       .select()
       .single();
+
+    // Колонок логистики ещё нет — повторяем без них.
+    if (insertError && /order_type|fleet_vehicle_kind|loading_point_id/i.test(insertError.message || '')) {
+      const {
+        order_type: _ot,
+        fleet_vehicle_kind: _fk,
+        loading_point_id: _lp,
+        ...legacyRow
+      } = orderRow;
+      void _ot;
+      void _fk;
+      void _lp;
+      const retry = await supabase.from('orders').insert([legacyRow]).select().single();
+      orderData = retry.data;
+      insertError = retry.error;
+    }
 
     if (insertError) {
       console.error('Insert order error:', insertError);

@@ -18,8 +18,9 @@ import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatLeadDateRu } from '@/lib/leads';
 import { Users } from 'lucide-react';
 import { CARD_BORDER, CARD_VOLUME_SOFT, modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
-import { appConfirm } from '../components/appDialog';
+import { appConfirm, appPrompt } from '../components/appDialog';
 import AdminPagination from '../components/AdminPagination';
+import ViewModeToggle, { TABLE_CARDS_OPTIONS } from '../components/ViewModeToggle';
 import { nowTimeHHMM } from '../components/modalPickerShared';
 import { pluralRu } from '@/lib/ruLocale';
 
@@ -1703,6 +1704,9 @@ const duplicateOrder = async (order: any) => {
       : `Копия заказа #${order.id}`,
 
     customerType: order.customer_type?.includes('Юрид') || order.customerType === 'legal' ? 'legal' : 'physical',
+    order_type: order.order_type || 'concrete',
+    fleet_vehicle_kind: order.fleet_vehicle_kind || null,
+    loading_point_id: order.loading_point_id ?? null,
     lead_id: leadLink.lead_id,
     lead_source: leadLink.lead_source,
     external_ref: leadLink.external_ref,
@@ -1902,7 +1906,12 @@ const changeStaffPassword = async (staffMember: any) => {
     return;
   }
 
-  const newPassword = prompt(`Новый пароль для сотрудника:\n${staffMember.full_name}`, 'guest2026');
+  const newPassword = await appPrompt(`Новый пароль для сотрудника:\n${staffMember.full_name}`, {
+    title: 'Смена пароля',
+    okLabel: 'Далее',
+    defaultValue: 'guest2026',
+    placeholder: 'Новый пароль',
+  });
 
   if (newPassword === null) return; // отмена
   if (newPassword.length < 6) {
@@ -1910,7 +1919,11 @@ const changeStaffPassword = async (staffMember: any) => {
     return;
   }
 
-  if (!(await appConfirm(`Сменить пароль для "${staffMember.full_name}" на:\n\n${newPassword}\n\nВы уверены?`))) {
+  if (!(await appConfirm(`Сменить пароль для "${staffMember.full_name}" на:\n\n${newPassword}\n\nВы уверены?`, {
+    title: 'Подтверждение',
+    okLabel: 'Сменить',
+    variant: 'warning',
+  }))) {
     return;
   }
 
@@ -2020,10 +2033,11 @@ const changeStaffPassword = async (staffMember: any) => {
       </div>
 
       {/* ====================== ВЕРХНЯЯ ПАНЕЛЬ УПРАВЛЕНИЯ ====================== */}
-<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexShrink: 0 }}>
+<div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px', flexShrink: 0, gap: '8px', flexWrap: 'wrap' }}>
 
-  {/* Левая группа — Кнопки действий */}
-<div style={{ display: 'flex', gap: '8px' }}>
+  {activeTab === 'staff' && (
+    <ViewModeToggle value={viewMode} onChange={setViewMode} options={TABLE_CARDS_OPTIONS} />
+  )}
 
   {/* Дубли — только на вкладке клиентов (у стаффа не нужны) */}
   {activeTab === 'clients' && (
@@ -2125,85 +2139,11 @@ const changeStaffPassword = async (staffMember: any) => {
   )}
 
 </div>
-  
-
-  {/* Правая группа — Вид отображения (Карточки / Список) — ТОЛЬКО НА КЛИЕНТАХ И СТАФФЕ */}
-{(activeTab === 'clients' || activeTab === 'staff') && (
-  <div style={{ display: 'flex', gap: '8px' }}>
-    <button 
-      onClick={() => setViewMode('cards')} 
-      style={{
-        padding: '12px 24px',
-        background: 'transparent',
-        border: 'none',
-        color: viewMode === 'cards' ? '#10B981' : '#64748B',
-        fontSize: '17px',
-        fontWeight: '600',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        position: 'relative',
-        transition: 'color 0.25s ease',
-        cursor: 'pointer',
-      }}
-    >
-      <span style={{ fontSize: '22px', opacity: viewMode === 'cards' ? 0.9 : 0.45 }}>▦</span>
-      Карточки
-      {viewMode === 'cards' && (
-        <div style={{
-          position: 'absolute',
-          bottom: '3px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: '5px',
-          height: '5px',
-          backgroundColor: '#10B981',
-          borderRadius: '50%',
-          boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
-        }} />
-      )}
-    </button>
-
-    <button 
-      onClick={() => setViewMode('table')} 
-      style={{
-        padding: '12px 24px',
-        background: 'transparent',
-        border: 'none',
-        color: viewMode === 'table' ? '#10B981' : '#64748B',
-        fontSize: '17px',
-        fontWeight: '600',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '10px',
-        position: 'relative',
-        transition: 'color 0.25s ease',
-        cursor: 'pointer',
-      }}
-    >
-      <span style={{ fontSize: '24px', opacity: viewMode === 'table' ? 0.9 : 0.45, lineHeight: 1 }}>≡</span>
-      Список
-      {viewMode === 'table' && (
-        <div style={{
-          position: 'absolute',
-          bottom: '3px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: '5px',
-          height: '5px',
-          backgroundColor: '#10B981',
-          borderRadius: '50%',
-          boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
-        }} />
-      )}
-    </button>
-  </div>
-)}
-</div>
 
 {/* ==================== ПОЛЕ ПОИСКА — ТОЛЬКО ПО КНОПКЕ ==================== */}
 {activeTab === 'clients' && (
-  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', marginBottom: '12px', flexShrink: 0 }}>
+  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', marginBottom: '12px', flexShrink: 0, flexWrap: 'wrap' }}>
+    <ViewModeToggle value={viewMode} onChange={setViewMode} options={TABLE_CARDS_OPTIONS} />
     <input
       type="text"
       placeholder="Поиск по имени, организации, телефону, ИНН..."

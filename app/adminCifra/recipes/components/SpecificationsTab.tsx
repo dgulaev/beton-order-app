@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { COLORS, inputStyle, labelStyle, cardStyle, ghostButton, primaryButton, overlayStyle, modalStyle, pillStyle } from '../labStyles';
+import { COLORS, inputStyle, labelStyle, cardStyle, ghostButton, primaryButton, overlayStyle, modalStyle, pillStyle, volumeCardSoftStyle } from '../labStyles';
 import PassportModal from './PassportModal';
 import { useAutoRows, LabPagination } from '../pagination';
 import { useEscapeClose } from '../labUtils';
 import ModalDateInput from '../../components/ModalDateInput';
 import ModalSelect from '../../components/ModalSelect';
 import { appConfirm } from '../../components/appDialog';
+import { isOrderGradeRecipe } from '../productCatalog';
 
 type FilterKey = 'all' | 'active' | 'no_recipes' | 'no_products';
 
@@ -49,7 +50,8 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
   const [dateFilter, setDateFilter] = useState('');
   const [page, setPage] = useState(1);
   const listRef = useRef<HTMLDivElement>(null);
-  const { perPage, rowH } = useAutoRows(listRef, { deps: [specs.length, dateFilter, filter] });
+  const ROW_GAP = 8;
+  const { perPage } = useAutoRows(listRef, { rowGap: ROW_GAP, deps: [specs.length, dateFilter, filter] });
   const [editing, setEditing] = useState<any>(null);
   const [passportFor, setPassportFor] = useState<any>(null);
   // Результат поиска заказа по номеру в модалке: null — не искали,
@@ -88,7 +90,11 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
           fetch('/api/adminCifra/plants'),
           fetch('/api/adminCifra/accredited-grades'),
         ]);
-        if (r.ok) setRecipes(await r.json());
+        if (r.ok) {
+          const all = await r.json();
+          // В спецификации — только бетон/раствор/ЦПС (без щебня/песка и ФБС).
+          setRecipes((Array.isArray(all) ? all : []).filter(isOrderGradeRecipe));
+        }
         if (p.ok) setPlants(await p.json());
         if (a.ok) setAccredited(await a.json());
       } catch (e) {
@@ -271,54 +277,63 @@ export default function SpecificationsTab({ onPassportSaved }: Props) {
           {dateFilter ? `За ${dateFilter} спецификаций нет.` : 'Спецификаций нет. Создайте первую по кнопке «+ Спецификация».'}
         </div>
       ) : (
-        <div ref={listRef} style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
-          <div data-lab-head style={{ display: 'flex', padding: '12px 16px', color: COLORS.muted, fontSize: '13px', borderBottom: `1px solid ${COLORS.border}` }}>
-            <div style={{ flex: 1.4 }}>Спецификация</div>
-            <div style={{ flex: 1.2 }}>Продукция</div>
-            <div style={{ flex: 1 }}>Рецептура</div>
-            <div style={{ width: '110px' }}>Статус</div>
-            <div style={{ width: '210px' }}></div>
+        <div ref={listRef} style={{ display: 'flex', flexDirection: 'column', gap: ROW_GAP }}>
+          <div data-lab-head style={{ display: 'flex', padding: '4px 16px 2px', color: '#F1F5F9', fontSize: '13px', fontWeight: 700, letterSpacing: '0.02em', gap: '10px' }}>
+            <div style={{ flex: 1.4, whiteSpace: 'nowrap' }}>Спецификация</div>
+            <div style={{ flex: 1.2, whiteSpace: 'nowrap' }}>Продукция</div>
+            <div style={{ flex: 1, whiteSpace: 'nowrap' }}>Рецептура</div>
+            <div style={{ width: '110px', whiteSpace: 'nowrap' }}>Статус</div>
+            <div style={{ width: '210px', textAlign: 'right', whiteSpace: 'nowrap' }}>Действия</div>
           </div>
           {pagedSpecs.map((s) => {
             const recipeText = assignedRecipeText(s);
             return (
-              <div key={s.id} data-lab-row style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: `1px solid ${COLORS.border}`, color: '#E2E8F0', fontSize: '14px' }}>
-                <div style={{ flex: 1.4 }}>
-                  <div style={{ fontWeight: 600 }}>{s.code || s.name || `Спец. #${s.id}`}</div>
-                  <div style={{ color: COLORS.muted, fontSize: '13px' }}>
-                    {s.grade || '—'} {s.order_id ? `· заказ №${s.order_id}` : ''}
-                  </div>
+              <div
+                key={s.id}
+                data-lab-row
+                style={volumeCardSoftStyle({
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '12px 16px',
+                  borderRadius: 12,
+                  color: '#E2E8F0',
+                  fontSize: '14px',
+                  gap: '10px',
+                })}
+              >
+                <div style={{ flex: 1.4, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={[s.code || s.name || `Спец. #${s.id}`, s.grade, s.order_id ? `заказ №${s.order_id}` : ''].filter(Boolean).join(' · ')}>
+                  <span style={{ fontWeight: 600 }}>{s.code || s.name || `Спец. #${s.id}`}</span>
+                  <span style={{ color: COLORS.muted, fontSize: '13px', marginLeft: '8px' }}>
+                    {s.grade || '—'}{s.order_id ? ` · заказ №${s.order_id}` : ''}
+                  </span>
                 </div>
-                <div style={{ flex: 1.2, color: s.product_name ? '#E2E8F0' : COLORS.danger }}>
+                <div style={{ flex: 1.2, minWidth: 0, color: s.product_name ? '#E2E8F0' : COLORS.danger, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.product_name || 'Без продукта'}>
                   {s.product_name || 'Без продукта'}
                 </div>
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   {recipeText ? (
                     <span style={pillStyle('rgba(96,165,250,0.15)', COLORS.blue)}>{recipeText}</span>
                   ) : (
                     <span style={pillStyle('rgba(248,113,113,0.12)', COLORS.danger)}>Без рецепта</span>
                   )}
                 </div>
-                <div style={{ width: '110px' }}>
+                <div style={{ width: '110px', flexShrink: 0 }}>
                   <span style={s.status === 'active' ? pillStyle('rgba(74,222,128,0.15)', COLORS.accent) : pillStyle('rgba(148,163,184,0.15)', COLORS.muted)}>
                     {s.status === 'active' ? 'Активна' : 'Архив'}
                   </span>
                 </div>
-                <div style={{ width: '210px', display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
-                  <button onClick={() => setPassportFor(s)} style={{ ...ghostButton, padding: '6px 12px' }}>Паспорт</button>
-                  <button onClick={() => openEdit(s)} style={{ ...ghostButton, padding: '6px 12px' }}>Изм.</button>
-                  <button onClick={() => remove(s.id)} style={{ ...ghostButton, padding: '6px 12px' }}>Удал.</button>
+                <div style={{ width: '210px', flexShrink: 0, display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'nowrap' }}>
+                  <button onClick={() => setPassportFor(s)} style={{ ...ghostButton, padding: '6px 12px', whiteSpace: 'nowrap' }}>Паспорт</button>
+                  <button onClick={() => openEdit(s)} style={{ ...ghostButton, padding: '6px 12px', whiteSpace: 'nowrap' }}>Изм.</button>
+                  <button onClick={() => remove(s.id)} style={{ ...ghostButton, padding: '6px 12px', whiteSpace: 'nowrap' }}>Удал.</button>
                 </div>
               </div>
             );
           })}
-          {totalPages > 1 && pagedSpecs.length < perPage && (
-            <div style={{ height: `${(perPage - pagedSpecs.length) * rowH}px` }} />
-          )}
         </div>
       )}
 
-      <LabPagination page={pageSafe} totalPages={totalPages} onPage={setPage} />
+      <LabPagination page={pageSafe} totalPages={totalPages} onPage={setPage} reserveSpace style={{ height: 56 }} />
 
       {/* Модалка создания/редактирования */}
       {editing && (

@@ -6,6 +6,7 @@ import { Store, RefreshCw, Pencil, Plus, RotateCcw, Trash2, X, Webhook } from 'l
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import type { ListingTemplate } from '@/lib/avitoListingTemplates';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
+import { appConfirm } from '../components/appDialog';
 import { ListingCard, type MarketplaceListing } from './ListingCard';
 
 type TemplateForm = {
@@ -273,10 +274,16 @@ function MarketplacePageInner() {
 
   const removeTemplate = async (t: ListingTemplate) => {
     const userOwned = isUserTemplate(t);
-    const ok = confirm(
+    const ok = await appConfirm(
       userOwned
         ? `Удалить шаблон «${t.title}» безвозвратно?`
         : `Сбросить «${t.title}» к значениям из прайса?`,
+      {
+        title: userOwned ? 'Удаление' : 'Сброс шаблона',
+        okLabel: userOwned ? 'Удалить' : 'Сбросить',
+        cancelLabel: 'Отмена',
+        variant: userOwned ? 'danger' : 'warning',
+      },
     );
     if (!ok) return;
 

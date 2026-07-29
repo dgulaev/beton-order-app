@@ -89,9 +89,12 @@ export function calculateDeliveryCost(params: {
   address?: string | null;
   /** Координаты адреса доставки (геокодирование) — нужны только для доставки за городом. */
   coords?: Coords | null;
+  /** Точка погрузки (Фаза 5). Если нет — считаем от своего БСУ. */
+  originCoords?: Coords | null;
   settings?: DeliverySettings;
 }): DeliveryCostResult {
   const { volume, address, coords } = params;
+  const origin = params.originCoords || ROUTE_ORIGIN_COORDS;
   const s = params.settings ?? DEFAULT_DELIVERY_SETTINGS;
 
   if (!volume || volume <= 0) {
@@ -115,7 +118,7 @@ export function calculateDeliveryCost(params: {
       };
     }
 
-    const distanceKm = haversineKm(ROUTE_ORIGIN_COORDS, coords) * (s.road_curvature_coefficient || 1);
+    const distanceKm = haversineKm(origin, coords) * (s.road_curvature_coefficient || 1);
     const oneWayCost = distanceKm * s.price_per_km;
     const deliveryCost = Math.round(oneWayCost * tripsCount);
     const tripsLabel = tripsCount > 1 ? `${tripsCount} рейса` : '1 рейс';

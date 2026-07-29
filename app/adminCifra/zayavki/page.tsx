@@ -16,6 +16,7 @@ import {
   densitiesFromLabSettings,
   type AdditiveDensities,
 } from '@/lib/recipeAdditives';
+import { isOrderGradeRecipe } from '@/app/adminCifra/recipes/productCatalog';
 import { formatPhoneDisplay, formatPhoneInput } from '@/lib/phone';
 import {
   CARD_BORDER,
@@ -28,7 +29,7 @@ import {
 } from '../cardStyles';
 import ModalDateInput from '@/app/adminCifra/components/ModalDateInput';
 import ModalTimeInput from '@/app/adminCifra/components/ModalTimeInput';
-import { appConfirm } from '@/app/adminCifra/components/appDialog';
+import { appConfirm, appPrompt } from '@/app/adminCifra/components/appDialog';
 import ModalSelect from '@/app/adminCifra/components/ModalSelect';
 import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
 import { InstantFieldHint, VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
@@ -36,6 +37,9 @@ import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatRuDateWithWeekday, formatTimeHHMM, pluralWord } from '@/lib/ruLocale';
 import OrderCommentsPanel, { CommentUnreadBadge, orderModalTabStyle } from '@/app/adminCifra/components/OrderCommentsPanel';
 import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts';
+import FleetOpsTabs from '@/app/adminCifra/components/FleetOpsTabs';
+import type { VehicleKind } from '@/lib/fleetCatalog';
+import { orderMatchesFleetTab } from '@/lib/orderLogistics';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
@@ -703,6 +707,7 @@ export default function ZayavkiPage() {
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const { yandexHref: yandexRouteHref, googleHref: googleRouteHref, twoGisHref: twoGisRouteHref } = useMapRouteLinks(selectedOrder?.address);
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [fleetTab, setFleetTab] = useState<VehicleKind>('mixer');
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'new' | 'processing' | 'completed' | 'cancelled'>('all');
@@ -986,16 +991,26 @@ useEffect(() => {
   };
 
   // ==================== РЕДАКТИРОВАНИЕ ЗАЯВКИ ====================
-  const handleEditOrder = (order: any) => {
+  const handleEditOrder = async (order: any) => {
     if (order.status === 'completed') {
       alert('Заявка в статусе «Выполнена» — объём менять нельзя. Верните в работу и добавьте рейс.');
       return;
     }
 
-    const newAddress = prompt('Новый адрес:', order.address);
+    const newAddress = await appPrompt('Новый адрес:', {
+      title: 'Адрес доставки',
+      defaultValue: String(order.address ?? ''),
+      okLabel: 'Далее',
+    });
     if (newAddress === null) return;
 
-    const newVolume = prompt('Новый объём (м³):', order.volume);
+    const newVolume = await appPrompt('Новый объём (м³):', {
+      title: 'Объём',
+      defaultValue: String(order.volume ?? ''),
+      inputMode: 'decimal',
+      unit: 'м³',
+      okLabel: 'Сохранить',
+    });
     if (newVolume === null) return;
 
     const updatedOrder = {
@@ -1126,6 +1141,9 @@ ${order.customer_type?.includes('Юридическое')
       phone: order.phone,
       inn: order.inn || '',
       comment: order.comment || '',
+      order_type: order.order_type || 'concrete',
+      fleet_vehicle_kind: order.fleet_vehicle_kind || null,
+      loading_point_id: order.loading_point_id ?? null,
       lead_id: leadLink.lead_id,
       lead_source: leadLink.lead_source,
       external_ref: leadLink.external_ref,
@@ -1261,6 +1279,7 @@ ${order.customer_type?.includes('Юридическое')
 
       return orderDateStr === selectedStr;
     })
+    .filter((o: Order) => orderMatchesFleetTab(o as any, fleetTab))
     .sort((a, b) => (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00'));
 
     // Заявки на день
@@ -1477,14 +1496,15 @@ ${order.customer_type?.includes('Юридическое')
           (order.grade || '').toLowerCase().includes(q) ||
           (order.address || '').toLowerCase().includes(q);
         const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
-        return matchesSearch && matchesStatus;
+        const matchesFleet = orderMatchesFleetTab(order, fleetTab);
+        return matchesSearch && matchesStatus && matchesFleet;
       })
       .sort((a: any, b: any) => {
         const dc = String(b.delivery_date || '').localeCompare(String(a.delivery_date || ''));
         if (dc !== 0) return dc;
         return String(a.delivery_time || '').localeCompare(String(b.delivery_time || ''));
       });
-  }, [searchMode, searchQuery, allOrders, statusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [searchMode, searchQuery, allOrders, statusFilter, fleetTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const listOrderIds = useMemo(
     () => (searchMode ? searchResults : filteredOrders).map((o) => o.id),
@@ -1510,8 +1530,8 @@ ${order.customer_type?.includes('Юридическое')
         const res = await fetch('/api/adminCifra/recipes');
         if (res.ok) {
           const data = await res.json();
-         // console.log('✅ Загружено рецептов из adminCifra:', data.length, data);
-          setRecipes(data);
+          // В заявках — только бетон/раствор/ЦПС (без щебня/песка и ФБС).
+          setRecipes((Array.isArray(data) ? data : []).filter(isOrderGradeRecipe));
         } else {
           console.error('❌ Ошибка загрузки рецептов, статус:', res.status);
         }
@@ -1580,16 +1600,7 @@ ${order.customer_type?.includes('Юридическое')
     return Math.min(planVol, unloaded);
   };
 
-  const findRecipeForOrder = (gradeRaw: string) => {
-    const grade = String(gradeRaw || '').trim();
-    if (!grade) return null;
-    let recipe = recipes.find((r: any) => r.code === grade);
-    if (!recipe) recipe = recipes.find((r: any) => r.code === grade.replace(/и$/, ''));
-    if (!recipe) recipe = recipes.find((r: any) => r.name?.includes(grade));
-    if (!recipe) recipe = recipes.find((r: any) => grade.includes(r.code));
-    if (!recipe) recipe = recipes.find((r: any) => r.name?.toLowerCase().includes(grade.toLowerCase()));
-    return recipe || null;
-  };
+  const findRecipeForOrder = (gradeRaw: string) => findRecipeByGrade(recipes, gradeRaw);
 
   const calculateCementNeeded = (mode: 'plan' | 'unloaded') => {
     let totalKg = 0;
@@ -2244,6 +2255,8 @@ ${order.customer_type?.includes('Юридическое')
 
         {/* ==================== ПРАВАЯ КОЛОНКА — ОСНОВНОЙ СПИСОК ==================== */}
 <div style={{ flex: 1, minHeight: 0, height: '100%', boxSizing: 'border-box', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+
+  <FleetOpsTabs value={fleetTab} onChange={setFleetTab} />
 
   {/* Заголовок + поиск + кнопки — всё в одну строку */}
   <div style={{ marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, flexWrap: 'wrap' }}>

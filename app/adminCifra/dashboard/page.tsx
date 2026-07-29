@@ -23,6 +23,9 @@ import WeatherKpiCard from '../components/WeatherKpiCard';
 import { appAlert, appConfirm } from '../components/appDialog';
 import { CommentUnreadBadge } from '../components/OrderCommentsPanel';
 import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts';
+import FleetOpsTabs from '../components/FleetOpsTabs';
+import type { VehicleKind } from '@/lib/fleetCatalog';
+import { fleetInWorkLabel, orderMatchesFleetTab } from '@/lib/orderLogistics';
 
 export default function AdminCifraDashboard() {
 
@@ -35,6 +38,16 @@ export default function AdminCifraDashboard() {
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [fleetTab, setFleetTab] = useState<VehicleKind>('mixer');
+  const [dashboardNarrow, setDashboardNarrow] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(max-width: 1100px)');
+    const update = () => setDashboardNarrow(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
   const MINUTES_PER_CUBIC_METER = 1;
 
   // ==================== 2. СТАТУСЫ ЗАКАЗОВ (глобальная функция) ====================
@@ -414,6 +427,7 @@ const todayOrders = allOrders
 
     return orderDateStr === selectedDateStr;
   })
+  .filter((o: Order) => orderMatchesFleetTab(o as any, fleetTab))
   .sort((a: Order, b: Order) => 
     (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00')
   );
@@ -1103,16 +1117,19 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
         {/* ==================== 32. ОСНОВНОЙ GRID ==================== */}
         <div style={{ 
           display: 'grid',
-          // Чуть ближе к таймлайну (gap↓) и шире колонка; maxWidth карточки = max трека.
-          gridTemplateColumns: 'minmax(0, 1fr) minmax(340px, 520px)', 
-          gridTemplateRows: 'minmax(0, 1fr)',
-          gap: '24px',
+          // На узких экранах — одна колонка (KPI сверху, таймлайн ниже), иначе KPI | таймлайн.
+          gridTemplateColumns: dashboardNarrow
+            ? '1fr'
+            : 'minmax(0, 1fr) minmax(340px, 520px)',
+          gridTemplateRows: dashboardNarrow ? 'auto minmax(0, 1fr)' : 'minmax(0, 1fr)',
+          gap: dashboardNarrow ? '16px' : '24px',
           maxWidth: '100%', 
           width: '100%', 
           flex: 1,
           margin: '0 auto',
           alignItems: 'stretch',
-          minHeight: 0
+          minHeight: 0,
+          overflow: dashboardNarrow ? 'auto' : 'hidden',
         }}>
 
       {/* ==================== 33. ЛЕВАЯ КОЛОНКА ( KPI) ==================== */}
@@ -1489,7 +1506,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
   onMouseLeave={e => { e.currentTarget.style.filter = 'none'; }}
 >
-  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Миксеры в работе</div>
+  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{fleetInWorkLabel(fleetTab)}</div>
   
     <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '2px' }}>
     <span style={{ fontSize: '52px', fontWeight: '700', color: '#60A5FA', lineHeight: 1 }}>
@@ -1543,6 +1560,8 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
             position: 'relative',
           })}>
   
+  <FleetOpsTabs value={fleetTab} onChange={setFleetTab} />
+
   {/* Заголовок + Кнопки */}
   <div style={{ 
     display: 'grid',
@@ -2154,7 +2173,7 @@ const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVo
       color: 'white'
     }}>
       <Truck size={26} color="#E2E8F0" strokeWidth={2} />
-      Миксеры в работе
+      {fleetInWorkLabel(fleetTab)}
     </h3>
 
     {/* Отдельный блок со счётчиком */}

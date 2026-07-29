@@ -2,8 +2,20 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { COLORS, inputStyle, ghostButton, primaryButton, pillStyle, volumeCardSoftStyle, volumeCardStyle } from '../labStyles';
+import {
+  COLORS,
+  inputStyle,
+  ghostButton,
+  primaryButton,
+  pillStyle,
+  volumeCardSoftStyle,
+  volumeCardStyle,
+  CARD_BORDER,
+  CARD_GRADIENT_SOFT,
+  CARD_VOLUME_SOFT,
+} from '../labStyles';
 import PassportModal from './PassportModal';
+import ViewModeToggle, { LIST_GRID_OPTIONS } from '../../components/ViewModeToggle';
 import { appConfirm } from '../../components/appDialog';
 
 // ==================== Дропдаун списка паспортов ====================
@@ -158,7 +170,9 @@ function PassportDropdown({
                 flexShrink: 0,
                 width: '40px',
                 background: 'transparent',
-                border: 'none',
+                borderTop: 'none',
+                borderRight: 'none',
+                borderBottom: 'none',
                 borderLeft: '1px solid #334155',
                 color: COLORS.danger,
                 fontSize: '16px',
@@ -659,8 +673,16 @@ export default function OrdersTab({
             </div>
           </div>
 
-          {/* Поиск + фильтры + вид */}
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+          {/* Вид + поиск + фильтры — одна линия слева */}
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+            <ViewModeToggle
+              value={viewMode}
+              onChange={(v) => {
+                setViewMode(v);
+                setPassportDropdownFor(null);
+              }}
+              options={LIST_GRID_OPTIONS}
+            />
             <input
               placeholder="Поиск по клиенту, №, марке, ИНН..."
               value={search}
@@ -686,14 +708,6 @@ export default function OrdersTab({
                 </button>
               ))}
             </div>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
-              <button onClick={() => { setViewMode('list'); setPassportDropdownFor(null); }} style={{ padding: '8px 14px', background: 'transparent', border: 'none', color: viewMode === 'list' ? '#10B981' : '#64748B', fontSize: '15px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '20px', lineHeight: 1 }}>≡</span> Список
-              </button>
-              <button onClick={() => { setViewMode('grid'); setPassportDropdownFor(null); }} style={{ padding: '8px 14px', background: 'transparent', border: 'none', color: viewMode === 'grid' ? '#10B981' : '#64748B', fontSize: '15px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '18px' }}>▦</span> Плитка
-              </button>
-            </div>
           </div>
 
           {/* Список/плитка заявок дня */}
@@ -717,16 +731,23 @@ export default function OrdersTab({
                   <div
                     key={o.id}
                     className={isNew ? 'lab-new-card' : undefined}
-                    style={volumeCardSoftStyle({
-                      padding: '14px',
+                    style={{
+                      // Только longhand для border — иначе при переключении список↔плитка
+                      // React ругается на конфликт с borderBottom/borderLeft.
+                      background: CARD_GRADIENT_SOFT,
                       borderRadius: 14,
-                      border: isNew ? `1px solid ${COLORS.accent}` : undefined,
                       boxShadow: isNew
-                        ? '0 8px 18px rgba(0,0,0,0.28), 0 2px 6px rgba(0,0,0,0.16), inset 0 1px 0 rgba(255,255,255,0.1), 0 0 0 1px rgba(74,222,128,0.25)'
-                        : undefined,
+                        ? `${CARD_VOLUME_SOFT}, 0 0 0 1px rgba(74,222,128,0.25)`
+                        : CARD_VOLUME_SOFT,
+                      boxSizing: 'border-box',
+                      padding: 14,
                       display: 'flex',
                       flexDirection: 'column',
-                    })}
+                      borderTop: isNew ? `1px solid ${COLORS.accent}` : CARD_BORDER,
+                      borderRight: isNew ? `1px solid ${COLORS.accent}` : CARD_BORDER,
+                      borderBottom: isNew ? `1px solid ${COLORS.accent}` : CARD_BORDER,
+                      borderLeft: isNew ? `1px solid ${COLORS.accent}` : CARD_BORDER,
+                    }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -783,8 +804,8 @@ export default function OrdersTab({
               })}
             </div>
           ) : (
-            <div style={volumeCardStyle({ borderRadius: 16, overflow: 'hidden', padding: 0 })}>
-              {dayOrders.map((o, idx) => {
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {dayOrders.map((o) => {
                 const isNew = newOrderIds.has(String(o.id));
                 const passports = passportsByOrder.get(String(o.id)) || [];
                 const pCount = passports.length;
@@ -792,18 +813,27 @@ export default function OrdersTab({
                 const client = o.organization_name || o.full_name || 'Без названия';
                 const tests = testSummary?.get(String(o.id));
                 const oid = String(o.id);
+                const edge = isNew ? COLORS.accent : 'rgba(148, 163, 184, 0.28)';
                 return (
                   <div
                     key={o.id}
+                    className={isNew ? 'lab-new-card' : undefined}
                     style={{
                       display: 'grid',
                       gridTemplateColumns: '58px minmax(0, 1fr) 78px 112px 168px',
                       alignItems: 'center',
-                      columnGap: '12px',
-                      padding: '11px 18px',
-                      borderBottom: idx < dayOrders.length - 1 ? `1px solid ${COLORS.border}` : 'none',
-                      borderLeft: isNew ? `3px solid ${COLORS.accent}` : '3px solid transparent',
-                      background: isNew ? 'rgba(74,222,128,0.06)' : 'transparent',
+                      columnGap: 12,
+                      padding: '12px 16px',
+                      background: isNew ? 'rgba(74,222,128,0.08)' : CARD_GRADIENT_SOFT,
+                      borderRadius: 12,
+                      boxShadow: isNew
+                        ? `${CARD_VOLUME_SOFT}, 0 0 0 1px rgba(74,222,128,0.25)`
+                        : CARD_VOLUME_SOFT,
+                      boxSizing: 'border-box',
+                      borderTop: `1px solid ${edge}`,
+                      borderRight: `1px solid ${edge}`,
+                      borderBottom: `1px solid ${edge}`,
+                      borderLeft: isNew ? `3px solid ${COLORS.accent}` : `1px solid ${edge}`,
                     }}
                   >
                     <div style={{ fontWeight: 700, fontSize: '14px', whiteSpace: 'nowrap' }}>{fmtTime(o.delivery_time) || '—'}</div>

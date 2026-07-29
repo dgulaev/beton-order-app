@@ -9,7 +9,7 @@ import ModalSelect from '../components/ModalSelect';
 import ModalDateInput from '../components/ModalDateInput';
 import ModalTimeInput from '../components/ModalTimeInput';
 import { nowTimeHHMM } from '../components/modalPickerShared';
-import { appConfirm } from '../components/appDialog';
+import { appConfirm, appPrompt } from '../components/appDialog';
 
 const inputStyle: React.CSSProperties = modalFieldStyle({
   marginBottom: '16px',
@@ -488,8 +488,13 @@ const showVisualNotification = (type: string, data: any) => {
                           </button>
                         )}
                         <button
-                          onClick={() => {
-                            const note = prompt('Что было сделано для выполнения задачи?');
+                          onClick={async () => {
+                            const note = await appPrompt('Что было сделано для выполнения задачи?', {
+                              title: 'Выполнение задачи',
+                              okLabel: 'Готово',
+                              placeholder: 'Кратко опиши результат',
+                            });
+                            if (note === null) return;
                             updateTaskStatus(task.id, 'completed', note || '');
                           }}
                           style={{ padding: '8px 16px', background: '#10B981', color: 'white', border: 'none', borderRadius: '9999px', fontWeight: '600', fontSize: '13.5px', whiteSpace: 'nowrap', cursor: 'pointer' }}

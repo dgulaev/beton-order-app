@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useState, type CSSProperties, type RefObject } from 'react';
 import AdminPagination from '../components/AdminPagination';
 
 // Высота (visual) для пагинации снизу + небольшой отступ от края экрана.
@@ -14,7 +14,13 @@ const BOTTOM_RESERVE = 84;
 // (offsetHeight), чтобы её можно было задать в style.
 export function useAutoRows(
   ref: RefObject<HTMLElement | null>,
-  { minRows = 4, reserveBottom = BOTTOM_RESERVE, deps = [] as any[] }: { minRows?: number; reserveBottom?: number; deps?: any[] } = {}
+  {
+    minRows = 4,
+    reserveBottom = BOTTOM_RESERVE,
+    /** Visual gap между строками (flex gap / margin) — учитываем в perPage. */
+    rowGap = 0,
+    deps = [] as any[],
+  }: { minRows?: number; reserveBottom?: number; rowGap?: number; deps?: any[] } = {}
 ): { perPage: number; rowH: number } {
   const [state, setState] = useState<{ perPage: number; rowH: number }>({ perPage: 10, rowH: 56 });
   useEffect(() => {
@@ -26,10 +32,13 @@ export function useAutoRows(
       const rowHVis = rowEl ? rowEl.getBoundingClientRect().height : 49;
       if (rowHVis <= 0) return;
       const headVis = headEl ? headEl.getBoundingClientRect().height : 0;
+      // Зазор после шапки тоже съедает высоту (gap между head и первой строкой).
+      const headGap = headEl && rowGap > 0 ? rowGap : 0;
       const rowHLayout = rowEl ? rowEl.offsetHeight : 49;
       const top = el.getBoundingClientRect().top;
       const avail = window.innerHeight - top - reserveBottom;
-      const n = Math.max(minRows, Math.floor((avail - headVis) / rowHVis));
+      const step = rowHVis + rowGap;
+      const n = Math.max(minRows, Math.floor((avail - headVis - headGap + rowGap) / step));
       setState((prev) => (prev.perPage === n && prev.rowH === rowHLayout ? prev : { perPage: n, rowH: rowHLayout }));
     };
     // Несколько отложенных замеров — после появления списка в DOM и после
@@ -48,7 +57,7 @@ export function useAutoRows(
       clearTimeout(t2);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ref, minRows, reserveBottom, ...deps]);
+  }, [ref, minRows, reserveBottom, rowGap, ...deps]);
   return state;
 }
 
@@ -100,17 +109,23 @@ export function LabPagination({
   page,
   totalPages,
   onPage,
+  style,
+  reserveSpace = false,
 }: {
   page: number;
   totalPages: number;
   onPage: (p: number) => void;
+  style?: CSSProperties;
+  /** Держать высоту блока даже при 1 странице — кнопки не прыгают. */
+  reserveSpace?: boolean;
 }) {
   return (
     <AdminPagination
       page={page}
       totalPages={totalPages}
       onPage={onPage}
-      style={{ marginTop: '16px' }}
+      reserveSpace={reserveSpace}
+      style={{ marginTop: '16px', ...style }}
     />
   );
 }

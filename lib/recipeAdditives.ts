@@ -20,11 +20,19 @@ export interface RecipeLike {
   code?: string | null;
   name?: string | null;
   type?: string | null;
+  item_type?: string | null;
   cement?: number | null;
   sand?: number | null;       // кг на 1 м³
   gravel?: number | null;     // щебень, кг на 1 м³
   additive?: number | null;   // Добавка 1 — ПФМ-НЛК, кг на 1 м³
   additive2?: number | null;  // Добавка 2 — Линомикс ТипР, кг на 1 м³
+}
+
+/** Бетон/раствор для заказов и списаний — без щебня/песка, цемента и ФБС. */
+function isOrderGradeRecipeLike(r: RecipeLike): boolean {
+  if (r.item_type === 'aggregate' || r.item_type === 'cement' || r.item_type === 'fbs') return false;
+  if (r.code && String(r.code).startsWith('24-')) return false;
+  return true;
 }
 
 export interface AdditiveDosage {
@@ -106,12 +114,17 @@ export function findRecipeByGrade<T extends RecipeLike>(recipes: T[], grade: str
   if (!trimmed) return null;
   if (isMekaServiceGrade(trimmed)) return null;
 
+  // Исключаем инерты и ФБС — иначе substring-матч по name/code может
+  // подобрать «Песок…» / «Щебень…» вместо бетонной марки.
+  const pool = recipes.filter(isOrderGradeRecipeLike);
+  if (pool.length === 0) return null;
+
   const byExactCode = (code: string) =>
-    recipes.find((r) => String(r.code || '').trim() === code) || null;
+    pool.find((r) => String(r.code || '').trim() === code) || null;
 
   const byCodeKey = (key: string) => {
     if (!key) return null;
-    return recipes.find((r) => recipeCodeKey(r.code) === key) || null;
+    return pool.find((r) => recipeCodeKey(r.code) === key) || null;
   };
 
   const mapped = resolveMekaToRecipeCode(trimmed);
@@ -136,13 +149,13 @@ export function findRecipeByGrade<T extends RecipeLike>(recipes: T[], grade: str
   }
 
   // Самое длинное вхождение кода в марку (ТР М150 раньше М150)
-  const graded = recipes
+  const graded = pool
     .map((r) => ({ r, key: recipeCodeKey(r.code) }))
     .filter(({ key }) => key.length >= 3 && gradeKey.includes(key))
     .sort((a, b) => b.key.length - a.key.length);
   if (graded[0]) return graded[0].r;
 
-  recipe = recipes.find((r) => r.name?.toLowerCase().includes(trimmed.toLowerCase())) || null;
+  recipe = pool.find((r) => r.name?.toLowerCase().includes(trimmed.toLowerCase())) || null;
   return recipe;
 }
 

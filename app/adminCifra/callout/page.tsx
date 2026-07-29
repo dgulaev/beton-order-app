@@ -22,6 +22,7 @@ import {
 import { formatPhoneDisplay, formatPhoneInput, normalizePhone } from '@/lib/phone';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
 import AdminPagination from '../components/AdminPagination';
+import { appConfirm } from '../components/appDialog';
 import styles from './callout.module.css';
 
 type Prospect = {
@@ -419,7 +420,7 @@ export default function CalloutPage() {
     const tenders = tendersByProspect[id] || detail?.tenders || [];
     const tenderCount = tenders.length;
     const leadLinks = tenders.filter((t) => t.lead_id != null).length;
-    const ok = window.confirm(
+    const ok = await appConfirm(
       [
         'Удалить карточку обзвона?',
         '',
@@ -434,6 +435,7 @@ export default function CalloutPage() {
         '',
         'Клиент в разделе «Клиенты» не трогается.',
       ].join('\n'),
+      { title: 'Удаление', okLabel: 'Удалить', cancelLabel: 'Отмена', variant: 'danger' },
     );
     if (!ok) return;
     setBusy(true);
@@ -459,13 +461,14 @@ export default function CalloutPage() {
 
   const deleteBatch = async (batchId: string) => {
     if (
-      !window.confirm(
+      !(await appConfirm(
         `Удалить импорт Excel «${batchId}»?\n\n` +
           `Останутся:\n` +
           `• карточки обзвона (контакты, статусы, комментарии)\n` +
           `• ссылки на торги ЕИС у этих карточек\n\n` +
           `Удалится только список «Без победителя» из этого файла.`,
-      )
+        { title: 'Удаление импорта', okLabel: 'Удалить', cancelLabel: 'Отмена', variant: 'danger' },
+      ))
     ) {
       return;
     }

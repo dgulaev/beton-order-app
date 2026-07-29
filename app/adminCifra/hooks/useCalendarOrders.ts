@@ -23,6 +23,9 @@ export interface Order {
   delivery_cost?: number;
   created_at?: string;
   referred_by?: number;
+  order_type?: 'concrete' | 'bulk' | string | null;
+  fleet_vehicle_kind?: string | null;
+  loading_point_id?: number | null;
 }
 
 export function useCalendarOrders(year: number, month: number) {

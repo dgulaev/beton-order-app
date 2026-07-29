@@ -26,8 +26,9 @@ const memoryCache = new Map<string, RouteGeometry | null>();
 const inFlight = new Map<string, Promise<RouteGeometry | null>>();
 const SESSION_CACHE_PREFIX = 'osrmRoute:';
 
-function cacheKey(dest: Coords): string {
-  return `${dest.lat.toFixed(5)},${dest.lon.toFixed(5)}`;
+function cacheKey(dest: Coords, origin?: Coords | null): string {
+  const o = origin || ROUTE_ORIGIN_COORDS;
+  return `${o.lat.toFixed(5)},${o.lon.toFixed(5)}>${dest.lat.toFixed(5)},${dest.lon.toFixed(5)}`;
 }
 
 function readSessionCache(key: string): RouteGeometry | null | undefined {
@@ -50,9 +51,10 @@ function writeSessionCache(key: string, value: RouteGeometry) {
   }
 }
 
-async function fetchRouteGeometry(dest: Coords): Promise<RouteGeometry | null> {
+async function fetchRouteGeometry(dest: Coords, origin?: Coords | null): Promise<RouteGeometry | null> {
   try {
-    const url = `https://router.project-osrm.org/route/v1/driving/${ROUTE_ORIGIN_COORDS.lon},${ROUTE_ORIGIN_COORDS.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson`;
+    const o = origin || ROUTE_ORIGIN_COORDS;
+    const url = `https://router.project-osrm.org/route/v1/driving/${o.lon},${o.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), OSRM_TIMEOUT_MS);
     const res = await fetch(url, { signal: controller.signal });
@@ -71,8 +73,8 @@ async function fetchRouteGeometry(dest: Coords): Promise<RouteGeometry | null> {
   }
 }
 
-async function getRouteGeometryCached(dest: Coords): Promise<RouteGeometry | null> {
-  const key = cacheKey(dest);
+async function getRouteGeometryCached(dest: Coords, origin?: Coords | null): Promise<RouteGeometry | null> {
+  const key = cacheKey(dest, origin);
   if (memoryCache.has(key)) return memoryCache.get(key) ?? null;
 
   const fromSession = readSessionCache(key);
@@ -83,7 +85,7 @@ async function getRouteGeometryCached(dest: Coords): Promise<RouteGeometry | nul
 
   let promise = inFlight.get(key);
   if (!promise) {
-    promise = fetchRouteGeometry(dest).finally(() => inFlight.delete(key));
+    promise = fetchRouteGeometry(dest, origin).finally(() => inFlight.delete(key));
     inFlight.set(key, promise);
   }
 
@@ -96,11 +98,10 @@ async function getRouteGeometryCached(dest: Coords): Promise<RouteGeometry | nul
 }
 
 /**
- * Хук, отдающий геометрию маршрута завод → адрес доставки (массив точек для
- * L.Polyline). null — пока не загрузилось или если построить не удалось
- * (в этом случае превью-карта просто показывает маркеры без линии).
+ * Хук, отдающий геометрию маршрута точка погрузки → адрес доставки.
+ * origin — координаты точки погрузки (Фаза 5); по умолчанию свой БСУ.
  */
-export function useRouteGeometry(dest: Coords | null): RouteGeometry | null {
+export function useRouteGeometry(dest: Coords | null, origin?: Coords | null): RouteGeometry | null {
   const [geometry, setGeometry] = useState<RouteGeometry | null>(null);
 
   useEffect(() => {
@@ -112,14 +113,14 @@ export function useRouteGeometry(dest: Coords | null): RouteGeometry | null {
     let cancelled = false;
     setGeometry(null);
 
-    getRouteGeometryCached(dest).then((result) => {
+    getRouteGeometryCached(dest, origin).then((result) => {
       if (!cancelled) setGeometry(result);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [dest?.lat, dest?.lon]);
+  }, [dest?.lat, dest?.lon, origin?.lat, origin?.lon]);
 
   return geometry;
 }

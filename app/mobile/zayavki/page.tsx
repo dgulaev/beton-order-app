@@ -13,6 +13,8 @@ import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
+import { findRecipeByGrade } from '@/lib/recipeAdditives';
+import { isOrderGradeRecipe } from '@/app/adminCifra/recipes/productCatalog';
 
 export default function MobileZayavkiPage() {
 const { user } = useUserRole();   // ← Берём роль из провайдера
@@ -45,7 +47,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   useEffect(() => {
     fetch('/api/adminCifra/recipes')
       .then((res) => (res.ok ? res.json() : []))
-      .then((data) => setRecipes(data))
+      .then((data) => setRecipes((Array.isArray(data) ? data : []).filter(isOrderGradeRecipe)))
       .catch((err) => console.error('Ошибка загрузки рецептов:', err));
   }, []);
 
@@ -193,9 +195,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
       const volume = Number(order.volume || 0);
       if (volume <= 0 || !grade) return;
 
-      let recipe = recipes.find((r: any) => r.code === grade);
-      if (!recipe) recipe = recipes.find((r: any) => r.code === grade.replace(/и$/, ''));
-      if (!recipe) recipe = recipes.find((r: any) => grade.includes(r.code));
+      const recipe = findRecipeByGrade(recipes, grade);
 
       if (recipe && recipe.cement) {
         totalKg += volume * Number(recipe.cement);

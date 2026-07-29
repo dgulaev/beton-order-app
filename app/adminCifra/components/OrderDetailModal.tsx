@@ -13,6 +13,8 @@ import { CARD_BORDER, modalFieldStyle, volumeCardSoftStyle, volumeModalStyle } f
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
 import OrderCommentsPanel, { CommentUnreadBadge, orderModalTabStyle } from './OrderCommentsPanel';
+import { bulkVolumeUnitLabel } from '@/lib/orderLogistics';
+import BulkShipmentBlock from './BulkShipmentBlock';
 
 interface OrderDetailModalProps {
   order: Order | null;
@@ -672,7 +674,12 @@ const formatVolume = (value: number | string) => {
                 <div style={{ fontWeight: '600', color: '#60A5FA' }}>{order.grade}</div>
 
                 <div style={{ color: '#94A3B8' }}>Объём</div>
-                <div style={{ fontSize: '20px', fontWeight: '700', color: '#10B981' }}>{order.volume} м³</div>
+                <div style={{ fontSize: '20px', fontWeight: '700', color: '#10B981' }}>
+                  {order.volume}{' '}
+                  {(order as any).order_type === 'bulk'
+                    ? bulkVolumeUnitLabel((order as any).fleet_vehicle_kind)
+                    : 'м³'}
+                </div>
 
                 <div style={{ color: '#94A3B8' }}>Дата и время</div>
                 <div>{order.delivery_date} • {formatTimeHHMM(order.delivery_time)}</div>
@@ -767,6 +774,26 @@ const formatVolume = (value: number | string) => {
 
               return (
                 <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '18px' })}>
+                  {(order as any).order_type === 'bulk' && (
+                    <BulkShipmentBlock
+                      orderId={order.id}
+                      orderVolume={orderVolume}
+                      productCode={order.grade}
+                      loadingPointId={(order as any).loading_point_id}
+                      vehicleKind={(order as any).fleet_vehicle_kind}
+                      onChanged={({ orderStatus }) => {
+                        if (!orderStatus) return;
+                        setSelectedOrder((prev) =>
+                          prev && prev.id === order.id ? { ...prev, status: orderStatus as any } : prev,
+                        );
+                        setAllOrders((prev) =>
+                          prev.map((o) =>
+                            o.id === order.id ? { ...o, status: orderStatus as any } : o,
+                          ),
+                        );
+                      }}
+                    />
+                  )}
                   {/* Сумма по миксерам */}
 <div style={volumeCardSoftStyle({
   borderRadius: 12,
@@ -774,14 +801,19 @@ const formatVolume = (value: number | string) => {
   textAlign: 'center',
   marginBottom: '14px',
 })}>
-  <div style={{ color: '#94A3B8', fontSize: '13px' }}>Назначено бетона</div>
+  <div style={{ color: '#94A3B8', fontSize: '13px' }}>
+    {(order as any).order_type === 'bulk' ? 'Назначено на технику' : 'Назначено бетона'}
+  </div>
   <div style={{ fontSize: '25px', fontWeight: '700', color: '#10B981', margin: '4px 0' }}>
-    {formatVolume(assignedVolume)} / {formatVolume(orderVolume)} м³
+    {formatVolume(assignedVolume)} / {formatVolume(orderVolume)}{' '}
+    {(order as any).order_type === 'bulk'
+      ? bulkVolumeUnitLabel((order as any).fleet_vehicle_kind)
+      : 'м³'}
   </div>
   <div style={{ fontSize: '13px', color: isFullyReady ? '#10B981' : '#F59E0B' }}>
     {isFullyReady 
       ? '✅ Полностью укомплектовано' 
-      : `Осталось ${formatVolume(orderVolume - assignedVolume)} м³`
+      : `Осталось ${formatVolume(orderVolume - assignedVolume)} ${(order as any).order_type === 'bulk' ? bulkVolumeUnitLabel((order as any).fleet_vehicle_kind) : 'м³'}`
     }
   </div>
 

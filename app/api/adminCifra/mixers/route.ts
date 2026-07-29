@@ -2,21 +2,58 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { isVehicleKind, type VehicleKind } from '@/lib/fleetCatalog';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// GET — получение всех миксеров вместе с доп. водителями
-export async function GET() {
+// GET — техника.
+// По умолчанию только миксеры (бетонный контур: заявки, mobile, водитель).
+// ?kind=dump_truck|… — один вид; ?kind=all — весь парк для страницы «Техника».
+export async function GET(request: NextRequest) {
   try {
-    const { data, error } = await supabase
+    const kindParam = request.nextUrl.searchParams.get('kind');
+
+    let query = supabase
       .from('mixers')
       .select('*, mixer_drivers(id, driver_name, phone)')
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (!kindParam || kindParam === 'mixer') {
+      // Без колонки vehicle_kind (до миграции) .eq упадёт — тогда отдаём всё как миксеры.
+      query = query.eq('vehicle_kind', 'mixer');
+    } else if (kindParam === 'all') {
+      // без фильтра
+    } else if (isVehicleKind(kindParam)) {
+      query = query.eq('vehicle_kind', kindParam);
+    } else {
+      return NextResponse.json({ error: 'Неизвестный kind' }, { status: 400 });
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      // Колонки ещё нет — fallback на старое поведение.
+      if (/vehicle_kind|specs/i.test(error.message)) {
+        const legacy = await supabase
+          .from('mixers')
+          .select('*, mixer_drivers(id, driver_name, phone)')
+          .order('created_at', { ascending: false });
+        if (legacy.error) throw legacy.error;
+        const rows = (legacy.data || []).map((r: any) => ({
+          ...r,
+          vehicle_kind: r.vehicle_kind || 'mixer',
+          specs: r.specs || {},
+        }));
+        if (kindParam && kindParam !== 'all' && kindParam !== 'mixer') {
+          return NextResponse.json([]);
+        }
+        return NextResponse.json(rows);
+      }
+      throw error;
+    }
 
     return NextResponse.json(data || []);
   } catch (error: any) {
@@ -25,62 +62,150 @@ export async function GET() {
   }
 }
 
-// POST — добавление / обновление миксера
+// POST — добавление / обновление единицы техники
 export async function POST(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request, ['admin']);
   if (auth.error) return auth.error;
 
   try {
     const body = await request.json();
-    const { id, number, model, driver, phone, volume, type, status, unload_allowance_min } = body;
+    const {
+      id,
+      number,
+      model,
+      driver,
+      phone,
+      volume,
+      type,
+      status,
+      unload_allowance_min,
+      vehicle_kind: rawKind,
+      specs: rawSpecs,
+    } = body;
+
+    const vehicle_kind: VehicleKind = isVehicleKind(rawKind) ? rawKind : 'mixer';
+    const specs =
+      rawSpecs && typeof rawSpecs === 'object' && !Array.isArray(rawSpecs) ? rawSpecs : {};
 
     if (!number || !driver) {
       return NextResponse.json({ error: 'Номер и водитель обязательны' }, { status: 400 });
     }
 
     if (!phone || !String(phone).trim()) {
-      return NextResponse.json({ error: 'Телефон водителя обязателен — по нему водитель входит в мобильное приложение' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Телефон водителя обязателен — по нему водитель входит в мобильное приложение' },
+        { status: 400 }
+      );
     }
 
-    // Норма простоя из БД имеет смысл только для наёмных миксеров — для своих
-    // используется фиксированная константа 50 мин из кода (см. lib/orderMixers.ts).
-    if (type === 'rented' && (unload_allowance_min === undefined || unload_allowance_min === null || unload_allowance_min === '')) {
-      return NextResponse.json({ error: 'Для наёмного миксера укажите норму разгрузки в минутах' }, { status: 400 });
+    if (type !== 'own' && type !== 'rented') {
+      return NextResponse.json({ error: 'Укажите свою или наёмную технику' }, { status: 400 });
     }
-    const normalizedAllowance = type === 'rented' ? Number(unload_allowance_min) : null;
-    if (type === 'rented' && (!Number.isFinite(normalizedAllowance) || normalizedAllowance! <= 0)) {
-      return NextResponse.json({ error: 'Норма разгрузки для наёмного миксера должна быть больше 0' }, { status: 400 });
+
+    // Норма простоя — только для наёмных миксеров.
+    if (
+      vehicle_kind === 'mixer' &&
+      type === 'rented' &&
+      (unload_allowance_min === undefined || unload_allowance_min === null || unload_allowance_min === '')
+    ) {
+      return NextResponse.json(
+        { error: 'Для наёмного миксера укажите норму разгрузки в минутах' },
+        { status: 400 }
+      );
     }
+    const normalizedAllowance =
+      vehicle_kind === 'mixer' && type === 'rented' ? Number(unload_allowance_min) : null;
+    if (
+      vehicle_kind === 'mixer' &&
+      type === 'rented' &&
+      (!Number.isFinite(normalizedAllowance) || normalizedAllowance! <= 0)
+    ) {
+      return NextResponse.json(
+        { error: 'Норма разгрузки для наёмного миксера должна быть больше 0' },
+        { status: 400 }
+      );
+    }
+
+    const payload = {
+      number,
+      model: model || '',
+      driver,
+      phone,
+      volume: Number(volume) || 0,
+      type,
+      status: status || 'Доступен',
+      unload_allowance_min: normalizedAllowance,
+      vehicle_kind,
+      specs,
+      updated_at: new Date().toISOString(),
+    };
 
     if (id) {
-      // Обновление существующего
       const { data, error } = await supabase
         .from('mixers')
-        .update({ number, model, driver, phone, volume, type, status, unload_allowance_min: normalizedAllowance, updated_at: new Date().toISOString() })
+        .update(payload)
         .eq('id', id)
         .select()
         .single();
 
-      if (error) throw error;
-      return NextResponse.json({ success: true, data });
-    } else {
-      // Создание нового
-      const { data, error } = await supabase
-        .from('mixers')
-        .insert([{ number, model, driver, phone, volume, type, status, unload_allowance_min: normalizedAllowance }])
-        .select()
-        .single();
-
-      if (error) throw error;
+      if (error) {
+        if (/vehicle_kind|specs/i.test(error.message)) {
+          const { vehicle_kind: _vk, specs: _sp, ...legacyPayload } = payload;
+          void _vk;
+          void _sp;
+          const { data: d2, error: e2 } = await supabase
+            .from('mixers')
+            .update(legacyPayload)
+            .eq('id', id)
+            .select()
+            .single();
+          if (e2) throw e2;
+          return NextResponse.json({
+            success: true,
+            data: d2,
+            warning: 'Выполните scripts/fleet-vehicle-kind.sql — колонки vehicle_kind/specs ещё не в БД',
+          });
+        }
+        throw error;
+      }
       return NextResponse.json({ success: true, data });
     }
+
+    const { updated_at: _ua, ...insertPayload } = payload;
+    void _ua;
+    const { data, error } = await supabase
+      .from('mixers')
+      .insert([insertPayload])
+      .select()
+      .single();
+
+    if (error) {
+      if (/vehicle_kind|specs/i.test(error.message)) {
+        const { vehicle_kind: _vk, specs: _sp, ...legacyPayload } = insertPayload;
+        void _vk;
+        void _sp;
+        const { data: d2, error: e2 } = await supabase
+          .from('mixers')
+          .insert([legacyPayload])
+          .select()
+          .single();
+        if (e2) throw e2;
+        return NextResponse.json({
+          success: true,
+          data: d2,
+          warning: 'Выполните scripts/fleet-vehicle-kind.sql — колонки vehicle_kind/specs ещё не в БД',
+        });
+      }
+      throw error;
+    }
+    return NextResponse.json({ success: true, data });
   } catch (error: any) {
     console.error('Mixers POST error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
-// DELETE — удаление миксера (?id=)
+// DELETE — удаление (?id=)
 export async function DELETE(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request, ['admin']);
   if (auth.error) return auth.error;

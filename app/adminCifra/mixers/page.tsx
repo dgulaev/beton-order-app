@@ -9,8 +9,32 @@ import { Truck } from 'lucide-react';
 import { modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import { appConfirm } from '../components/appDialog';
 import AdminPagination from '../components/AdminPagination';
+import ViewModeToggle, { LIST_GRID_OPTIONS } from '../components/ViewModeToggle';
+import ModalSelect from '../components/ModalSelect';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { pluralWord } from '@/lib/ruLocale';
+import {
+  VEHICLE_KINDS,
+  MODEL_TEMPLATES,
+  applyModelTemplate,
+  formatSpecsSummary,
+  vehicleKindMeta,
+  visibleSpecFields,
+  type VehicleKind,
+  type Ownership,
+} from '@/lib/fleetCatalog';
+
+function kindPlural(kind: VehicleKind, n: number): string {
+  const forms: Record<VehicleKind, [string, string, string]> = {
+    mixer: ['миксер', 'миксера', 'миксеров'],
+    dump_truck: ['самосвал', 'самосвала', 'самосвалов'],
+    tonar: ['тоннар', 'тоннара', 'тоннаров'],
+    cement_truck: ['цементовоз', 'цементовоза', 'цементовозов'],
+    special: ['единица', 'единицы', 'единиц'],
+  };
+  const [one, few, many] = forms[kind];
+  return pluralWord(n, one, few, many);
+}
 
 interface MixerDriver {
   id: number;
@@ -18,31 +42,38 @@ interface MixerDriver {
   phone: string;
 }
 
-interface Mixer {
+interface FleetUnit {
   id: number;
   number: string;
   model: string;
   driver: string;
   phone: string;
   volume: number;
-  type: 'own' | 'rented';
+  type: Ownership;
   status: string;
   location?: string;
   created_at?: string;
   unload_allowance_min?: number | null;
+  vehicle_kind?: VehicleKind;
+  specs?: Record<string, any>;
   mixer_drivers?: MixerDriver[];
 }
+
+type PageTab = VehicleKind | 'delivery';
 
 export default function MixersPage() {
   const { isAdmin } = useUserRole();
 
-  // ==================== ВКЛАДКИ: «Миксеры» / «Тарифы доставки» (только admin) ====================
-  const [activeTab, setActiveTab] = useState<'mixers' | 'delivery'>('mixers');
+  // Вкладки видов техники + «Тарифы доставки» (admin)
+  const [activeTab, setActiveTab] = useState<PageTab>('mixer');
   useEffect(() => {
-    if (activeTab === 'delivery' && !isAdmin) setActiveTab('mixers');
+    if (activeTab === 'delivery' && !isAdmin) setActiveTab('mixer');
   }, [activeTab, isAdmin]);
 
-  const [mixers, setMixers] = useState<Mixer[]>([]);
+  const vehicleKind: VehicleKind = activeTab === 'delivery' ? 'mixer' : activeTab;
+  const kindMeta = vehicleKindMeta(vehicleKind);
+
+  const [mixers, setMixers] = useState<FleetUnit[]>([]);
   const [loading, setLoading] = useState(true);
   // Маппинг: номер миксера → актуальный статус рейса (если рейс есть)
   const [activeTripMap, setActiveTripMap] = useState<Map<string, string>>(new Map());
@@ -50,8 +81,8 @@ export default function MixersPage() {
   const [filter, setFilter] = useState<'all' | 'own' | 'rented'>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showModal, setShowModal] = useState(false);
-  const [editingMixer, setEditingMixer] = useState<Mixer | null>(null);
-  const [historyMixer, setHistoryMixer] = useState<Mixer | null>(null);
+  const [editingMixer, setEditingMixer] = useState<FleetUnit | null>(null);
+  const [historyMixer, setHistoryMixer] = useState<FleetUnit | null>(null);
 
   // Список: число строк под высоту экрана (как в отчётах)
   const mixerListRef = useRef<HTMLDivElement>(null);
@@ -64,9 +95,11 @@ export default function MixersPage() {
     driver: '',
     phone: '',
     volume: 10,
-    type: 'own' as 'own' | 'rented',
+    type: 'own' as Ownership,
     status: 'Доступен',
-    unload_allowance_min: 50 as number | ''
+    unload_allowance_min: 50 as number | '',
+    vehicle_kind: 'mixer' as VehicleKind,
+    specs: {} as Record<string, any>,
   });
 
   // Дополнительные водители миксера
@@ -76,22 +109,23 @@ export default function MixersPage() {
   const [newDriverPhone, setNewDriverPhone]   = useState('');
   const [driverSaving, setDriverSaving]       = useState(false);
 
-  // ==================== ЗАГРУЗКА МИКСЕРОВ ====================
+  // ==================== ЗАГРУЗКА ТЕХНИКИ ====================
   useEffect(() => {
+    if (activeTab === 'delivery') return;
     fetchMixers();
-    fetchActiveTrips();
-  }, []);
+    if (vehicleKind === 'mixer') fetchActiveTrips();
+  }, [activeTab, vehicleKind]);
 
   const fetchMixers = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/adminCifra/mixers');
+      const res = await fetch(`/api/adminCifra/mixers?kind=${vehicleKind}`);
       if (res.ok) {
         const data = await res.json();
-        setMixers(data);
+        setMixers(Array.isArray(data) ? data : []);
       }
     } catch (err) {
-      console.error('Ошибка загрузки миксеров:', err);
+      console.error('Ошибка загрузки техники:', err);
     } finally {
       setLoading(false);
     }
@@ -124,7 +158,7 @@ export default function MixersPage() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [filter, viewMode]);
+  }, [filter, viewMode, vehicleKind]);
 
   // Подгонка числа строк списка под доступную высоту (паттерн отчётов).
   // getComputedStyle — не getBoundingClientRect: layout adminCifra использует transform:scale.
@@ -160,20 +194,21 @@ export default function MixersPage() {
   }, [itemsPerPage, viewMode]);
 
   // ==================== ФУНКЦИИ МОДАЛЬНОГО ОКНА ====================
-  const openEditModal = (mixer: Mixer) => {
-    setEditingMixer(mixer);
+  const openEditModal = (unit: FleetUnit) => {
+    setEditingMixer(unit);
     setFormData({
-      number: mixer.number,
-      model: mixer.model,
-      driver: mixer.driver,
-      phone: mixer.phone,
-      volume: mixer.volume,
-      type: mixer.type,
-      status: mixer.status,
-      unload_allowance_min: mixer.unload_allowance_min ?? 50
+      number: unit.number,
+      model: unit.model || '',
+      driver: unit.driver,
+      phone: unit.phone,
+      volume: unit.volume,
+      type: unit.type,
+      status: unit.status,
+      unload_allowance_min: unit.unload_allowance_min ?? 50,
+      vehicle_kind: unit.vehicle_kind || vehicleKind,
+      specs: unit.specs && typeof unit.specs === 'object' ? { ...unit.specs } : {},
     });
-    // Подгружаем доп. водителей из ответа API (уже приходят в mixer_drivers)
-    setExtraDrivers(mixer.mixer_drivers || []);
+    setExtraDrivers(unit.mixer_drivers || []);
     setShowAddDriver(false);
     setNewDriverName('');
     setNewDriverPhone('');
@@ -182,7 +217,18 @@ export default function MixersPage() {
 
   const openAddModal = () => {
     setEditingMixer(null);
-    setFormData({ number: '', model: '', driver: '', phone: '', volume: 10, type: 'own', status: 'Доступен', unload_allowance_min: 50 });
+    setFormData({
+      number: '',
+      model: '',
+      driver: '',
+      phone: '',
+      volume: vehicleKind === 'mixer' ? 10 : 0,
+      type: 'own',
+      status: 'Доступен',
+      unload_allowance_min: 50,
+      vehicle_kind: vehicleKind,
+      specs: vehicleKind === 'special' ? { subtype: 'loader' } : {},
+    });
     setExtraDrivers([]);
     setShowAddDriver(false);
     setNewDriverName('');
@@ -190,9 +236,19 @@ export default function MixersPage() {
     setShowModal(true);
   };
 
+  const applyModel = (modelName: string) => {
+    const applied = applyModelTemplate(formData.vehicle_kind, modelName);
+    setFormData((prev) => ({
+      ...prev,
+      model: modelName,
+      volume: applied?.volume != null ? Number(applied.volume) : prev.volume,
+      specs: applied?.specs ? { ...prev.specs, ...applied.specs } : prev.specs,
+    }));
+  };
+
   const saveMixer = async () => {
     if (!formData.number || !formData.driver) {
-      alert('Номер миксера и водитель обязательны');
+      alert('Госномер и водитель обязательны');
       return;
     }
 
@@ -201,28 +257,34 @@ export default function MixersPage() {
       return;
     }
 
-    if (formData.type === 'rented' && (formData.unload_allowance_min === '' || formData.unload_allowance_min === null || Number(formData.unload_allowance_min) <= 0)) {
+    if (
+      formData.vehicle_kind === 'mixer' &&
+      formData.type === 'rented' &&
+      (formData.unload_allowance_min === '' || formData.unload_allowance_min === null || Number(formData.unload_allowance_min) <= 0)
+    ) {
       alert('Укажите норму разгрузки (мин) для наёмного миксера');
       return;
     }
 
     try {
-      const payload = editingMixer 
-        ? { ...formData, id: editingMixer.id } 
+      const payload = editingMixer
+        ? { ...formData, id: editingMixer.id }
         : formData;
 
       const res = await fetch('/api/adminCifra/mixers', {
         method: 'POST',
         headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
 
+      const json = await res.json().catch(() => ({}));
       if (res.ok) {
-        fetchMixers();           // обновляем список
+        fetchMixers();
         setShowModal(false);
-        alert(editingMixer ? 'Миксер обновлён' : 'Миксер успешно добавлен');
+        if (json.warning) alert(json.warning);
+        else alert(editingMixer ? 'Сохранено' : `${kindMeta.singular} добавлен`);
       } else {
-        alert('Ошибка при сохранении');
+        alert(json.error || 'Ошибка при сохранении');
       }
     } catch (err) {
       console.error(err);
@@ -281,8 +343,13 @@ export default function MixersPage() {
   };
 
   // Эффективный статус: если есть активный рейс — показываем его статус, иначе «Доступен»
-  const effectiveStatus = (mixer: Mixer) =>
-    activeTripMap.get(mixer.number) ?? 'Доступен';
+  const effectiveStatus = (unit: FleetUnit) =>
+    vehicleKind === 'mixer' ? (activeTripMap.get(unit.number) ?? 'Доступен') : 'Доступен';
+
+  const pageTabs: { key: PageTab; label: string }[] = [
+    ...VEHICLE_KINDS.map((k) => ({ key: k.key as PageTab, label: k.label })),
+    ...(isAdmin ? [{ key: 'delivery' as const, label: 'Тарифы доставки' }] : []),
+  ];
 
   return (
     <div style={{ 
@@ -308,10 +375,10 @@ export default function MixersPage() {
           gap: '10px'
         }}>
           <Truck size={26} color="#94A3B8" />
-          Миксеры
+          Техника
         </h1>
 
-        {activeTab === 'mixers' && (
+        {activeTab !== 'delivery' && (
           <button 
             onClick={openAddModal} 
             style={volumeCardSoftStyle({
@@ -327,81 +394,76 @@ export default function MixersPage() {
             onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
           >
-            + Добавить миксер
+            {kindMeta.addLabel}
           </button>
         )}
       </div>
 
-      {/* Табы — стиль как у оператора/лаборатории. «Тарифы» только для admin. */}
-      {isAdmin && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '48px',
-            marginBottom: '14px',
-            borderBottom: '1px solid #334155',
-            paddingBottom: '8px',
-            flexShrink: 0,
-          }}
-        >
-          {[
-            { key: 'mixers' as const, label: 'Миксеры' },
-            { key: 'delivery' as const, label: 'Тарифы доставки' },
-          ].map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setActiveTab(t.key)}
-              style={{
-                padding: '12px 0',
-                background: 'transparent',
-                border: 'none',
-                fontSize: '17px',
-                fontWeight: 600,
-                color: activeTab === t.key ? '#10B981' : '#64748B',
-                cursor: 'pointer',
-                position: 'relative',
-                transition: 'color 0.2s',
-              }}
-            >
-              {t.label}
-              {activeTab === t.key && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    bottom: '-6px',
-                    left: '50%',
-                    transform: 'translateX(-50%)',
-                    width: '5px',
-                    height: '5px',
-                    backgroundColor: '#10B981',
-                    borderRadius: '50%',
-                    boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.3)',
-                  }}
-                />
-              )}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Виды техники + тарифы */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '28px',
+          marginBottom: '14px',
+          borderBottom: '1px solid #334155',
+          paddingBottom: '8px',
+          flexShrink: 0,
+          overflowX: 'auto',
+        }}
+      >
+        {pageTabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setActiveTab(t.key)}
+            style={{
+              padding: '12px 0',
+              background: 'transparent',
+              border: 'none',
+              fontSize: '16px',
+              fontWeight: 600,
+              color: activeTab === t.key ? '#10B981' : '#64748B',
+              cursor: 'pointer',
+              position: 'relative',
+              transition: 'color 0.2s',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {t.label}
+            {activeTab === t.key && (
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: '-6px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  width: '5px',
+                  height: '5px',
+                  backgroundColor: '#10B981',
+                  borderRadius: '50%',
+                  boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.3)',
+                }}
+              />
+            )}
+          </button>
+        ))}
+      </div>
 
       {activeTab === 'delivery' ? (
         <DeliverySettingsTab />
       ) : (
       <>
-      {/* ==================== ПАНЕЛЬ УПРАВЛЕНИЯ (ФИЛЬТРЫ + ВИД) ==================== */}
+      {/* ==================== ПАНЕЛЬ УПРАВЛЕНИЯ (ВИД + ФИЛЬТРЫ) ==================== */}
       <div style={{
         display: 'flex',
-        justifyContent: 'space-between',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: '16px',
+        gap: '10px',
         marginBottom: '14px',
-        flexShrink: 0
+        flexShrink: 0,
       }}>
-        
-        {/* Левая группа — фильтры */}
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <ViewModeToggle value={viewMode} onChange={setViewMode} options={LIST_GRID_OPTIONS} />
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
           <button 
             onClick={() => setFilter('all')} 
             style={{
@@ -448,83 +510,12 @@ export default function MixersPage() {
             Наемные
           </button>
         </div>
-
-        {/* Правая группа — Плитка / Список */}
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button 
-            onClick={() => setViewMode('grid')} 
-            style={{
-              padding: '10px 20px',
-              background: 'transparent',
-              border: 'none',
-              color: viewMode === 'grid' ? '#10B981' : '#64748B',
-              fontSize: '17px',
-              fontWeight: '600',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              position: 'relative',
-              transition: 'color 0.25s ease',
-              cursor: 'pointer',
-            }}
-          >
-            <span style={{ fontSize: '22px', opacity: viewMode === 'grid' ? 0.9 : 0.45 }}>▦</span>
-            Плитка
-            {viewMode === 'grid' && (
-              <div style={{
-                position: 'absolute',
-                bottom: '3px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                width: '5px',
-                height: '5px',
-                backgroundColor: '#10B981',
-                borderRadius: '50%',
-                boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
-              }} />
-            )}
-          </button>
-
-          <button 
-            onClick={() => setViewMode('list')} 
-            style={{
-              padding: '10px 20px',
-              background: 'transparent',
-              border: 'none',
-              color: viewMode === 'list' ? '#10B981' : '#64748B',
-              fontSize: '17px',
-              fontWeight: '600',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              position: 'relative',
-              transition: 'color 0.25s ease',
-              cursor: 'pointer',
-            }}
-          >
-            <span style={{ fontSize: '24px', opacity: viewMode === 'list' ? 0.9 : 0.45, lineHeight: 1 }}>≡</span>
-            Список
-            {viewMode === 'list' && (
-              <div style={{
-                position: 'absolute',
-                bottom: '3px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                width: '5px',
-                height: '5px',
-                backgroundColor: '#10B981',
-                borderRadius: '50%',
-                boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.25)'
-              }} />
-            )}
-          </button>
-        </div>
       </div>
 
       {/* ==================== ОСНОВНОЙ КОНТЕНТ (СПИСОК / ПЛИТКА) ==================== */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       {loading ? (
-        <div style={{ textAlign: 'center', padding: '100px', color: '#94A3B8' }}>Загрузка миксеров...</div>
+        <div style={{ textAlign: 'center', padding: '100px', color: '#94A3B8' }}>Загрузка техники...</div>
       ) : (
         <>
                               {/* ==================== РЕЖИМ ПЛИТКИ ==================== */}
@@ -534,14 +525,20 @@ export default function MixersPage() {
               minHeight: 0,
               overflowY: 'auto',
               display: 'grid', 
-              gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', 
+              gridTemplateColumns: 'repeat(auto-fill, minmax(min(280px, 100%), 1fr))', 
               gap: '16px',
               alignContent: 'start',
               paddingBottom: '4px',
             }}>
+              {filteredMixers.length === 0 && (
+                <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '60px 20px', color: '#64748B', fontSize: '16px' }}>
+                  {kindMeta.label} не найдены
+                </div>
+              )}
               {filteredMixers.map((mixer) => {
                 const dispStatus = effectiveStatus(mixer);
                 const statusStyle = getStatusStyle(dispStatus);
+                const specsLine = formatSpecsSummary(vehicleKind, mixer.specs);
                 return (
                   <div 
                     key={mixer.id} 
@@ -581,15 +578,21 @@ export default function MixersPage() {
                       </div>
                     </div>
 
-                    {/* Норма простоя */}
-                    <div style={{ color: '#64748B', fontSize: '13px', marginTop: '-10px', marginBottom: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      Норма разгрузки: {mixer.type === 'own' ? OWN_UNLOAD_ALLOWANCE_MIN : (mixer.unload_allowance_min ?? '—')} мин
-                    </div>
+                    {vehicleKind === 'mixer' && (
+                      <div style={{ color: '#64748B', fontSize: '13px', marginTop: '-10px', marginBottom: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        Норма разгрузки: {mixer.type === 'own' ? OWN_UNLOAD_ALLOWANCE_MIN : (mixer.unload_allowance_min ?? '—')} мин
+                      </div>
+                    )}
 
                     {/* Модель */}
-                    <div style={{ color: '#CBD5E1', fontSize: '16.5px', marginBottom: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {mixer.model}
+                    <div style={{ color: '#CBD5E1', fontSize: '16.5px', marginBottom: specsLine ? '6px' : '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {mixer.model || '—'}
                     </div>
+                    {specsLine ? (
+                      <div style={{ color: '#64748B', fontSize: '12.5px', marginBottom: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {specsLine}
+                      </div>
+                    ) : null}
 
                     {/* Водитель + Телефон */}
                     <div style={{ marginBottom: '20px' }}>
@@ -617,44 +620,48 @@ export default function MixersPage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', marginTop: 'auto' }}>
                       <div>
                         <div style={{ fontSize: '32px', fontWeight: '700', lineHeight: 1 }}>
-                          {mixer.volume} <span style={{ fontSize: '18px', color: '#94A3B8' }}>м³</span>
+                          {mixer.volume} <span style={{ fontSize: '18px', color: '#94A3B8' }}>{kindMeta.volumeUnit}</span>
                         </div>
                       </div>
 
-                      <div style={{ 
-                        padding: '7px 18px', 
-                        borderRadius: '9999px', 
-                        background: statusStyle.bg, 
-                        color: statusStyle.color, 
-                        fontWeight: '600',
-                        fontSize: '14px',
-                        whiteSpace: 'nowrap'
-                      }}>
-                        {dispStatus}
-                      </div>
+                      {vehicleKind === 'mixer' && (
+                        <div style={{ 
+                          padding: '7px 18px', 
+                          borderRadius: '9999px', 
+                          background: statusStyle.bg, 
+                          color: statusStyle.color, 
+                          fontWeight: '600',
+                          fontSize: '14px',
+                          whiteSpace: 'nowrap'
+                        }}>
+                          {dispStatus}
+                        </div>
+                      )}
                     </div>
 
                     {/* Тонкие кнопки в стиле списка */}
                     <div style={{ display: 'flex', gap: '8px' }}>
-                      <button
-                        onClick={() => setHistoryMixer(mixer)}
-                        style={{
-                          flex: 1,
-                          padding: '8px 12px',
-                          background: 'rgba(74,222,128,0.1)',
-                          color: '#4ADE80',
-                          border: '1px solid rgba(74,222,128,0.3)',
-                          borderRadius: '9999px',
-                          fontWeight: '500',
-                          fontSize: '13.5px',
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        📋 История
-                      </button>
+                      {vehicleKind === 'mixer' && (
+                        <button
+                          onClick={() => setHistoryMixer(mixer)}
+                          style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            background: 'rgba(74,222,128,0.1)',
+                            color: '#4ADE80',
+                            border: '1px solid rgba(74,222,128,0.3)',
+                            borderRadius: '9999px',
+                            fontWeight: '500',
+                            fontSize: '13.5px',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          📋 История
+                        </button>
+                      )}
                       <button 
                         onClick={() => openEditModal(mixer)} 
                         style={{ 
@@ -696,7 +703,7 @@ export default function MixersPage() {
                 page={safeCurrentPage}
                 totalPages={totalPages}
                 onPage={setCurrentPage}
-                suffix={`· ${pluralWord(filteredMixers.length, 'миксер', 'миксера', 'миксеров')}`}
+                suffix={`· ${kindPlural(vehicleKind, filteredMixers.length)}`}
                 style={{ marginBottom: '10px' }}
               />
 
@@ -706,15 +713,18 @@ export default function MixersPage() {
                 style={{
                   flex: 1,
                   minHeight: 0,
-                  overflow: 'hidden',
+                  overflowX: 'auto',
+                  overflowY: 'hidden',
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '5px',
+                  WebkitOverflowScrolling: 'touch',
                 }}
               >
                 {pagedMixers.length > 0 ? pagedMixers.map((mixer) => {
                   const dispStatus = effectiveStatus(mixer);
                   const statusStyle = getStatusStyle(dispStatus);
+                  const specsLine = formatSpecsSummary(vehicleKind, mixer.specs);
                   return (
                     <div
                       key={mixer.id}
@@ -727,6 +737,7 @@ export default function MixersPage() {
                         flexShrink: 0,
                         minHeight: 0,
                         gap: '12px',
+                        minWidth: 720,
                       })}
                       onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
@@ -735,8 +746,15 @@ export default function MixersPage() {
                         {mixer.number}
                       </div>
 
-                      <div style={{ flex: 1, color: '#CBD5E1', fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-                        {mixer.model}
+                      <div style={{ flex: 1.2, minWidth: 0, overflow: 'hidden' }}>
+                        <div style={{ color: '#CBD5E1', fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {mixer.model || '—'}
+                        </div>
+                        {specsLine ? (
+                          <div style={{ color: '#64748B', fontSize: '11.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {specsLine}
+                          </div>
+                        ) : null}
                       </div>
 
                       <div style={{ flex: 1.4, minWidth: 0, overflow: 'hidden' }}>
@@ -744,23 +762,25 @@ export default function MixersPage() {
                         <div style={{ color: '#94A3B8', fontSize: '12.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mixer.phone}</div>
                       </div>
 
-                      <div style={{ width: '80px', fontSize: '15px', fontWeight: 700, textAlign: 'center', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                        {mixer.volume} м³
+                      <div style={{ width: '90px', fontSize: '15px', fontWeight: 700, textAlign: 'center', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                        {mixer.volume} {kindMeta.volumeUnit}
                       </div>
 
-                      <div style={{ width: '130px', flexShrink: 0 }}>
-                        <span style={{
-                          padding: '4px 12px',
-                          borderRadius: '9999px',
-                          background: statusStyle.bg,
-                          color: statusStyle.color,
-                          fontWeight: 600,
-                          fontSize: '12.5px',
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {dispStatus}
-                        </span>
-                      </div>
+                      {vehicleKind === 'mixer' && (
+                        <div style={{ width: '130px', flexShrink: 0 }}>
+                          <span style={{
+                            padding: '4px 12px',
+                            borderRadius: '9999px',
+                            background: statusStyle.bg,
+                            color: statusStyle.color,
+                            fontWeight: 600,
+                            fontSize: '12.5px',
+                            whiteSpace: 'nowrap',
+                          }}>
+                            {dispStatus}
+                          </span>
+                        </div>
+                      )}
 
                       <div style={{ width: '100px', flexShrink: 0 }}>
                         <span style={{
@@ -777,22 +797,24 @@ export default function MixersPage() {
                       </div>
 
                       <div style={{ display: 'flex', gap: '6px', marginLeft: 'auto', flexShrink: 0 }}>
-                        <button
-                          onClick={() => setHistoryMixer(mixer)}
-                          style={{
-                            padding: '6px 12px',
-                            background: 'rgba(74,222,128,0.1)',
-                            color: '#4ADE80',
-                            border: '1px solid rgba(74,222,128,0.3)',
-                            borderRadius: 10,
-                            fontWeight: 600,
-                            fontSize: '12.5px',
-                            whiteSpace: 'nowrap',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          История
-                        </button>
+                        {vehicleKind === 'mixer' && (
+                          <button
+                            onClick={() => setHistoryMixer(mixer)}
+                            style={{
+                              padding: '6px 12px',
+                              background: 'rgba(74,222,128,0.1)',
+                              color: '#4ADE80',
+                              border: '1px solid rgba(74,222,128,0.3)',
+                              borderRadius: 10,
+                              fontWeight: 600,
+                              fontSize: '12.5px',
+                              whiteSpace: 'nowrap',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            История
+                          </button>
+                        )}
                         <button
                           onClick={() => openEditModal(mixer)}
                           style={{
@@ -825,7 +847,7 @@ export default function MixersPage() {
                     data-mixer-placeholder="true"
                     style={{ textAlign: 'center', padding: '60px 20px', color: '#64748B', fontSize: '16px' }}
                   >
-                    Миксеры не найдены
+                    {kindMeta.label} не найдены
                   </div>
                 )}
               </div>
@@ -872,23 +894,48 @@ export default function MixersPage() {
             onClick={e => e.stopPropagation()}
           >
             <h2 style={{ marginBottom: '24px' }}>
-              {editingMixer ? 'Редактировать миксер' : 'Добавить миксер'}
+              {editingMixer ? `Редактировать: ${kindMeta.singular}` : kindMeta.addLabel.replace(/^\+\s*/, '')}
             </h2>
             
             <input 
               type="text" 
-              placeholder="Номер миксера *" 
+              placeholder="Госномер *" 
               value={formData.number} 
               onChange={(e) => setFormData({...formData, number: e.target.value})} 
               style={inputStyle} 
             />
-            <input 
-              type="text" 
-              placeholder="Модель" 
-              value={formData.model} 
-              onChange={(e) => setFormData({...formData, model: e.target.value})} 
-              style={inputStyle} 
-            />
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', marginBottom: 8, color: '#94A3B8', fontSize: 13 }}>Модель</label>
+              <ModalSelect
+                value={formData.model}
+                onChange={(v) => applyModel(v)}
+                options={[
+                  ...(MODEL_TEMPLATES[formData.vehicle_kind] || []).map((t) => ({ value: t.model, label: t.model })),
+                  ...(formData.model && !(MODEL_TEMPLATES[formData.vehicle_kind] || []).some((t) => t.model === formData.model)
+                    ? [{ value: formData.model, label: formData.model }]
+                    : []),
+                ]}
+                placeholder="Выберите модель"
+              />
+              <input
+                type="text"
+                placeholder="Или введите модель вручную"
+                value={formData.model}
+                onChange={(e) => {
+                  const model = e.target.value;
+                  const applied = applyModelTemplate(formData.vehicle_kind, model);
+                  setFormData((prev) => ({
+                    ...prev,
+                    model,
+                    volume: applied?.volume != null ? Number(applied.volume) : prev.volume,
+                    specs: applied?.specs ? { ...prev.specs, ...applied.specs } : prev.specs,
+                  }));
+                }}
+                style={{ ...inputStyle, marginBottom: 0, marginTop: 8 }}
+              />
+            </div>
+
             <input 
               type="text" 
               placeholder="ФИО водителя *" 
@@ -917,7 +964,6 @@ export default function MixersPage() {
                   </div>
                 )}
 
-                {/* Список */}
                 {extraDrivers.map((d) => (
                   <div key={d.id} style={volumeCardSoftStyle({
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -936,7 +982,6 @@ export default function MixersPage() {
                   </div>
                 ))}
 
-                {/* Форма добавления */}
                 {showAddDriver ? (
                   <div style={volumeCardSoftStyle({ borderRadius: 10, padding: '12px', marginTop: '4px' })}>
                     <input
@@ -980,7 +1025,7 @@ export default function MixersPage() {
             )}
 
             <div style={{ marginBottom: '16px' }}>
-              <label>Объём (м³)</label>
+              <label>{kindMeta.volumeLabel} ({kindMeta.volumeUnit})</label>
               <input 
                 type="number" 
                 value={formData.volume} 
@@ -989,8 +1034,42 @@ export default function MixersPage() {
               />
             </div>
 
+            {visibleSpecFields(formData.vehicle_kind, formData.specs).map((field) => (
+              <div key={field.key} style={{ marginBottom: '16px' }}>
+                <label>{field.label}{field.unit ? ` (${field.unit})` : ''}</label>
+                {field.type === 'select' ? (
+                  <div style={{ marginTop: 8 }}>
+                    <ModalSelect
+                      value={String(formData.specs[field.key] ?? '')}
+                      onChange={(v) => setFormData((prev) => ({
+                        ...prev,
+                        specs: { ...prev.specs, [field.key]: v },
+                      }))}
+                      options={(field.options || []).map((o) => ({ value: o.value, label: o.label }))}
+                      placeholder={field.placeholder || 'Выберите'}
+                    />
+                  </div>
+                ) : (
+                  <input
+                    type={field.type === 'number' ? 'number' : 'text'}
+                    placeholder={field.placeholder}
+                    value={formData.specs[field.key] ?? ''}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const val = field.type === 'number' ? (raw === '' ? '' : Number(raw)) : raw;
+                      setFormData((prev) => ({
+                        ...prev,
+                        specs: { ...prev.specs, [field.key]: val },
+                      }));
+                    }}
+                    style={{ ...inputStyle, marginBottom: 0, marginTop: '8px' }}
+                  />
+                )}
+              </div>
+            ))}
+
             <div style={{ marginBottom: '24px' }}>
-              <label>Тип миксера</label>
+              <label>Принадлежность</label>
               <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
                 <button 
                   onClick={() => setFormData({...formData, type: 'own'})} 
@@ -1011,25 +1090,27 @@ export default function MixersPage() {
               </div>
             </div>
 
-            {formData.type === 'rented' ? (
-              <div style={{ marginBottom: '24px' }}>
-                <label>Норма разгрузки, мин *</label>
-                <input
-                  type="number"
-                  min={1}
-                  placeholder="Например, 50"
-                  value={formData.unload_allowance_min}
-                  onChange={(e) => setFormData({ ...formData, unload_allowance_min: e.target.value === '' ? '' : Number(e.target.value) })}
-                  style={{ ...inputStyle, marginBottom: 0, marginTop: '8px' }}
-                />
-                <div style={{ color: '#64748B', fontSize: '13px', marginTop: '6px' }}>
-                  Время разгрузки сверх этой нормы будет считаться простоем у водителя этого миксера
+            {formData.vehicle_kind === 'mixer' && (
+              formData.type === 'rented' ? (
+                <div style={{ marginBottom: '24px' }}>
+                  <label>Норма разгрузки, мин *</label>
+                  <input
+                    type="number"
+                    min={1}
+                    placeholder="Например, 50"
+                    value={formData.unload_allowance_min}
+                    onChange={(e) => setFormData({ ...formData, unload_allowance_min: e.target.value === '' ? '' : Number(e.target.value) })}
+                    style={{ ...inputStyle, marginBottom: 0, marginTop: '8px' }}
+                  />
+                  <div style={{ color: '#64748B', fontSize: '13px', marginTop: '6px' }}>
+                    Время разгрузки сверх этой нормы будет считаться простоем у водителя этого миксера
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div style={{ marginBottom: '24px', color: '#64748B', fontSize: '13px' }}>
-                Норма разгрузки для своих миксеров — {OWN_UNLOAD_ALLOWANCE_MIN} мин (общая для всех своих)
-              </div>
+              ) : (
+                <div style={{ marginBottom: '24px', color: '#64748B', fontSize: '13px' }}>
+                  Норма разгрузки для своих миксеров — {OWN_UNLOAD_ALLOWANCE_MIN} мин (общая для всех своих)
+                </div>
+              )
             )}
 
             <div style={{ display: 'flex', gap: '12px' }}>
@@ -1043,7 +1124,7 @@ export default function MixersPage() {
                 onClick={saveMixer} 
                 style={{ flex: 1, padding: '14px', background: '#10B981', borderRadius: '9999px', fontWeight: '600', color: 'white', border: 'none', boxSizing: 'border-box' }}
               >
-                {editingMixer ? 'Сохранить изменения' : 'Добавить миксер'}
+                {editingMixer ? 'Сохранить изменения' : kindMeta.addLabel.replace(/^\+\s*/, '')}
               </button>
             </div>
           </div>

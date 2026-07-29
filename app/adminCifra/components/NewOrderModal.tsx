@@ -14,6 +14,15 @@ import { nowTimeHHMM } from './modalPickerShared';
 import ModalSelect from './ModalSelect';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
+import { isBulkOrderProduct, isOrderGradeRecipe } from '@/app/adminCifra/recipes/productCatalog';
+import {
+  bulkVehicleKindOptions,
+  bulkVolumeUnitLabel,
+  normalizeOrderType,
+  type OrderType,
+} from '@/lib/orderLogistics';
+import { isVehicleKind, type VehicleKind } from '@/lib/fleetCatalog';
+import { loadingPointCoords, type LoadingPoint } from '@/lib/loadingPoints';
 
 interface NewOrderModalProps {
   isOpen: boolean;                    // ← обязательно
@@ -49,7 +58,11 @@ export default function NewOrderModal({
 }: NewOrderModalProps) {
 
   // ==================== 1. СОСТОЯНИЯ ====================
-  const [recipes, setRecipes] = useState<any[]>([]);
+  const [allRecipes, setAllRecipes] = useState<any[]>([]);
+  const [loadingPoints, setLoadingPoints] = useState<LoadingPoint[]>([]);
+  const [orderType, setOrderType] = useState<OrderType>('concrete');
+  const [fleetVehicleKind, setFleetVehicleKind] = useState<VehicleKind>('dump_truck');
+  const [loadingPointId, setLoadingPointId] = useState<string>('');
   
   const [orderCreated, setOrderCreated] = useState<any>(null);
   const [notificationSent, setNotificationSent] = useState(false);
@@ -62,13 +75,22 @@ export default function NewOrderModal({
   // прежней, просторной, без изменений. Поэтому переключаем плотность полей
   // по фактической высоте окна, а не жёстко ужимаем везде.
   const [compact, setCompact] = useState(false);
+  const [narrow, setNarrow] = useState(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const mq = window.matchMedia('(max-height: 1200px)');
-    const update = () => setCompact(mq.matches);
+    const mqH = window.matchMedia('(max-height: 1200px)');
+    const mqW = window.matchMedia('(max-width: 900px)');
+    const update = () => {
+      setCompact(mqH.matches);
+      setNarrow(mqW.matches);
+    };
     update();
-    mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
+    mqH.addEventListener('change', update);
+    mqW.addEventListener('change', update);
+    return () => {
+      mqH.removeEventListener('change', update);
+      mqW.removeEventListener('change', update);
+    };
   }, []);
   // s(компактное, просторное) — просторное значение = как было раньше (4K), компактное — под 1920×1080.
   const s = <T,>(compactValue: T, spaciousValue: T): T => (compact ? compactValue : spaciousValue);
@@ -93,6 +115,12 @@ export default function NewOrderModal({
         inn: initialData.inn || '',
         comment: initialData.comment || '',
       });
+      const ot = normalizeOrderType(initialData.order_type ?? initialData.orderType);
+      setOrderType(ot);
+      const fk = initialData.fleet_vehicle_kind ?? initialData.fleetVehicleKind;
+      if (ot === 'bulk' && isVehicleKind(fk)) setFleetVehicleKind(fk);
+      const lp = initialData.loading_point_id ?? initialData.loadingPointId;
+      if (lp != null && lp !== '') setLoadingPointId(String(lp));
     } else if (defaultDeliveryDate) {
       setForm(prev => ({
         ...prev,
@@ -101,44 +129,78 @@ export default function NewOrderModal({
     }
   }, [initialData, defaultDeliveryDate]);
 
-  // ==================== 4. ЗАГРУЗКА РЕЦЕПТОВ ====================
+  // ==================== 4. ЗАГРУЗКА РЕЦЕПТОВ И ТОЧЕК ПОГРУЗКИ ====================
   useEffect(() => {
-    const isFbs = (r: any) =>
-      r?.item_type === 'fbs' || (r?.code && String(r.code).startsWith('24-'));
-
     const loadRecipes = async () => {
       try {
         const res = await fetch('/api/adminCifra/recipes');
         if (res.ok) {
           const data = await res.json();
-          // API отдаёт по code — ФБС (24-*) оказываются сверху. Держим их в конце,
-          // как в каталоге лаборатории; бетонные марки — выше.
-          const sorted = [...(Array.isArray(data) ? data : [])].sort((a: any, b: any) => {
-            const af = isFbs(a) ? 1 : 0;
-            const bf = isFbs(b) ? 1 : 0;
-            if (af !== bf) return af - bf;
-            return String(a.code || '').localeCompare(String(b.code || ''), 'ru');
-          });
-          setRecipes(sorted);
-
-          // По умолчанию — М300 (как раньше). Подтягиваем реальный code из списка.
-          setForm((prev) => {
-            const codes = new Set(sorted.map((r: any) => r.code));
-            if (prev.grade && codes.has(prev.grade)) return prev;
-            const m300 =
-              sorted.find((r: any) => r.code === 'М300') ||
-              sorted.find((r: any) => !isFbs(r) && String(r.name || '').includes('М300'));
-            if (m300?.code) return { ...prev, grade: m300.code };
-            const firstConcrete = sorted.find((r: any) => !isFbs(r));
-            return firstConcrete?.code ? { ...prev, grade: firstConcrete.code } : prev;
-          });
+          setAllRecipes(Array.isArray(data) ? data : []);
         }
       } catch (e) {
         console.error('Ошибка загрузки рецептов:', e);
       }
     };
+    const loadPoints = async () => {
+      try {
+        const res = await fetch('/api/adminCifra/loading-points', {
+          headers: adminCifraAuthHeaders(),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setLoadingPoints(Array.isArray(data) ? data : []);
+        }
+      } catch (e) {
+        console.error('Ошибка загрузки точек погрузки:', e);
+      }
+    };
     loadRecipes();
+    loadPoints();
   }, []);
+
+  const recipes = useMemo(() => {
+    const filtered = allRecipes.filter((r) =>
+      orderType === 'bulk' ? isBulkOrderProduct(r) : isOrderGradeRecipe(r)
+    );
+    return [...filtered].sort((a: any, b: any) =>
+      String(a.code || '').localeCompare(String(b.code || ''), 'ru')
+    );
+  }, [allRecipes, orderType]);
+
+  useEffect(() => {
+    if (recipes.length === 0) return;
+    setForm((prev) => {
+      const codes = new Set(recipes.map((r: any) => r.code));
+      if (prev.grade && codes.has(prev.grade)) return prev;
+      if (orderType === 'concrete') {
+        const m300 =
+          recipes.find((r: any) => r.code === 'М300') ||
+          recipes.find((r: any) => String(r.name || '').includes('М300'));
+        if (m300?.code) return { ...prev, grade: m300.code };
+      }
+      return recipes[0]?.code ? { ...prev, grade: recipes[0].code } : prev;
+    });
+  }, [recipes, orderType]);
+
+  useEffect(() => {
+    const kindNeeded = orderType === 'bulk'
+      ? (fleetVehicleKind === 'cement_truck' ? 'cement' : 'aggregate')
+      : 'concrete';
+    const candidates = loadingPoints.filter((p) => {
+      if (orderType === 'concrete') return p.kind === 'concrete' || p.kind === 'mixed';
+      if (fleetVehicleKind === 'cement_truck') return p.kind === 'cement' || p.kind === 'mixed';
+      return p.kind === 'aggregate' || p.kind === 'mixed';
+    });
+    // Не сбрасываем точку, если она ещё подходит (важно при копировании заявки)
+    if (loadingPointId && candidates.some((p) => String(p.id) === loadingPointId)) return;
+    const def = candidates.find((p) => p.is_default) || candidates[0];
+    if (def) setLoadingPointId(String(def.id));
+    else setLoadingPointId('');
+  }, [orderType, fleetVehicleKind, loadingPoints, loadingPointId]);
+
+  const selectedLoadingPoint = loadingPoints.find((p) => String(p.id) === loadingPointId) || null;
+  const originCoords = loadingPointCoords(selectedLoadingPoint);
 
   // ==================== 4.1 ЗАГРУЗКА ТАРИФОВ ДОСТАВКИ ====================
   // Тарифы (цены за рейс, ставка за км за городом и т.п.) редактирует admin
@@ -207,9 +269,10 @@ export default function NewOrderModal({
       volume,
       address: addressLooksUsable ? previewAddress : form.address,
       coords: previewCoords,
+      originCoords,
       settings: deliverySettings,
     }),
-    [volume, addressLooksUsable, previewAddress, form.address, previewCoords, deliverySettings]
+    [volume, addressLooksUsable, previewAddress, form.address, previewCoords, originCoords, deliverySettings]
   );
   const totalPrice = concreteCost + deliveryCost;
 
@@ -320,6 +383,9 @@ const handleSubmit = async (e: React.FormEvent) => {
     deliveryCost: deliveryCost || 0,
     totalPrice: totalPrice || 0,
     comment: form.comment?.trim() || null,
+    order_type: orderType,
+    fleet_vehicle_kind: orderType === 'bulk' ? fleetVehicleKind : 'mixer',
+    loading_point_id: loadingPointId ? Number(loadingPointId) : null,
 
     // ==================== НОВЫЕ ПОЛЯ ДЛЯ ЕДИНООБРАЗИЯ ====================
     created_by: createdByStaff,             // ← Кто создал заявку (сервер всё равно берёт из auth)
@@ -359,6 +425,9 @@ const handleSubmit = async (e: React.FormEvent) => {
         address: form.address,
         phone: currentPhone,
         status: 'new',
+        order_type: orderType,
+        fleet_vehicle_kind: orderType === 'bulk' ? fleetVehicleKind : 'mixer',
+        loading_point_id: loadingPointId ? Number(loadingPointId) : null,
 
         customer_type: form.customerType === 'legal' ? 'Юридическое лицо' : 'Физическое лицо',
         full_name: form.fullName?.trim() || null,
@@ -467,7 +536,13 @@ const handleSubmit = async (e: React.FormEvent) => {
               сразу под карточкой параметров и растягивается (flex:1) так, чтобы низ
               карты всегда совпадал с низом поля адреса, даже если высота карточек
               справа/слева отличается (например, при появлении блока стоимости). */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: narrow ? '1fr' : '1fr 1fr',
+              gap: narrow ? 20 : 40,
+            }}
+          >
 
             {/* Левая колонка — Клиент + Адрес доставки */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: s('16px', '28px') }}>
@@ -575,8 +650,76 @@ const handleSubmit = async (e: React.FormEvent) => {
             <div>
               <h3 style={{ color: '#94A3B8', marginBottom: s('10px', '18px') }}>Параметры заказа</h3>
               <div style={volumeCardSoftStyle({ borderRadius: 16, padding: s('16px', '24px'), display: 'flex', flexDirection: 'column', gap: s('12px', '16px') })}>
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => setOrderType('concrete')}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      borderRadius: 10,
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontWeight: 700,
+                      background: orderType === 'concrete' ? '#10B981' : '#334155',
+                      color: '#fff',
+                    }}
+                  >
+                    Бетон
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrderType('bulk')}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      borderRadius: 10,
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontWeight: 700,
+                      background: orderType === 'bulk' ? '#10B981' : '#334155',
+                      color: '#fff',
+                    }}
+                  >
+                    Отгрузка
+                  </button>
+                </div>
+
+                {orderType === 'bulk' && (
+                  <ModalSelect
+                    value={fleetVehicleKind}
+                    onChange={(v) => setFleetVehicleKind(v as VehicleKind)}
+                    style={{ padding: s('12px', '14px') }}
+                    options={bulkVehicleKindOptions().map((k) => ({
+                      value: k.key,
+                      label: k.label,
+                      text: k.label,
+                    }))}
+                  />
+                )}
+
+                {loadingPoints.length > 0 && (
+                  <ModalSelect
+                    value={loadingPointId}
+                    onChange={setLoadingPointId}
+                    style={{ padding: s('12px', '14px') }}
+                    placeholder="Точка погрузки"
+                    options={loadingPoints
+                      .filter((p) => {
+                        if (orderType === 'concrete') return p.kind === 'concrete' || p.kind === 'mixed';
+                        if (fleetVehicleKind === 'cement_truck') return p.kind === 'cement' || p.kind === 'mixed';
+                        return p.kind === 'aggregate' || p.kind === 'mixed';
+                      })
+                      .map((p) => ({
+                        value: String(p.id),
+                        label: `${p.name}${p.ownership === 'partner' ? ' (партнёр)' : ''}`,
+                        text: p.name,
+                      }))}
+                  />
+                )}
                 
-                {/* ==================== МАРКА БЕТОНА / РАСТВОРА ==================== */}
+                {/* ==================== МАРКА / ПРОДУКТ ==================== */}
                 <ModalSelect
                   value={form.grade}
                   onChange={(grade) => setForm((p) => ({ ...p, grade }))}
@@ -591,7 +734,11 @@ const handleSubmit = async (e: React.FormEvent) => {
                 <input 
                   type="number" 
                   name="volume" 
-                  placeholder="Объём, м³" 
+                  placeholder={
+                    orderType === 'bulk'
+                      ? `Объём, ${bulkVolumeUnitLabel(fleetVehicleKind)}`
+                      : 'Объём, м³'
+                  } 
                   value={form.volume} 
                   onChange={handleChange} 
                   step="0.01" 
@@ -600,7 +747,13 @@ const handleSubmit = async (e: React.FormEvent) => {
                   required 
                 />
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: narrow ? '1fr' : '1fr 1fr',
+                    gap: 12,
+                  }}
+                >
                   <ModalDateInput
                     value={form.deliveryDate}
                     onChange={(deliveryDate) => setForm((p) => ({ ...p, deliveryDate }))}
@@ -616,7 +769,7 @@ const handleSubmit = async (e: React.FormEvent) => {
 
                 {volume > 0 && (
                   <div style={volumeCardSoftStyle({ padding: s('12px 16px', '16px'), borderRadius: 12, marginTop: s('4px', '8px') })}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Бетон:</span><span>{concreteCost.toLocaleString()} ₽</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{orderType === 'bulk' ? 'Материал:' : 'Бетон:'}</span><span>{concreteCost.toLocaleString()} ₽</span></div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Доставка:</span><span>{deliveryCost.toLocaleString()} ₽</span></div>
                     {deliveryNote && <div style={{ color: '#34D399', marginTop: s('6px', '8px') }}>🚚 {deliveryNote}</div>}
                     <div style={{ marginTop: s('8px', '12px'), fontWeight: '700', fontSize: s('17px', '18px'), borderTop: CARD_BORDER, paddingTop: s('8px', '10px') }}>

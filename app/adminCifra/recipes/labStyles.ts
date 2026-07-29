@@ -3,7 +3,9 @@ import type { CSSProperties } from 'react';
 import {
   CARD_BORDER,
   CARD_GRADIENT,
+  CARD_GRADIENT_SOFT,
   CARD_VOLUME,
+  CARD_VOLUME_SOFT,
   modalFieldStyle,
   volumeCardSoftStyle,
   volumeCardStyle,
@@ -24,8 +26,16 @@ export const COLORS = {
   amber: '#FACC15',
 };
 
-export { volumeCardStyle,
-  volumeModalStyle, volumeCardSoftStyle, CARD_BORDER, CARD_GRADIENT, CARD_VOLUME };
+export {
+  volumeCardStyle,
+  volumeModalStyle,
+  volumeCardSoftStyle,
+  CARD_BORDER,
+  CARD_GRADIENT,
+  CARD_GRADIENT_SOFT,
+  CARD_VOLUME,
+  CARD_VOLUME_SOFT,
+};
 
 export const inputStyle: CSSProperties = modalFieldStyle({
   padding: '12px',
@@ -55,6 +65,7 @@ export function pillStyle(bg: string, color: string): CSSProperties {
     background: bg,
     color,
     display: 'inline-block',
+    whiteSpace: 'nowrap',
   };
 }
 

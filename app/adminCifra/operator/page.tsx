@@ -19,11 +19,12 @@ import SiloSwitchVolumeModal, {
 import { appAlert, appConfirm } from '../components/appDialog';
 import { siloNameById } from '@/lib/siloConfig';
 import { formatRuDateWithWeekday, pluralRu } from '@/lib/ruLocale';
+import { findRecipeByGrade } from '@/lib/recipeAdditives';
 
 const LAB_MENU_ITEMS: { key: LabTab; label: string }[] = [
   { key: 'orders', label: 'Заявки' },
   { key: 'specifications', label: 'Спецификации' },
-  { key: 'recipes', label: 'Рецептуры' },
+  { key: 'recipes', label: 'Продукция' },
   { key: 'tests', label: 'Испытания' },
   { key: 'warehouse', label: 'Склад' },
 ];
@@ -2448,11 +2449,7 @@ export default function OperatorBSUPage() {
                 lineHeight: '1.65',
               })}>
                 {(() => {
-                  const grade = (selectedTrip.concrete_grade || '').toUpperCase().trim();
-                  const recipe = recipes.find((r: any) => 
-                    (r.name && r.name.toUpperCase().includes(grade)) || 
-                    (r.code && r.code.toUpperCase().includes(grade))
-                  );
+                  const recipe = findRecipeByGrade(recipes, selectedTrip.concrete_grade);
                   const podvizhnost = selectedTrip.podvizhnost || 'П3';
 
                   if (recipe) {
