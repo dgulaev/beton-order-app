@@ -121,15 +121,19 @@ export default function WeatherKpiCard({ dateKey, compact = false, mobile = fals
           <div
             style={{
               color: '#94A3B8',
-              fontSize: 13,
+              fontSize: 12,
               textTransform: 'uppercase',
-              letterSpacing: '0.05em',
+              letterSpacing: '0.04em',
               fontWeight: 600,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              minWidth: 0,
             }}
           >
             Погода
           </div>
-          <span style={{ color: '#94A3B8', fontSize: 12, fontWeight: 600 }}>{dateShort}</span>
+          <span style={{ color: '#94A3B8', fontSize: 12, fontWeight: 600, flexShrink: 0, whiteSpace: 'nowrap' }}>{dateShort}</span>
         </div>
 
         {loading ? (
@@ -230,22 +234,25 @@ export default function WeatherKpiCard({ dateKey, compact = false, mobile = fals
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: compact ? 10 : 14,
+                gap: compact ? 10 : 10,
                 marginBottom: compact ? 6 : 8,
                 flex: 1,
                 minWidth: 0,
+                flexWrap: 'nowrap',
+                overflow: 'hidden',
               }}
             >
               <WeatherIcon kind={day.kind} size={compact ? 34 : 48} strokeWidth={compact ? 1.75 : 1.6} />
               <div style={{ minWidth: 0, flex: '1 1 auto' }}>
                 <div
                   style={{
-                    fontSize: compact ? 24 : 40,
+                    fontSize: compact ? 24 : 36,
                     fontWeight: 700,
                     color: '#F8FAFC',
                     lineHeight: 1,
                     fontVariantNumeric: 'tabular-nums',
                     letterSpacing: compact ? undefined : '-0.02em',
+                    whiteSpace: 'nowrap',
                   }}
                 >
                   {day.tempMax ?? '—'}°
@@ -253,7 +260,7 @@ export default function WeatherKpiCard({ dateKey, compact = false, mobile = fals
                     style={{
                       color: '#94A3B8',
                       fontWeight: 600,
-                      fontSize: compact ? 16 : 22,
+                      fontSize: compact ? 16 : 20,
                       marginLeft: 4,
                     }}
                   >
@@ -344,8 +351,17 @@ export default function WeatherKpiCard({ dateKey, compact = false, mobile = fals
               )}
             </div>
 
-            <div style={{ fontSize: compact ? 11 : 12, color: '#64748B', fontWeight: 500 }}>
-              Брянск · Open-Meteo · подробнее →
+            <div
+              style={{
+                fontSize: compact ? 11 : 12,
+                color: '#64748B',
+                fontWeight: 500,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              Брянск · подробнее →
             </div>
           </>
         )}

@@ -6,14 +6,15 @@ import {
 } from '@/lib/weather/plant';
 import { parseOpenMeteoForecast } from '@/lib/weather/parse';
 import type { WeatherForecastPayload } from '@/lib/weather/types';
+import { loadSystemSettingsServer } from '@/lib/systemSettingsServer';
 
 const CACHE_TTL_MS = 45 * 60_000;
-let cache: { at: number; data: WeatherForecastPayload } | null = null;
+let cache: { at: number; key: string; data: WeatherForecastPayload } | null = null;
 
-async function fetchOpenMeteo(): Promise<WeatherForecastPayload> {
+async function fetchOpenMeteo(lat: number, lon: number, label: string): Promise<WeatherForecastPayload> {
   const qs = new URLSearchParams({
-    latitude: String(PLANT_WEATHER_LAT),
-    longitude: String(PLANT_WEATHER_LON),
+    latitude: String(lat),
+    longitude: String(lon),
     timezone: WEATHER_TIMEZONE,
     forecast_days: '10',
     daily: [
@@ -34,7 +35,6 @@ async function fetchOpenMeteo(): Promise<WeatherForecastPayload> {
   });
 
   const res = await fetch(`https://api.open-meteo.com/v1/forecast?${qs}`, {
-    // Next fetch cache + наш in-memory TTL
     next: { revalidate: 2700 },
   });
 
@@ -43,13 +43,20 @@ async function fetchOpenMeteo(): Promise<WeatherForecastPayload> {
   }
 
   const raw = await res.json();
-  return parseOpenMeteoForecast(raw);
+  const parsed = parseOpenMeteoForecast(raw);
+  return { ...parsed, locationLabel: label || parsed.locationLabel };
 }
 
 export async function GET() {
   try {
+    const settings = await loadSystemSettingsServer();
+    const lat = settings.plant.weatherLat || PLANT_WEATHER_LAT;
+    const lon = settings.plant.weatherLon || PLANT_WEATHER_LON;
+    const label = settings.plant.weatherLabel || 'Брянск, завод';
+    const cacheKey = `${lat},${lon}`;
+
     const now = Date.now();
-    if (cache && now - cache.at < CACHE_TTL_MS) {
+    if (cache && cache.key === cacheKey && now - cache.at < CACHE_TTL_MS) {
       return NextResponse.json(cache.data, {
         headers: {
           'Cache-Control': 'public, s-maxage=2700, stale-while-revalidate=600',
@@ -57,8 +64,8 @@ export async function GET() {
       });
     }
 
-    const data = await fetchOpenMeteo();
-    cache = { at: now, data };
+    const data = await fetchOpenMeteo(lat, lon, label);
+    cache = { at: now, key: cacheKey, data };
 
     return NextResponse.json(data, {
       headers: {

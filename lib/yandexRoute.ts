@@ -14,7 +14,7 @@ export {
 } from './bryanskAddress';
 
 import {
-  ROUTE_ORIGIN_ADDRESS,
+  getRouteOriginAddress,
   mentionsBryanskCity,
   normalizeDeliveryAddress,
 } from './bryanskAddress';
@@ -57,7 +57,7 @@ export function getShortDeliveryLabel(rawAddress: string | null | undefined): st
 export function buildYandexMapsRouteUrl(rawAddress: string | null | undefined): string {
   const destination = normalizeDeliveryAddress(rawAddress);
   const params = new URLSearchParams({
-    rtext: `${ROUTE_ORIGIN_ADDRESS}~${destination}`,
+    rtext: `${getRouteOriginAddress()}~${destination}`,
     rtt: 'auto',
   });
   return `https://yandex.ru/maps/?${params.toString()}`;
@@ -67,17 +67,19 @@ export function buildYandexMapsRouteUrl(rawAddress: string | null | undefined): 
 // чтобы их могли вызывать и серверные API. Здесь — реэкспорт для клиента.
 export {
   ROUTE_ORIGIN_COORDS,
+  getRouteOriginCoords,
   extractCoordsFromAddress,
   type Coords,
 } from './geocodeAddress';
-import { ROUTE_ORIGIN_COORDS, extractCoordsFromAddress, type Coords } from './geocodeAddress';
+import { getRouteOriginCoords, extractCoordsFromAddress, type Coords } from './geocodeAddress';
 
 /** Ссылка на построение маршрута в Яндекс.Картах по КООРДИНАТАМ — работает
  * одинаково надёжно и в обычном браузере, и в Яндекс.Браузере (открывает
  * приложение и сразу строит маршрут). */
 function buildYandexMapsRouteUrlByCoords(destLat: number, destLon: number): string {
+  const o = getRouteOriginCoords();
   const params = new URLSearchParams({
-    rtext: `${ROUTE_ORIGIN_COORDS.lat},${ROUTE_ORIGIN_COORDS.lon}~${destLat},${destLon}`,
+    rtext: `${o.lat},${o.lon}~${destLat},${destLon}`,
     rtt: 'auto',
   });
   return `https://yandex.ru/maps/?${params.toString()}`;
@@ -278,13 +280,16 @@ export function useYandexRouteHref(rawAddress: string | null | undefined): Yande
 //    через normalizeDeliveryAddress (DaData, регион "Брянская" — см.
 //    /api/geocode), используем координаты результата; 3) до готовности
 //    координат — временный фолбэк на нормализованный ТЕКСТ адреса.
-const TWO_GIS_ORIGIN = `${ROUTE_ORIGIN_COORDS.lon},${ROUTE_ORIGIN_COORDS.lat}`;
+function twoGisOrigin(): string {
+  const o = getRouteOriginCoords();
+  return `${o.lon},${o.lat}`;
+}
 
 function buildGoogleMapsRouteUrl(rawAddress: string | null | undefined, coords: Coords | null): string {
   const destination = coords ? `${coords.lat},${coords.lon}` : normalizeDeliveryAddress(rawAddress);
   const params = new URLSearchParams({
     api: '1',
-    origin: ROUTE_ORIGIN_ADDRESS,
+    origin: getRouteOriginAddress(),
     destination,
     travelmode: 'driving',
   });
@@ -301,7 +306,7 @@ function buildGoogleMapsRouteUrl(rawAddress: string | null | undefined, coords: 
  */
 function buildTwoGisRouteUrl(rawAddress: string | null | undefined, coords: Coords | null): string {
   if (coords) {
-    return `https://2gis.ru/routeSearch/rsType/car/from/${TWO_GIS_ORIGIN}/to/${coords.lon},${coords.lat}`;
+    return `https://2gis.ru/routeSearch/rsType/car/from/${twoGisOrigin()}/to/${coords.lon},${coords.lat}`;
   }
   return `https://2gis.ru/bryansk/search/${encodeURIComponent(normalizeDeliveryAddress(rawAddress))}`;
 }

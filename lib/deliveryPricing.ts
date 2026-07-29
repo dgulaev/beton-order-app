@@ -23,7 +23,7 @@
 //       - объём > 50 м³      → price_per_m3_over_50 ₽ за 1 м³
 
 import { isOutsideBryansk } from './bryanskAddress';
-import { ROUTE_ORIGIN_COORDS, type Coords } from './geocodeAddress';
+import { getRouteOriginCoords, type Coords } from './geocodeAddress';
 
 export interface DeliverySettings {
   price_tier_10: number;
@@ -95,7 +95,7 @@ export function calculateDeliveryCost(params: {
   settings?: DeliverySettings;
 }): DeliveryCostResult {
   const { volume, address, coords } = params;
-  const origin = params.originCoords || ROUTE_ORIGIN_COORDS;
+  const origin = params.originCoords || getRouteOriginCoords();
   const s = params.settings ?? DEFAULT_DELIVERY_SETTINGS;
 
   if (!volume || volume <= 0) {

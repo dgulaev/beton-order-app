@@ -102,9 +102,21 @@ export interface UpdateOrderMixerStatusResult {
   };
 }
 
+async function ownUnloadAllowanceFromSettings(): Promise<number> {
+  try {
+    const { loadSystemSettingsServer } = await import('@/lib/systemSettingsServer');
+    const s = await loadSystemSettingsServer();
+    const n = Number(s.logistics?.ownUnloadAllowanceMin);
+    return Number.isFinite(n) && n > 0 ? n : OWN_UNLOAD_ALLOWANCE_MIN;
+  } catch {
+    return OWN_UNLOAD_ALLOWANCE_MIN;
+  }
+}
+
 /** Возвращает норму разгрузки в минутах для данного названия миксера (ищет в реестре mixers по номеру) */
 export async function resolveUnloadAllowanceMinutes(mixerName: string | null | undefined): Promise<number> {
-  if (!mixerName) return OWN_UNLOAD_ALLOWANCE_MIN;
+  const ownDefault = await ownUnloadAllowanceFromSettings();
+  if (!mixerName) return ownDefault;
 
   const { data } = await supabase
     .from('mixers')
@@ -112,11 +124,11 @@ export async function resolveUnloadAllowanceMinutes(mixerName: string | null | u
     .eq('number', mixerName)
     .maybeSingle();
 
-  if (!data) return OWN_UNLOAD_ALLOWANCE_MIN;
+  if (!data) return ownDefault;
   if (data.type === 'rented' && data.unload_allowance_min) {
     return Number(data.unload_allowance_min);
   }
-  return OWN_UNLOAD_ALLOWANCE_MIN;
+  return ownDefault;
 }
 
 export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParams): Promise<UpdateOrderMixerStatusResult> {

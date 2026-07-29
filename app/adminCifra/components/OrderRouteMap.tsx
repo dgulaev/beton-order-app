@@ -26,7 +26,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { Map as LeafletMap, Polyline, Control } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { ExternalLink } from 'lucide-react';
-import { ROUTE_ORIGIN_COORDS, useDeliveryCoords, getShortDeliveryLabel } from '@/lib/yandexRoute';
+import { getRouteOriginCoords, useDeliveryCoords, getShortDeliveryLabel } from '@/lib/yandexRoute';
 import { useRouteGeometry } from '@/lib/routeGeometry';
 
 interface OrderRouteMapProps {
@@ -109,7 +109,8 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
     import('leaflet').then((L) => {
       if (cancelled || !containerRef.current) return;
 
-      const origin: [number, number] = [ROUTE_ORIGIN_COORDS.lat, ROUTE_ORIGIN_COORDS.lon];
+      const o = getRouteOriginCoords();
+      const origin: [number, number] = [o.lat, o.lon];
       const destination: [number, number] = [destCoords.lat, destCoords.lon];
 
       const map = L.map(containerRef.current, {

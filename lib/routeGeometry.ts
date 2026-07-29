@@ -15,7 +15,7 @@
 // без каких-либо лимитов.
 
 import { useEffect, useState } from 'react';
-import { ROUTE_ORIGIN_COORDS, type Coords } from './geocodeAddress';
+import { getRouteOriginCoords, type Coords } from './geocodeAddress';
 
 const OSRM_TIMEOUT_MS = 6000;
 
@@ -27,7 +27,7 @@ const inFlight = new Map<string, Promise<RouteGeometry | null>>();
 const SESSION_CACHE_PREFIX = 'osrmRoute:';
 
 function cacheKey(dest: Coords, origin?: Coords | null): string {
-  const o = origin || ROUTE_ORIGIN_COORDS;
+  const o = origin || getRouteOriginCoords();
   return `${o.lat.toFixed(5)},${o.lon.toFixed(5)}>${dest.lat.toFixed(5)},${dest.lon.toFixed(5)}`;
 }
 
@@ -53,7 +53,7 @@ function writeSessionCache(key: string, value: RouteGeometry) {
 
 async function fetchRouteGeometry(dest: Coords, origin?: Coords | null): Promise<RouteGeometry | null> {
   try {
-    const o = origin || ROUTE_ORIGIN_COORDS;
+    const o = origin || getRouteOriginCoords();
     const url = `https://router.project-osrm.org/route/v1/driving/${o.lon},${o.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), OSRM_TIMEOUT_MS);

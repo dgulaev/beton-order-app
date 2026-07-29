@@ -13,8 +13,14 @@ export function siloNameById(siloId: number | null | undefined): string {
 }
 
 /** Порог «глубокого минуса» (т): силос 1/2 → 5 т, силос 3 → 10 т. */
-export function siloLowRateThresholdTons(siloId: number | null | undefined): number {
-  return Number(siloId) === 3 ? 10 : 5;
+export function siloLowRateThresholdTons(
+  siloId: number | null | undefined,
+  overrides?: { lowRateTonsSilo12?: number; lowRateTonsSilo3?: number } | null,
+): number {
+  if (Number(siloId) === 3) {
+    return overrides?.lowRateTonsSilo3 ?? 10;
+  }
+  return overrides?.lowRateTonsSilo12 ?? 5;
 }
 
 export type LowRateAlertInfo = {
@@ -35,9 +41,27 @@ export async function syncSiloLowRateAlert(
 ): Promise<LowRateAlertInfo | null> {
   if (![1, 2, 3].includes(Number(siloId))) return null;
   try {
-    const { data, error } = await supabase.rpc('warehouse_silo_sync_low_rate_alert', {
+    let warehouseOverrides: { lowRateTonsSilo12?: number; lowRateTonsSilo3?: number } | null = null;
+    try {
+      const { loadSystemSettingsServer } = await import('@/lib/systemSettingsServer');
+      const sys = await loadSystemSettingsServer();
+      warehouseOverrides = sys.warehouse;
+    } catch {
+      warehouseOverrides = null;
+    }
+    const threshold = siloLowRateThresholdTons(siloId, warehouseOverrides);
+
+    // Сначала с p_threshold (после scripts/warehouse-silo-low-rate-alert-settings-threshold.sql);
+    // если параметр ещё не принят БД — fallback на старую сигнатуру.
+    let { data, error } = await supabase.rpc('warehouse_silo_sync_low_rate_alert', {
       p_silo_id: siloId,
+      p_threshold: threshold,
     });
+    if (error && /p_threshold|Could not find the function|function .* does not exist/i.test(String(error.message || ''))) {
+      ({ data, error } = await supabase.rpc('warehouse_silo_sync_low_rate_alert', {
+        p_silo_id: siloId,
+      }));
+    }
     if (error) {
       // Функция ещё не применена — тихо пропускаем
       if (String(error.message || '').includes('warehouse_silo_sync_low_rate_alert')) {
@@ -52,7 +76,8 @@ export async function syncSiloLowRateAlert(
       siloId: Number(row.silo_id),
       siloName: siloNameById(Number(row.silo_id)),
       currentTons: Number(row.current_tons ?? 0),
-      thresholdTons: Number(row.threshold_tons ?? siloLowRateThresholdTons(siloId)),
+      // UI и логика — порог из Настроек (не хардкод RPC)
+      thresholdTons: threshold,
       fired: Boolean(row.fired),
       pending: Boolean(row.pending),
       alertAt: row.alert_at ? String(row.alert_at) : null,

@@ -40,7 +40,7 @@ import OrderCommentsPanel, { CommentUnreadBadge, orderModalTabStyle } from '@/ap
 import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts';
 import FleetOpsTabs from '@/app/adminCifra/components/FleetOpsTabs';
 import type { VehicleKind } from '@/lib/fleetCatalog';
-import { orderMatchesFleetTab } from '@/lib/orderLogistics';
+import { bulkVolumeUnitLabel, orderMatchesFleetTab } from '@/lib/orderLogistics';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
@@ -1070,10 +1070,17 @@ useEffect(() => {
 
   // ==================== ПОДЕЛИТЬСЯ ЗАЯВКОЙ (ЧИСТЫЙ ТЕКСТ) ====================
   const shareOrder = (order: any) => {
+    const volumeUnit =
+      order.order_type === 'bulk'
+        ? bulkVolumeUnitLabel(order.fleet_vehicle_kind, {
+            code: order.grade,
+            name: order.grade,
+          })
+        : 'м³';
     const shareText = `Заявка №${order.id}
 
 Марка: ${order.grade}
-Объём: ${order.volume} м³
+Объём: ${order.volume} ${volumeUnit}
 Дата: ${order.delivery_date}
 Время: ${formatTimeHHMM(order.delivery_time)}
 

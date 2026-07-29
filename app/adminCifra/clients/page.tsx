@@ -307,6 +307,16 @@ export default function ClientsPage() {
   /** hide — обычный список без спама; only — только помеченные is_spam */
   const [spamFilter, setSpamFilter] = useState<'hide' | 'only'>('hide');
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const tab = new URLSearchParams(window.location.search).get('tab');
+      if (tab === 'staff') setActiveTab('staff');
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // Сколько карточек/строк влезает. Считаем в visual-пикселях (getBoundingClientRect
   // + window.innerHeight) — так корректно учитывается transform: scale админки.
   // Карточки остаются натуральной высоты; лишнее не влезает — на след. страницу.

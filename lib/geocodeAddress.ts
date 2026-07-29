@@ -8,8 +8,28 @@ const DADATA_URL = 'https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest
 export type GeocodeCoords = { lat: number; lon: number };
 export type Coords = GeocodeCoords;
 
-/** Координаты своего БСУ (Брянск, Орловский тупик, 6). */
+/** Координаты своего БСУ (Брянск, Орловский тупик, 6) — fallback. */
 export const ROUTE_ORIGIN_COORDS: Coords = { lat: 53.25347, lon: 34.416444 };
+
+/** Переопределение из Настройки → Завод / гео (клиент + сервер). */
+let routeOriginCoordsOverride: Coords | null = null;
+
+export function setRouteOriginCoordsOverride(coords: Coords | null | undefined): void {
+  if (
+    coords &&
+    Number.isFinite(coords.lat) &&
+    Number.isFinite(coords.lon)
+  ) {
+    routeOriginCoordsOverride = { lat: coords.lat, lon: coords.lon };
+    return;
+  }
+  routeOriginCoordsOverride = null;
+}
+
+/** Актуальные координаты БСУ (настройки или hardcode). */
+export function getRouteOriginCoords(): Coords {
+  return routeOriginCoordsOverride || ROUTE_ORIGIN_COORDS;
+}
 
 /**
  * Координаты из текста адреса, если диспетчер вставил "52.735700, 34.774616".

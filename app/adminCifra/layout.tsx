@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, FlaskConical, Truck, Package, Users, UserCog, Menu, X, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown, Cable, MapPin } from 'lucide-react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown, Cable, MapPin, PanelLeftOpen, PanelLeftClose, Settings, X } from 'lucide-react';
 import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import Image from 'next/image';
@@ -13,13 +13,42 @@ import { useDemandChangeNotifications } from '@/hooks/useRealtimeDemand';
 import { canAccessSales, isSalesPath } from '@/lib/adminCifraSalesAccess';
 import { LEAD_SOURCE_LABEL } from '@/lib/leads';
 import { sanitizeAvitoMessageText } from '@/lib/integrations/avito/messageText';
-import { reconnectAllBroadcastChannels, useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
+import {
+  reconnectAllBroadcastChannels,
+  useGlobalBroadcastStatus,
+  useRealtimeBroadcast,
+} from '@/hooks/useRealtimeBroadcast';
 import { useWakeReload } from '@/hooks/useWakeReload';
 import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
 import { formatPhoneInput } from '@/lib/phone';
 import { formatTimeHHMM, ruPastByName } from '@/lib/ruLocale';
 import { formatBuildLabelFull, formatBuildVersion } from '@/lib/buildInfo';
+import { bulkVolumeUnitLabel } from '@/lib/orderLogistics';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import {
+  DEFAULT_SYSTEM_SETTINGS,
+  SIDEBAR_COLLAPSED_PREF_KEY,
+  bannerDismissStorageKey,
+  canAccessNavSection,
+  isBannerActive,
+  pathnameToNavSection,
+  type NavSection,
+  type SystemSettingsData,
+} from '@/lib/systemSettings';
+import { setRouteOriginCoordsOverride } from '@/lib/geocodeAddress';
+import { setRouteOriginAddressOverride } from '@/lib/bryanskAddress';
 import AppDialogHost, { appConfirm } from './components/appDialog';
+
+/** Единица объёма в тостах: бетон — м³, отгрузка — т/шт/м³ по технике и марке. */
+function orderVolumeUnit(order: any): string {
+  if (order?.order_type === 'bulk') {
+    return bulkVolumeUnitLabel(order.fleet_vehicle_kind, {
+      code: order.grade,
+      name: order.grade,
+    });
+  }
+  return 'м³';
+}
 
 // ==================== PERSISTENTНЫЕ УВЕДОМЛЕНИЯ (localStorage) ====================
 const NOTIF_STORAGE_KEY = 'persistentOrderNotifications';
@@ -126,19 +155,54 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const { user, loading: roleLoading, refreshRole, logout } = useUserRole();
 
   const [isCollapsed, setIsCollapsed] = useState(true);
+  const [systemSettings, setSystemSettings] = useState<SystemSettingsData>(DEFAULT_SYSTEM_SETTINGS);
+  const systemSettingsRef = useRef(systemSettings);
+  systemSettingsRef.current = systemSettings;
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
   const [salesMenuOpen, setSalesMenuOpen] = useState(false);
   const [salesFlyoutPos, setSalesFlyoutPos] = useState<{ top: number; left: number } | null>(null);
   const salesMenuRef = useRef<HTMLDivElement | null>(null);
   const salesButtonRef = useRef<HTMLButtonElement | null>(null);
   const salesFlyoutRef = useRef<HTMLDivElement | null>(null);
+  const userRoleRef = useRef<string | null>(null);
 
   // Подменю «Продажи»: в развёрнутом режиме авто-открывать на дочерних страницах;
-  // закрывается только вручную (клик по «Продажи») или при сворачивании сайдбара —
-  // не по клику снаружи.
+  // в свёрнутом flyout закрывается кликом снаружи / Escape (см. ниже).
   useEffect(() => {
     if (!isCollapsed && isSalesSection) setSalesMenuOpen(true);
     if (isCollapsed) setSalesMenuOpen(false);
   }, [isCollapsed, isSalesSection, pathname]);
+
+  // Свёрнутый flyout «Продажи»: закрытие снаружи и по Escape
+  useEffect(() => {
+    if (!isCollapsed || !salesMenuOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (salesFlyoutRef.current?.contains(t)) return;
+      if (salesButtonRef.current?.contains(t)) return;
+      if (salesMenuRef.current?.contains(t)) return;
+      setSalesMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSalesMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [isCollapsed, salesMenuOpen]);
+
+  const setSidebarCollapsed = (next: boolean) => {
+    setIsCollapsed(next);
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_PREF_KEY, next ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  };
 
   // Реальная высота окна в пикселях (100%/100vh ненадёжны в цепочке flex-родителей —
   // считаем сами и передаём вниз конкретное число, а не проценты)
@@ -163,7 +227,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       const btn = salesButtonRef.current;
       if (!btn) return;
       const rect = btn.getBoundingClientRect();
-      setSalesFlyoutPos({ top: rect.top, left: rect.right + 8 });
+      const estimatedH = 260;
+      const maxTop = Math.max(8, window.innerHeight - estimatedH - 8);
+      const top = Math.min(Math.max(8, rect.top), maxTop);
+      setSalesFlyoutPos({ top, left: rect.right + 8 });
     };
     updatePos();
     window.addEventListener('resize', updatePos);
@@ -246,6 +313,51 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const isLoggedIn = !!user && !roleLoading;
   const userRole = user?.role || null;
   const isGuest = userRole === 'guest';
+
+  const navOk = (section: NavSection) =>
+    canAccessNavSection(userRole, section, systemSettings.roleAccess);
+
+  userRoleRef.current = userRole;
+
+  // Системные настройки: mute/баннер/меню/дефолт сайдбара
+  useEffect(() => {
+    if (!userRole) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/adminCifra/system-settings', {
+          headers: adminCifraAuthHeaders(),
+        });
+        if (cancelled) return;
+        if (res.ok) {
+          const data = (await res.json()) as SystemSettingsData;
+          if (cancelled) return;
+          setSystemSettings(data);
+          setRouteOriginCoordsOverride({ lat: data.plant.lat, lon: data.plant.lon });
+          setRouteOriginAddressOverride(data.plant.address);
+          const pref = localStorage.getItem(SIDEBAR_COLLAPSED_PREF_KEY);
+          if (pref === '0' || pref === '1') {
+            setIsCollapsed(pref === '1');
+          } else {
+            setIsCollapsed(Boolean(data.interface?.sidebarCollapsedDefault));
+          }
+          try {
+            const key = bannerDismissStorageKey(data.interface.banner);
+            setBannerDismissed(sessionStorage.getItem(key) === '1');
+          } catch {
+            setBannerDismissed(false);
+          }
+        }
+      } catch {
+        // дефолты уже в state
+      } finally {
+        if (!cancelled) setSettingsHydrated(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userRole]);
 
   // ==================== 1.2 АВТОМАТИЧЕСКИЙ РЕДИРЕКТ НА МОБИЛЬНУЮ ВЕРСИЮ ====================
   useEffect(() => {
@@ -551,11 +663,14 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   };
 
   // ==================== 4.3A ВОССТАНОВЛЕНИЕ УВЕДОМЛЕНИЙ ПРИ ЗАГРУЗКЕ СТРАНИЦЫ ====================
+  // Ждём settingsHydrated — иначе muteToasts ещё дефолт false и тосты всплывут зря.
   useEffect(() => {
+    if (!settingsHydrated) return;
+    if (systemSettingsRef.current.notifications.muteToasts) return;
     const saved = loadPersistedNotifs();
     if (saved.length === 0) return;
-    // Небольшая задержка чтобы контейнер успел смонтироваться в DOM
     const timer = setTimeout(() => {
+      if (systemSettingsRef.current.notifications.muteToasts) return;
       saved.forEach(n => {
         const tone =
           n.tone ||
@@ -573,12 +688,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
           tone,
         );
       });
-      // Обновляем счётчик
       setNewOrdersCount(prev => prev + saved.length);
     }, 300);
     return () => clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [settingsHydrated]);
 
   // ==================== 4.2.1 ВЫСОКОУРОВНЕВАЯ ФУНКЦИЯ — ПРИШЛО НОВОЕ СОБЫТИЕ ====================
   type OrderNotifType = 'new' | 'status' | 'volume' | 'datetime' | 'grade';
@@ -694,7 +807,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       icon = 'package';
       title = who ? `${who} ${created} заявку` : 'Новая заявка';
       const deliveryStr = formatDate(orderData?.delivery_date);
-      message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} м³`;
+      const unit = orderVolumeUnit(orderData);
+      message = `№${orderId} — ${orderData?.grade || ''} — ${orderData?.volume || ''} ${unit}`;
       if (deliveryStr) message += ` — на ${deliveryStr}`;
     } else if (type === 'status') {
       const statusMap: Record<string, string> = {
@@ -730,7 +844,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     } else if (type === 'volume') {
       icon = 'package';
       title = who ? `${who} ${changed} объём` : 'Изменён объём';
-      message = `Заявка №${orderId} — было ${oldData?.volume || '?'} → стало ${orderData?.volume} м³`;
+      const unit = orderVolumeUnit(orderData);
+      message = `Заявка №${orderId} — было ${oldData?.volume || '?'} → стало ${orderData?.volume} ${unit}`;
     } else if (type === 'datetime') {
       icon = 'clock';
       title = who ? `${who} ${changed} дату и время` : 'Изменены дата и время';
@@ -746,16 +861,29 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       title = who ? `${who} ${changed} марку` : 'Изменена марка';
       message = `Заявка №${orderId} — ${oldGrade} → ${newGrade}`;
       if (orderData?.volume != null && orderData?.volume !== '') {
-        message += ` · ${orderData.volume} м³`;
+        message += ` · ${orderData.volume} ${orderVolumeUnit(orderData)}`;
       }
+    }
+
+    const notifCfg = systemSettingsRef.current.notifications;
+    if (!notifCfg.channelToasts) return;
+    const role = (userRoleRef.current || '').toLowerCase();
+    if (
+      !notifCfg.orderToastRoles.map((r) => r.toLowerCase()).includes(role)
+    ) {
+      return;
     }
 
     // Сохраняем в localStorage — переживёт перезагрузку страницы
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    savePersistedNotif({ id, icon, title, message, timestamp: Date.now() });
+    if (!notifCfg.muteToasts) {
+      savePersistedNotif({ id, icon, title, message, timestamp: Date.now() });
+    }
 
-    playNotificationSound();
-    createToastRef.current?.(id, icon, title, message);
+    if (!notifCfg.muteSound) playNotificationSound();
+    if (!notifCfg.muteToasts) {
+      createToastRef.current?.(id, icon, title, message);
+    }
   };
 
   // ==================== 4.3 HEARTBEAT — активность для «Кто в онлайн» ====================
@@ -770,8 +898,11 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
   // ==================== БЛОК 5. REALTIME-УВЕДОМЛЕНИЯ О ЗАЯВКАХ ====================
   const staffRoles = ['admin', 'manager', 'dispatcher', 'operator'];
-  const { status: realtimeStatus } = useOrderChangeNotifications({
-    enabled: !!userRole && staffRoles.includes(userRole),
+  // Канал всегда подписываем у staff — mute/роли гасят только показ тоста.
+  // Иначе индикатор realtime зависает в CONNECTING при выключенных тостах.
+  const orderChannelEnabled = !!userRole && staffRoles.includes(userRole);
+  useOrderChangeNotifications({
+    enabled: orderChannelEnabled,
     onNewOrder: (order) => {
       setNewOrdersCount((prev) => prev + 1);
       void showVisualNotification('new', order);
@@ -789,6 +920,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       void showVisualNotification('grade', order, oldOrder);
     },
   });
+  const realtimeStatus = useGlobalBroadcastStatus();
 
   // Тост: новый комментарий сотрудника к заявке (не показываем автору).
   // Лаборант не получает: у него только «Лаборатория», заявок не видит.
@@ -810,21 +942,29 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       const message = `от: ${author}${preview ? ` — ${preview}` : ''}`;
       const href = `/adminCifra/zayavki?orderId=${orderId}&tab=comments`;
 
-      savePersistedNotif({
-        id,
-        icon: 'package',
-        title,
-        message,
-        timestamp: Date.now(),
-        href,
-        tone: 'comment',
-      });
+      const notifCfg = systemSettingsRef.current.notifications;
+      if (!notifCfg.channelToasts) return;
+      const role = (userRoleRef.current || '').toLowerCase();
+      if (!notifCfg.orderToastRoles.map((r) => r.toLowerCase()).includes(role)) return;
+      if (!notifCfg.muteToasts) {
+        savePersistedNotif({
+          id,
+          icon: 'package',
+          title,
+          message,
+          timestamp: Date.now(),
+          href,
+          tone: 'comment',
+        });
+      }
 
       // Уже висит в DOM (повторный broadcast) — не дублируем
       if (document.querySelector(`[data-notif-id="${id}"]`)) return;
 
-      playNotificationSound();
-      createToastRef.current?.(id, 'package', title, message, href, 'comment');
+      if (!notifCfg.muteSound) playNotificationSound();
+      if (!notifCfg.muteToasts) {
+        createToastRef.current?.(id, 'package', title, message, href, 'comment');
+      }
     },
   });
 
@@ -840,17 +980,23 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     message: string,
     href: string,
   ) => {
-    savePersistedNotif({
-      id,
-      icon: 'package',
-      title,
-      message,
-      timestamp: Date.now(),
-      href,
-      tone: 'lead',
-    });
-    playNotificationSound();
-    createToastRef.current?.(id, 'package', title, message, href, 'lead');
+    const notifCfg = systemSettingsRef.current.notifications;
+    if (!notifCfg.channelToasts) return;
+    if (!notifCfg.muteToasts) {
+      savePersistedNotif({
+        id,
+        icon: 'package',
+        title,
+        message,
+        timestamp: Date.now(),
+        href,
+        tone: 'lead',
+      });
+    }
+    if (!notifCfg.muteSound) playNotificationSound();
+    if (!notifCfg.muteToasts) {
+      createToastRef.current?.(id, 'package', title, message, href, 'lead');
+    }
   };
 
   useLeadChangeNotifications({
@@ -960,24 +1106,45 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   }, [pathname]);
 
   // ==================== 6.0 ОГРАНИЧЕНИЕ ДОСТУПА ПО РОЛЯМ ====================
-  // Лаборант — только «Лаборатория».
-  // Оператор / лаборант — без раздела «Продажи» (прямые ссылки тоже режем).
+  // Матрица из Настроек + наследие laborant/operator.
   useEffect(() => {
     if (!userRole || !pathname) return;
+
+    const firstAllowedPath = (): string => {
+      if (userRole === 'laborant') return '/adminCifra/recipes';
+      const candidates: Array<[NavSection, string]> = [
+        ['dashboard', '/adminCifra/dashboard'],
+        ['zayavki', '/adminCifra/zayavki'],
+        ['operator', '/adminCifra/operator'],
+        ['recipes', '/adminCifra/recipes'],
+        ['mixers', '/adminCifra/mixers'],
+        ['clients', '/adminCifra/clients'],
+        ['tasks', '/adminCifra/tasks'],
+      ];
+      for (const [section, path] of candidates) {
+        if (canAccessNavSection(userRole, section, systemSettings.roleAccess)) return path;
+      }
+      return '/adminCifra/dashboard';
+    };
+
+    const redirectSafe = (target: string) => {
+      if (target === pathname) return;
+      router.replace(target);
+    };
+
     if (userRole === 'laborant' && pathname !== '/adminCifra/recipes') {
-      router.replace('/adminCifra/recipes');
+      redirectSafe('/adminCifra/recipes');
       return;
     }
     if (!canAccessSales(userRole) && isSalesPath(pathname)) {
-      router.replace(
-        userRole === 'laborant'
-          ? '/adminCifra/recipes'
-          : userRole === 'operator'
-            ? '/adminCifra/operator'
-            : '/adminCifra/dashboard',
-      );
+      redirectSafe(firstAllowedPath());
+      return;
     }
-  }, [userRole, pathname, router]);
+    const section = pathnameToNavSection(pathname);
+    if (section && !canAccessNavSection(userRole, section, systemSettings.roleAccess)) {
+      redirectSafe(firstAllowedPath());
+    }
+  }, [userRole, pathname, router, systemSettings.roleAccess]);
 
   // ==================== 6.1 ЗАГРУЗКА ====================
   if (roleLoading) {
@@ -1136,7 +1303,9 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const scale = getGlobalScale();
   // Страницы-"каркасы": без скролла страницы целиком, со своим внутренним
   // скроллом по зонам (как дашборд) — сейчас это дашборд, заявки, оператор БСУ и миксеры.
-  const isFrameLayout = pathname === '/adminCifra/dashboard' || pathname === '/adminCifra/zayavki' || pathname === '/adminCifra/operator' || pathname === '/adminCifra/mixers' || pathname === '/adminCifra/technika' || pathname === '/adminCifra/tasks' || pathname === '/adminCifra/clients' || pathname === '/adminCifra/recipes' || pathname === '/adminCifra/loading-points' || pathname === '/adminCifra/competitors';
+  const isFrameLayout = pathname === '/adminCifra/dashboard' || pathname === '/adminCifra/zayavki' || pathname === '/adminCifra/operator' || pathname === '/adminCifra/mixers' || pathname === '/adminCifra/technika' || pathname === '/adminCifra/tasks' || pathname === '/adminCifra/clients' || pathname === '/adminCifra/recipes' || pathname === '/adminCifra/loading-points' || pathname === '/adminCifra/competitors' || pathname === '/adminCifra/settings';
+  const showStaffBanner =
+    !bannerDismissed && isBannerActive(systemSettings.interface.banner);
   const isDashboard = isFrameLayout;
   // Высота ДО применения transform: scale — после масштабирования визуально
   // она станет равна ровно viewportH (реальной высоте окна браузера).
@@ -1178,7 +1347,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
         <div 
           className="sidebar-menu"
           style={{
-            width: isCollapsed ? '68px' : '280px',
+            width: isCollapsed ? 68 : 280,
             backgroundColor: '#1E2937',
             color: '#fff',
             // padding только сверху — низ отдаём подвалу, иначе при content-box
@@ -1189,8 +1358,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             display: 'flex',
             flexDirection: 'column',
             borderRight: '1px solid #334155',
-            // cubic-bezier даёт более «упругий» эффект раскрытия по сравнению с linear ease
-            transition: 'width 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+            transition: `width ${SIDEBAR_TRANSITION}`,
             flexShrink: 0,
             height: '100%',
             overflow: 'hidden',
@@ -1201,61 +1369,53 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
           <div style={{ 
             display: 'flex', 
             justifyContent: isCollapsed ? 'center' : 'flex-end', 
-            marginBottom: '16px',
-            paddingRight: isCollapsed ? 0 : '16px',
-            paddingLeft: isCollapsed ? 0 : '16px',
-            transition: 'padding 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+            marginBottom: isCollapsed ? 32 : 20,
+            paddingRight: isCollapsed ? 0 : 16,
+            paddingLeft: isCollapsed ? 0 : 16,
+            transition: `padding ${SIDEBAR_TRANSITION}, margin-bottom ${SIDEBAR_TRANSITION}`,
           }}>
             <button 
-              onClick={() => setIsCollapsed(!isCollapsed)}
+              onClick={() => {
+                setSidebarCollapsed(!isCollapsed);
+                const nextCollapsed = !isCollapsed;
+                if (!nextCollapsed && isSalesSection) setSalesMenuOpen(true);
+                if (nextCollapsed) setSalesMenuOpen(false);
+              }}
+              aria-label={isCollapsed ? 'Развернуть меню' : 'Свернуть меню'}
+              title={isCollapsed ? 'Развернуть меню' : 'Свернуть меню'}
               style={{
-                background: 'none',
-                border: 'none',
-                color: '#94A3B8',
+                width: 36,
+                height: 36,
+                padding: 0,
+                borderRadius: 10,
+                border: '1px solid rgba(148, 163, 184, 0.28)',
+                background: 'rgba(148, 163, 184, 0.08)',
+                color: '#CBD5E1',
                 cursor: 'pointer',
-                padding: '8px',
-                borderRadius: '8px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                transition: 'color 0.2s',
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)',
+                transition: 'color 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.2s',
               }}
-              onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
-              onMouseLeave={e => (e.currentTarget.style.color = '#94A3B8')}
+              onMouseEnter={e => {
+                e.currentTarget.style.color = '#fff';
+                e.currentTarget.style.background = 'rgba(74, 222, 128, 0.12)';
+                e.currentTarget.style.borderColor = 'rgba(74, 222, 128, 0.45)';
+                e.currentTarget.style.boxShadow = '0 0 12px rgba(74, 222, 128, 0.18)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.color = '#CBD5E1';
+                e.currentTarget.style.background = 'rgba(148, 163, 184, 0.08)';
+                e.currentTarget.style.borderColor = 'rgba(148, 163, 184, 0.28)';
+                e.currentTarget.style.boxShadow = 'inset 0 1px 0 rgba(255,255,255,0.04)';
+              }}
             >
-              {isCollapsed ? <Menu size={22} /> : <X size={20} />}
+              {isCollapsed
+                ? <PanelLeftOpen size={18} strokeWidth={1.75} />
+                : <PanelLeftClose size={18} strokeWidth={1.75} />}
             </button>
           </div>
-
-          {/* ==================== 9.1 ЛОГОТИП — только в развёрнутом виде ==================== */}
-          {!isCollapsed && (
-            <div style={{ 
-              padding: '0 20px', 
-              marginBottom: '28px', 
-              textAlign: 'center',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-            }}>
-              <Image 
-                src="/logo-tradecom-white.png"
-                alt="TRADECOM" 
-                width={220}
-                height={106}
-                style={{ objectFit: 'contain', borderRadius: '8px' }} 
-                priority
-              />
-              <p style={{ 
-                fontSize: '12px', 
-                color: '#64748B', 
-                marginTop: '6px',
-                letterSpacing: '0.5px',
-                whiteSpace: 'nowrap',
-              }}>
-                ТрейдКом • ДИСПЕТЧЕРИЗАЦИЯ
-              </p>
-            </div>
-          )}
 
           {/* ==================== ИНДИКАТОР REALTIME ==================== */}
           {staffRoles.includes(userRole || '') && (
@@ -1268,19 +1428,23 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px',
-                padding: isCollapsed ? '4px 0' : '4px 12px',
-                marginBottom: '8px',
-                justifyContent: isCollapsed ? 'center' : 'flex-start',
+                justifyContent: 'center',
+                gap: isCollapsed ? 0 : 6,
+                width: '100%',
+                boxSizing: 'border-box',
+                padding: isCollapsed ? '6px 0' : '4px 12px',
+                marginBottom: isCollapsed ? 10 : 8,
                 cursor: realtimeStatus !== 'SUBSCRIBED' ? 'pointer' : 'default',
+                transition: `padding ${SIDEBAR_TRANSITION}, gap ${SIDEBAR_TRANSITION}`,
               }}
               onClick={() => realtimeStatus !== 'SUBSCRIBED' && reconnectAllBroadcastChannels()}
             >
               <span style={{
-                width: '8px',
-                height: '8px',
+                width: 8,
+                height: 8,
                 borderRadius: '50%',
                 flexShrink: 0,
+                display: 'block',
                 background:
                   realtimeStatus === 'SUBSCRIBED' ? '#4ADE80' :
                   realtimeStatus === 'CONNECTING' ? '#FACC15' : '#F87171',
@@ -1290,12 +1454,13 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               }} />
               {!isCollapsed && (
                 <span style={{
-                  fontSize: '11px',
+                  fontSize: 11,
+                  paddingLeft: 6,
                   color:
                     realtimeStatus === 'SUBSCRIBED' ? '#4ADE80' :
                     realtimeStatus === 'CONNECTING' ? '#FACC15' : '#F87171',
-                  whiteSpace: 'nowrap',
                   letterSpacing: '0.02em',
+                  whiteSpace: 'nowrap',
                 }}>
                   {realtimeStatus === 'SUBSCRIBED' ? 'Уведомления' :
                    realtimeStatus === 'CONNECTING' ? 'Подключение...' :
@@ -1315,12 +1480,15 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               </Link>
             ) : (
             <>
+            {navOk('dashboard') && (
             <Link href="/adminCifra/dashboard" style={navLinkStyle(isActive('/adminCifra/dashboard'), isCollapsed)}>
               <Home size={22} />
               <span style={navTextStyle(isCollapsed)}>Диспетчерская</span>
             </Link>
+            )}
 
             {/* ==================== БЛОК 10: ПУНКТ МЕНЮ "ЗАЯВКИ" ==================== */}
+            {navOk('zayavki') && (
             <Link 
               href="/adminCifra/zayavki" 
               style={navLinkStyle(isActive('/adminCifra/zayavki'), isCollapsed)}
@@ -1329,9 +1497,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               <Package size={22} />
               <span style={navTextStyle(isCollapsed)}>Заявки</span>
             </Link>
+            )}
 
             {/* ==================== ПРОДАЖИ: без operator / laborant ==================== */}
-            {canAccessSales(userRole) && (
+            {navOk('sales') && canAccessSales(userRole) && (
             <>
             <div ref={salesMenuRef} style={{ position: 'relative', marginBottom: 4 }}>
               <button
@@ -1384,48 +1553,59 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 <span style={{ ...navTextStyle(isCollapsed), flex: isCollapsed ? undefined : 1 }}>
                   Продажи
                 </span>
-                {!isCollapsed && salesBadgeCount > 0 && (
-                  <span
-                    aria-label={`Новых: ${salesBadgeCount}`}
-                    style={{
-                      minWidth: 20,
-                      height: 20,
-                      padding: '0 6px',
-                      borderRadius: 9999,
-                      background: '#EAB308',
-                      color: '#0F172A',
-                      fontSize: 12,
-                      fontWeight: 800,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                      marginRight: 4,
-                    }}
-                  >
-                    {salesBadgeCount > 99 ? '99+' : salesBadgeCount}
-                  </span>
-                )}
-                {!isCollapsed && (
-                  <ChevronDown
-                    size={16}
-                    style={{
-                      marginLeft: 4,
-                      flexShrink: 0,
-                      opacity: 0.85,
-                      transform: salesMenuOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                      transition: 'transform 0.2s ease',
-                    }}
-                  />
-                )}
+                <span
+                  aria-hidden={isCollapsed || salesBadgeCount <= 0}
+                  aria-label={!isCollapsed && salesBadgeCount > 0 ? `Новых: ${salesBadgeCount}` : undefined}
+                  style={{
+                    minWidth: isCollapsed || salesBadgeCount <= 0 ? 0 : 20,
+                    width: isCollapsed || salesBadgeCount <= 0 ? 0 : 'auto',
+                    height: 20,
+                    padding: isCollapsed || salesBadgeCount <= 0 ? 0 : '0 6px',
+                    borderRadius: 9999,
+                    background: '#EAB308',
+                    color: '#0F172A',
+                    fontSize: 12,
+                    fontWeight: 800,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    marginRight: isCollapsed || salesBadgeCount <= 0 ? 0 : 4,
+                    opacity: !isCollapsed && salesBadgeCount > 0 ? 1 : 0,
+                    overflow: 'hidden',
+                    transition: `opacity 0.25s ${SIDEBAR_EASE}, min-width ${SIDEBAR_TRANSITION}, margin ${SIDEBAR_TRANSITION}, padding ${SIDEBAR_TRANSITION}`,
+                    pointerEvents: 'none',
+                  }}
+                >
+                  {salesBadgeCount > 99 ? '99+' : salesBadgeCount || 0}
+                </span>
+                <ChevronDown
+                  size={16}
+                  aria-hidden={isCollapsed}
+                  style={{
+                    marginLeft: isCollapsed ? 0 : 4,
+                    width: isCollapsed ? 0 : 16,
+                    flexShrink: 0,
+                    opacity: isCollapsed ? 0 : 0.85,
+                    overflow: 'hidden',
+                    transform: salesMenuOpen && !isCollapsed ? 'rotate(180deg)' : 'rotate(0deg)',
+                    transition: `transform 0.28s ${SIDEBAR_EASE}, opacity 0.25s ${SIDEBAR_EASE}, width ${SIDEBAR_TRANSITION}, margin ${SIDEBAR_TRANSITION}`,
+                  }}
+                />
               </button>
 
-              {/* Развёрнутый сайдбар — дерево подпунктов */}
-              {!isCollapsed && salesMenuOpen && (
+              {/* Развёрнутый сайдбар — дерево подпунктов (высота анимируется, без mount/unmount) */}
+              <div
+                style={{
+                  ...sidebarRevealStyle(!isCollapsed && salesMenuOpen),
+                  marginTop: !isCollapsed && salesMenuOpen ? 4 : 0,
+                  marginBottom: !isCollapsed && salesMenuOpen ? 2 : 0,
+                  transition: `grid-template-rows ${SIDEBAR_TRANSITION}, opacity 0.28s ${SIDEBAR_EASE}, margin ${SIDEBAR_TRANSITION}`,
+                }}
+              >
+                <div style={{ overflow: 'hidden', minHeight: 0 }}>
                 <div
                   style={{
-                    marginTop: 4,
-                    marginBottom: 2,
                     marginLeft: 18,
                     padding: '2px 0',
                   }}
@@ -1439,6 +1619,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                         <Link
                           key={item.href}
                           href={item.href}
+                          tabIndex={!isCollapsed && salesMenuOpen ? 0 : -1}
                           onClick={() => {
                             if (item.href === '/adminCifra/leads') setNewLeadsCount(0);
                             if (item.href === '/adminCifra/demand') setNewDemandCount(0);
@@ -1594,7 +1775,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                     },
                   )}
                 </div>
-              )}
+                </div>
+              </div>
             </div>
 
             {/* Свёрнутый сайдбар — portal в body, иначе overflow:hidden сайдбара обрезает панель */}
@@ -1702,50 +1884,66 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
             {/* ==================== БЛОК 11: ОГРАНИЧЕНИЕ МЕНЮ ==================== */}
             {userRole === 'operator' ? (
+              navOk('operator') && (
               <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
                 <UserCog size={22} />
                 <span style={navTextStyle(isCollapsed)}>Оператор БСУ</span>
               </Link>
+              )
             ) : (
               <>
+                {navOk('recipes') && (
                 <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
                   <FlaskConical size={22} />
                   <span style={navTextStyle(isCollapsed)}>Лаборатория</span>
                 </Link>
+                )}
 
+                {navOk('mixers') && (
                 <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers') || isActive('/adminCifra/technika'), isCollapsed)}>
                   <Truck size={22} />
                   <span style={navTextStyle(isCollapsed)}>Техника</span>
                 </Link>
+                )}
 
+                {navOk('loading_points') && (
                 <Link href="/adminCifra/loading-points" style={navLinkStyle(isActive('/adminCifra/loading-points'), isCollapsed)}>
                   <MapPin size={22} />
                   <span style={navTextStyle(isCollapsed)}>Точки погрузки</span>
                 </Link>
+                )}
 
+                {navOk('competitors') && (
                 <Link href="/adminCifra/competitors" style={navLinkStyle(isActive('/adminCifra/competitors'), isCollapsed)}>
                   <Store size={22} />
                   <span style={navTextStyle(isCollapsed)}>Конкуренты</span>
                 </Link>
+                )}
 
+                {navOk('clients') && (
                 <Link href="/adminCifra/clients" style={navLinkStyle(isActive('/adminCifra/clients'), isCollapsed)}>
                   <Users size={22} />
                   <span style={navTextStyle(isCollapsed)}>Клиенты</span>
                 </Link>
+                )}
 
                 {/* Операционка: поручения сотрудникам (не путать с Лидами в «Продажи») */}
+                {navOk('tasks') && (
                 <Link href="/adminCifra/tasks" style={navLinkStyle(isActive('/adminCifra/tasks'), isCollapsed)}>
                   <CheckCircle size={22} />
                   <span style={navTextStyle(isCollapsed)}>Задачи</span>
                 </Link>
+                )}
 
+                {navOk('operator') && (
                 <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
                   <UserCog size={22} />
                   <span style={navTextStyle(isCollapsed)}>Оператор БСУ</span>
                 </Link>
+                )}
 
                 {/* ==================== БЛОК 12 ССЫЛКА "КТО В ОНЛАЙН" ==================== */}
-                {(userRole === 'admin') && (
+                {navOk('online') && (
                   <Link href="/adminCifra/online" style={navLinkStyle(false, isCollapsed)}>
                     <Globe size={22} />
                     <span style={navTextStyle(isCollapsed)}>Кто в онлайн</span>
@@ -1770,6 +1968,17 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             </>
             )}
 
+            {userRole === 'admin' && (
+              <Link
+                href="/adminCifra/settings"
+                style={navLinkStyle(isActive('/adminCifra/settings'), isCollapsed)}
+                title={isCollapsed ? 'Настройки' : undefined}
+              >
+                <Settings size={22} />
+                <span style={navTextStyle(isCollapsed)}>Настройки</span>
+              </Link>
+            )}
+
             {/* ==================== БЛОК 13.1 ЛИЧНЫЙ ВЫХОД ==================== */}
             <Link
               href="#"
@@ -1784,10 +1993,52 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             </Link>
           </nav>
 
-          {/* ==================== ПОДВАЛ САЙДБАРА ==================== */}
+          {/* Блок «лого + подвал» прижат вниз; в свёрнутом меню лого нет */}
           <div
             style={{
               marginTop: 'auto',
+              flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+          {!isCollapsed && (
+            <div
+              style={{
+                flexShrink: 0,
+                padding: '8px 20px 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                textAlign: 'center',
+              }}
+            >
+              <Image
+                src="/logo-tradecom-white.png"
+                alt="TRADECOM"
+                width={180}
+                height={86}
+                style={{ objectFit: 'contain', borderRadius: 8 }}
+                priority
+              />
+              <p
+                style={{
+                  fontSize: 11,
+                  color: '#64748B',
+                  marginTop: 4,
+                  marginBottom: 0,
+                  letterSpacing: '0.5px',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                ТрейдКом • ДИСПЕТЧЕРИЗАЦИЯ
+              </p>
+            </div>
+          )}
+
+          {/* ==================== ПОДВАЛ САЙДБАРА ==================== */}
+          <div
+            style={{
               padding: isCollapsed ? '10px 6px 12px' : '10px 14px 12px',
               borderTop: '1px solid #334155',
               display: 'flex',
@@ -1796,6 +2047,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               gap: 8,
               flexShrink: 0,
               boxSizing: 'border-box',
+              transition: `padding ${SIDEBAR_TRANSITION}`,
             }}
           >
             {userRole !== 'laborant' && (
@@ -1805,8 +2057,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   flexDirection: 'row',
                   alignItems: 'center',
                   justifyContent: isCollapsed ? 'center' : 'flex-start',
-                  flexWrap: 'wrap',
+                  flexWrap: 'nowrap',
                   gap: 4,
+                  overflow: 'hidden',
+                  transition: `justify-content ${SIDEBAR_TRANSITION}`,
                 }}
               >
                 <button
@@ -1828,7 +2082,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                     fontSize: 11,
                     fontWeight: 500,
                     lineHeight: 1,
-                    transition: 'color 0.15s, background 0.15s, border-color 0.15s',
+                    transition: `color 0.15s, background 0.15s, border-color 0.15s, padding ${SIDEBAR_TRANSITION}`,
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.color = '#E2E8F0';
@@ -1842,31 +2096,40 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   }}
                 >
                   <Smartphone size={14} strokeWidth={1.75} />
-                  {!isCollapsed && <span>Мобильная</span>}
+                  <span style={{ ...navTextStyle(isCollapsed), paddingLeft: 0, maxWidth: isCollapsed ? 0 : 90 }}>
+                    Мобильная
+                  </span>
                 </button>
-                {userRole === 'admin' && !isCollapsed && (
+                {userRole === 'admin' && (
                   <button
                     type="button"
                     onClick={() => { void forceLogoutAll(); }}
                     title="Разлогинить всех"
                     aria-label="Разлогинить всех"
+                    tabIndex={isCollapsed ? -1 : 0}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       gap: 6,
-                      padding: '4px 8px',
+                      padding: isCollapsed ? 0 : '4px 8px',
+                      maxWidth: isCollapsed ? 0 : 160,
+                      opacity: isCollapsed ? 0 : 1,
+                      overflow: 'hidden',
                       borderRadius: 8,
                       border: '1px solid transparent',
                       background: 'transparent',
                       color: '#94A3B8',
-                      cursor: 'pointer',
+                      cursor: isCollapsed ? 'default' : 'pointer',
                       fontSize: 11,
                       fontWeight: 500,
                       lineHeight: 1,
-                      transition: 'color 0.15s, background 0.15s, border-color 0.15s',
+                      whiteSpace: 'nowrap',
+                      pointerEvents: isCollapsed ? 'none' : 'auto',
+                      transition: `color 0.15s, background 0.15s, border-color 0.15s, max-width ${SIDEBAR_TRANSITION}, opacity 0.25s ${SIDEBAR_EASE}, padding ${SIDEBAR_TRANSITION}`,
                     }}
                     onMouseEnter={(e) => {
+                      if (isCollapsed) return;
                       e.currentTarget.style.color = '#E2E8F0';
                       e.currentTarget.style.background = 'rgba(148,163,184,0.1)';
                       e.currentTarget.style.borderColor = '#475569';
@@ -1883,68 +2146,131 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 )}
               </div>
             )}
-            {!isCollapsed ? (
-              <div
+            <div
+              title={isCollapsed ? `ООО «Трейдком» · ${formatBuildLabelFull()}` : formatBuildLabelFull()}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: isCollapsed ? 'center' : 'space-between',
+                gap: isCollapsed ? 0 : 8,
+                fontSize: 10,
+                lineHeight: 1.2,
+                letterSpacing: '0.01em',
+                minWidth: 0,
+                color: '#94A3B8',
+                transition: `gap ${SIDEBAR_TRANSITION}, justify-content ${SIDEBAR_TRANSITION}`,
+              }}
+            >
+              <span
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  fontSize: 10,
-                  lineHeight: 1.2,
-                  letterSpacing: '0.01em',
+                  color: '#94A3B8',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                  maxWidth: isCollapsed ? 0 : 140,
+                  opacity: isCollapsed ? 0 : 1,
+                  overflow: 'hidden',
+                  transition: `max-width ${SIDEBAR_TRANSITION}, opacity 0.25s ${SIDEBAR_EASE}`,
+                }}
+              >
+                © ООО «Трейдком»
+              </span>
+              <span
+                style={{
+                  color: '#94A3B8',
+                  fontWeight: 500,
+                  whiteSpace: 'nowrap',
+                  textAlign: isCollapsed ? 'center' : 'right',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
                   minWidth: 0,
                 }}
               >
-                <span style={{ color: '#94A3B8', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                  © ООО «Трейдком»
-                </span>
-                <span
-                  style={{
-                    color: '#94A3B8',
-                    fontWeight: 500,
-                    whiteSpace: 'nowrap',
-                    textAlign: 'right',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    minWidth: 0,
-                  }}
-                  title={formatBuildLabelFull()}
-                >
-                  {formatBuildVersion()}
-                </span>
-              </div>
-            ) : (
-              <div
-                title={`ООО «Трейдком» · ${formatBuildLabelFull()}`}
-                style={{
-                  fontSize: 10,
-                  color: '#94A3B8',
-                  textAlign: 'center',
-                  lineHeight: 1.2,
-                  fontWeight: 500,
-                }}
-              >
                 {formatBuildVersion()}
-              </div>
-            )}
+              </span>
+            </div>
+          </div>
           </div>
         </div>
 
         {/* ==================== 14. ОСНОВНОЙ КОНТЕНТ ==================== */}
         <div style={{ 
           flex: 1, 
+          minWidth: 0,
           minHeight: 0,
           alignSelf: 'stretch',
           boxSizing: 'border-box',
           overflow: isDashboard ? 'hidden' : 'auto', 
           overscrollBehavior: 'none',
           padding: isDashboard ? '14px 20px' : '20px 32px', 
-          display: isDashboard ? 'flex' : 'block',
+          display: 'flex',
           flexDirection: 'column',
           backgroundColor: '#0F172A',
         }}>
-          {children}
+          {showStaffBanner && (
+            <div
+              style={{
+                flexShrink: 0,
+                marginBottom: 12,
+                padding: '10px 14px',
+                borderRadius: 12,
+                border: '1px solid rgba(250,204,21,0.45)',
+                background:
+                  'linear-gradient(165deg, rgba(250,204,21,0.18) 0%, rgba(15,23,42,0.95) 70%)',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 12,
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {systemSettings.interface.banner.title.trim() && (
+                  <div style={{ fontWeight: 700, color: '#FDE68A', fontSize: 14, marginBottom: 2 }}>
+                    {systemSettings.interface.banner.title}
+                  </div>
+                )}
+                {systemSettings.interface.banner.body.trim() && (
+                  <div style={{ color: '#E2E8F0', fontSize: 13, lineHeight: 1.4, whiteSpace: 'pre-wrap' }}>
+                    {systemSettings.interface.banner.body}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                aria-label="Скрыть объявление"
+                onClick={() => {
+                  setBannerDismissed(true);
+                  try {
+                    sessionStorage.setItem(
+                      bannerDismissStorageKey(systemSettings.interface.banner),
+                      '1',
+                    );
+                  } catch {
+                    // ignore
+                  }
+                }}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#94A3B8',
+                  cursor: 'pointer',
+                  padding: 4,
+                  display: 'inline-flex',
+                }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: isDashboard ? 'flex' : 'block',
+              flexDirection: 'column',
+              overflow: isDashboard ? 'hidden' : 'visible',
+            }}
+          >
+            {children}
+          </div>
         </div>
       </div>
       <AppDialogHost />
@@ -1979,6 +2305,11 @@ function salesMenuItemVisible(
 // ==================== 15. СТИЛИ ДЛЯ ССЫЛОК ====================
 const ACCENT = '#4ADE80'; // Tailwind green-400 — «салатовый» акцент
 
+/** Единый easing для ширины сайдбара и сопутствующих анимаций. */
+const SIDEBAR_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
+const SIDEBAR_MS = '0.42s';
+const SIDEBAR_TRANSITION = `${SIDEBAR_MS} ${SIDEBAR_EASE}`;
+
 const navLinkStyle = (active: boolean, collapsed: boolean): React.CSSProperties => ({
   display: 'flex',
   alignItems: 'center',
@@ -1995,7 +2326,7 @@ const navLinkStyle = (active: boolean, collapsed: boolean): React.CSSProperties 
   fontSize: '15px',
   fontWeight: active ? '600' : '500',
   justifyContent: collapsed ? 'center' : 'flex-start',
-  transition: 'background-color 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s, padding 0.35s cubic-bezier(0.4,0,0.2,1)',
+  transition: `background-color 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s, padding ${SIDEBAR_TRANSITION}`,
   overflow: 'hidden',
   whiteSpace: 'nowrap',
   flexShrink: 0,
@@ -2009,6 +2340,17 @@ const navTextStyle = (collapsed: boolean): React.CSSProperties => ({
   opacity: collapsed ? 0 : 1,
   overflow: 'hidden',
   whiteSpace: 'nowrap',
-  transition: 'max-width 0.35s cubic-bezier(0.4,0,0.2,1), padding-left 0.35s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease',
+  transition: `max-width ${SIDEBAR_TRANSITION}, padding-left ${SIDEBAR_TRANSITION}, opacity 0.28s ${SIDEBAR_EASE}`,
+  transitionDelay: collapsed ? '0s, 0s, 0s' : '0.05s, 0.05s, 0.08s',
   flexShrink: 0,
+});
+
+/** Плавное скрытие блока по высоте (лого, подменю) — без mount/unmount. */
+const sidebarRevealStyle = (open: boolean): React.CSSProperties => ({
+  display: 'grid',
+  gridTemplateRows: open ? '1fr' : '0fr',
+  opacity: open ? 1 : 0,
+  transition: `grid-template-rows ${SIDEBAR_TRANSITION}, opacity 0.28s ${SIDEBAR_EASE}`,
+  transitionDelay: open ? '0.04s, 0.1s' : '0s, 0s',
+  pointerEvents: open ? 'auto' : 'none',
 });

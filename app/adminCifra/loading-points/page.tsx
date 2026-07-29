@@ -601,7 +601,7 @@ export default function LoadingPointsPage() {
                 checked={form.is_default}
                 onChange={(e) => setForm({ ...form, is_default: e.target.checked })}
               />
-              Точка по умолчанию для своего kind
+              По умолчанию для этого типа (Бетон / Щебень / Цемент / Смешанная)
             </label>
             <label
               style={{

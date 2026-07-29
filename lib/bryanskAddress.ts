@@ -5,6 +5,17 @@
 
 export const ROUTE_ORIGIN_ADDRESS = 'Брянск, Орловский тупик, 6';
 
+let routeOriginAddressOverride: string | null = null;
+
+export function setRouteOriginAddressOverride(address: string | null | undefined): void {
+  const t = String(address || '').trim();
+  routeOriginAddressOverride = t || null;
+}
+
+export function getRouteOriginAddress(): string {
+  return routeOriginAddressOverride || ROUTE_ORIGIN_ADDRESS;
+}
+
 const KNOWN_LANDMARKS: { keywords: string[]; address: string }[] = [
   { keywords: ['варяг'], address: 'Брянск, улица Дуки, 56В' },
 ];

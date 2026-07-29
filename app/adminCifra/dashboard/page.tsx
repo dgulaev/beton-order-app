@@ -26,6 +26,7 @@ import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts
 import FleetOpsTabs from '../components/FleetOpsTabs';
 import type { VehicleKind } from '@/lib/fleetCatalog';
 import { fleetInWorkLabel, orderMatchesFleetTab } from '@/lib/orderLogistics';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 export default function AdminCifraDashboard() {
 
@@ -40,6 +41,27 @@ export default function AdminCifraDashboard() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [fleetTab, setFleetTab] = useState<VehicleKind>('mixer');
   const [dashboardNarrow, setDashboardNarrow] = useState(false);
+  const [delayMinutesThreshold, setDelayMinutesThreshold] = useState(15);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/adminCifra/system-settings', {
+          headers: adminCifraAuthHeaders(),
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const n = Number(data?.logistics?.delayMinutesThreshold);
+        if (!cancelled && Number.isFinite(n) && n > 0) setDelayMinutesThreshold(n);
+      } catch {
+        // default 15
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const mq = window.matchMedia('(max-width: 1100px)');
@@ -552,7 +574,7 @@ const delayedOrders = selectedDateStr !== today ? [] : todayOrders
       delayText: delayMinutes > 0 ? `+${delayMinutes} мин` : '',
     };
   })
-  .filter(order => order.delayMinutes > 15)
+  .filter(order => order.delayMinutes > delayMinutesThreshold)
   .sort((a, b) => b.delayMinutes - a.delayMinutes);
 
 const fmtClockMins = (mins: number) => {
@@ -1143,15 +1165,17 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
         }}>
         
         {/* Topbar — центр плашек по строчным («испетчерская»), без заглавной «Д».
-            translateY компенсирует вынос заглавной над x-height. */}
+            translateY компенсирует вынос заглавной над x-height.
+            Без wrap: при раскрытии сайдбара шапка не прыгает на вторую строку. */}
 <div style={{ 
   display: 'flex', 
   justifyContent: 'space-between', 
   alignItems: 'center',
-  flexWrap: 'wrap',
-  gap: '16px',
+  flexWrap: 'nowrap',
+  gap: '12px',
+  minWidth: 0,
 }}>
-  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', height: 26 }}>
+  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'nowrap', height: 26, minWidth: 0, overflow: 'hidden' }}>
     <h1 style={{ 
       fontSize: 26,
       fontWeight: 700, 
@@ -1198,7 +1222,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
     </div>
   </div>
 
-         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', height: 26 }}>
+         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', height: 26, flexShrink: 0 }}>
   {(userRole === 'admin' || userRole === 'manager') && notifications.length > 0 && (
     <div 
       style={{ 
@@ -1217,6 +1241,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
         animation: 'pulse 2s infinite',
         cursor: 'pointer',
         transform: 'translateY(3px)',
+        whiteSpace: 'nowrap',
       }}
       onClick={() => window.location.href = '/adminCifra/withdrawals'}
     >
@@ -1242,79 +1267,92 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
     background: 'linear-gradient(165deg, rgba(74,222,128,0.22) 0%, rgba(15,23,42,0.95) 55%, rgba(15,23,42,1) 100%)',
     boxShadow: '0 8px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(74,222,128,0.35), inset 0 0 22px rgba(74,222,128,0.18)',
     transform: 'translateY(3px)',
+    whiteSpace: 'nowrap',
+    maxWidth: 180,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   })}>
-    <User size={15} strokeWidth={2} color="#4ADE80" />
-    {userFullName || 'Сотрудник'}
+    <User size={15} strokeWidth={2} color="#4ADE80" style={{ flexShrink: 0 }} />
+    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{userFullName || 'Сотрудник'}</span>
   </div>
 </div>
 </div>
 
        {/* ==================== 34. KPI — РЕАЛЬНЫЕ ДАННЫЕ ==================== */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 pb-2">
+        <div
+          className="grid grid-cols-2 lg:grid-cols-5 gap-4 pb-2"
+          style={{ alignItems: 'stretch', minWidth: 0 }}
+        >
           
        {/* ==================== 35. ЗАЯВКИ СЕГОДНЯ ==================== */}
 <div
   onClick={() => setShowOrdersModal(true)}
   style={volumeCardStyle({
     borderRadius: 18,
-    padding: '16px 20px',
+    padding: '16px 14px',
     flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
     cursor: 'pointer',
     transition: 'filter 0.2s',
   })}
   onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
   onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
 >
-  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-    <div style={{ color: '#94A3B8', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: '4px', minWidth: 0 }}>
+    <div style={{ color: '#94A3B8', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
       Заявки сегодня
     </div>
-    <span style={{ color: '#475569', fontSize: '12px' }}>подробнее →</span>
+    <span style={{ color: '#475569', fontSize: '12px', flexShrink: 0, whiteSpace: 'nowrap' }}>→</span>
   </div>
 
-  <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '4px' }}>
+  <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '4px', whiteSpace: 'nowrap' }}>
     <div style={{ fontSize: '52px', fontWeight: '700', color: '#60A5FA', lineHeight: 1 }}>
       {totalToday}
     </div>
-    <div style={{ color: '#64748B', fontSize: '13px' }}>
+    <div style={{ color: '#64748B', fontSize: '13px', flexShrink: 0 }}>
       {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
     </div>
   </div>
 
   <div style={{ height: '1px', background: '#334155', margin: '10px 0' }} />
 
-  {/* Два блока: активные | закрытые */}
-  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+  {/* Два блока: активные | закрытые — nowrap, чтобы при узкой колонке не росли по высоте */}
+  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', minWidth: 0 }}>
     <div style={volumeCardSoftStyle({
       borderRadius: 12,
-      padding: '10px 12px',
+      padding: '8px 8px',
       display: 'flex',
       flexDirection: 'column',
       gap: '8px',
+      minWidth: 0,
+      overflow: 'hidden',
     })}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px' }}>
-        <span style={{ color: '#94A3B8', fontSize: '12px' }}>🟡 Новые</span>
-        <strong style={{ color: '#FACC15', fontSize: '24px', fontWeight: 700, lineHeight: 1 }}>{newOrders}</strong>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 4, whiteSpace: 'nowrap', minWidth: 0 }}>
+        <span style={{ color: '#94A3B8', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis' }}>🟡 Новые</span>
+        <strong style={{ color: '#FACC15', fontSize: '22px', fontWeight: 700, lineHeight: 1, flexShrink: 0 }}>{newOrders}</strong>
       </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px' }}>
-        <span style={{ color: '#94A3B8', fontSize: '12px' }}>→ В работе</span>
-        <strong style={{ color: '#60A5FA', fontSize: '24px', fontWeight: 700, lineHeight: 1 }}>{inWorkOrders}</strong>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 4, whiteSpace: 'nowrap', minWidth: 0 }}>
+        <span style={{ color: '#94A3B8', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis' }}>→ В работе</span>
+        <strong style={{ color: '#60A5FA', fontSize: '22px', fontWeight: 700, lineHeight: 1, flexShrink: 0 }}>{inWorkOrders}</strong>
       </div>
     </div>
     <div style={volumeCardSoftStyle({
       borderRadius: 12,
-      padding: '10px 12px',
+      padding: '8px 8px',
       display: 'flex',
       flexDirection: 'column',
       gap: '8px',
+      minWidth: 0,
+      overflow: 'hidden',
     })}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px' }}>
-        <span style={{ color: '#94A3B8', fontSize: '12px' }}>✓ Выполнены</span>
-        <strong style={{ color: '#10B981', fontSize: '24px', fontWeight: 700, lineHeight: 1 }}>{completedOrders}</strong>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 4, whiteSpace: 'nowrap', minWidth: 0 }}>
+        <span style={{ color: '#94A3B8', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis' }}>✓ Выполнены</span>
+        <strong style={{ color: '#10B981', fontSize: '22px', fontWeight: 700, lineHeight: 1, flexShrink: 0 }}>{completedOrders}</strong>
       </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px' }}>
-        <span style={{ color: '#94A3B8', fontSize: '12px' }}>✕ Отменены</span>
-        <strong style={{ color: '#EF4444', fontSize: '24px', fontWeight: 700, lineHeight: 1 }}>{cancelledOrders}</strong>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 4, whiteSpace: 'nowrap', minWidth: 0 }}>
+        <span style={{ color: '#94A3B8', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis' }}>✕ Отменены</span>
+        <strong style={{ color: '#EF4444', fontSize: '22px', fontWeight: 700, lineHeight: 1, flexShrink: 0 }}>{cancelledOrders}</strong>
       </div>
     </div>
   </div>
@@ -1325,8 +1363,10 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   onClick={() => setShowPlanModal(true)}
   style={volumeCardStyle({ 
   borderRadius: 18, 
-  padding: '16px 20px', 
+  padding: '16px 14px', 
   flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'space-between',
@@ -1336,28 +1376,28 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
   onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
 >
-  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-    <div style={{ color: '#94A3B8', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: '8px', minWidth: 0 }}>
+    <div style={{ color: '#94A3B8', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
       Выполнение плана
     </div>
-    <span style={{ color: '#475569', fontSize: '12px' }}>подробнее →</span>
+    <span style={{ color: '#475569', fontSize: '12px', flexShrink: 0, whiteSpace: 'nowrap' }}>→</span>
   </div>
 
-  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', minWidth: 0 }}>
-      <span style={{ fontSize: '40px', fontWeight: '700', lineHeight: 1, color: completionColor }}>
+  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', marginBottom: '10px', flexWrap: 'nowrap', minWidth: 0 }}>
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' }}>
+      <span style={{ fontSize: '36px', fontWeight: '700', lineHeight: 1, color: completionColor }}>
         {fmtM3(factVolume)}
       </span>
-      <span style={{ fontSize: '18px', color: '#64748B', whiteSpace: 'nowrap' }}>
+      <span style={{ fontSize: '15px', color: '#64748B', whiteSpace: 'nowrap' }}>
         / {fmtM3(planToday)} м³
       </span>
     </div>
-    <span style={{ fontSize: '28px', fontWeight: '700', lineHeight: 1, color: completionColor, flexShrink: 0 }}>
+    <span style={{ fontSize: '24px', fontWeight: '700', lineHeight: 1, color: completionColor, flexShrink: 0 }}>
       {completionPercent}%
     </span>
   </div>
 
-  <div style={{ height: '8px', borderRadius: '9999px', background: '#334155', overflow: 'hidden', marginBottom: '10px' }}>
+  <div style={{ height: '8px', borderRadius: '9999px', background: '#334155', overflow: 'hidden', marginBottom: '10px', flexShrink: 0 }}>
     <div style={{
       height: '100%',
       width: `${completionPercent}%`,
@@ -1368,7 +1408,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   </div>
 
   {volumeByStatus.length > 0 ? (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+    <div className="scroll-hidden" style={{ display: 'flex', flexWrap: 'nowrap', gap: '6px', overflowX: 'auto', minWidth: 0 }}>
       {volumeByStatus.map((item) => (
         <span
           key={item.status}
@@ -1385,6 +1425,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
             fontWeight: 600,
             lineHeight: 1.3,
             whiteSpace: 'nowrap',
+            flexShrink: 0,
           }}
         >
           {item.showCount ? (
@@ -1403,7 +1444,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
     <div style={{ color: '#64748B', fontSize: '13px' }}>нет рейсов за день</div>
   )}
   {completedOrders > 0 && (
-    <div style={{ color: '#64748B', fontSize: '12px', marginTop: '8px' }}>
+    <div style={{ color: '#64748B', fontSize: '12px', marginTop: '8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
       {completedOrders} заявки закрыты
     </div>
   )}
@@ -1412,12 +1453,14 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
    {/* ==================== 37. ЗАДЕРЖКИ ОТГРУЗОК ==================== */}
 {/* Логика: заявки new/processing, у которых НЕТ миксеров в движении (В пути/На объекте/
     Разгружен/Возврат) и НЕ покрыт весь объём назначенными миксерами, при этом
-    прошло > 15 мин от расчётного старта загрузки. */}
+    прошло больше порога задержки (Настройки → Нормы логистики) от расчётного старта загрузки. */}
 <div
   onClick={() => setShowDelaysModal(true)}
   style={volumeCardStyle({ 
   borderRadius: 18, 
-  padding: '16px 20px', 
+  padding: '16px 14px', 
+  minWidth: 0,
+  overflow: 'hidden',
   display: 'flex',
   flexDirection: 'column',
   cursor: 'pointer',
@@ -1426,20 +1469,20 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
   onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
 >
-  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-    <div style={{ color: '#94A3B8', fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: '4px', minWidth: 0 }}>
+    <div style={{ color: '#94A3B8', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
       Задержки отгрузок
     </div>
-    <span style={{ color: '#475569', fontSize: '12px' }}>подробнее →</span>
+    <span style={{ color: '#475569', fontSize: '12px', flexShrink: 0, whiteSpace: 'nowrap' }}>→</span>
   </div>
 
   {delayedOrders.length > 0 ? (
     <>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '2px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '2px', whiteSpace: 'nowrap' }}>
         <span style={{ fontSize: '52px', fontWeight: '700', color: '#EF4444', lineHeight: 1 }}>
           {delayedOrders.length}
         </span>
-        <span style={{ color: '#F87171', fontSize: '13px' }}>
+        <span style={{ color: '#F87171', fontSize: '13px', flexShrink: 0 }}>
           {pluralRu(delayedOrders.length, 'заявка', 'заявки', 'заявок')}
         </span>
       </div>
@@ -1499,27 +1542,29 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   onClick={() => window.location.href = '/adminCifra/mixers'}
   style={volumeCardStyle({ 
     borderRadius: 18, 
-    padding: '16px 20px', 
+    padding: '16px 14px', 
+    minWidth: 0,
+    overflow: 'hidden',
     cursor: 'pointer',
     transition: 'filter 0.2s',
   })}
   onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
   onMouseLeave={e => { e.currentTarget.style.filter = 'none'; }}
 >
-  <div style={{ color: '#94A3B8', fontSize: '13px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{fleetInWorkLabel(fleetTab)}</div>
+  <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fleetInWorkLabel(fleetTab)}</div>
   
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '2px' }}>
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '2px', whiteSpace: 'nowrap' }}>
     <span style={{ fontSize: '52px', fontWeight: '700', color: '#60A5FA', lineHeight: 1 }}>
       {activeMixersToday.length}
     </span>
-    <span style={{ fontSize: '13px', color: '#64748B' }}>
+    <span style={{ fontSize: '13px', color: '#64748B', flexShrink: 0 }}>
       {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
     </span>
   </div>
 
   <div style={{ height: '1px', background: '#334155', margin: '10px 0' }} />
 
-  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '13px' }}>
+  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', minWidth: 0 }}>
     {([
       { status: 'Загрузка', label: '🟡 Загрузка', color: '#FACC15', showCount: false },
       { status: 'В пути', label: '→ В пути', color: '#60A5FA', showCount: false },
@@ -1531,9 +1576,9 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
       const cnt = trips.length;
       if (vol <= 0 && cnt <= 0) return null;
       return (
-        <div key={row.status} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-          <span style={{ color: '#94A3B8' }}>{row.label}</span>
-          <strong style={{ color: row.color, whiteSpace: 'nowrap' }}>
+        <div key={row.status} style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', whiteSpace: 'nowrap', minWidth: 0 }}>
+          <span style={{ color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{row.label}</span>
+          <strong style={{ color: row.color, whiteSpace: 'nowrap', flexShrink: 0 }}>
             {row.showCount
               ? `${cnt} · ${fmtM3(vol)} м³`
               : `${fmtM3(vol)} м³`}
