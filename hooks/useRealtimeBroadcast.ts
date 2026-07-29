@@ -23,6 +23,8 @@ interface BroadcastListener {
   onUpdate?: (record: any, old?: any) => void;
   onDelete?: (old: any) => void;
   onStatusChange?: (status: RealtimeStatus) => void;
+  /** Выставлен при unmount — игнор после hardReset, если listener ещё в preserved set */
+  dead?: boolean;
 }
 
 interface BroadcastEntry {
@@ -43,6 +45,9 @@ let globalListenersAttached = false;
 // Без этого visibilitychange + keepalive-timer могут одновременно инициировать
 // reconnect одного канала → двойное removeChannel + двойной connect → конфликт топиков.
 const reconnectingTopics = new Set<string>();
+
+/** Антиспам: один warn на пачку CHANNEL_ERROR 1006 по всем топикам. */
+let socket1006LogUntil = 0;
 
 // ── Глобальный агрегированный статус (наихудший из всех каналов) ──────────────
 const globalStatusListeners = new Set<(s: RealtimeStatus) => void>();
@@ -75,7 +80,10 @@ function notify(topic: string, status: RealtimeStatus) {
   const entry = registry.get(topic);
   if (!entry) return;
   entry.status = status;
-  entry.listeners.forEach((l) => l.onStatusChange?.(status));
+  entry.listeners.forEach((l) => {
+    if (l.dead) return;
+    l.onStatusChange?.(status);
+  });
   notifyGlobal();
 }
 
@@ -83,10 +91,29 @@ function dispatch(topic: string, kind: 'insert' | 'update' | 'delete', record: a
   const entry = registry.get(topic);
   if (!entry) return;
   entry.listeners.forEach((l) => {
+    if (l.dead) return;
     if (kind === 'insert') l.onInsert?.(record);
     else if (kind === 'update') l.onUpdate?.(record, old);
     else l.onDelete?.(old);
   });
+}
+
+function pruneDeadListeners(entry: BroadcastEntry) {
+  entry.listeners.forEach((l) => {
+    if (l.dead) entry.listeners.delete(l);
+  });
+}
+
+/** Сбросить firstErrorAt только когда все живые каналы снова SUBSCRIBED */
+function clearFirstErrorIfHealthy() {
+  if (registry.size === 0) {
+    firstErrorAt = null;
+    return;
+  }
+  for (const e of registry.values()) {
+    if (e.status !== 'SUBSCRIBED') return;
+  }
+  firstErrorAt = null;
 }
 
 function connect(topic: string): BroadcastEntry {
@@ -121,18 +148,29 @@ function connect(topic: string): BroadcastEntry {
       const e = registry.get(topic);
       if (s === 'SUBSCRIBED') {
         console.log(`✅ [Broadcast] ПОДПИСКА АКТИВНА → ${topic}`);
-        // Соединение живо — снимаем отложенный ERROR и общий счётчик сбоев.
+        // Соединение живо — снимаем отложенный ERROR.
         if (e?.errorTimer) {
           clearTimeout(e.errorTimer);
           e.errorTimer = undefined;
         }
-        firstErrorAt = null;
         notify(topic, 'SUBSCRIBED');
+        // Не сбрасываем firstErrorAt по одному топику: иначе 1 из 5
+        // ожил — и watchdog больше не сделает hard-reset для остальных.
+        clearFirstErrorIfHealthy();
       } else if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') {
-        console.warn(
-          `⚠️ [Broadcast] ОШИБКА ${s} → ${topic}`,
-          err ? (err.message || err) : ''
-        );
+        // 1006 = abnormal WebSocket close (Wi‑Fi, сон, idle) — штатно, keepalive
+        // переподключит. Не спамим по 5 топиков одной и той же причиной.
+        const detail = err ? String((err as any).message || err) : '';
+        const isSocketBlip = /1006|socket closed/i.test(detail);
+        const now = Date.now();
+        if (!isSocketBlip) {
+          console.warn(`⚠️ [Broadcast] ОШИБКА ${s} → ${topic}`, detail);
+        } else if (now > socket1006LogUntil) {
+          socket1006LogUntil = now + 15_000;
+          console.warn(
+            '⚠️ [Broadcast] Сокет закрыт (1006) — переподключение каналов…',
+          );
+        }
         if (firstErrorAt === null) firstErrorAt = Date.now();
         // Не мигаем индикатором сразу — вдруг восстановится за пару секунд.
         if (e && !e.errorTimer) {
@@ -188,14 +226,23 @@ function hardResetSocket() {
   // (channel.subscribe сам инициирует новое соединение сокета).
   setTimeout(() => {
     for (const { topic, listeners } of preserved) {
+      // Выкидываем listeners от уже размонтированных компонентов
+      listeners.forEach((l) => {
+        if (l.dead) listeners.delete(l);
+      });
+      if (listeners.size === 0) continue;
+
       const fresh = connect(topic);
       listeners.forEach((l) => fresh.listeners.add(l));
       // Гарантируем единственный keepalive на топик — старый уже очищен выше.
       if (!fresh.keepalive) {
         fresh.keepalive = setInterval(() => reconnect(topic), 20_000);
       }
+      fresh.listeners.forEach((l) => {
+        if (!l.dead) l.onStatusChange?.(fresh.status);
+      });
     }
-    firstErrorAt = null;
+    clearFirstErrorIfHealthy();
     hardResetInProgress = false;
   }, 800);
 }
@@ -204,6 +251,7 @@ function reconnect(topic: string) {
   // Защита от параллельных reconnect() одного топика:
   // visibilitychange + keepalive-timer могут сработать одновременно.
   if (reconnectingTopics.has(topic)) return;
+  if (hardResetInProgress) return;
 
   const entry = registry.get(topic);
   if (!entry) return;
@@ -213,7 +261,10 @@ function reconnect(topic: string) {
   if (state === 'joined' || state === 'joining') return;
 
   reconnectingTopics.add(topic);
-  console.warn(`🔁 [Broadcast] Переподключение → ${topic} (состояние: ${state})`);
+  // При массовом 1006 уже есть одна сводка — не дублируем по каждому топику.
+  if (Date.now() > socket1006LogUntil) {
+    console.warn(`🔁 [Broadcast] Переподключение → ${topic} (состояние: ${state})`);
+  }
   const listeners = entry.listeners;
   if (entry.keepalive) clearInterval(entry.keepalive);
   if (entry.errorTimer) clearTimeout(entry.errorTimer);
@@ -227,7 +278,10 @@ function reconnect(topic: string) {
     fresh.keepalive = setInterval(() => reconnect(topic), 20_000);
   }
   // Сообщаем актуальный статус перенесённым слушателям
-  fresh.listeners.forEach((l) => l.onStatusChange?.(fresh.status));
+  fresh.listeners.forEach((l) => {
+    if (!l.dead) l.onStatusChange?.(fresh.status);
+  });
+  pruneDeadListeners(fresh);
 
   // Снимаем блокировку после того, как новый канал начал подключаться
   setTimeout(() => reconnectingTopics.delete(topic), 5_000);
@@ -255,6 +309,7 @@ function attachGlobalListeners() {
   const recoverAfterWake = (source: string, opts?: { softOk?: boolean }) => {
     if (document.visibilityState !== 'visible') return;
     if (registry.size === 0) return;
+    if (hardResetInProgress) return;
 
     const now = Date.now();
     if (now - lastRecoverAt < 3000) return;
@@ -265,6 +320,19 @@ function attachGlobalListeners() {
     // focus/online/pageshow без bfcache — только если простой длинный,
     // иначе каждый клик в окно срывал бы живые каналы.
     if (!stale && !opts?.softOk) return;
+
+    // Короткое переключение вкладки: ничего не трогаем, если все каналы живы.
+    if (!stale && opts?.softOk) {
+      let needsRepair = false;
+      for (const e of registry.values()) {
+        const st = (e.channel as any)?.state;
+        if (e.status !== 'SUBSCRIBED' || (st && st !== 'joined' && st !== 'joining')) {
+          needsRepair = true;
+          break;
+        }
+      }
+      if (!needsRepair) return;
+    }
 
     lastRecoverAt = now;
 
@@ -282,9 +350,11 @@ function attachGlobalListeners() {
       return;
     }
 
-    // Короткое переключение вкладки — шахматное переподключение.
+    // Короткое переключение вкладки — шахматное переподключение только «больных».
     let i = 0;
-    registry.forEach((_e, topic) => {
+    registry.forEach((e, topic) => {
+      const st = (e.channel as any)?.state;
+      if (st === 'joined' || st === 'joining') return;
       setTimeout(() => reconnect(topic), 500 + i * 200);
       i += 1;
     });
@@ -366,6 +436,7 @@ export function useRealtimeBroadcast({
       onUpdate: (r, o) => cbRef.current.onUpdate?.(r, o),
       onDelete: (o) => cbRef.current.onDelete?.(o),
       onStatusChange: (s) => {
+        if (listener.dead) return;
         cbRef.current.onStatusChange?.(s);
         setStatus(s);
       },
@@ -375,9 +446,11 @@ export function useRealtimeBroadcast({
     listener.onStatusChange?.(entry.status);
 
     return () => {
+      listener.dead = true;
       const current = registry.get(topic);
       if (!current) return;
       current.listeners.delete(listener);
+      pruneDeadListeners(current);
 
       // Последний подписчик ушёл — откладываем закрытие (StrictMode делает
       // mount→unmount→mount; при мгновенном возврате не пересоздаём канал).

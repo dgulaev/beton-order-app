@@ -795,8 +795,8 @@ export default function CreateLeadModal({ open, onClose, onCreated }: Props) {
             </h3>
             <p style={{ margin: '6px 0 8px', fontSize: 12, color: '#64748B' }}>
               {isTender
-                ? `PDF, Word, Excel, изображения · до ${Math.round(LEAD_CONTRACT_MAX_BYTES / (1024 * 1024))} МБ · до 10 файлов`
-                : 'Необязательно · PDF, Word, Excel, изображения'}
+                ? `PDF и архивы (zip, rar, 7z…) · до ${Math.round(LEAD_CONTRACT_MAX_BYTES / (1024 * 1024))} МБ · до 10 файлов`
+                : 'Необязательно · PDF и архивы (zip, rar, 7z…)'}
             </p>
             <label
               style={{

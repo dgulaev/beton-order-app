@@ -18,6 +18,7 @@ import { useWakeReload } from '@/hooks/useWakeReload';
 import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
 import { formatPhoneInput } from '@/lib/phone';
 import { formatTimeHHMM, ruPastByName } from '@/lib/ruLocale';
+import { formatBuildLabelFull, formatBuildVersion } from '@/lib/buildInfo';
 import AppDialogHost, { appConfirm } from './components/appDialog';
 
 // ==================== PERSISTENTНЫЕ УВЕДОМЛЕНИЯ (localStorage) ====================
@@ -1180,7 +1181,11 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             width: isCollapsed ? '68px' : '280px',
             backgroundColor: '#1E2937',
             color: '#fff',
-            padding: '24px 0',
+            // padding только сверху — низ отдаём подвалу, иначе при content-box
+            // height:100% + padding снизу выталкивает футер за overflow:hidden
+            // (масштаб layout) и строка «Трейдком / v…» пропадает с экрана.
+            padding: '20px 0 0',
+            boxSizing: 'border-box',
             display: 'flex',
             flexDirection: 'column',
             borderRight: '1px solid #334155',
@@ -1300,7 +1305,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             </div>
           )}
 
-          <nav style={{ flex: 1, paddingLeft: '8px', paddingRight: '8px' }}>
+          <nav style={{ flex: 1, paddingLeft: '8px', paddingRight: '8px', overflowY: 'auto', minHeight: 0 }}>
 
             {/* ==================== БЛОК 9.5: ЛАБОРАНТ — ТОЛЬКО «ЛАБОРАТОРИЯ» ==================== */}
             {userRole === 'laborant' ? (
@@ -1755,34 +1760,6 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             </>
             )}
 
-            {/* Переключение вида — сразу перед «Разлогинить всех» / «Выйти» */}
-            {userRole !== 'laborant' && (
-              <Link
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  goToMobileVersion();
-                }}
-                style={navLinkStyle(false, isCollapsed)}
-                title="Мобильная версия"
-              >
-                <Smartphone size={22} />
-                <span style={navTextStyle(isCollapsed)}>Мобильная версия</span>
-              </Link>
-            )}
-
-            {/* ==================== БЛОК 13 ССЫЛКА "ВЫКИНУТЬ ВСЕХ" ==================== */}
-            {(userRole === 'admin') && (
-              <Link
-                href="#"
-                onClick={(e) => { e.preventDefault(); forceLogoutAll(); }}
-                style={navLinkStyle(false, isCollapsed)}
-              >
-                <UserX size={22} />
-                <span style={navTextStyle(isCollapsed)}>Разлогинить всех</span>
-              </Link>
-            )}
-
             {/* ==================== БЛОК 13.1 ЛИЧНЫЙ ВЫХОД ==================== */}
             <Link
               href="#"
@@ -1796,6 +1773,152 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               <span style={navTextStyle(isCollapsed)}>Выйти</span>
             </Link>
           </nav>
+
+          {/* ==================== ПОДВАЛ САЙДБАРА ==================== */}
+          <div
+            style={{
+              marginTop: 'auto',
+              padding: isCollapsed ? '10px 6px 12px' : '10px 14px 12px',
+              borderTop: '1px solid #334155',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: isCollapsed ? 'center' : 'stretch',
+              gap: 8,
+              flexShrink: 0,
+              boxSizing: 'border-box',
+            }}
+          >
+            {userRole !== 'laborant' && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: isCollapsed ? 'center' : 'flex-start',
+                  flexWrap: 'wrap',
+                  gap: 4,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={goToMobileVersion}
+                  title="Мобильная версия"
+                  aria-label="Мобильная версия"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                    padding: isCollapsed ? 6 : '4px 8px',
+                    borderRadius: 8,
+                    border: '1px solid transparent',
+                    background: 'transparent',
+                    color: '#94A3B8',
+                    cursor: 'pointer',
+                    fontSize: 11,
+                    fontWeight: 500,
+                    lineHeight: 1,
+                    transition: 'color 0.15s, background 0.15s, border-color 0.15s',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = '#E2E8F0';
+                    e.currentTarget.style.background = 'rgba(148,163,184,0.1)';
+                    e.currentTarget.style.borderColor = '#475569';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = '#94A3B8';
+                    e.currentTarget.style.background = 'transparent';
+                    e.currentTarget.style.borderColor = 'transparent';
+                  }}
+                >
+                  <Smartphone size={14} strokeWidth={1.75} />
+                  {!isCollapsed && <span>Мобильная</span>}
+                </button>
+                {userRole === 'admin' && !isCollapsed && (
+                  <button
+                    type="button"
+                    onClick={() => { void forceLogoutAll(); }}
+                    title="Разлогинить всех"
+                    aria-label="Разлогинить всех"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      padding: '4px 8px',
+                      borderRadius: 8,
+                      border: '1px solid transparent',
+                      background: 'transparent',
+                      color: '#94A3B8',
+                      cursor: 'pointer',
+                      fontSize: 11,
+                      fontWeight: 500,
+                      lineHeight: 1,
+                      transition: 'color 0.15s, background 0.15s, border-color 0.15s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = '#E2E8F0';
+                      e.currentTarget.style.background = 'rgba(148,163,184,0.1)';
+                      e.currentTarget.style.borderColor = '#475569';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = '#94A3B8';
+                      e.currentTarget.style.background = 'transparent';
+                      e.currentTarget.style.borderColor = 'transparent';
+                    }}
+                  >
+                    <UserX size={14} strokeWidth={1.75} />
+                    <span>Разлогинить всех</span>
+                  </button>
+                )}
+              </div>
+            )}
+            {!isCollapsed ? (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  fontSize: 10,
+                  lineHeight: 1.2,
+                  letterSpacing: '0.01em',
+                  minWidth: 0,
+                }}
+              >
+                <span style={{ color: '#94A3B8', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  © ООО «Трейдком»
+                </span>
+                <span
+                  style={{
+                    color: '#94A3B8',
+                    fontWeight: 500,
+                    whiteSpace: 'nowrap',
+                    textAlign: 'right',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    minWidth: 0,
+                  }}
+                  title={formatBuildLabelFull()}
+                >
+                  {formatBuildVersion()}
+                </span>
+              </div>
+            ) : (
+              <div
+                title={`ООО «Трейдком» · ${formatBuildLabelFull()}`}
+                style={{
+                  fontSize: 10,
+                  color: '#94A3B8',
+                  textAlign: 'center',
+                  lineHeight: 1.2,
+                  fontWeight: 500,
+                }}
+              >
+                {formatBuildVersion()}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* ==================== 14. ОСНОВНОЙ КОНТЕНТ ==================== */}

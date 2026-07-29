@@ -1,6 +1,10 @@
 'use client';
 
 import { useEffect } from 'react';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+
+/** Кастомное событие: проверить force-logout без синтетического visibilitychange. */
+export const FORCE_LOGOUT_CHECK_EVENT = 'admincifra:force-logout-check';
 
 /**
  * Пишет активность сотрудника в active_sessions (/api/adminCifra/heartbeat).
@@ -10,6 +14,9 @@ import { useEffect } from 'react';
  * Интервал 4 мин при окне «онлайн» 10 мин на API — с запасом на задержки сети.
  * При возврате во вкладку/приложение шлём сразу (мобильные браузеры часто
  * замораживают setInterval в фоне).
+ *
+ * Первый запрос чуть откладываем: на холодном старте Turbopack роут ещё
+ * компилируется, и мгновенный fetch даёт ложный «Failed to fetch» в консоли.
  */
 export function useStaffHeartbeat(enabled: boolean) {
   useEffect(() => {
@@ -19,38 +26,78 @@ export function useStaffHeartbeat(enabled: boolean) {
     if (!savedUserId) return;
 
     const userId = parseInt(savedUserId, 10);
-    if (!Number.isFinite(userId)) return;
+    if (!Number.isFinite(userId) || userId <= 0) return;
 
-    const sendHeartbeat = async () => {
+    let cancelled = false;
+    let controller: AbortController | null = null;
+    let retryTimer: number | undefined;
+    let forcedLogoutNotified = false;
+
+    const notifyForceLogoutCheck = () => {
+      // Не visibilitychange: иначе heartbeat/Broadcast/Role ловят его все сразу
+      // и при 403 получается цикл heartbeat → event → heartbeat → …
+      if (forcedLogoutNotified) return;
+      forcedLogoutNotified = true;
+      try {
+        window.dispatchEvent(new Event(FORCE_LOGOUT_CHECK_EVENT));
+      } catch { /* ignore */ }
+    };
+
+    const sendHeartbeat = async (isRetry = false) => {
+      if (cancelled) return;
+      // Уже выкинуты — не долбим API и не крутим цикл
+      if (forcedLogoutNotified) return;
+
+      controller?.abort();
+      controller = new AbortController();
+      const signal = controller.signal;
+
       try {
         const res = await fetch('/api/adminCifra/heartbeat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ userId }),
+          signal,
         });
         if (res.status === 403) {
-          // Force-logout на сервере — подтолкнём проверку роли (kick в UserRoleProvider)
-          try {
-            window.dispatchEvent(new Event('visibilitychange'));
-          } catch { /* ignore */ }
+          notifyForceLogoutCheck();
+          return;
         }
       } catch (e) {
-        console.warn('Heartbeat failed:', e);
+        if (cancelled || signal.aborted) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        // Холодный старт / HMR — один тихий повтор через 2с
+        if (!isRetry && (msg.includes('Failed to fetch') || msg.includes('NetworkError'))) {
+          retryTimer = window.setTimeout(() => {
+            void sendHeartbeat(true);
+          }, 2000);
+          return;
+        }
+        if (isRetry) console.warn('Heartbeat failed:', e);
       }
     };
 
-    sendHeartbeat();
+    // Даём Next/Turbopack поднять API-роут после Ready
+    const startTimer = window.setTimeout(() => {
+      void sendHeartbeat();
+    }, 800);
 
-    const interval = setInterval(sendHeartbeat, 4 * 60 * 1000);
+    const interval = window.setInterval(() => {
+      void sendHeartbeat();
+    }, 4 * 60 * 1000);
 
     const onVisible = () => {
-      if (document.visibilityState === 'visible') sendHeartbeat();
+      if (document.visibilityState === 'visible') void sendHeartbeat();
     };
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onVisible);
 
     return () => {
-      clearInterval(interval);
+      cancelled = true;
+      window.clearTimeout(startTimer);
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      window.clearInterval(interval);
+      controller?.abort();
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onVisible);
     };

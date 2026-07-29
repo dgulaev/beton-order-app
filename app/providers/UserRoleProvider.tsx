@@ -1,6 +1,7 @@
 'use client';
 
-import { createContext, useContext, ReactNode, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, ReactNode, useEffect, useState, useCallback, useRef } from 'react';
+import { FORCE_LOGOUT_CHECK_EVENT } from '@/hooks/useStaffHeartbeat';
 
 interface UserRole {
   role: string;
@@ -20,8 +21,9 @@ interface UserRoleContextType {
 }
 
 // Проверка force-logout: при возврате на вкладку + poll.
-// 30 с — компромисс: быстрый kick без лишней нагрузки.
-const FORCE_LOGOUT_POLL_MS = 30_000;
+// 5 мин — функция «разлогинить всех» применяется редко; при возврате
+// на вкладку проверка всё равно срабатывает сразу.
+const FORCE_LOGOUT_POLL_MS = 5 * 60_000;
 
 // Сколько ждём ответ /api/user/role, прежде чем сдаться — без этого при
 // холодном старте сервера (Vercel cold start) или плохой мобильной сети
@@ -72,84 +74,100 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserRole | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const inFlightRef = useRef<Promise<void> | null>(null);
+  const lastFetchAtRef = useRef(0);
 
-  const fetchRole = useCallback(async (force = false) => {
-    try {
-      if (!force) setLoading(true);
+  const fetchRole = useCallback(async (force = false, opts?: { urgent?: boolean }) => {
+    // Схлопываем гонки: visibility + poll + ручной refresh в одну секунду
+    // иначе в логе пачка POST /api/user/role подряд.
+    // urgent (force-logout от heartbeat) — debounce не применяем.
+    const now = Date.now();
+    if (inFlightRef.current) return inFlightRef.current;
+    if (force && !opts?.urgent && now - lastFetchAtRef.current < 1500) return;
 
-      const savedUserId = localStorage.getItem('userId');
-      if (!savedUserId) {
-        setUser(null);
-        setLoading(false);
-        return;
-      }
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), ROLE_FETCH_TIMEOUT_MS);
-
-      const res = await fetch('/api/user/role', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': savedUserId,
-        },
-        body: JSON.stringify({}),
-        cache: 'no-store',
-        signal: controller.signal,
-      }).finally(() => clearTimeout(timeoutId));
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const data = await res.json();
-      if (data?.success === false) throw new Error(data?.message || 'Role check failed');
-
-      // Проверка принудительного выхода — ДО записи кэша роли
-      const currentVersion = Number(data?.force_logout_version || 0);
-      const lastVersion = parseInt(localStorage.getItem('lastForceLogoutVersion') || '0', 10) || 0;
-
-      if (currentVersion > lastVersion) {
-        // Запоминаем версию kick, чтобы после логина (version=0) не было ложного
-        // сравнения и чтобы повторный kick с той же константой 9999 (legacy) не
-        // «залипал» при рассинхроне.
-        localStorage.setItem('lastForceLogoutVersion', String(currentVersion));
-        clearStaffSessionKeys();
-        setUser(null);
-        alert('Ваш сеанс был завершён администратором. Пожалуйста, войдите заново.');
-        // Перезагружаем текущую страницу, а не уводим на "/" — layout сам
-        // покажет форму входа на нужном пути (/adminCifra или /mobile).
-        window.location.reload();
-        return;
-      }
-
-      setUser(data);
-      setError(null);
+    const run = (async () => {
       try {
-        localStorage.setItem(ROLE_CACHE_KEY, JSON.stringify(data));
-      } catch {
-        // localStorage может быть недоступен (приватный режим) — не критично.
-      }
+        if (!force) setLoading(true);
 
-      localStorage.setItem('lastForceLogoutVersion', String(currentVersion));
-    } catch (err: any) {
-      // fetch кидает TypeError ("Failed to fetch"), когда сервер временно
-      // недоступен (перезапуск дев-сервера, потеря сети, уход со страницы), а
-      // AbortError — когда сами прервали запрос по таймауту (см. выше). Оба
-      // случая — обычный сетевой сбой, а не ошибка приложения: следующий тик
-      // интервала/возврат на вкладку всё исправит сам, поэтому не шумим в
-      // консоль на каждый такой случай — предупреждаем только на реальные
-      // ошибки API (не-network, например неожиданный HTTP-статус).
-      // Важно: НЕ обнуляем user при сетевом сбое — если роль уже была
-      // известна (из кэша или предыдущего успешного запроса), пусть
-      // приложение продолжает работать с ней, а не выкидывает на экран входа.
-      // И НЕ трогаем lastForceLogoutVersion при ошибке — иначе fail-open
-      // мог бы «съесть» pending force-logout.
-      if (!(err instanceof TypeError) && err?.name !== 'AbortError') {
-        console.warn('Role fetch error:', err);
+        const savedUserId = localStorage.getItem('userId');
+        if (!savedUserId) {
+          setUser(null);
+          setLoading(false);
+          return;
+        }
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), ROLE_FETCH_TIMEOUT_MS);
+
+        lastFetchAtRef.current = Date.now();
+        const res = await fetch('/api/user/role', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': savedUserId,
+          },
+          body: JSON.stringify({}),
+          cache: 'no-store',
+          signal: controller.signal,
+        }).finally(() => clearTimeout(timeoutId));
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const data = await res.json();
+        if (data?.success === false) throw new Error(data?.message || 'Role check failed');
+
+        // Проверка принудительного выхода — ДО записи кэша роли
+        const currentVersion = Number(data?.force_logout_version || 0);
+        const lastVersion = parseInt(localStorage.getItem('lastForceLogoutVersion') || '0', 10) || 0;
+
+        if (currentVersion > lastVersion) {
+          // Запоминаем версию kick, чтобы после логина (version=0) не было ложного
+          // сравнения и чтобы повторный kick с той же константой 9999 (legacy) не
+          // «залипал» при рассинхроне.
+          localStorage.setItem('lastForceLogoutVersion', String(currentVersion));
+          clearStaffSessionKeys();
+          setUser(null);
+          alert('Ваш сеанс был завершён администратором. Пожалуйста, войдите заново.');
+          // Перезагружаем текущую страницу, а не уводим на "/" — layout сам
+          // покажет форму входа на нужном пути (/adminCifra или /mobile).
+          window.location.reload();
+          return;
+        }
+
+        setUser(data);
+        setError(null);
+        try {
+          localStorage.setItem(ROLE_CACHE_KEY, JSON.stringify(data));
+        } catch {
+          // localStorage может быть недоступен (приватный режим) — не критично.
+        }
+
+        localStorage.setItem('lastForceLogoutVersion', String(currentVersion));
+      } catch (err: any) {
+        // fetch кидает TypeError ("Failed to fetch"), когда сервер временно
+        // недоступен (перезапуск дев-сервера, потеря сети, уход со страницы), а
+        // AbortError — когда сами прервали запрос по таймауту (см. выше). Оба
+        // случая — обычный сетевой сбой, а не ошибка приложения: следующий тик
+        // интервала/возврат на вкладку всё исправит сам, поэтому не шумим в
+        // консоль на каждый такой случай — предупреждаем только на реальные
+        // ошибки API (не-network, например неожиданный HTTP-статус).
+        // Важно: НЕ обнуляем user при сетевом сбое — если роль уже была
+        // известна (из кэша или предыдущего успешного запроса), пусть
+        // приложение продолжает работать с ней, а не выкидывает на экран входа.
+        // И НЕ трогаем lastForceLogoutVersion при ошибке — иначе fail-open
+        // мог бы «съесть» pending force-logout.
+        if (!(err instanceof TypeError) && err?.name !== 'AbortError') {
+          console.warn('Role fetch error:', err);
+        }
+        setError(err.message);
+      } finally {
+        setLoading(false);
+        inFlightRef.current = null;
       }
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+    })();
+
+    inFlightRef.current = run;
+    return run;
   }, []);
 
   const logout = useCallback(() => {
@@ -182,7 +200,13 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    // Heartbeat 403 (force-logout) — без синтетического visibilitychange
+    const handleForceLogoutCheck = () => {
+      void fetchRole(true, { urgent: true });
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener(FORCE_LOGOUT_CHECK_EVENT, handleForceLogoutCheck);
 
     const pollInterval = setInterval(() => {
       if (localStorage.getItem('userId')) fetchRole(true);
@@ -190,6 +214,7 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener(FORCE_LOGOUT_CHECK_EVENT, handleForceLogoutCheck);
       clearInterval(pollInterval);
     };
   }, [fetchRole]);

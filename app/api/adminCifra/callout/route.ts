@@ -15,29 +15,44 @@ export async function GET(request: NextRequest) {
 
   const status = request.nextUrl.searchParams.get('status');
   const q = (request.nextUrl.searchParams.get('q') || '').trim();
-  const limit = Math.min(Number(request.nextUrl.searchParams.get('limit') || 100), 300);
+  const limit = Math.min(Math.max(Number(request.nextUrl.searchParams.get('limit') || 50), 1), 100);
+  const page = Math.max(Number(request.nextUrl.searchParams.get('page') || 1), 1);
+  const offset = (page - 1) * limit;
+
+  let countQuery = supabaseAdmin
+    .from('callout_prospects')
+    .select('id', { count: 'exact', head: true });
 
   let query = supabaseAdmin
     .from('callout_prospects')
     .select('*')
     .order('updated_at', { ascending: false })
-    .limit(limit);
+    .range(offset, offset + limit - 1);
 
   if (status && CALLOUT_STATUSES.includes(status as CalloutStatus)) {
     query = query.eq('status', status);
+    countQuery = countQuery.eq('status', status);
   }
   if (q) {
     // Простой поиск: inn или название
-    query = query.or(
-      `inn.ilike.%${q}%,organization_name.ilike.%${q}%,phone.ilike.%${q}%`,
-    );
+    const orFilter = `inn.ilike.%${q}%,organization_name.ilike.%${q}%,phone.ilike.%${q}%`;
+    query = query.or(orFilter);
+    countQuery = countQuery.or(orFilter);
   }
 
-  const { data: prospects, error } = await query;
+  const [{ data: prospects, error }, { count: filteredTotal, error: countError }] =
+    await Promise.all([query, countQuery]);
+
   if (error) {
     console.error('[callout GET]', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
+  if (countError) {
+    console.error('[callout GET count]', countError);
+  }
+
+  const filteredCount = filteredTotal ?? (prospects || []).length;
+  const totalPages = Math.max(1, Math.ceil(filteredCount / limit));
 
   // Общий счётчик карточек (для бейджа вкладки, без фильтра статуса)
   const { count: prospectTotal } = await supabaseAdmin
@@ -99,6 +114,10 @@ export async function GET(request: NextRequest) {
     importBatches,
     pendingTenders: pendingTenders || [],
     prospectTotal: prospectTotal ?? 0,
+    page,
+    limit,
+    filteredTotal: filteredCount,
+    totalPages,
   });
 }
 

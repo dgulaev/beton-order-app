@@ -73,7 +73,7 @@ export default function OperatorSilosBar({
 
   useEffect(() => {
     loadSilos();
-    const t = setInterval(loadSilos, 15000);
+    const t = setInterval(loadSilos, 30_000);
     return () => clearInterval(t);
   }, [loadSilos]);
 

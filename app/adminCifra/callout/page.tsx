@@ -21,6 +21,7 @@ import {
 } from '@/lib/callout/labels';
 import { formatPhoneDisplay, formatPhoneInput, normalizePhone } from '@/lib/phone';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
+import AdminPagination from '../components/AdminPagination';
 import styles from './callout.module.css';
 
 type Prospect = {
@@ -39,6 +40,7 @@ type Prospect = {
 type Tender = {
   id: number;
   prospect_id: number | null;
+  lead_id?: number | null;
   purchase_url: string | null;
   purchase_number: string | null;
   object_info: string | null;
@@ -112,6 +114,10 @@ export default function CalloutPage() {
   const [pendingTenders, setPendingTenders] = useState<Tender[]>([]);
   const [importBatches, setImportBatches] = useState<string[]>([]);
   const [prospectTotal, setProspectTotal] = useState(0);
+  const [filteredTotal, setFilteredTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const PAGE_SIZE = 50;
   const [status, setStatus] = useState<CalloutStatus | ''>('');
   const [q, setQ] = useState('');
   const [qInput, setQInput] = useState('');
@@ -138,6 +144,8 @@ export default function CalloutPage() {
       const qs = new URLSearchParams();
       if (status) qs.set('status', status);
       if (q.trim()) qs.set('q', q.trim());
+      qs.set('page', String(page));
+      qs.set('limit', String(PAGE_SIZE));
       const res = await fetch(`/api/adminCifra/callout?${qs}`, {
         headers: adminCifraAuthHeaders(),
       });
@@ -153,6 +161,8 @@ export default function CalloutPage() {
       setPendingTenders(json.pendingTenders || []);
       setImportBatches(json.importBatches || []);
       setProspectTotal(Number(json.prospectTotal) || 0);
+      setFilteredTotal(Number(json.filteredTotal) || 0);
+      setTotalPages(Math.max(1, Number(json.totalPages) || 1));
 
       const needEnrich = (json.prospects || []).filter((p: Prospect) => {
         const name = String(p.organization_name || '').trim();
@@ -186,6 +196,8 @@ export default function CalloutPage() {
               setTendersByProspect(again.tendersByProspect || {});
               setCommentCounts(again.commentCounts || {});
               setProspectTotal(Number(again.prospectTotal) || 0);
+              setFilteredTotal(Number(again.filteredTotal) || 0);
+              setTotalPages(Math.max(1, Number(again.totalPages) || 1));
             }
           })
           .catch(() => {});
@@ -195,7 +207,7 @@ export default function CalloutPage() {
     } finally {
       setLoading(false);
     }
-  }, [status, q]);
+  }, [status, q, page]);
 
   useEffect(() => {
     void load();
@@ -203,9 +215,17 @@ export default function CalloutPage() {
 
   // Поиск с задержкой — не дёргать API на каждый символ
   useEffect(() => {
-    const t = setTimeout(() => setQ(qInput), 350);
+    const t = setTimeout(() => {
+      setPage(1);
+      setQ(qInput);
+    }, 350);
     return () => clearTimeout(t);
   }, [qInput]);
+
+  // Сброс страницы при смене статуса
+  useEffect(() => {
+    setPage(1);
+  }, [status]);
 
   const showBanner = (text: string, ok = true) => {
     setMessage(text);
@@ -396,7 +416,26 @@ export default function CalloutPage() {
   };
 
   const deleteProspect = async (id: number) => {
-    if (!window.confirm('Удалить карточку обзвона?')) return;
+    const tenders = tendersByProspect[id] || detail?.tenders || [];
+    const tenderCount = tenders.length;
+    const leadLinks = tenders.filter((t) => t.lead_id != null).length;
+    const ok = window.confirm(
+      [
+        'Удалить карточку обзвона?',
+        '',
+        'Будет удалено безвозвратно:',
+        '• сама карточка (контакты, статус, комментарии)',
+        tenderCount > 0
+          ? `• её закупки и ссылки ЕИС (${tenderCount})`
+          : '• связанные закупки/ссылки ЕИС (если есть)',
+        leadLinks > 0
+          ? `• связь с лидом в Обзвоне (${leadLinks}) — сам лид в «Лидах» останется`
+          : '• связь закупки с лидом в Обзвоне (если была) — сам лид в «Лидах» останется',
+        '',
+        'Клиент в разделе «Клиенты» не трогается.',
+      ].join('\n'),
+    );
+    if (!ok) return;
     setBusy(true);
     try {
       const res = await fetch(`/api/adminCifra/callout/${id}`, {
@@ -543,8 +582,9 @@ export default function CalloutPage() {
             Обзвон
           </h1>
           <p className={styles.subtitle}>
-            Это <strong>не</strong> раздел «Клиенты». Здесь — список компаний-победителей торгов для
-            обзвона. Сохраняются в базе Обзвона, пока сам не удалишь карточку.
+            Победители торгов, которых можно обзвонить. Это отдельный список от «Клиентов» —
+            сюда попадают компании после закупки, даже если их ещё нет в базе. Телефон подтянется
+            сам, когда найдётся; если нет — допиши вручную справа в карточке.
           </p>
         </div>
         <div className={styles.headerActions}>
@@ -600,7 +640,9 @@ export default function CalloutPage() {
 
       {importBatches.length > 0 && (
         <div className={styles.batchBar}>
-          <span style={{ color: '#94a3b8', fontSize: 13 }}>Импорты (убрать файл, карточки и ЕИС оставить):</span>
+          <span style={{ color: '#94a3b8', fontSize: 13 }}>
+            Загруженные Excel (убрать файл — карточки и ссылки останутся):
+          </span>
           {importBatches.map((b) => (
             <button
               key={b}
@@ -608,7 +650,7 @@ export default function CalloutPage() {
               disabled={busy}
               onClick={() => void deleteBatch(b)}
               style={btnDangerSoft}
-              title="Убрать импорт: карточки, контакты, комментарии и ссылки ЕИС останутся"
+              title="Убрать только файл импорта. Карточки, контакты и ссылки ЕИС сохранятся"
             >
               <Trash2 size={14} /> {b.slice(0, 36)}
               {b.length > 36 ? '…' : ''}
@@ -643,8 +685,8 @@ export default function CalloutPage() {
 
       <p className={styles.tabHint} style={{ marginTop: -4, marginBottom: 12 }}>
         {mainTab === 'prospects'
-          ? 'Слева — компании, которых можно звонить. Кликни строку → справа детали и комментарии.'
-          : 'Слева — закупки без победителя (Excel и лиды торгов). Кликни → справа «Подтянуть победителя».'}
+          ? 'Выбери компанию слева — справа телефон, объекты и комментарии по звонку.'
+          : 'Закупки, где победитель ещё не известен. Выбери строку — справа можно подтянуть данные из ЕИС.'}
       </p>
 
       <div className={styles.filters}>
@@ -768,6 +810,28 @@ export default function CalloutPage() {
                     </div>
                   );
                 })
+              )}
+              {filteredTotal > 0 && (
+                <>
+                  <div
+                    style={{
+                      color: '#64748B',
+                      fontSize: 12,
+                      textAlign: 'center',
+                      marginTop: 4,
+                    }}
+                  >
+                    Показано {prospects.length} из {filteredTotal}
+                    {status || q.trim() ? ' по фильтру' : ''}
+                    {totalPages > 1 ? ` · стр. ${page}/${totalPages}` : ''}
+                  </div>
+                  <AdminPagination
+                    page={page}
+                    totalPages={totalPages}
+                    onPage={setPage}
+                    style={{ marginTop: 8 }}
+                  />
+                </>
               )}
             </>
           ) : (
@@ -920,7 +984,7 @@ export default function CalloutPage() {
                   type="button"
                   onClick={() => void deleteProspect(detail.prospect.id)}
                   style={btnDangerSoft}
-                  title="Удалить карточку"
+                  title="Удалить карточку вместе с закупками ЕИС"
                 >
                   <Trash2 size={14} />
                 </button>
@@ -938,7 +1002,7 @@ export default function CalloutPage() {
                   </a>
                 ) : (
                   <div className={styles.noPhoneBig}>
-                    Телефон не найден автоматически (ЕИС/DaData часто без номера)
+                    Телефон пока не найден — можно вписать ниже
                   </div>
                 )}
                 {detail.prospect.email && (
@@ -962,6 +1026,10 @@ export default function CalloutPage() {
                     Сохранить
                   </button>
                 </div>
+                <p style={{ color: '#64748b', fontSize: 11, margin: '6px 0 0', lineHeight: 1.35 }}>
+                  Если автоматом не нашёлся — впиши номер сюда и сохрани. Городские: +7 (код) …,
+                  мобильные: +7 9xx ….
+                </p>
               </div>
 
               {detail.prospect.address && (
