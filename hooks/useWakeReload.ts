@@ -188,10 +188,14 @@ export function useWakeReload(enabled = true) {
 // при возврате на передний план просто переподключаем соединение и обновляем
 // данные на месте. Страница остаётся отрисованной.
 //
-// Триггеры пробуждения на мобильном надёжнее ловятся комбинацией:
-//   visibilitychange → visible  (обычный возврат на вкладку)
-//   pageshow (persisted)        (восстановление из bfcache)
-//   resume                      (Page Lifecycle API — выход из «заморозки»)
+// Пишет wake-beat в sessionStorage (как useWakeReload), чтобы broadcast видел
+// реальный gap после сна и мог делать stale hard-reset.
+//
+// Триггеры:
+//   visibilitychange → visible
+//   pageshow (persisted / visible)
+//   resume
+//   focus / online — сеть вернулась или окно снова в фокусе без visibility
 export function useWakeRefresh(onWake: () => void, enabled = true) {
   const cbRef = useRef(onWake);
   cbRef.current = onWake;
@@ -203,33 +207,59 @@ export function useWakeRefresh(onWake: () => void, enabled = true) {
     // Дебаунс: visibilitychange и pageshow нередко приходят почти одновременно —
     // не дёргаем onWake дважды подряд.
     const fire = () => {
+      if (document.visibilityState !== 'visible') return;
       const now = Date.now();
       if (now - lastFire < 3000) return;
       lastFire = now;
       try {
+        // onWake может прочитать getWakeGapMs() ДО обновления пульса.
         cbRef.current();
       } catch (e) {
         // Не console.error(Error) — Next.js Dev Overlay рисует белый экран.
         console.warn('[WakeRefresh] onWake error:', e instanceof Error ? e.message : e);
+      } finally {
+        touchWakeBeat(now);
+        clearTs(WAKE_HIDDEN_AT_KEY);
       }
     };
 
+    // Пульс, пока вкладка видима — иначе getWakeGapMs() на mobile ≈ 0
+    // и broadcast не отличает короткий app-switch от долгого сна.
+    if (document.visibilityState === 'visible') touchWakeBeat();
+    const beat = window.setInterval(() => {
+      if (document.visibilityState === 'visible') touchWakeBeat();
+    }, HEARTBEAT_MS);
+
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') fire();
+      if (document.visibilityState === 'hidden') {
+        writeTs(WAKE_HIDDEN_AT_KEY, Date.now());
+        touchWakeBeat();
+        return;
+      }
+      fire();
     };
     const onPageShow = (e: Event) => {
-      if ((e as PageTransitionEvent).persisted) fire();
+      if ((e as PageTransitionEvent).persisted || document.visibilityState === 'visible') {
+        fire();
+      }
     };
     const onResume = () => fire();
+    const onFocus = () => fire();
+    const onOnline = () => fire();
 
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('pageshow', onPageShow);
     document.addEventListener('resume', onResume);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onOnline);
 
     return () => {
+      window.clearInterval(beat);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pageshow', onPageShow);
       document.removeEventListener('resume', onResume);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onOnline);
     };
   }, [enabled]);
 }

@@ -23,7 +23,7 @@ import {
 } from './driver/driverClient';
 import DriverDashboard from './driver/components/DriverDashboard';
 import HelpProvider from '@/app/adminCifra/components/help/HelpProvider';
-import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { getWakeGapMs, SOCKET_STALE_GAP_MS, useWakeRefresh } from '@/hooks/useWakeReload';
 import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
 import './globals.css';
 import { hardResetBroadcastSocket, useGlobalBroadcastStatus, reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
@@ -103,12 +103,6 @@ const INPUT_STYLE: React.CSSProperties = volumeCardSoftStyle({
 
 export default function MobileLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
-
-  // Мягкое восстановление при пробуждении (без перезагрузки — на Android reload
-  // сам виснет на белом экране). Пересоздаём broadcast-сокет, чтобы realtime
-  // ожил после фоновой заморозки. Данные страницы обновляются в своих компонентах
-  // (см. useWakeRefresh в DriverDashboard / mobile-дашборде).
-  useWakeRefresh(() => hardResetBroadcastSocket());
 
   // ==================== 1. РОЛЬ СОТРУДНИКА ИЗ PROVIDER ====================
   const { user, loading: roleLoading, refreshRole, logout } = useUserRole();
@@ -372,6 +366,21 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
 
   // ==================== BROADCAST ИНДИКАТОР ====================
   const broadcastStatus = useGlobalBroadcastStatus();
+  const broadcastStatusRef = useRef(broadcastStatus);
+  broadcastStatusRef.current = broadcastStatus;
+
+  // Мягкое восстановление при пробуждении (без location.reload — на Android/Samsung
+  // reload сам даёт белый экран). После долгого сна или если сокет уже не SUBSCRIBED
+  // — hard-reset WS. Короткий app-switch при живом сокете не трогаем (нет мигания
+  // «Подключение…»). Данные догоняют страницы через свои useWakeRefresh.
+  useWakeRefresh(() => {
+    const gap = getWakeGapMs();
+    const stale = gap >= SOCKET_STALE_GAP_MS;
+    const unhealthy = broadcastStatusRef.current !== 'SUBSCRIBED';
+    if (stale || unhealthy) {
+      hardResetBroadcastSocket();
+    }
+  });
 
   // ==================== НАВБАР: скрывается при скролле вниз, выезжает при скролле вверх ====================
   const [navVisible, setNavVisible] = useState(true);

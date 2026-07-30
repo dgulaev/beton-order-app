@@ -9,6 +9,7 @@ import { canProcessTenders } from '@/lib/demandProcessAccess';
 import { volumeCardSoftStyle } from '@/app/adminCifra/cardStyles';
 import ProcessDemandModal from '@/app/adminCifra/demand/ProcessDemandModal';
 import type { DemandItemRow } from '@/hooks/useRealtimeDemand';
+import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { useUserRole } from '../../providers/UserRoleProvider';
 
 const btnBase: CSSProperties = {
@@ -33,25 +34,30 @@ export default function MobileDemandPage() {
   const [processItem, setProcessItem] = useState<DemandItemRow | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts?: { quiet?: boolean }) => {
+    if (!opts?.quiet) setLoading(true);
     try {
       const res = await fetch('/api/adminCifra/demand?status=new&min_score=40', {
         headers: adminCifraAuthHeaders(),
+        cache: 'no-store',
       });
       const json = await res.json();
       if (json.success) setItems(json.items || []);
-      else alert(json.error || 'Не удалось загрузить спрос');
+      else if (!opts?.quiet) alert(json.error || 'Не удалось загрузить спрос');
     } catch {
-      alert('Ошибка соединения с сервером');
+      if (!opts?.quiet) alert('Ошибка соединения с сервером');
     } finally {
-      setLoading(false);
+      if (!opts?.quiet) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useWakeRefresh(() => {
+    void load({ quiet: true });
+  });
 
   const ensureProcessing = async (item: DemandItemRow): Promise<DemandItemRow | null> => {
     if (item.status === 'processing') return item;

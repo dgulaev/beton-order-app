@@ -19,6 +19,7 @@ import {
   type LeadStatus,
 } from '@/lib/leads';
 import { useRealtimeLeads } from '@/hooks/useRealtimeLeads';
+import { useWakeRefresh } from '@/hooks/useWakeReload';
 import {
   modalCloseButtonStyle,
   modalFieldStyle,
@@ -203,15 +204,16 @@ export default function MobileLeadsPage() {
     setShipmentsByLead(map);
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { quiet?: boolean }) => {
     const seq = ++loadSeqRef.current;
-    setLoading(true);
+    if (!opts?.quiet) setLoading(true);
     try {
       const qs = new URLSearchParams({ limit: mineOnly ? '300' : '100' });
       if (statusFilter) qs.set('status', statusFilter);
       if (mineOnly) qs.set('mine', '1');
       const res = await fetch(`/api/adminCifra/leads?${qs}`, {
         headers: adminCifraAuthHeaders(),
+        cache: 'no-store',
       });
       const json = await res.json();
       if (seq !== loadSeqRef.current) return;
@@ -221,13 +223,18 @@ export default function MobileLeadsPage() {
         void loadShipments(list);
       }
     } finally {
-      if (seq === loadSeqRef.current) setLoading(false);
+      if (seq === loadSeqRef.current && !opts?.quiet) setLoading(false);
     }
   }, [statusFilter, mineOnly, loadShipments]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // После простоя догоняем список (сокет поднимает layout; missed events не восстанавливаются).
+  useWakeRefresh(() => {
+    void load({ quiet: true });
+  });
 
   const statusFilterArr = useMemo(
     () => (statusFilter ? [statusFilter as LeadStatus] : undefined),
