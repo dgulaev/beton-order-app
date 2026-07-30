@@ -6,6 +6,7 @@ import { COLORS, overlayStyle, modalStyle, inputStyle, labelStyle, ghostButton, 
 import { useEscapeClose } from '../labUtils';
 import ModalSelect from '../../components/ModalSelect';
 import { appConfirm } from '../../components/appDialog';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 interface Props {
   orderId?: number | null;
@@ -75,7 +76,9 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
         }
       } else {
         // Без заказа — тянем только реквизиты лаборатории.
-        const res = await fetch('/api/adminCifra/lab-settings');
+        const res = await fetch('/api/adminCifra/lab-settings', {
+          headers: adminCifraAuthHeaders(),
+        });
         const s = res.ok ? await res.json() : {};
         setData({
           doc_kind: kind,
@@ -185,7 +188,9 @@ export default function PassportModal({ orderId, specId, initialDocKind = 'concr
     setDocKind(kind);
     if (recordId != null) {
       try {
-        const res = await fetch('/api/adminCifra/lab-settings');
+        const res = await fetch('/api/adminCifra/lab-settings', {
+          headers: adminCifraAuthHeaders(),
+        });
         const s = res.ok ? await res.json() : {};
         setData((prev) => {
           const next: PassportData = {

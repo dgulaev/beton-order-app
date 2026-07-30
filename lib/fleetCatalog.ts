@@ -2,6 +2,7 @@
  * Справочник видов техники и шаблонов моделей (Фаза 1 «Техника»).
  * ownership по-прежнему в колонке mixers.type: own | rented.
  * Головы (tractor_unit) + сцепки с прицепами — см. fleet_couples / formatCoupleLabel.
+ * Тарифы единиц — lib/fleetTariffs.ts (ключи в specs).
  */
 
 export type VehicleKind =
@@ -91,22 +92,66 @@ export const SPEC_FIELDS_BY_KIND: Record<VehicleKind, SpecField[]> = {
     { key: 'compartments', label: 'Отсеков', type: 'number', placeholder: '1' },
   ],
   special: [
-    {
-      key: 'subtype',
-      label: 'Подтип',
-      type: 'select',
-      options: [
-        { value: 'loader', label: 'Погрузчик' },
-        { value: 'manipulator', label: 'Манипулятор' },
-        { value: 'excavator', label: 'Экскаватор' },
-        { value: 'other', label: 'Прочее' },
-      ],
-    },
+    // subtype рендерится отдельно (выше модели); здесь — метрики по типу
     { key: 'lift_kg', label: 'Грузоподъёмность', type: 'number', unit: 'кг', placeholder: '3000' },
     { key: 'bucket_m3', label: 'Объём ковша', type: 'number', unit: 'м³', placeholder: '1.5' },
-    { key: 'boom_reach_m', label: 'Вылет стрелы', type: 'number', unit: 'м', placeholder: '8' },
+    { key: 'boom_reach_m', label: 'Длина стрелы', type: 'number', unit: 'м', placeholder: '20' },
+    { key: 'pump_output_m3h', label: 'Производительность', type: 'number', unit: 'м³/ч', placeholder: '90' },
   ],
 };
+
+/** Типы спецтехники (поле specs.subtype). */
+export const SPECIAL_SUBTYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'loader', label: 'Погрузчик' },
+  { value: 'manipulator', label: 'Манипулятор' },
+  { value: 'excavator', label: 'Экскаватор' },
+  { value: 'crane', label: 'Кран' },
+  { value: 'concrete_pump', label: 'Бетононасос' },
+  { value: 'other', label: 'Прочая спецтехника' },
+];
+
+export function specialSubtypeLabel(subtype: string | null | undefined): string {
+  const opt = SPECIAL_SUBTYPE_OPTIONS.find((o) => o.value === subtype);
+  return opt?.label || 'Спецтехника';
+}
+
+/** Показывать ли общее поле volume («Грузоподъёмность, т») для спецтехники. */
+export function specialShowsVolumeField(subtype: string | null | undefined): boolean {
+  return String(subtype || 'other') === 'other';
+}
+
+/** Короткая метрика для карточки списка спецтехники. */
+export function specialListMetric(
+  volume: number | null | undefined,
+  specs: Record<string, any> | null | undefined,
+): string {
+  const subtype = String(specs?.subtype || 'other');
+  const lift = Number(specs?.lift_kg);
+  const boom = Number(specs?.boom_reach_m);
+  const bucket = Number(specs?.bucket_m3);
+  const pump = Number(specs?.pump_output_m3h);
+  if (subtype === 'concrete_pump') {
+    const parts: string[] = [];
+    if (Number.isFinite(boom) && boom > 0) parts.push(`${boom} м`);
+    if (Number.isFinite(pump) && pump > 0) parts.push(`${pump} м³/ч`);
+    return parts.join(' · ') || '—';
+  }
+  if (subtype === 'crane' || subtype === 'manipulator') {
+    const parts: string[] = [];
+    if (Number.isFinite(lift) && lift > 0) parts.push(`${lift >= 1000 ? `${lift / 1000} т` : `${lift} кг`}`);
+    if (Number.isFinite(boom) && boom > 0) parts.push(`${boom} м`);
+    return parts.join(' · ') || '—';
+  }
+  if (subtype === 'loader' || subtype === 'excavator') {
+    const parts: string[] = [];
+    if (Number.isFinite(lift) && lift > 0) parts.push(`${lift >= 1000 ? `${lift / 1000} т` : `${lift} кг`}`);
+    if (Number.isFinite(bucket) && bucket > 0) parts.push(`${bucket} м³`);
+    return parts.join(' · ') || '—';
+  }
+  const vol = Number(volume);
+  if (Number.isFinite(vol) && vol > 0) return `${vol} т`;
+  return '—';
+}
 
 /** Записать volume в зеркальный ключ specs (чтобы JSON и колонка не расходились). */
 export function syncVolumeIntoSpecs(
@@ -122,20 +167,56 @@ export function syncVolumeIntoSpecs(
   return out;
 }
 
-/** Какие поля specs показывать в форме (без дубля volume). */
+/** Какие поля specs показывать в форме (без дубля volume; subtype — отдельно сверху). */
 export function visibleSpecFields(kind: VehicleKind, specs: Record<string, any> | null | undefined): SpecField[] {
   const all = SPEC_FIELDS_BY_KIND[kind] || [];
   const mirrorKey = VOLUME_MIRROR_SPEC_KEY[kind];
   const withoutMirror = mirrorKey ? all.filter((f) => f.key !== mirrorKey) : all;
   if (kind !== 'special') return withoutMirror;
+
   const subtype = String(specs?.subtype || 'other');
-  return withoutMirror.filter((f) => {
-    if (f.key === 'subtype') return true;
-    if (subtype === 'loader') return f.key === 'lift_kg' || f.key === 'bucket_m3';
-    if (subtype === 'manipulator') return f.key === 'lift_kg' || f.key === 'boom_reach_m';
-    if (subtype === 'excavator') return f.key === 'bucket_m3' || f.key === 'lift_kg';
-    return f.key === 'lift_kg' || f.key === 'bucket_m3' || f.key === 'boom_reach_m';
-  });
+  if (subtype === 'loader' || subtype === 'excavator') {
+    return [
+      { key: 'lift_kg', label: 'Грузоподъёмность', type: 'number', unit: 'кг', placeholder: '3000' },
+      { key: 'bucket_m3', label: 'Объём ковша', type: 'number', unit: 'м³', placeholder: '1.5' },
+    ];
+  }
+  if (subtype === 'manipulator') {
+    return [
+      { key: 'lift_kg', label: 'Грузоподъёмность', type: 'number', unit: 'кг', placeholder: '7000' },
+      { key: 'boom_reach_m', label: 'Вылет стрелы', type: 'number', unit: 'м', placeholder: '12' },
+    ];
+  }
+  if (subtype === 'crane') {
+    return [
+      { key: 'lift_kg', label: 'Грузоподъёмность', type: 'number', unit: 'кг', placeholder: '25000' },
+      { key: 'boom_reach_m', label: 'Длина стрелы', type: 'number', unit: 'м', placeholder: '21' },
+    ];
+  }
+  if (subtype === 'concrete_pump') {
+    return [
+      { key: 'boom_reach_m', label: 'Длина стрелы', type: 'number', unit: 'м', placeholder: '32' },
+      { key: 'pump_output_m3h', label: 'Производительность', type: 'number', unit: 'м³/ч', placeholder: '90' },
+    ];
+  }
+  // Прочая спецтехника — общие метрики
+  return [
+    { key: 'lift_kg', label: 'Грузоподъёмность', type: 'number', unit: 'кг', placeholder: '3000' },
+    { key: 'boom_reach_m', label: 'Длина / вылет стрелы', type: 'number', unit: 'м', placeholder: '8' },
+    { key: 'bucket_m3', label: 'Объём ковша', type: 'number', unit: 'м³', placeholder: '1.5' },
+  ];
+}
+
+/** Шаблоны моделей спецтехники с фильтром по типу. */
+export function modelTemplatesForKind(
+  kind: VehicleKind,
+  specs?: Record<string, any> | null,
+): ModelTemplate[] {
+  const all = MODEL_TEMPLATES[kind] || [];
+  if (kind !== 'special') return all;
+  const subtype = String(specs?.subtype || '');
+  if (!subtype) return all;
+  return all.filter((t) => !t.specs?.subtype || String(t.specs.subtype) === subtype);
 }
 
 /** Шаблоны моделей — при выборе подставляем volume + specs. */
@@ -183,12 +264,38 @@ export const MODEL_TEMPLATES: Record<VehicleKind, ModelTemplate[]> = {
     { model: 'МАЗ тягач', volume: 0 },
   ],
   special: [
-    { model: 'Амкодор 342С', volume: 3, specs: { subtype: 'loader', lift_kg: 3400, bucket_m3: 1.7 } },
-    { model: 'JCB 3CX', volume: 1, specs: { subtype: 'loader', lift_kg: 3200, bucket_m3: 1.1 } },
-    { model: 'Hyundai HL760', volume: 3, specs: { subtype: 'loader', lift_kg: 5000, bucket_m3: 2.7 } },
-    { model: 'КАМАЗ манипулятор', volume: 7, specs: { subtype: 'manipulator', lift_kg: 7000, boom_reach_m: 12 } },
-    { model: 'МАЗ манипулятор', volume: 6, specs: { subtype: 'manipulator', lift_kg: 6000, boom_reach_m: 10 } },
-    { model: 'JCB JS200', volume: 1, specs: { subtype: 'excavator', bucket_m3: 1.0, lift_kg: 0 } },
+    { model: 'Амкодор 342С', volume: 0, specs: { subtype: 'loader', lift_kg: 3400, bucket_m3: 1.7 } },
+    { model: 'JCB 3CX', volume: 0, specs: { subtype: 'loader', lift_kg: 3200, bucket_m3: 1.1 } },
+    { model: 'Hyundai HL760', volume: 0, specs: { subtype: 'loader', lift_kg: 5000, bucket_m3: 2.7 } },
+    { model: 'КАМАЗ манипулятор', volume: 0, specs: { subtype: 'manipulator', lift_kg: 7000, boom_reach_m: 12 } },
+    { model: 'МАЗ манипулятор', volume: 0, specs: { subtype: 'manipulator', lift_kg: 6000, boom_reach_m: 10 } },
+    { model: 'JCB JS200', volume: 0, specs: { subtype: 'excavator', bucket_m3: 1.0, lift_kg: 12000 } },
+    { model: 'КС-55713', volume: 0, specs: { subtype: 'crane', lift_kg: 25000, boom_reach_m: 21 } },
+    { model: 'Галичанин КС-55729', volume: 0, specs: { subtype: 'crane', lift_kg: 32000, boom_reach_m: 30 } },
+    {
+      model: 'Putzmeister BSF 36.5',
+      volume: 0,
+      specs: {
+        subtype: 'concrete_pump', boom_reach_m: 36, pump_output_m3h: 90,
+        hour_rate_rub: 9000, min_shift_hours: 7, primer_mix_cost_rub: 5000,
+      },
+    },
+    {
+      model: 'Schwing S 36 X',
+      volume: 0,
+      specs: {
+        subtype: 'concrete_pump', boom_reach_m: 36, pump_output_m3h: 100,
+        hour_rate_rub: 9500, min_shift_hours: 7, primer_mix_cost_rub: 5500,
+      },
+    },
+    {
+      model: 'CIFA K36L',
+      volume: 0,
+      specs: {
+        subtype: 'concrete_pump', boom_reach_m: 36, pump_output_m3h: 120,
+        hour_rate_rub: 10000, min_shift_hours: 7, primer_mix_cost_rub: 6000,
+      },
+    },
   ],
 };
 
@@ -203,21 +310,59 @@ export function applyModelTemplate(
   return { volume: t.volume, specs: { ...(t.specs || {}) } };
 }
 
+/** Реэкспорт тарифов — единая точка для старых импортов из fleetCatalog. */
+export { formatRub, concretePumpShiftTotal } from '@/lib/fleetTariffs';
+
 export function formatSpecsSummary(kind: VehicleKind, specs: Record<string, any> | null | undefined): string {
-  if (!specs || typeof specs !== 'object') return '';
-  const fields = visibleSpecFields(kind, specs);
-  const parts: string[] = [];
-  for (const f of fields) {
-    if (f.key === 'subtype') {
-      const opt = f.options?.find((o) => o.value === specs.subtype);
-      if (opt) parts.push(opt.label);
-      continue;
-    }
+  return formatSpecsChips(kind, specs)
+    .map((c) => c.text)
+    .join(' · ');
+}
+
+export type SpecChip = {
+  text: string;
+  /** accent — тип/подтип; muted — обычный параметр */
+  tone?: 'accent' | 'muted';
+};
+
+/** Чипы характеристик для списка/плитки (читаемее, чем одна серая строка). */
+export function formatSpecsChips(
+  kind: VehicleKind,
+  specs: Record<string, any> | null | undefined,
+): SpecChip[] {
+  const chips: SpecChip[] = [];
+  if (kind === 'special' && specs?.subtype) {
+    chips.push({ text: specialSubtypeLabel(String(specs.subtype)), tone: 'accent' });
+  }
+  if (!specs || typeof specs !== 'object') return chips;
+  for (const f of visibleSpecFields(kind, specs)) {
     const v = specs[f.key];
     if (v === undefined || v === null || v === '' || v === 0) continue;
-    parts.push(`${f.label}: ${v}${f.unit ? ` ${f.unit}` : ''}`);
+    const short =
+      f.key === 'boom_reach_m'
+        ? `Стрела ${v} м`
+        : f.key === 'pump_output_m3h'
+          ? `${v} м³/ч`
+          : f.key === 'lift_kg'
+            ? Number(v) >= 1000
+              ? `Г/п ${Number(v) / 1000} т`
+              : `Г/п ${v} кг`
+            : f.key === 'bucket_m3'
+              ? `Ковш ${v} м³`
+              : f.key === 'payload_tons' || f.key === 'capacity_tons'
+                ? `${v} т`
+                : f.key === 'compartments'
+                  ? `${v} отс.`
+                  : f.key === 'axle_count'
+                    ? `${v} оси`
+                    : f.key === 'length_m'
+                      ? `${v} м`
+                      : f.unit
+                        ? `${v} ${f.unit}`
+                        : String(v);
+    chips.push({ text: short, tone: 'muted' });
   }
-  return parts.join(' · ');
+  return chips;
 }
 
 /** Короткая подпись прицепа для сцепки: «бочка 30 т» / «тоннар 40 т». */

@@ -293,8 +293,14 @@ const loadWarehouse = async () => {
       cache: 'no-store',
       headers: { 'Cache-Control': 'no-cache' },
     }),
-    safeFetch('/api/adminCifra/lab-settings', { cache: 'no-store' }),
-    safeFetch('/api/adminCifra/operator-shift', { cache: 'no-store' }),
+    safeFetch('/api/adminCifra/lab-settings', {
+      cache: 'no-store',
+      headers: adminCifraAuthHeaders(),
+    }),
+    safeFetch('/api/adminCifra/operator-shift', {
+      cache: 'no-store',
+      headers: adminCifraAuthHeaders(),
+    }),
   ]);
 
   try {

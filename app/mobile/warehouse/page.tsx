@@ -178,8 +178,8 @@ export default function MobileWarehousePage() {
     const [warehouseRes, recipesRes, labRes, shiftRes] = await Promise.all([
       safeFetch('/api/adminCifra/warehouse'),
       safeFetch('/api/adminCifra/recipes'),
-      safeFetch('/api/adminCifra/lab-settings'),
-      safeFetch('/api/adminCifra/operator-shift'),
+      safeFetch('/api/adminCifra/lab-settings', { headers: adminCifraAuthHeaders() }),
+      safeFetch('/api/adminCifra/operator-shift', { headers: adminCifraAuthHeaders() }),
     ]);
 
     try {

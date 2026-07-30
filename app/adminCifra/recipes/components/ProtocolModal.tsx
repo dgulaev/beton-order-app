@@ -5,6 +5,7 @@ import { COLORS, overlayStyle, modalStyle, inputStyle, labelStyle, ghostButton, 
 import { SCALE, num, ru, ruInt, computeSeries, type Specimen } from '../protocolCalc';
 import { useEscapeClose } from '../labUtils';
 import ModalSelect from '../../components/ModalSelect';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 interface Props {
   test: any;              // строка concrete_tests, к которой формируем протокол
@@ -38,7 +39,9 @@ export default function ProtocolModal({ test, onClose, onSaved }: Props) {
     (async () => {
       let settings: any = {};
       try {
-        const res = await fetch('/api/adminCifra/lab-settings');
+        const res = await fetch('/api/adminCifra/lab-settings', {
+          headers: adminCifraAuthHeaders(),
+        });
         if (res.ok) settings = await res.json();
       } catch (e) {
         console.error(e);

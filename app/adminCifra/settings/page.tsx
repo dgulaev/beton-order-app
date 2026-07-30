@@ -21,6 +21,7 @@ import {
   Info,
   Gavel,
   BookOpen,
+  Wallet,
 } from 'lucide-react';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
@@ -42,9 +43,11 @@ import type { LoadingPoint } from '@/lib/loadingPoints';
 import { setRouteOriginCoordsOverride } from '@/lib/geocodeAddress';
 import { setRouteOriginAddressOverride } from '@/lib/bryanskAddress';
 import HelpSettingsTab from './HelpSettingsTab';
+import FleetTariffsSettingsTab from './FleetTariffsSettingsTab';
 
 const SECTIONS = [
   { id: 'delivery', label: 'Доставка и тарифы', icon: Truck },
+  { id: 'fleetTariffs', label: 'Тарифы техники', icon: Wallet },
   { id: 'lab', label: 'Лаборатория', icon: FlaskConical },
   { id: 'integrations', label: 'Интеграции', icon: Cable },
   { id: 'loading', label: 'Точки погрузки', icon: MapPin },
@@ -464,6 +467,16 @@ export default function SettingsPage() {
               action={<LinkPill href="/adminCifra/mixers" label="Открыть в Технике" />}
             >
               <DeliverySettingsTab />
+            </SectionCard>
+          )}
+
+          {active === 'fleetTariffs' && (
+            <SectionCard
+              title="Тарифы техники"
+              hint="Дубль тарифов единиц из раздела Техника (кроме миксеров). Данные в mixers.specs — для расчётов в рейсах на следующем этапе."
+              action={<LinkPill href="/adminCifra/mixers" label="Открыть Технику" />}
+            >
+              <FleetTariffsSettingsTab />
             </SectionCard>
           )}
 

@@ -8,6 +8,7 @@ import {
   vehicleRequiresDriver,
   type VehicleKind,
 } from '@/lib/fleetCatalog';
+import { mergeTariffIntoSpecs, sanitizeFleetSpecs } from '@/lib/fleetTariffs';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -86,13 +87,55 @@ export async function POST(request: NextRequest) {
       unload_allowance_min,
       vehicle_kind: rawKind,
       specs: rawSpecs,
+      tariff_patch: tariffPatch,
     } = body;
 
+    // Частичное обновление только тарифов — не затирает физику/ФИО из устаревшего UI.
+    if (id && tariffPatch != null && typeof tariffPatch === 'object' && !Array.isArray(tariffPatch)) {
+      const { data: existing, error: exErr } = await supabase
+        .from('mixers')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (exErr) throw exErr;
+      if (!existing) {
+        return NextResponse.json({ error: 'Единица не найдена' }, { status: 404 });
+      }
+      const kind: VehicleKind = isVehicleKind(existing.vehicle_kind)
+        ? existing.vehicle_kind
+        : 'mixer';
+      const nextSpecs = sanitizeFleetSpecs(
+        kind,
+        mergeTariffIntoSpecs(
+          existing.specs && typeof existing.specs === 'object' ? existing.specs : {},
+          tariffPatch,
+        ),
+      );
+      const { data, error } = await supabase
+        .from('mixers')
+        .update({ specs: nextSpecs, updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select()
+        .single();
+      if (error) {
+        if (/vehicle_kind|specs/i.test(error.message)) {
+          return NextResponse.json({
+            error: 'Выполните scripts/fleet-vehicle-kind.sql — колонки vehicle_kind/specs ещё не в БД',
+          }, { status: 400 });
+        }
+        throw error;
+      }
+      return NextResponse.json({ success: true, data });
+    }
+
     const vehicle_kind: VehicleKind = isVehicleKind(rawKind) ? rawKind : 'mixer';
-    const specs = syncVolumeIntoSpecs(
+    const specs = sanitizeFleetSpecs(
       vehicle_kind,
-      volume,
-      rawSpecs && typeof rawSpecs === 'object' && !Array.isArray(rawSpecs) ? rawSpecs : {},
+      syncVolumeIntoSpecs(
+        vehicle_kind,
+        volume,
+        rawSpecs && typeof rawSpecs === 'object' && !Array.isArray(rawSpecs) ? rawSpecs : {},
+      ),
     );
 
     if (!number) {
@@ -149,7 +192,8 @@ export async function POST(request: NextRequest) {
       status: status || 'Доступен',
       unload_allowance_min: normalizedAllowance,
       vehicle_kind,
-      specs: vehicle_kind === 'tractor_unit' ? {} : specs,
+      // Голова без физических specs — но тарифы (hour_rate_rub и т.п.) храним в specs
+      specs,
       updated_at: new Date().toISOString(),
     };
 

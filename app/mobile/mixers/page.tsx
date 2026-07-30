@@ -16,18 +16,60 @@ import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } f
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import {
   VEHICLE_KINDS,
-  MODEL_TEMPLATES,
   TRAILER_KINDS,
+  SPECIAL_SUBTYPE_OPTIONS,
   applyModelTemplate,
-  formatSpecsSummary,
+  formatSpecsChips,
   isTrailerKind,
   isVehicleKind,
+  formatRub,
+  modelTemplatesForKind,
+  specialListMetric,
+  specialShowsVolumeField,
+  specialSubtypeLabel,
   syncVolumeIntoSpecs,
   vehicleKindMeta,
   vehicleRequiresDriver,
   visibleSpecFields,
+  type SpecChip,
   type VehicleKind,
 } from '@/lib/fleetCatalog';
+import {
+  sanitizeFleetSpecs,
+  specsAfterSpecialSubtypeChange,
+  tariffFieldsForUnit,
+  unitHasFleetTariffs,
+  unitShiftOrTripTotal,
+} from '@/lib/fleetTariffs';
+
+function SpecChipsRow({ chips }: { chips: SpecChip[] }) {
+  if (!chips.length) return null;
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+      {chips.map((c, i) => (
+        <span
+          key={`${c.text}-${i}`}
+          style={{
+            display: 'inline-flex',
+            padding: '1px 7px',
+            borderRadius: 6,
+            fontSize: 11,
+            fontWeight: c.tone === 'accent' ? 650 : 500,
+            whiteSpace: 'nowrap',
+            background: c.tone === 'accent' ? 'rgba(96,165,250,0.14)' : 'rgba(148,163,184,0.10)',
+            color: c.tone === 'accent' ? '#93C5FD' : '#94A3B8',
+            border:
+              c.tone === 'accent'
+                ? '1px solid rgba(96,165,250,0.28)'
+                : '1px solid rgba(148,163,184,0.14)',
+          }}
+        >
+          {c.text}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -97,6 +139,7 @@ function initials(name: string): string {
 
 function volumeDisplay(unit: FleetUnit, kind: VehicleKind): string {
   if (kind === 'tractor_unit') return '—';
+  if (kind === 'special') return specialListMetric(unit.volume, unit.specs);
   const meta = vehicleKindMeta(kind);
   const unitLabel = meta.volumeUnit || '';
   return `${unit.volume}${unitLabel ? ` ${unitLabel}` : ''}`;
@@ -530,7 +573,10 @@ export default function MobileMixersPage() {
     try {
       const synced = {
         ...form,
-        specs: syncVolumeIntoSpecs(form.vehicle_kind, form.volume, form.specs),
+        specs: sanitizeFleetSpecs(
+          form.vehicle_kind,
+          syncVolumeIntoSpecs(form.vehicle_kind, form.volume, form.specs),
+        ),
       };
       const payload = sheet === 'edit' && selected ? { ...synced, id: selected.id } : synced;
       const res = await fetch('/api/adminCifra/mixers', {
@@ -847,7 +893,8 @@ export default function MobileMixersPage() {
               const hasActiveTrip = !!activeTrip;
               const coupleLine = coupleStatusLine(unit);
               const coupled = coupleByTrailerId.has(unit.id) || coupleByTractorId.has(unit.id);
-              const specsLine = formatSpecsSummary(vehicleKind, unit.specs);
+              const specsChips = formatSpecsChips(vehicleKind, unit.specs);
+              const tariffTotal = unitShiftOrTripTotal(vehicleKind, unit.specs);
 
               return (
                 <div
@@ -856,6 +903,8 @@ export default function MobileMixersPage() {
                     borderRadius: 14,
                     border: hasActiveTrip
                       ? `1px solid ${sc.color}50`
+                      : tariffTotal
+                        ? '1px solid rgba(251,191,36,0.35)'
                       : coupled
                         ? '1px solid rgba(74,222,128,0.35)'
                         : CARD_BORDER,
@@ -865,7 +914,7 @@ export default function MobileMixersPage() {
                 >
                   <div style={{
                     width: '4px', flexShrink: 0,
-                    background: coupled ? '#4ADE80' : sc.color,
+                    background: tariffTotal ? '#FBBF24' : coupled ? '#4ADE80' : sc.color,
                   }} />
 
                   <div style={{ flex: 1, padding: '11px 12px', minWidth: 0 }}>
@@ -882,7 +931,7 @@ export default function MobileMixersPage() {
                           <span style={{ fontSize: '16px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
                             {unit.number}
                           </span>
-                          <span style={{ fontSize: '12px', color: '#64748B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <span style={{ fontSize: '13px', color: '#CBD5E1', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {unit.model || ''}
                           </span>
                         </div>
@@ -890,7 +939,7 @@ export default function MobileMixersPage() {
                           <span style={{ fontSize: '11px', fontWeight: 600, color: isOwn ? '#10B981' : '#FACC15' }}>
                             {isOwn ? 'свой' : 'наём.'}
                           </span>
-                          {vehicleKind !== 'tractor_unit' && (
+                          {vehicleKind !== 'tractor_unit' && !tariffTotal && (
                             <span style={{ fontSize: '15px', fontWeight: 700, color: '#CBD5E1', whiteSpace: 'nowrap' }}>
                               {volumeDisplay(unit, vehicleKind)}
                             </span>
@@ -898,7 +947,9 @@ export default function MobileMixersPage() {
                         </div>
                       </div>
 
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <SpecChipsRow chips={specsChips} />
+
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginTop: specsChips.length ? 6 : 0 }}>
                         <span style={{ fontSize: '13px', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                           {unit.driver || (isTrailerKind(vehicleKind) ? 'без водителя' : '—')}
                         </span>
@@ -910,11 +961,40 @@ export default function MobileMixersPage() {
                         )}
                       </div>
 
-                      {(coupleLine || specsLine) && (
-                        <div style={{ marginTop: 6, fontSize: 11, color: coupleLine?.startsWith('Сцеплен') ? '#4ADE80' : '#64748B' }}>
-                          {coupleLine || specsLine}
+                      {coupleLine && (
+                        <div style={{
+                          marginTop: 5,
+                          fontSize: 11,
+                          color: coupleLine.startsWith('Сцеплен') ? '#4ADE80' : '#64748B',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {coupleLine}
                         </div>
                       )}
+
+                      {tariffTotal ? (
+                        <div style={{
+                          marginTop: 8,
+                          padding: '8px 10px',
+                          borderRadius: 10,
+                          background: 'rgba(251,191,36,0.10)',
+                          border: '1px solid rgba(251,191,36,0.25)',
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: '#FBBF24', letterSpacing: '0.05em' }}>
+                              {tariffTotal.label.toUpperCase()}
+                            </span>
+                            <span style={{ fontSize: 16, fontWeight: 800, color: '#FBBF24' }}>{formatRub(tariffTotal.amount)}</span>
+                          </div>
+                          {tariffTotal.detail ? (
+                            <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 3 }}>
+                              {tariffTotal.detail}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </button>
 
                     {/* Actions */}
@@ -1039,19 +1119,47 @@ export default function MobileMixersPage() {
             </div>
             <div style={{ padding: '0 20px 24px', overflowY: 'auto' }}>
               <InfoRow label="Вид" value={kindMeta.singular} />
+              {vehicleKind === 'special' && (
+                <InfoRow label="Тип техники" value={specialSubtypeLabel(String(selected.specs?.subtype || ''))} />
+              )}
               <InfoRow label="Модель" value={selected.model || '—'} />
               <InfoRow label="Водитель" value={selected.driver || '—'} />
               <InfoRow label="Телефон" value={selected.phone || '—'} />
-              {vehicleKind !== 'tractor_unit' && (
+              {vehicleKind !== 'tractor_unit' &&
+                (vehicleKind !== 'special' || specialShowsVolumeField(selected.specs?.subtype)) && (
                 <InfoRow label={kindMeta.volumeLabel || 'Объём'} value={volumeDisplay(selected, vehicleKind)} />
               )}
-              <InfoRow label="Тип" value={selected.type === 'own' ? 'Свой' : 'Наёмный'} />
+              <InfoRow label="Принадлежность" value={selected.type === 'own' ? 'Свой' : 'Наёмный'} />
               {coupleStatusLine(selected) && (
                 <InfoRow label="Сцепка" value={coupleStatusLine(selected)!} />
               )}
-              {formatSpecsSummary(vehicleKind, selected.specs) && (
-                <InfoRow label="Параметры" value={formatSpecsSummary(vehicleKind, selected.specs)} />
+              {formatSpecsChips(vehicleKind, selected.specs).length > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4, fontWeight: 600 }}>Параметры</div>
+                  <SpecChipsRow chips={formatSpecsChips(vehicleKind, selected.specs)} />
+                </div>
               )}
+              {(() => {
+                const tariff = unitShiftOrTripTotal(vehicleKind, selected.specs);
+                if (!tariff) return null;
+                const fields = tariffFieldsForUnit(vehicleKind, selected.specs);
+                return (
+                  <>
+                    {fields.map((f) => {
+                      const v = selected.specs?.[f.key];
+                      if (v === undefined || v === null || v === '') return null;
+                      return (
+                        <InfoRow
+                          key={f.key}
+                          label={f.label}
+                          value={`${Number(v).toLocaleString('ru-RU')}${f.unit ? ` ${f.unit}` : ''}`}
+                        />
+                      );
+                    })}
+                    <InfoRow label={tariff.label} value={formatRub(tariff.amount)} />
+                  </>
+                );
+              })()}
               {vehicleKind === 'mixer' && (
                 <InfoRow
                   label="Норма разгрузки"
@@ -1106,15 +1214,35 @@ export default function MobileMixersPage() {
                 onChange={(v) => setForm((p) => ({ ...p, number: v }))}
               />
 
+              {form.vehicle_kind === 'special' && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '6px', fontWeight: 600 }}>Тип техники</div>
+                  <select
+                    value={String(form.specs?.subtype || 'loader')}
+                    onChange={(e) => setForm((prev) => ({
+                      ...prev,
+                      model: '',
+                      volume: 0,
+                      specs: specsAfterSpecialSubtypeChange(prev.specs, e.target.value),
+                    }))}
+                    style={selectStyle}
+                  >
+                    {SPECIAL_SUBTYPE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div style={{ marginBottom: 16 }}>
                 <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '6px', fontWeight: 600 }}>Модель</div>
                 <select
-                  value={(MODEL_TEMPLATES[form.vehicle_kind] || []).some((t) => t.model === form.model) ? form.model : ''}
+                  value={modelTemplatesForKind(form.vehicle_kind, form.specs).some((t) => t.model === form.model) ? form.model : ''}
                   onChange={(e) => { if (e.target.value) applyModel(e.target.value); }}
                   style={{ ...selectStyle, marginBottom: 8 }}
                 >
                   <option value="">— шаблон —</option>
-                  {(MODEL_TEMPLATES[form.vehicle_kind] || []).map((t) => (
+                  {modelTemplatesForKind(form.vehicle_kind, form.specs).map((t) => (
                     <option key={t.model} value={t.model}>{t.model}</option>
                   ))}
                 </select>
@@ -1158,7 +1286,8 @@ export default function MobileMixersPage() {
                 hint={needsDriver ? 'Используется для входа водителя в приложение' : 'Для бочки/тоннара водитель ведёт голова'}
               />
 
-              {form.vehicle_kind !== 'tractor_unit' && (
+              {form.vehicle_kind !== 'tractor_unit' &&
+                (form.vehicle_kind !== 'special' || specialShowsVolumeField(form.specs?.subtype)) && (
                 <FieldInput
                   label={`${kindMeta.volumeLabel || 'Объём'}${kindMeta.volumeUnit ? `, ${kindMeta.volumeUnit}` : ''}`}
                   value={form.volume}
@@ -1190,20 +1319,86 @@ export default function MobileMixersPage() {
                       type={field.type === 'number' ? 'number' : 'text'}
                       placeholder={field.placeholder}
                       value={form.specs[field.key] ?? ''}
-                      onChange={(e) => setForm((p) => ({
-                        ...p,
-                        specs: {
-                          ...p.specs,
-                          [field.key]: field.type === 'number'
-                            ? (e.target.value === '' ? '' : Number(e.target.value))
-                            : e.target.value,
-                        },
-                      }))}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (field.type === 'number') {
+                          if (raw === '') {
+                            setForm((p) => ({ ...p, specs: { ...p.specs, [field.key]: '' } }));
+                            return;
+                          }
+                          const n = Number(raw);
+                          if (!Number.isFinite(n)) return;
+                          setForm((p) => ({ ...p, specs: { ...p.specs, [field.key]: n } }));
+                          return;
+                        }
+                        setForm((p) => ({ ...p, specs: { ...p.specs, [field.key]: raw } }));
+                      }}
                       style={selectStyle}
                     />
                   )}
                 </div>
               ))}
+
+              {unitHasFleetTariffs(form.vehicle_kind) && (() => {
+                const priceFields = tariffFieldsForUnit(form.vehicle_kind, form.specs);
+                const formTariff = unitShiftOrTripTotal(form.vehicle_kind, form.specs);
+                return (
+                  <div style={volumeCardSoftStyle({
+                    borderRadius: 14,
+                    padding: '14px',
+                    marginBottom: 16,
+                    border: '1px solid rgba(251,191,36,0.28)',
+                    background: 'linear-gradient(165deg, rgba(251,191,36,0.10) 0%, rgba(15,23,42,0.55) 70%)',
+                  })}>
+                    <div style={{
+                      fontSize: 11, fontWeight: 700, color: '#FBBF24',
+                      letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 12,
+                    }}>
+                      Тариф
+                    </div>
+                    {priceFields.map((field) => (
+                      <div key={field.key} style={{ marginBottom: 16 }}>
+                        <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '6px', fontWeight: 600 }}>
+                          {field.label}{field.unit ? `, ${field.unit}` : ''}
+                        </div>
+                        <input
+                          type="number"
+                          placeholder={field.placeholder}
+                          value={form.specs[field.key] ?? ''}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            if (raw === '') {
+                              setForm((p) => ({ ...p, specs: { ...p.specs, [field.key]: '' } }));
+                              return;
+                            }
+                            const n = Number(raw);
+                            if (!Number.isFinite(n)) return;
+                            setForm((p) => ({ ...p, specs: { ...p.specs, [field.key]: n } }));
+                          }}
+                          style={selectStyle}
+                        />
+                      </div>
+                    ))}
+                    <div style={{
+                      marginTop: 4, paddingTop: 12,
+                      borderTop: '1px solid rgba(148,163,184,0.18)',
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10,
+                    }}>
+                      <div>
+                        <div style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>
+                          {formTariff?.label || 'Итого'}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
+                          {formTariff?.detail || 'Заполните поля тарифа'}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: formTariff ? '#FBBF24' : '#64748B' }}>
+                        {formTariff ? formatRub(formTariff.amount) : '—'}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div style={{ marginBottom: '16px' }}>
                 <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '8px', fontWeight: 600 }}>Принадлежность</div>

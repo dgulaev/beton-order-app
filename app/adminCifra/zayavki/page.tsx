@@ -1585,8 +1585,8 @@ ${order.customer_type?.includes('Юридическое')
     const fetchWarehouse = async () => {
       try {
         const [whRes, labRes] = await Promise.all([
-          fetch('/api/adminCifra/warehouse'),
-          fetch('/api/adminCifra/lab-settings'),
+          fetch('/api/adminCifra/warehouse', { headers: adminCifraAuthHeaders() }),
+          fetch('/api/adminCifra/lab-settings', { headers: adminCifraAuthHeaders() }),
         ]);
         if (whRes.ok) {
           const data = await whRes.json();
