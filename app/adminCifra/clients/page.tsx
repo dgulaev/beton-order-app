@@ -1676,15 +1676,19 @@ const duplicateOrder = async (order: any) => {
 
   const clientData = selectedProfile?.clients?.[0] || selectedProfile || {};
 
-  const today = new Date().toISOString().split('T')[0]; // ← сегодняшняя дата
+  const { todayMoscowYmd } = await import('@/lib/leads');
+  const today = todayMoscowYmd();
+  const sourceYmd = String(order.delivery_date || order.deliveryDate || '').split('T')[0] || null;
 
-  const { resolveLeadLinkForOrderCopy } = await import('@/lib/leadOrderCopy');
+  const { resolveLeadLinkForOrderCopy, rewriteCommentDeliveryDate } = await import('@/lib/leadOrderCopy');
   const leadLink = await resolveLeadLinkForOrderCopy({
     leadId: order.lead_id ?? order.leadId ?? null,
     leadSource: order.lead_source ?? order.leadSource ?? null,
     externalRef: order.external_ref ?? order.externalRef ?? null,
     volume: order.volume ?? null,
   });
+
+  const commentBody = rewriteCommentDeliveryDate(order.comment, sourceYmd, today);
 
   const duplicated = {
     id: undefined,
@@ -1710,8 +1714,8 @@ const duplicateOrder = async (order: any) => {
     
     address: order.address || clientData.address || '',
     
-    comment: order.comment 
-      ? `Копия заказа #${order.id}\n\n${order.comment}` 
+    comment: commentBody
+      ? `Копия заказа #${order.id}\n\n${commentBody}`
       : `Копия заказа #${order.id}`,
 
     customerType: order.customer_type?.includes('Юрид') || order.customerType === 'legal' ? 'legal' : 'physical',

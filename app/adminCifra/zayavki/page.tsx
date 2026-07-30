@@ -36,6 +36,7 @@ import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
 import { InstantFieldHint, VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatRuDateWithWeekday, formatTimeHHMM, pluralWord } from '@/lib/ruLocale';
+import { todayMoscowYmd } from '@/lib/leads';
 import PageHelpButton from '@/app/adminCifra/components/help/PageHelpButton';
 import OrderCommentsPanel, { CommentUnreadBadge, orderModalTabStyle } from '@/app/adminCifra/components/OrderCommentsPanel';
 import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts';
@@ -1131,7 +1132,7 @@ ${order.customer_type?.includes('Юридическое')
 
   // ==================== КОПИРОВАТЬ ЗАЯВКУ ====================
   const copyOrder = async (order: any) => {
-    const { resolveLeadLinkForOrderCopy } = await import('@/lib/leadOrderCopy');
+    const { resolveLeadLinkForOrderCopy, rewriteCommentDeliveryDate } = await import('@/lib/leadOrderCopy');
     const leadLink = await resolveLeadLinkForOrderCopy({
       leadId: order.lead_id ?? order.leadId ?? null,
       leadSource: order.lead_source ?? order.leadSource ?? null,
@@ -1139,10 +1140,14 @@ ${order.customer_type?.includes('Юридическое')
       volume: order.volume ?? null,
     });
 
+    const todayYmd = todayMoscowYmd();
+    const sourceYmd = String(order.delivery_date || '').split('T')[0] || null;
+
     const copiedData = {
       grade: order.grade,
       volume: leadLink.volume != null ? leadLink.volume : order.volume,
-      deliveryDate: order.delivery_date,
+      // Дата — всегда «сегодня» на момент копирования (МСК), не дата исходной заявки.
+      deliveryDate: todayYmd,
       deliveryTime: order.delivery_time,
       address: order.address,
       customerType: order.customer_type?.includes('Юридическое') ? 'legal' : 'physical',
@@ -1150,7 +1155,7 @@ ${order.customer_type?.includes('Юридическое')
       fullName: order.full_name || '',
       phone: order.phone,
       inn: order.inn || '',
-      comment: order.comment || '',
+      comment: rewriteCommentDeliveryDate(order.comment, sourceYmd, todayYmd),
       order_type: order.order_type || 'concrete',
       fleet_vehicle_kind: order.fleet_vehicle_kind || null,
       loading_point_id: order.loading_point_id ?? null,

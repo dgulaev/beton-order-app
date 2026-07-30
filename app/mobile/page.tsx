@@ -1258,7 +1258,7 @@ useWakeRefresh(() => {
               onClick={e => e.stopPropagation()}
               style={{ fontSize: '12px', color: '#60A5FA', textDecoration: 'none', fontWeight: 600, flexShrink: 0 }}
             >
-              Все миксеры →
+              Вся техника →
             </Link>
           </div>
 

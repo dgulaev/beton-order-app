@@ -1,22 +1,37 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Phone, Plus, X, Save, Truck, DollarSign, Trash2, RotateCcw, MapPin, ExternalLink } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Phone, Plus, X, Save, Truck, DollarSign, Trash2, RotateCcw, MapPin, ExternalLink, Link2, Unlink } from 'lucide-react';
 import Link from 'next/link';
 import MobileExitButton from '../components/MobileExitButton';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
+import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import { DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
 import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
 import { useRealtimeOrderMixers } from '@/hooks/useRealtimeOrders';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import {
+  VEHICLE_KINDS,
+  MODEL_TEMPLATES,
+  TRAILER_KINDS,
+  applyModelTemplate,
+  formatSpecsSummary,
+  isTrailerKind,
+  isVehicleKind,
+  syncVolumeIntoSpecs,
+  vehicleKindMeta,
+  vehicleRequiresDriver,
+  visibleSpecFields,
+  type VehicleKind,
+} from '@/lib/fleetCatalog';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface Mixer {
+interface FleetUnit {
   id: number;
   number: string;
   model: string;
@@ -26,10 +41,20 @@ interface Mixer {
   type: 'own' | 'rented';
   status: string;
   unload_allowance_min?: number | null;
+  vehicle_kind?: VehicleKind | string | null;
+  specs?: Record<string, any> | null;
 }
 
+type CoupleInfo = {
+  id: number;
+  couple_id?: number;
+  tractor_id: number;
+  trailer_id: number;
+  label: string;
+};
+
 type FilterType = 'all' | 'own' | 'rented';
-type Tab = 'fleet' | 'tariffs';
+type PageTab = VehicleKind | 'tariffs';
 type FormData = {
   number: string;
   model: string;
@@ -38,30 +63,43 @@ type FormData = {
   volume: number;
   type: 'own' | 'rented';
   unload_allowance_min: number | '';
+  vehicle_kind: VehicleKind;
+  specs: Record<string, any>;
 };
 
-const EMPTY_FORM: FormData = {
-  number: '',
-  model: '',
-  driver: '',
-  phone: '',
-  volume: 10,
-  type: 'own',
-  unload_allowance_min: 50,
-};
+function emptyForm(kind: VehicleKind): FormData {
+  return {
+    number: '',
+    model: '',
+    driver: '',
+    phone: '',
+    volume: kind === 'mixer' ? 10 : 0,
+    type: 'own',
+    unload_allowance_min: 50,
+    vehicle_kind: kind,
+    specs: kind === 'special' ? { subtype: 'loader' } : {},
+  };
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function statusColor(status: string): { color: string; bg: string } {
-  if (status === 'Загрузка')    return { color: '#FACC15', bg: '#FACC1520' };
-  if (status === 'В пути')      return { color: '#3B82F6', bg: '#3B82F620' };
-  if (status === 'На объекте')  return { color: '#10B981', bg: '#10B98120' };
-  if (status === 'Проблема')    return { color: '#EF4444', bg: '#EF444420' };
-  return { color: '#64748B', bg: '#334155' }; // Доступен / прочие
+  if (status === 'Загрузка') return { color: '#FACC15', bg: '#FACC1520' };
+  if (status === 'В пути') return { color: '#3B82F6', bg: '#3B82F620' };
+  if (status === 'На объекте') return { color: '#10B981', bg: '#10B98120' };
+  if (status === 'Проблема') return { color: '#EF4444', bg: '#EF444420' };
+  return { color: '#64748B', bg: '#334155' };
 }
 
 function initials(name: string): string {
-  return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  return name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '—';
+}
+
+function volumeDisplay(unit: FleetUnit, kind: VehicleKind): string {
+  if (kind === 'tractor_unit') return '—';
+  const meta = vehicleKindMeta(kind);
+  const unitLabel = meta.volumeUnit || '';
+  return `${unit.volume}${unitLabel ? ` ${unitLabel}` : ''}`;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -69,6 +107,7 @@ function initials(name: string): string {
 function FilterBtn({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       style={{
         padding: '5px 14px',
@@ -103,7 +142,7 @@ function FieldInput({
         type={type}
         placeholder={placeholder}
         value={value}
-        onChange={e => onChange(e.target.value)}
+        onChange={(e) => onChange(e.target.value)}
         style={volumeCardSoftStyle({
           width: '100%',
           padding: '14px 16px',
@@ -114,6 +153,18 @@ function FieldInput({
         })}
       />
       {hint && <div style={{ color: '#475569', fontSize: '12px', marginTop: '5px' }}>{hint}</div>}
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      padding: '12px 0', borderBottom: '1px solid #334155', gap: 12,
+    }}>
+      <span style={{ color: '#475569', fontSize: '13px', flexShrink: 0 }}>{label}</span>
+      <span style={{ color: '#CBD5E1', fontSize: '14px', fontWeight: 600, textAlign: 'right' }}>{value}</span>
     </div>
   );
 }
@@ -148,7 +199,7 @@ function TariffsTab() {
   }, []);
 
   const upd = (field: keyof DeliverySettings) => (v: string) =>
-    setSettings(prev => ({ ...prev, [field]: parseFloat(v) || 0 }));
+    setSettings((prev) => ({ ...prev, [field]: parseFloat(v) || 0 }));
 
   const save = async () => {
     setSaving(true);
@@ -204,7 +255,7 @@ function TariffsTab() {
             min="0"
             step="1"
             value={settings[field]}
-            onChange={e => upd(field)(e.target.value)}
+            onChange={(e) => upd(field)(e.target.value)}
             style={inputStyle}
           />
           <span style={{ color: '#64748B', fontSize: '12px', whiteSpace: 'nowrap', minWidth: '28px' }}>{suffix}</span>
@@ -222,7 +273,6 @@ function TariffsTab() {
         Применяется во всех формах создания заявки. Изменения — только для новых заявок.
       </div>
 
-      {/* В черте Брянска */}
       <div style={volumeCardStyle({ borderRadius: 16, padding: '16px', marginBottom: '12px' })}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
           <Truck size={16} color="#10B981" />
@@ -237,7 +287,6 @@ function TariffsTab() {
         <Row label="Более 50 м³" hint="Тариф за кубометр" field="price_per_m3_over_50" suffix="₽/м³" />
       </div>
 
-      {/* За городом */}
       <div style={volumeCardStyle({ borderRadius: 16, padding: '16px', marginBottom: '16px' })}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
           <MapPin size={16} color="#3B82F6" />
@@ -255,7 +304,6 @@ function TariffsTab() {
         </div>
       </div>
 
-      {/* Кнопки */}
       <div style={{ display: 'flex', gap: '10px' }}>
         <ModalActionButton
           onClick={save}
@@ -268,35 +316,23 @@ function TariffsTab() {
         />
         {confirmReset ? (
           <button
+            type="button"
             onClick={() => { setSettings(DEFAULT_DELIVERY_SETTINGS); setConfirmReset(false); }}
             style={{
-              flex: 1,
-              padding: '14px',
-              background: '#EF4444',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '12px',
-              fontWeight: 700,
-              fontSize: '14px',
-              cursor: 'pointer',
+              flex: 1, padding: '14px', background: '#EF4444', color: '#fff', border: 'none',
+              borderRadius: '12px', fontWeight: 700, fontSize: '14px', cursor: 'pointer',
             }}
           >
             Подтвердить
           </button>
         ) : (
           <button
+            type="button"
             onClick={() => setConfirmReset(true)}
             style={{
-              flex: 1,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-              padding: '14px',
-              background: 'transparent',
-              color: '#64748B',
-              border: '1px solid #334155',
-              borderRadius: '12px',
-              fontWeight: 600,
-              fontSize: '14px',
-              cursor: 'pointer',
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+              padding: '14px', background: 'transparent', color: '#64748B',
+              border: '1px solid #334155', borderRadius: '12px', fontWeight: 600, fontSize: '14px', cursor: 'pointer',
             }}
           >
             <RotateCcw size={14} />
@@ -311,73 +347,140 @@ function TariffsTab() {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function MobileMixersPage() {
-  const { isAdmin } = useUserRole();
+  const { isAdmin, user } = useUserRole();
+  const role = (user?.role || '').toLowerCase();
+  const canEditCouples = role === 'admin' || role === 'manager' || role === 'dispatcher';
 
-  const [tab, setTab] = useState<Tab>('fleet');
-  const [mixers, setMixers] = useState<Mixer[]>([]);
+  const [tab, setTab] = useState<PageTab>('mixer');
+  const vehicleKind: VehicleKind = tab === 'tariffs' ? 'mixer' : tab;
+  const kindMeta = vehicleKindMeta(vehicleKind);
+  const needsDriver = vehicleRequiresDriver(vehicleKind);
+  const couplesEnabled = vehicleKind === 'tractor_unit' || isTrailerKind(vehicleKind);
+
+  const [units, setUnits] = useState<FleetUnit[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterType>('all');
+  const [couples, setCouples] = useState<CoupleInfo[]>([]);
+  const [tractors, setTractors] = useState<FleetUnit[]>([]);
+  const [trailerPickList, setTrailerPickList] = useState<FleetUnit[]>([]);
 
-  // Sheet state
-  const [sheet, setSheet] = useState<'add' | 'edit' | 'view' | null>(null);
-  const [selected, setSelected] = useState<Mixer | null>(null);
-  const [form, setForm] = useState<FormData>(EMPTY_FORM);
+  const [sheet, setSheet] = useState<'add' | 'edit' | 'view' | 'couple' | null>(null);
+  const [selected, setSelected] = useState<FleetUnit | null>(null);
+  const [form, setForm] = useState<FormData>(() => emptyForm('mixer'));
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [couplePickId, setCouplePickId] = useState('');
+  const [coupleSaving, setCoupleSaving] = useState(false);
+
   const [activeTrips, setActiveTrips] = useState<any[]>([]);
   const [showTripSheet, setShowTripSheet] = useState(false);
 
   useBodyScrollLock(!!sheet || showTripSheet);
 
-  // ── Fetch mixers ────────────────────────────────────────────────────────────
-  const fetchMixers = useCallback(async () => {
-    setLoading(true);
+  const coupleByTrailerId = useMemo(() => {
+    const m = new Map<number, CoupleInfo>();
+    for (const c of couples) m.set(Number(c.trailer_id), c);
+    return m;
+  }, [couples]);
+
+  const coupleByTractorId = useMemo(() => {
+    const m = new Map<number, CoupleInfo>();
+    for (const c of couples) m.set(Number(c.tractor_id), c);
+    return m;
+  }, [couples]);
+
+  const fetchCouples = useCallback(async () => {
     try {
-      const [mixersRes, tripsRes] = await Promise.all([
-        fetch('/api/adminCifra/mixers'),
-        fetch('/api/adminCifra/active-mixers'),
-      ]);
-      if (mixersRes.ok) setMixers(await mixersRes.json());
-      if (tripsRes.ok) setActiveTrips(await tripsRes.json());
-    } catch (e) {
-      console.error('Ошибка загрузки миксеров:', e);
-    } finally {
-      setLoading(false);
+      const res = await fetch('/api/adminCifra/fleet-couples', {
+        headers: adminCifraAuthHeaders(),
+      });
+      if (!res.ok) { setCouples([]); return; }
+      const data = await res.json();
+      setCouples(Array.isArray(data.couples) ? data.couples : []);
+    } catch {
+      setCouples([]);
     }
   }, []);
 
-  useEffect(() => { fetchMixers(); }, [fetchMixers]);
+  const fetchUnits = useCallback(async (kind: VehicleKind) => {
+    setLoading(true);
+    try {
+      const tasks: Promise<Response>[] = [
+        fetch(`/api/adminCifra/mixers?kind=${kind}`),
+      ];
+      if (kind === 'mixer') {
+        tasks.push(fetch('/api/adminCifra/active-mixers'));
+      }
+      const [unitsRes, tripsRes] = await Promise.all(tasks);
+      if (unitsRes.ok) {
+        const data = await unitsRes.json();
+        setUnits(Array.isArray(data) ? data : []);
+      } else {
+        setUnits([]);
+      }
+      if (kind === 'mixer' && tripsRes?.ok) {
+        setActiveTrips(await tripsRes.json());
+      }
+      if (kind === 'tractor_unit' || isTrailerKind(kind)) {
+        await fetchCouples();
+      }
+    } catch (e) {
+      console.error('Ошибка загрузки техники:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchCouples]);
 
-  // Live-обновление активных рейсов (Загрузка → В пути → …) по broadcast
+  useEffect(() => {
+    if (tab === 'tariffs') return;
+    setFilter('all');
+    void fetchUnits(tab);
+  }, [tab, fetchUnits]);
+
   useRealtimeOrderMixers(setActiveTrips, { activeOnly: true });
 
   useWakeRefresh(() => {
+    if (vehicleKind !== 'mixer') return;
     fetch('/api/adminCifra/active-mixers')
       .then((res) => (res.ok ? res.json() : null))
       .then((trips) => { if (Array.isArray(trips)) setActiveTrips(trips); })
       .catch(() => {});
   });
 
-  // ── Open sheet ──────────────────────────────────────────────────────────────
+  const coupleStatusLine = (unit: FleetUnit): string | null => {
+    if (vehicleKind === 'tractor_unit') {
+      const c = coupleByTractorId.get(unit.id);
+      return c ? `Сцеплен: ${c.label}` : 'Свободна';
+    }
+    if (isTrailerKind(vehicleKind)) {
+      const c = coupleByTrailerId.get(unit.id);
+      return c ? `Сцеплен: ${c.label}` : 'Без сцепки';
+    }
+    return null;
+  };
+
   const openAdd = () => {
     setSelected(null);
-    setForm(EMPTY_FORM);
+    setForm(emptyForm(vehicleKind));
     setConfirmDelete(false);
     setSheet('add');
   };
 
-  const openCard = (mixer: Mixer) => {
-    setSelected(mixer);
+  const openCard = (unit: FleetUnit) => {
+    setSelected(unit);
     setConfirmDelete(false);
     if (isAdmin) {
+      const kind = isVehicleKind(unit.vehicle_kind) ? unit.vehicle_kind : vehicleKind;
       setForm({
-        number: mixer.number,
-        model: mixer.model,
-        driver: mixer.driver,
-        phone: mixer.phone,
-        volume: mixer.volume,
-        type: mixer.type,
-        unload_allowance_min: mixer.unload_allowance_min ?? 50,
+        number: unit.number || '',
+        model: unit.model || '',
+        driver: unit.driver || '',
+        phone: unit.phone || '',
+        volume: Number(unit.volume) || 0,
+        type: unit.type === 'rented' ? 'rented' : 'own',
+        unload_allowance_min: unit.unload_allowance_min ?? 50,
+        vehicle_kind: kind,
+        specs: unit.specs && typeof unit.specs === 'object' ? { ...unit.specs } : {},
       });
       setSheet('edit');
     } else {
@@ -389,45 +492,66 @@ export default function MobileMixersPage() {
     setSheet(null);
     setSelected(null);
     setConfirmDelete(false);
+    setCouplePickId('');
   };
 
-  // ── Save ────────────────────────────────────────────────────────────────────
-  const saveMixer = async () => {
-    if (!form.number.trim() || !form.driver.trim()) {
-      alert('Номер миксера и ФИО водителя обязательны');
+  const applyModel = (modelName: string) => {
+    const applied = applyModelTemplate(form.vehicle_kind, modelName);
+    setForm((prev) => ({
+      ...prev,
+      model: modelName,
+      volume: applied?.volume != null ? Number(applied.volume) : prev.volume,
+      specs: applied?.specs ? { ...prev.specs, ...applied.specs } : prev.specs,
+    }));
+  };
+
+  const saveUnit = async () => {
+    if (!form.number.trim()) {
+      alert('Госномер обязателен');
       return;
     }
-    if (!form.phone.trim()) {
+    if (needsDriver && !form.driver.trim()) {
+      alert('Водитель обязателен');
+      return;
+    }
+    if (needsDriver && !form.phone.trim()) {
       alert('Телефон водителя обязателен — по нему водитель входит в приложение');
       return;
     }
-    if (form.type === 'rented' && (!form.unload_allowance_min || Number(form.unload_allowance_min) <= 0)) {
+    if (
+      form.vehicle_kind === 'mixer' &&
+      form.type === 'rented' &&
+      (!form.unload_allowance_min || Number(form.unload_allowance_min) <= 0)
+    ) {
       alert('Укажите норму разгрузки для наёмного миксера');
       return;
     }
     setSaving(true);
     try {
-      const payload = sheet === 'edit' && selected
-        ? { ...form, id: selected.id }
-        : form;
+      const synced = {
+        ...form,
+        specs: syncVolumeIntoSpecs(form.vehicle_kind, form.volume, form.specs),
+      };
+      const payload = sheet === 'edit' && selected ? { ...synced, id: selected.id } : synced;
       const res = await fetch('/api/adminCifra/mixers', {
         method: 'POST',
         headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
       });
+      const json = await res.json().catch(() => ({}));
       if (res.ok) {
-        await fetchMixers();
+        await fetchUnits(vehicleKind);
         closeSheet();
+        if (json.warning) alert(json.warning);
       } else {
-        alert('Ошибка при сохранении');
+        alert(json.error || 'Ошибка при сохранении');
       }
     } finally {
       setSaving(false);
     }
   };
 
-  // ── Delete ──────────────────────────────────────────────────────────────────
-  const deleteMixer = async () => {
+  const deleteUnit = async () => {
     if (!selected) return;
     setSaving(true);
     try {
@@ -436,7 +560,7 @@ export default function MobileMixersPage() {
         headers: adminCifraAuthHeaders(),
       });
       if (res.ok) {
-        await fetchMixers();
+        await fetchUnits(vehicleKind);
         closeSheet();
       } else {
         const d = await res.json().catch(() => ({}));
@@ -448,40 +572,128 @@ export default function MobileMixersPage() {
     }
   };
 
-  // ── Filtered list ───────────────────────────────────────────────────────────
-  const filtered = mixers.filter(m => filter === 'all' || m.type === filter);
+  const openCoupleSheet = async (unit: FleetUnit) => {
+    setSelected(unit);
+    setCouplePickId('');
+    if (vehicleKind === 'tractor_unit') {
+      const existing = coupleByTractorId.get(unit.id);
+      setCouplePickId(existing ? String(existing.trailer_id) : '');
+      const lists: FleetUnit[] = [];
+      for (const kind of TRAILER_KINDS) {
+        const res = await fetch(`/api/adminCifra/mixers?kind=${kind}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) lists.push(...data);
+        }
+      }
+      setTrailerPickList(lists);
+      setTractors([]);
+    } else {
+      const existing = coupleByTrailerId.get(unit.id);
+      setCouplePickId(existing ? String(existing.tractor_id) : '');
+      const res = await fetch('/api/adminCifra/mixers?kind=tractor_unit');
+      if (res.ok) {
+        const data = await res.json();
+        setTractors(Array.isArray(data) ? data : []);
+      } else {
+        setTractors([]);
+      }
+      setTrailerPickList([]);
+    }
+    setSheet('couple');
+  };
 
-  // ── Активные рейсы сегодня — данные из order_mixers ─────────────────────────
-  // activeTrips: [{ number, status, volume, time, ... }] из /api/adminCifra/active-mixers
-  // Для каждого рейса находим карточку миксера чтобы показать имя водителя
-  // Локальная «сегодня» — без toISOString (UTC иначе съезжает на соседний день).
+  const saveCouple = async () => {
+    if (!selected || !couplePickId) {
+      alert('Выберите пару для сцепки');
+      return;
+    }
+    const tractor_id = vehicleKind === 'tractor_unit' ? selected.id : Number(couplePickId);
+    const trailer_id = vehicleKind === 'tractor_unit' ? Number(couplePickId) : selected.id;
+
+    const existingTractor = coupleByTractorId.get(tractor_id);
+    const existingTrailer = coupleByTrailerId.get(trailer_id);
+    const conflicts: string[] = [];
+    if (existingTractor && Number(existingTractor.trailer_id) !== trailer_id) {
+      conflicts.push(`Голова уже сцеплена: ${existingTractor.label}`);
+    }
+    if (existingTrailer && Number(existingTrailer.tractor_id) !== tractor_id) {
+      conflicts.push(`Прицеп уже сцеплен: ${existingTrailer.label}`);
+    }
+    if (conflicts.length > 0) {
+      const ok = await appConfirm(
+        `${conflicts.join('\n')}\n\nСтарые сцепки будут разорваны. Продолжить?`,
+        { title: 'Перецепка', okLabel: 'Сцепить', cancelLabel: 'Отмена' },
+      );
+      if (!ok) return;
+    }
+
+    setCoupleSaving(true);
+    try {
+      const res = await fetch('/api/adminCifra/fleet-couples', {
+        method: 'POST',
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ tractor_id, trailer_id }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json.error || 'Не удалось сцепить');
+        return;
+      }
+      await fetchCouples();
+      closeSheet();
+    } finally {
+      setCoupleSaving(false);
+    }
+  };
+
+  const uncoupleUnit = async (unit: FleetUnit) => {
+    const asTrailer = isTrailerKind(vehicleKind);
+    const c = asTrailer ? coupleByTrailerId.get(unit.id) : coupleByTractorId.get(unit.id);
+    if (!c) return;
+    if (!(await appConfirm(`Отцепить?\n${c.label}`, {
+      title: 'Сцепка',
+      okLabel: 'Отцепить',
+      cancelLabel: 'Отмена',
+    }))) {
+      return;
+    }
+    const qs = asTrailer ? `trailer_id=${unit.id}` : `tractor_id=${unit.id}`;
+    const res = await fetch(`/api/adminCifra/fleet-couples?${qs}`, {
+      method: 'DELETE',
+      headers: adminCifraAuthHeaders(),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(json.error || 'Не удалось отцепить');
+      return;
+    }
+    await fetchCouples();
+  };
+
+  const filtered = units.filter((m) => filter === 'all' || m.type === filter);
+
+  // ── Активные рейсы (только миксеры) ─────────────────────────────────────────
   const _now = new Date();
   const todayStr = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-${String(_now.getDate()).padStart(2, '0')}`;
   const todayActiveTrips = activeTrips.filter((t: any) => {
     const d = t.deliveryDate || t.delivery_date || '';
     return String(d).slice(0, 10) === todayStr;
   });
-
-  // Обогащаем каждый рейс данными из mixers (имя водителя, id)
   const enrichedTrips = todayActiveTrips.map((trip: any) => {
-    const mixer = mixers.find(m => m.number === trip.number);
+    const mixer = units.find((m) => m.number === trip.number);
     return { ...trip, driver: mixer?.driver || '', mixerId: mixer?.id };
   });
 
-  const PROBLEM_STATUS = 'Проблема';
-  const activeInTrip  = enrichedTrips.filter((t: any) => t.status !== PROBLEM_STATUS);
-  const problemTrips  = enrichedTrips.filter((t: any) => t.status === PROBLEM_STATUS);
+  const selectStyle: React.CSSProperties = volumeCardSoftStyle({
+    width: '100%',
+    padding: '14px 16px',
+    borderRadius: 12,
+    color: '#fff',
+    fontSize: '15px',
+    colorScheme: 'dark',
+  });
 
-  // Убираем дубликаты — один миксер может иметь несколько рейсов за день,
-  // в виджете показываем только последний (activeTrips уже sorted desc)
-  const uniqueActive = Array.from(
-    new Map(activeInTrip.map((t: any) => [t.number, t])).values()
-  );
-  const uniqueProblem = Array.from(
-    new Map(problemTrips.map((t: any) => [t.number, t])).values()
-  );
-
-  // ─── Render ─────────────────────────────────────────────────────────────────
   return (
     <div style={{ minHeight: '100vh', paddingBottom: '100px', background: '#0F172A' }}>
 
@@ -489,36 +701,48 @@ export default function MobileMixersPage() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 16px 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <Truck size={22} color="#10B981" />
-          <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#E2E8F0' }}>Миксеры</h1>
+          <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#E2E8F0' }}>Техника</h1>
         </div>
         <MobileExitButton />
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: '8px', padding: '16px 16px 0', overflowX: 'auto' }}>
-        <button
-          onClick={() => setTab('fleet')}
-          style={{
-            display: 'flex', alignItems: 'center', gap: '6px',
-            padding: '9px 18px', borderRadius: '9999px',
-            border: `1px solid ${tab === 'fleet' ? '#10B981' : '#334155'}`,
-            background: tab === 'fleet' ? '#10B98120' : 'transparent',
-            color: tab === 'fleet' ? '#10B981' : '#64748B',
-            fontWeight: 600, fontSize: '14px', cursor: 'pointer', whiteSpace: 'nowrap',
-          }}
-        >
-          <Truck size={14} /> Парк
-        </button>
+      {/* Kind tabs */}
+      <div style={{ display: 'flex', gap: '8px', padding: '16px 16px 0', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        {VEHICLE_KINDS.map((k) => {
+          const active = tab === k.key;
+          return (
+            <button
+              key={k.key}
+              type="button"
+              onClick={() => setTab(k.key)}
+              style={{
+                padding: '9px 14px',
+                borderRadius: '9999px',
+                border: `1px solid ${active ? '#10B981' : '#334155'}`,
+                background: active ? '#10B98120' : 'transparent',
+                color: active ? '#10B981' : '#64748B',
+                fontWeight: 600,
+                fontSize: '13px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
+            >
+              {k.label}
+            </button>
+          );
+        })}
         {isAdmin && (
           <button
+            type="button"
             onClick={() => setTab('tariffs')}
             style={{
               display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '9px 18px', borderRadius: '9999px',
+              padding: '9px 14px', borderRadius: '9999px',
               border: `1px solid ${tab === 'tariffs' ? '#3B82F6' : '#334155'}`,
               background: tab === 'tariffs' ? '#3B82F620' : 'transparent',
               color: tab === 'tariffs' ? '#3B82F6' : '#64748B',
-              fontWeight: 600, fontSize: '14px', cursor: 'pointer', whiteSpace: 'nowrap',
+              fontWeight: 600, fontSize: '13px', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
             }}
           >
             <DollarSign size={14} /> Тарифы
@@ -526,31 +750,30 @@ export default function MobileMixersPage() {
         )}
       </div>
 
-      {/* ══════════════ TAB: FLEET ══════════════ */}
-      {tab === 'fleet' && (
+      {/* ══════════════ TAB: FLEET KIND ══════════════ */}
+      {tab !== 'tariffs' && (
         <>
-          {/* ── Виджет «В рейсе сегодня» — компактная сводка ── */}
-          {!loading && enrichedTrips.length > 0 && (() => {
-            const statuses = ['В пути', 'Загрузка', 'На объекте', 'Проблема'] as const;
+          {/* Виджет рейсов — только миксеры */}
+          {vehicleKind === 'mixer' && !loading && enrichedTrips.length > 0 && (() => {
             const allUnique = Array.from(new Map(enrichedTrips.map((t: any) => [t.number, t])).values());
             const countByStatus = (s: string) => allUnique.filter((t: any) => t.status === s).length;
             const totalActive = allUnique.length;
             const ownCount = allUnique.filter((t: any) => {
-              const mx = mixers.find(m => m.number === (t as any).number);
+              const mx = units.find((m) => m.number === (t as any).number);
               return mx?.type === 'own';
             }).length;
             const rentedCount = totalActive - ownCount;
-
             const statCells = [
-              { label: 'В пути',      color: '#3B82F6', count: countByStatus('В пути') },
-              { label: 'Загрузка',    color: '#FACC15', count: countByStatus('Загрузка') },
-              { label: 'На объекте',  color: '#10B981', count: countByStatus('На объекте') },
-              { label: 'Проблема',    color: '#EF4444', count: countByStatus('Проблема') },
-            ].filter(s => s.count > 0);
+              { label: 'В пути', color: '#3B82F6', count: countByStatus('В пути') },
+              { label: 'Загрузка', color: '#FACC15', count: countByStatus('Загрузка') },
+              { label: 'На объекте', color: '#10B981', count: countByStatus('На объекте') },
+              { label: 'Проблема', color: '#EF4444', count: countByStatus('Проблема') },
+            ].filter((s) => s.count > 0);
 
             return (
               <div style={{ padding: '14px 16px 0' }}>
                 <button
+                  type="button"
                   onClick={() => setShowTripSheet(true)}
                   style={volumeCardSoftStyle({
                     width: '100%',
@@ -560,7 +783,6 @@ export default function MobileMixersPage() {
                     textAlign: 'left',
                   })}
                 >
-                  {/* Заголовок */}
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <div style={{
@@ -574,31 +796,18 @@ export default function MobileMixersPage() {
                         background: '#10B98120', color: '#10B981',
                       }}>{totalActive}</span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontSize: '11px', color: '#64748B' }}>
-                        {ownCount > 0 && `${ownCount} св.`}{ownCount > 0 && rentedCount > 0 && ' · '}{rentedCount > 0 && `${rentedCount} наём.`}
-                      </span>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="9 18 15 12 9 6" />
-                      </svg>
-                    </div>
+                    <span style={{ fontSize: '11px', color: '#64748B' }}>
+                      {ownCount > 0 && `${ownCount} св.`}{ownCount > 0 && rentedCount > 0 && ' · '}{rentedCount > 0 && `${rentedCount} наём.`}
+                    </span>
                   </div>
-
-                  {/* Статусные ячейки */}
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    {statCells.map(cell => (
+                    {statCells.map((cell) => (
                       <div key={cell.label} style={{
                         display: 'flex', alignItems: 'center', gap: '6px',
-                        padding: '5px 10px',
-                        borderRadius: '8px',
-                        background: `${cell.color}12`,
-                        border: `1px solid ${cell.color}30`,
+                        padding: '5px 10px', borderRadius: '8px',
+                        background: `${cell.color}12`, border: `1px solid ${cell.color}30`,
                       }}>
-                        <div style={{
-                          width: '6px', height: '6px', borderRadius: '50%',
-                          background: cell.color, flexShrink: 0,
-                          boxShadow: cell.label !== 'Проблема' ? `0 0 4px ${cell.color}` : undefined,
-                        }} />
+                        <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: cell.color, flexShrink: 0 }} />
                         <span style={{ fontSize: '12px', fontWeight: 700, color: cell.color }}>{cell.count}</span>
                         <span style={{ fontSize: '11px', color: '#94A3B8' }}>{cell.label}</span>
                       </div>
@@ -611,8 +820,8 @@ export default function MobileMixersPage() {
 
           {/* Filters */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '14px 16px' }}>
-            <FilterBtn active={filter === 'all'}    onClick={() => setFilter('all')}    label="Все" />
-            <FilterBtn active={filter === 'own'}    onClick={() => setFilter('own')}    label="Свои" />
+            <FilterBtn active={filter === 'all'} onClick={() => setFilter('all')} label="Все" />
+            <FilterBtn active={filter === 'own'} onClick={() => setFilter('own')} label="Свои" />
             <FilterBtn active={filter === 'rented'} onClick={() => setFilter('rented')} label="Наёмные" />
           </div>
 
@@ -620,106 +829,152 @@ export default function MobileMixersPage() {
           <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {loading && (
               <div style={{ textAlign: 'center', padding: '60px', color: '#475569', fontSize: '14px' }}>
-                Загрузка миксеров...
+                Загрузка…
               </div>
             )}
             {!loading && filtered.length === 0 && (
               <div style={{ textAlign: 'center', padding: '60px', color: '#475569', fontSize: '14px' }}>
-                Миксеры не найдены
+                {kindMeta.label} не найдены
               </div>
             )}
-            {filtered.map(mixer => {
-              const isOwn = mixer.type === 'own';
-              // Берём актуальный статус из активного рейса (если есть)
-              const activeTrip = enrichedTrips.find((t: any) => t.number === mixer.number);
-              const tripStatus = activeTrip?.status || 'Доступен';
+            {filtered.map((unit) => {
+              const isOwn = unit.type === 'own';
+              const activeTrip = vehicleKind === 'mixer'
+                ? enrichedTrips.find((t: any) => t.number === unit.number)
+                : null;
+              const tripStatus = activeTrip?.status || unit.status || 'Доступен';
               const sc = statusColor(tripStatus);
               const hasActiveTrip = !!activeTrip;
+              const coupleLine = coupleStatusLine(unit);
+              const coupled = coupleByTrailerId.has(unit.id) || coupleByTractorId.has(unit.id);
+              const specsLine = formatSpecsSummary(vehicleKind, unit.specs);
+
               return (
                 <div
-                  key={mixer.id}
-                  onClick={() => openCard(mixer)}
+                  key={unit.id}
                   style={volumeCardSoftStyle({
                     borderRadius: 14,
-                    border: hasActiveTrip ? `1px solid ${sc.color}50` : CARD_BORDER,
-                    cursor: 'pointer',
+                    border: hasActiveTrip
+                      ? `1px solid ${sc.color}50`
+                      : coupled
+                        ? '1px solid rgba(74,222,128,0.35)'
+                        : CARD_BORDER,
                     overflow: 'hidden',
                     display: 'flex',
                   })}
                 >
-                  {/* Цветной индикатор слева */}
                   <div style={{
-                    width: '4px',
-                    flexShrink: 0,
-                    background: sc.color,
+                    width: '4px', flexShrink: 0,
+                    background: coupled ? '#4ADE80' : sc.color,
                   }} />
 
-                  {/* Основное содержимое */}
                   <div style={{ flex: 1, padding: '11px 12px', minWidth: 0 }}>
-                    {/* Строка 1: номер + модель | тип + объём */}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                        <span style={{ fontSize: '16px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
-                          {mixer.number}
-                        </span>
-                        <span style={{ fontSize: '12px', color: '#64748B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {mixer.model || ''}
-                        </span>
+                    <button
+                      type="button"
+                      onClick={() => openCard(unit)}
+                      style={{
+                        display: 'block', width: '100%', background: 'none', border: 'none',
+                        padding: 0, margin: 0, cursor: 'pointer', textAlign: 'left', color: 'inherit',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                          <span style={{ fontSize: '16px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
+                            {unit.number}
+                          </span>
+                          <span style={{ fontSize: '12px', color: '#64748B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {unit.model || ''}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                          <span style={{ fontSize: '11px', fontWeight: 600, color: isOwn ? '#10B981' : '#FACC15' }}>
+                            {isOwn ? 'свой' : 'наём.'}
+                          </span>
+                          {vehicleKind !== 'tractor_unit' && (
+                            <span style={{ fontSize: '15px', fontWeight: 700, color: '#CBD5E1', whiteSpace: 'nowrap' }}>
+                              {volumeDisplay(unit, vehicleKind)}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                        <span style={{
-                          fontSize: '11px', fontWeight: 600,
-                          color: isOwn ? '#10B981' : '#FACC15',
-                        }}>
-                          {isOwn ? 'свой' : 'наём.'}
-                        </span>
-                        <span style={{ fontSize: '16px', fontWeight: 700, color: '#CBD5E1' }}>
-                          {mixer.volume}<span style={{ fontSize: '11px', color: '#64748B', fontWeight: 400 }}> м³</span>
-                        </span>
-                      </div>
-                    </div>
 
-                    {/* Строка 2: водитель | статус рейса | кнопки */}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                      <span style={{ fontSize: '13px', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                        {mixer.driver}
-                      </span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                        <span style={{
-                          display: 'inline-flex', alignItems: 'center', gap: '4px',
-                          fontSize: '11px', fontWeight: 600, color: sc.color,
-                        }}>
-                          <span style={{
-                            width: '6px', height: '6px', borderRadius: '50%',
-                            background: sc.color, display: 'inline-block',
-                          }} />
-                          {tripStatus}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                        <span style={{ fontSize: '13px', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                          {unit.driver || (isTrailerKind(vehicleKind) ? 'без водителя' : '—')}
                         </span>
+                        {vehicleKind === 'mixer' && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600, color: sc.color, flexShrink: 0 }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: sc.color, display: 'inline-block' }} />
+                            {tripStatus}
+                          </span>
+                        )}
+                      </div>
+
+                      {(coupleLine || specsLine) && (
+                        <div style={{ marginTop: 6, fontSize: 11, color: coupleLine?.startsWith('Сцеплен') ? '#4ADE80' : '#64748B' }}>
+                          {coupleLine || specsLine}
+                        </div>
+                      )}
+                    </button>
+
+                    {/* Actions */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                      {unit.phone && (
                         <a
-                          href={`tel:${mixer.phone}`}
-                          onClick={e => e.stopPropagation()}
+                          href={`tel:${unit.phone}`}
                           style={{
                             display: 'inline-flex', alignItems: 'center', gap: '3px',
-                            padding: '3px 8px', borderRadius: '9999px',
+                            padding: '5px 10px', borderRadius: '9999px',
                             background: '#10B98115', color: '#10B981',
                             fontSize: '11px', fontWeight: 600, textDecoration: 'none',
                           }}
                         >
-                          <Phone size={10} />
+                          <Phone size={10} /> Звонок
                         </a>
+                      )}
+                      {vehicleKind === 'mixer' && (
                         <Link
-                          href={`/mobile/mixers/driver-view/${mixer.id}`}
-                          onClick={e => e.stopPropagation()}
+                          href={`/mobile/mixers/driver-view/${unit.id}`}
                           style={{
                             display: 'inline-flex', alignItems: 'center', gap: '3px',
-                            padding: '3px 8px', borderRadius: '9999px',
+                            padding: '5px 10px', borderRadius: '9999px',
                             background: '#60A5FA15', color: '#60A5FA',
                             fontSize: '11px', fontWeight: 600, textDecoration: 'none',
                           }}
                         >
-                          <ExternalLink size={10} />
+                          <ExternalLink size={10} /> Кабинет
                         </Link>
-                      </div>
+                      )}
+                      {canEditCouples && couplesEnabled && (
+                        <button
+                          type="button"
+                          onClick={() => void openCoupleSheet(unit)}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '3px',
+                            padding: '5px 10px', borderRadius: '9999px',
+                            background: 'rgba(59,130,246,0.15)', color: '#93C5FD',
+                            border: '1px solid rgba(59,130,246,0.35)',
+                            fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                          }}
+                        >
+                          <Link2 size={10} /> Сцепка
+                        </button>
+                      )}
+                      {canEditCouples && couplesEnabled && coupled && (
+                        <button
+                          type="button"
+                          onClick={() => void uncoupleUnit(unit)}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '3px',
+                            padding: '5px 10px', borderRadius: '9999px',
+                            background: 'rgba(248,113,113,0.12)', color: '#F87171',
+                            border: '1px solid rgba(248,113,113,0.35)',
+                            fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                          }}
+                        >
+                          <Unlink size={10} /> Отцепить
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -729,9 +984,10 @@ export default function MobileMixersPage() {
         </>
       )}
 
-      {/* FAB — добавить миксер (только admin, только вкладка Парк) */}
-      {isAdmin && tab === 'fleet' && !sheet && (
+      {/* FAB */}
+      {isAdmin && tab !== 'tariffs' && !sheet && (
         <button
+          type="button"
           onClick={openAdd}
           style={{
             position: 'fixed',
@@ -750,146 +1006,225 @@ export default function MobileMixersPage() {
             justifyContent: 'center',
             cursor: 'pointer',
           }}
-          aria-label="Добавить миксер"
+          aria-label={kindMeta.addLabel}
         >
           <Plus size={20} color="#10B981" strokeWidth={2.5} />
         </button>
       )}
 
-      {/* ══════════════ TAB: TARIFFS ══════════════ */}
+      {/* Tariffs */}
       {tab === 'tariffs' && isAdmin && (
         <div style={{ marginTop: '16px' }}>
           <TariffsTab />
         </div>
       )}
 
-      {/* ══════════════ BOTTOM SHEET: VIEW (non-admin) ══════════════ */}
+      {/* VIEW sheet */}
       {sheet === 'view' && selected && (
         <>
-          <div
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }}
-            onClick={closeSheet}
-          />
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }} onClick={closeSheet} />
           <div style={volumeModalStyle({
-            position: 'fixed', bottom: '74px', left: 0, right: 0,
-            zIndex: 10001,
-            borderRadius: '20px 20px 0 0',
-            maxHeight: 'calc(80vh - 74px)',
-            overflow: 'hidden',
-            display: 'flex', flexDirection: 'column',
+            position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001,
+            borderRadius: '20px 20px 0 0', maxHeight: 'calc(80vh - 74px)',
+            overflow: 'hidden', display: 'flex', flexDirection: 'column',
           })}>
-            {/* Handle */}
             <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0' }}>
               <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
             </div>
-            {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px' }}>
               <div style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>{selected.number}</div>
-              <button onClick={closeSheet} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+              <button type="button" onClick={closeSheet} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
                 <X size={20} color="#64748B" />
               </button>
             </div>
-            {/* Content */}
             <div style={{ padding: '0 20px 24px', overflowY: 'auto' }}>
+              <InfoRow label="Вид" value={kindMeta.singular} />
               <InfoRow label="Модель" value={selected.model || '—'} />
-              <InfoRow label="Водитель" value={selected.driver} />
-              <InfoRow label="Телефон" value={selected.phone} />
-              <InfoRow label="Объём" value={`${selected.volume} м³`} />
+              <InfoRow label="Водитель" value={selected.driver || '—'} />
+              <InfoRow label="Телефон" value={selected.phone || '—'} />
+              {vehicleKind !== 'tractor_unit' && (
+                <InfoRow label={kindMeta.volumeLabel || 'Объём'} value={volumeDisplay(selected, vehicleKind)} />
+              )}
               <InfoRow label="Тип" value={selected.type === 'own' ? 'Свой' : 'Наёмный'} />
-              <InfoRow label="Статус" value={selected.status} />
-              <InfoRow
-                label="Норма разгрузки"
-                value={selected.type === 'own'
-                  ? `${OWN_UNLOAD_ALLOWANCE_MIN} мин (общая)`
-                  : `${selected.unload_allowance_min ?? '—'} мин`}
-              />
-              <a
-                href={`tel:${selected.phone}`}
-                style={{
-                  marginTop: '16px',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-                  padding: '14px',
-                  background: '#10B981',
-                  color: '#fff',
-                  borderRadius: '12px',
-                  fontWeight: 700,
-                  fontSize: '15px',
-                  textDecoration: 'none',
-                }}
-              >
-                <Phone size={18} /> Позвонить водителю
-              </a>
+              {coupleStatusLine(selected) && (
+                <InfoRow label="Сцепка" value={coupleStatusLine(selected)!} />
+              )}
+              {formatSpecsSummary(vehicleKind, selected.specs) && (
+                <InfoRow label="Параметры" value={formatSpecsSummary(vehicleKind, selected.specs)} />
+              )}
+              {vehicleKind === 'mixer' && (
+                <InfoRow
+                  label="Норма разгрузки"
+                  value={selected.type === 'own'
+                    ? `${OWN_UNLOAD_ALLOWANCE_MIN} мин (общая)`
+                    : `${selected.unload_allowance_min ?? '—'} мин`}
+                />
+              )}
+              {selected.phone && (
+                <a
+                  href={`tel:${selected.phone}`}
+                  style={{
+                    marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                    padding: '14px', background: '#10B981', color: '#fff', borderRadius: '12px',
+                    fontWeight: 700, fontSize: '15px', textDecoration: 'none',
+                  }}
+                >
+                  <Phone size={18} /> Позвонить
+                </a>
+              )}
             </div>
           </div>
         </>
       )}
 
-      {/* ══════════════ BOTTOM SHEET: ADD / EDIT (admin) ══════════════ */}
+      {/* ADD / EDIT sheet */}
       {(sheet === 'add' || sheet === 'edit') && (
         <>
-          <div
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }}
-            onClick={closeSheet}
-          />
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }} onClick={closeSheet} />
           <div style={volumeModalStyle({
-            position: 'fixed', bottom: '74px', left: 0, right: 0,
-            zIndex: 10001,
-            borderRadius: '20px 20px 0 0',
-            maxHeight: 'calc(90vh - 74px)',
-            display: 'flex', flexDirection: 'column',
-            overflow: 'hidden',
+            position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001,
+            borderRadius: '20px 20px 0 0', maxHeight: 'calc(90vh - 74px)',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
           })}>
-            {/* Handle */}
             <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0', flexShrink: 0 }}>
               <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
             </div>
-            {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', flexShrink: 0 }}>
               <div style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0' }}>
-                {sheet === 'add' ? 'Новый миксер' : `Редактировать — ${selected?.number}`}
+                {sheet === 'add' ? kindMeta.addLabel.replace(/^\+\s*/, '') : `Редактировать — ${selected?.number}`}
               </div>
-              <button onClick={closeSheet} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+              <button type="button" onClick={closeSheet} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
                 <X size={20} color="#64748B" />
               </button>
             </div>
 
-            {/* Scrollable Form */}
             <div style={{ overflowY: 'auto', flex: 1, padding: '0 20px 20px' }}>
-              <FieldInput label="Номер миксера *" placeholder="Например: А123БВ 32" value={form.number} onChange={v => setForm(p => ({ ...p, number: v }))} />
-              <FieldInput label="Модель" placeholder="Например: КамАЗ 6520" value={form.model} onChange={v => setForm(p => ({ ...p, model: v }))} />
-              <FieldInput label="ФИО водителя *" placeholder="Иванов Иван Иванович" value={form.driver} onChange={v => setForm(p => ({ ...p, driver: v }))} />
-              <FieldInput label="Телефон водителя *" placeholder="+7..." value={form.phone} onChange={v => setForm(p => ({ ...p, phone: v }))} type="tel" hint="Используется для входа водителя в приложение" />
-              <FieldInput label="Объём, м³" value={form.volume} onChange={v => setForm(p => ({ ...p, volume: Number(v) || 10 }))} type="number" />
+              <FieldInput
+                label="Госномер *"
+                placeholder="Например: А123БВ 32"
+                value={form.number}
+                onChange={(v) => setForm((p) => ({ ...p, number: v }))}
+              />
 
-              {/* Тип */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '6px', fontWeight: 600 }}>Модель</div>
+                <select
+                  value={(MODEL_TEMPLATES[form.vehicle_kind] || []).some((t) => t.model === form.model) ? form.model : ''}
+                  onChange={(e) => { if (e.target.value) applyModel(e.target.value); }}
+                  style={{ ...selectStyle, marginBottom: 8 }}
+                >
+                  <option value="">— шаблон —</option>
+                  {(MODEL_TEMPLATES[form.vehicle_kind] || []).map((t) => (
+                    <option key={t.model} value={t.model}>{t.model}</option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  placeholder="Или введите модель вручную"
+                  value={form.model}
+                  onChange={(e) => {
+                    const model = e.target.value;
+                    const applied = applyModelTemplate(form.vehicle_kind, model);
+                    setForm((prev) => ({
+                      ...prev,
+                      model,
+                      volume: applied?.volume != null ? Number(applied.volume) : prev.volume,
+                      specs: applied?.specs ? { ...prev.specs, ...applied.specs } : prev.specs,
+                    }));
+                  }}
+                  style={selectStyle}
+                />
+                {isTrailerKind(form.vehicle_kind) && (
+                  <div style={{ color: '#64748B', fontSize: 12, marginTop: 8, lineHeight: 1.4 }}>
+                    {form.vehicle_kind === 'cement_truck'
+                      ? '«Бочка (прицеп)» — под сцепку с головой. «Моноблок» — машина целиком.'
+                      : '«Тоннар (прицеп)» — полуприцеп под сцепку с головой.'}
+                  </div>
+                )}
+              </div>
+
+              <FieldInput
+                label={needsDriver ? 'ФИО водителя *' : 'ФИО водителя'}
+                placeholder={needsDriver ? 'Обязательно' : 'Необязательно для прицепа'}
+                value={form.driver}
+                onChange={(v) => setForm((p) => ({ ...p, driver: v }))}
+              />
+              <FieldInput
+                label={needsDriver ? 'Телефон *' : 'Телефон'}
+                placeholder="+7..."
+                value={form.phone}
+                onChange={(v) => setForm((p) => ({ ...p, phone: v }))}
+                type="tel"
+                hint={needsDriver ? 'Используется для входа водителя в приложение' : 'Для бочки/тоннара водитель ведёт голова'}
+              />
+
+              {form.vehicle_kind !== 'tractor_unit' && (
+                <FieldInput
+                  label={`${kindMeta.volumeLabel || 'Объём'}${kindMeta.volumeUnit ? `, ${kindMeta.volumeUnit}` : ''}`}
+                  value={form.volume}
+                  onChange={(v) => setForm((p) => ({ ...p, volume: Number(v) || 0 }))}
+                  type="number"
+                />
+              )}
+
+              {visibleSpecFields(form.vehicle_kind, form.specs).map((field) => (
+                <div key={field.key} style={{ marginBottom: 16 }}>
+                  <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '6px', fontWeight: 600 }}>
+                    {field.label}{field.unit ? `, ${field.unit}` : ''}
+                  </div>
+                  {field.type === 'select' ? (
+                    <select
+                      value={String(form.specs[field.key] ?? '')}
+                      onChange={(e) => setForm((p) => ({
+                        ...p,
+                        specs: { ...p.specs, [field.key]: e.target.value },
+                      }))}
+                      style={selectStyle}
+                    >
+                      {(field.options || []).map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={field.type === 'number' ? 'number' : 'text'}
+                      placeholder={field.placeholder}
+                      value={form.specs[field.key] ?? ''}
+                      onChange={(e) => setForm((p) => ({
+                        ...p,
+                        specs: {
+                          ...p.specs,
+                          [field.key]: field.type === 'number'
+                            ? (e.target.value === '' ? '' : Number(e.target.value))
+                            : e.target.value,
+                        },
+                      }))}
+                      style={selectStyle}
+                    />
+                  )}
+                </div>
+              ))}
+
               <div style={{ marginBottom: '16px' }}>
-                <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '8px', fontWeight: 600 }}>Тип миксера</div>
+                <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '8px', fontWeight: 600 }}>Принадлежность</div>
                 <div style={{ display: 'flex', gap: '10px' }}>
-                  {(['own', 'rented'] as const).map(t => (
+                  {(['own', 'rented'] as const).map((t) => (
                     <button
                       key={t}
-                      onClick={() => setForm(p => ({ ...p, type: t }))}
+                      type="button"
+                      onClick={() => setForm((p) => ({ ...p, type: t }))}
                       style={
                         form.type === t
                           ? {
-                              flex: 1,
-                              padding: '12px',
+                              flex: 1, padding: '12px',
                               background: t === 'own' ? '#10B981' : '#FACC15',
-                              border: 'none',
-                              borderRadius: 12,
+                              border: 'none', borderRadius: 12,
                               color: t === 'rented' ? '#000' : '#fff',
-                              fontWeight: 700,
-                              fontSize: '14px',
-                              cursor: 'pointer',
+                              fontWeight: 700, fontSize: '14px', cursor: 'pointer',
                             }
                           : volumeCardSoftStyle({
-                              flex: 1,
-                              padding: '12px',
-                              borderRadius: 12,
-                              color: '#fff',
-                              fontWeight: 700,
-                              fontSize: '14px',
-                              cursor: 'pointer',
+                              flex: 1, padding: '12px', borderRadius: 12, color: '#fff',
+                              fontWeight: 700, fontSize: '14px', cursor: 'pointer',
                             })
                       }
                     >
@@ -899,34 +1234,27 @@ export default function MobileMixersPage() {
                 </div>
               </div>
 
-              {/* Норма разгрузки */}
-              {form.type === 'rented' ? (
-                <FieldInput
-                  label="Норма разгрузки, мин *"
-                  placeholder="Например: 50"
-                  value={form.unload_allowance_min}
-                  onChange={v => setForm(p => ({ ...p, unload_allowance_min: v === '' ? '' : Number(v) }))}
-                  type="number"
-                  hint="Время сверх нормы считается простоем водителя"
-                />
-              ) : (
-                <div style={volumeCardSoftStyle({ padding: '12px 14px', borderRadius: 10, color: '#475569', fontSize: '13px', marginBottom: '16px' })}>
-                  Норма разгрузки для своих — {OWN_UNLOAD_ALLOWANCE_MIN} мин (общая настройка)
-                </div>
+              {form.vehicle_kind === 'mixer' && (
+                form.type === 'rented' ? (
+                  <FieldInput
+                    label="Норма разгрузки, мин *"
+                    placeholder="Например: 50"
+                    value={form.unload_allowance_min}
+                    onChange={(v) => setForm((p) => ({ ...p, unload_allowance_min: v === '' ? '' : Number(v) }))}
+                    type="number"
+                    hint="Время сверх нормы считается простоем водителя"
+                  />
+                ) : (
+                  <div style={volumeCardSoftStyle({ padding: '12px 14px', borderRadius: 10, color: '#475569', fontSize: '13px', marginBottom: '16px' })}>
+                    Норма разгрузки для своих — {OWN_UNLOAD_ALLOWANCE_MIN} мин (общая настройка)
+                  </div>
+                )
               )}
 
-              {/* Кнопки */}
               <div style={{ display: 'flex', gap: '10px', marginTop: '8px' }}>
+                <ModalActionButton onClick={closeSheet} color="#94A3B8" icon={<X size={18} />} label="Отмена" fullWidth size="lg" />
                 <ModalActionButton
-                  onClick={closeSheet}
-                  color="#94A3B8"
-                  icon={<X size={18} />}
-                  label="Отмена"
-                  fullWidth
-                  size="lg"
-                />
-                <ModalActionButton
-                  onClick={saveMixer}
+                  onClick={saveUnit}
                   disabled={saving}
                   color="#10B981"
                   icon={<Save size={18} />}
@@ -936,23 +1264,24 @@ export default function MobileMixersPage() {
                 />
               </div>
 
-              {/* Удаление */}
               {sheet === 'edit' && selected && (
                 <div style={{ marginTop: '16px' }}>
                   {confirmDelete ? (
                     <div style={volumeCardSoftStyle({ borderRadius: 12, padding: '14px' })}>
                       <div style={{ color: '#EF4444', fontWeight: 600, fontSize: '14px', marginBottom: '10px', textAlign: 'center' }}>
-                        Удалить миксер «{selected.number}»?
+                        Удалить «{selected.number}»?
                       </div>
                       <div style={{ display: 'flex', gap: '10px' }}>
                         <button
+                          type="button"
                           onClick={() => setConfirmDelete(false)}
                           style={volumeCardSoftStyle({ flex: 1, padding: '12px', color: '#94A3B8', borderRadius: 10, fontWeight: 600, cursor: 'pointer' })}
                         >
                           Нет
                         </button>
                         <button
-                          onClick={deleteMixer}
+                          type="button"
+                          onClick={deleteUnit}
                           disabled={saving}
                           style={{ flex: 1, padding: '12px', background: '#EF4444', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 700, cursor: 'pointer' }}
                         >
@@ -962,18 +1291,16 @@ export default function MobileMixersPage() {
                     </div>
                   ) : (
                     <button
+                      type="button"
                       onClick={() => setConfirmDelete(true)}
                       style={{
                         width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-                        padding: '13px',
-                        background: 'transparent',
-                        color: '#EF4444',
-                        border: '1px solid #EF444440',
-                        borderRadius: '12px',
+                        padding: '13px', background: 'transparent', color: '#EF4444',
+                        border: '1px solid #EF444440', borderRadius: '12px',
                         fontWeight: 600, fontSize: '14px', cursor: 'pointer',
                       }}
                     >
-                      <Trash2 size={15} /> Удалить миксер
+                      <Trash2 size={15} /> Удалить
                     </button>
                   )}
                 </div>
@@ -983,10 +1310,76 @@ export default function MobileMixersPage() {
         </>
       )}
 
-      {/* ══════════════ BOTTOM SHEET: В РЕЙСЕ СЕГОДНЯ ══════════════ */}
-      {showTripSheet && (() => {
+      {/* COUPLE sheet */}
+      {sheet === 'couple' && selected && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }} onClick={closeSheet} />
+          <div style={volumeModalStyle({
+            position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001,
+            borderRadius: '20px 20px 0 0', maxHeight: 'calc(80vh - 74px)',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          })}>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0' }}>
+              <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px' }}>
+              <div style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0' }}>
+                {vehicleKind === 'tractor_unit' ? 'Сцепить с прицепом' : 'Сцепить с головой'}
+              </div>
+              <button type="button" onClick={closeSheet} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+                <X size={20} color="#64748B" />
+              </button>
+            </div>
+            <div style={{ padding: '0 20px 24px', overflowY: 'auto' }}>
+              <div style={{ color: '#94A3B8', fontSize: 13, marginBottom: 14 }}>
+                {selected.model ? `${selected.model} · ` : ''}{selected.number}
+              </div>
+              <div style={{ color: '#94A3B8', fontSize: 12, marginBottom: 6, fontWeight: 600 }}>
+                {vehicleKind === 'tractor_unit' ? 'Прицеп (бочка / тоннар)' : 'Голова'}
+              </div>
+              <select
+                value={couplePickId}
+                onChange={(e) => setCouplePickId(e.target.value)}
+                style={{ ...selectStyle, marginBottom: 18 }}
+              >
+                <option value="">— выберите —</option>
+                {vehicleKind === 'tractor_unit'
+                  ? trailerPickList.map((t) => {
+                      const linked = coupleByTrailerId.get(t.id);
+                      const kindLabel = t.vehicle_kind === 'cement_truck' ? 'Бочка' : 'Тоннар';
+                      return (
+                        <option key={t.id} value={String(t.id)}>
+                          {kindLabel} {t.number} · {t.volume} т{linked ? ` · уже: ${linked.label}` : ''}
+                        </option>
+                      );
+                    })
+                  : tractors.map((t) => (
+                      <option key={t.id} value={String(t.id)}>
+                        {t.model || 'Голова'} {t.number}{t.driver ? ` · ${t.driver}` : ''}
+                      </option>
+                    ))}
+              </select>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <ModalActionButton onClick={closeSheet} color="#94A3B8" icon={<X size={18} />} label="Отмена" fullWidth size="lg" />
+                <ModalActionButton
+                  onClick={saveCouple}
+                  disabled={coupleSaving || !couplePickId}
+                  color="#3B82F6"
+                  icon={<Link2 size={18} />}
+                  label={coupleSaving ? 'Сцепляем…' : 'Сцепить'}
+                  fullWidth
+                  size="lg"
+                />
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Trip sheet */}
+      {showTripSheet && vehicleKind === 'mixer' && (() => {
         const allUnique: any[] = Array.from(
-          new Map(enrichedTrips.map((t: any) => [t.number, t])).values()
+          new Map(enrichedTrips.map((t: any) => [t.number, t])).values(),
         );
         const order = ['Проблема', 'Загрузка', 'В пути', 'На объекте'];
         const sorted = [...allUnique].sort((a, b) => {
@@ -997,67 +1390,44 @@ export default function MobileMixersPage() {
 
         return (
           <>
-            <div
-              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }}
-              onClick={() => setShowTripSheet(false)}
-            />
+            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }} onClick={() => setShowTripSheet(false)} />
             <div style={volumeModalStyle({
-              position: 'fixed', bottom: '74px', left: 0, right: 0,
-              zIndex: 10001,
-              borderRadius: '20px 20px 0 0',
-              maxHeight: 'calc(85vh - 74px)',
-              display: 'flex', flexDirection: 'column',
-              overflow: 'hidden',
+              position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001,
+              borderRadius: '20px 20px 0 0', maxHeight: 'calc(85vh - 74px)',
+              display: 'flex', flexDirection: 'column', overflow: 'hidden',
             })}>
-              {/* Handle */}
               <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0', flexShrink: 0 }}>
                 <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
               </div>
-              {/* Header */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px 10px', flexShrink: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{
-                    width: '8px', height: '8px', borderRadius: '50%', background: '#10B981',
-                    boxShadow: '0 0 6px rgba(16,185,129,0.8)', animation: 'pulse 2s infinite',
-                  }} />
                   <span style={{ fontSize: '17px', fontWeight: 700, color: '#E2E8F0' }}>В рейсе сегодня</span>
                   <span style={{
                     padding: '1px 8px', borderRadius: '9999px', fontSize: '12px', fontWeight: 700,
                     background: '#10B98120', color: '#10B981',
                   }}>{sorted.length}</span>
                 </div>
-                <button onClick={() => setShowTripSheet(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
+                <button type="button" onClick={() => setShowTripSheet(false)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
                   <X size={20} color="#64748B" />
                 </button>
               </div>
-
-              {/* List */}
               <div style={{ overflowY: 'auto', flex: 1, padding: '0 16px 20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {sorted.map((trip: any) => {
                   const sc = statusColor(trip.status);
-                  const mx = mixers.find(m => m.number === trip.number);
+                  const mx = units.find((m) => m.number === trip.number);
                   const isOwn = mx?.type === 'own';
                   return (
                     <button
                       key={trip.number}
+                      type="button"
                       onClick={() => { if (mx) { openCard(mx); setShowTripSheet(false); } }}
                       style={volumeCardSoftStyle({
                         display: 'flex', alignItems: 'center', gap: '12px',
-                        padding: '12px 14px',
-                        borderRadius: 12,
+                        padding: '12px 14px', borderRadius: 12,
                         border: `1px solid ${sc.color}40`,
-                        cursor: mx ? 'pointer' : 'default',
-                        textAlign: 'left',
-                        width: '100%',
+                        cursor: mx ? 'pointer' : 'default', textAlign: 'left', width: '100%',
                       })}
                     >
-                      {/* Цветная полоска слева */}
-                      <div style={{
-                        width: '3px', alignSelf: 'stretch', borderRadius: '9999px',
-                        background: sc.color, flexShrink: 0,
-                      }} />
-
-                      {/* Инициалы */}
                       <div style={{
                         width: '36px', height: '36px', borderRadius: '9999px', flexShrink: 0,
                         background: `${sc.color}20`,
@@ -1066,8 +1436,6 @@ export default function MobileMixersPage() {
                       }}>
                         {initials(trip.driver || mx?.driver || '')}
                       </div>
-
-                      {/* Основная инфо */}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
                           <span style={{ fontSize: '15px', fontWeight: 700, color: '#E2E8F0' }}>{trip.number}</span>
@@ -1079,22 +1447,14 @@ export default function MobileMixersPage() {
                             {isOwn ? 'Свой' : 'Наёмный'}
                           </span>
                         </div>
-                        <div style={{ fontSize: '12px', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <div style={{ fontSize: '12px', color: '#94A3B8' }}>
                           {trip.driver || mx?.driver || '—'}
                         </div>
                       </div>
-
-                      {/* Статус + объём */}
                       <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', justifyContent: 'flex-end', marginBottom: '3px' }}>
-                          <div style={{
-                            width: '6px', height: '6px', borderRadius: '50%',
-                            background: sc.color, boxShadow: `0 0 4px ${sc.color}`,
-                          }} />
-                          <span style={{ fontSize: '12px', fontWeight: 700, color: sc.color }}>{trip.status}</span>
-                        </div>
+                        <span style={{ fontSize: '12px', fontWeight: 700, color: sc.color }}>{trip.status}</span>
                         {trip.volume > 0 && (
-                          <span style={{ fontSize: '11px', color: '#64748B' }}>{trip.volume} м³</span>
+                          <div style={{ fontSize: '11px', color: '#64748B' }}>{trip.volume} м³</div>
                         )}
                       </div>
                     </button>
@@ -1105,20 +1465,6 @@ export default function MobileMixersPage() {
           </>
         );
       })()}
-    </div>
-  );
-}
-
-// ─── Helper component ─────────────────────────────────────────────────────────
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{
-      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      padding: '12px 0', borderBottom: '1px solid #334155',
-    }}>
-      <span style={{ color: '#475569', fontSize: '13px' }}>{label}</span>
-      <span style={{ color: '#CBD5E1', fontSize: '14px', fontWeight: 600 }}>{value}</span>
     </div>
   );
 }

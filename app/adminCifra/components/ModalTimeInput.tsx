@@ -34,6 +34,36 @@ function parseTime(v: string): { h: number; m: number; ok: boolean } {
   };
 }
 
+/**
+ * Полностью распознанное время из ручного ввода → HH:MM.
+ * Допускает «8:30», «08:30», «830», «0830», точки/запятые вместо двоеточия.
+ */
+function tryParseComplete(raw: string): string | null {
+  const s = String(raw || '')
+    .trim()
+    .replace(/[.,]/g, ':')
+    .replace(/\s/g, '');
+  if (!s) return null;
+
+  // Минуты — строго 2 цифры, иначе при наборе «8:3» → «08:03» раньше «8:30».
+  const colon = /^(\d{1,2}):(\d{2})$/.exec(s);
+  if (colon) {
+    const hh = Number(colon[1]);
+    const mm = Number(colon[2]);
+    if (hh <= 23 && mm <= 59) return `${pad2(hh)}:${pad2(mm)}`;
+    return null;
+  }
+
+  if (/^\d{3,4}$/.test(s)) {
+    const digits = s.padStart(4, '0');
+    const hh = Number(digits.slice(0, 2));
+    const mm = Number(digits.slice(2));
+    if (hh <= 23 && mm <= 59) return `${pad2(hh)}:${pad2(mm)}`;
+  }
+
+  return null;
+}
+
 function scrollColToIndex(el: HTMLDivElement | null, idx: number) {
   if (!el) return;
   const child = el.children[idx] as HTMLElement | undefined;
@@ -42,15 +72,24 @@ function scrollColToIndex(el: HTMLDivElement | null, idx: number) {
   el.scrollTop = Math.max(0, top);
 }
 
+/**
+ * Единый выбор времени для adminCifra.
+ * Правила:
+ * - ручной ввод HH:MM в поле;
+ * - выпадающий список: значение в форму только по клику (не по hover);
+ * - клик по минуте сразу закрывает попап (кнопки «Готово» нет).
+ */
 export default function ModalTimeInput({ value, onChange, style, disabled, title }: Props) {
   const [open, setOpen] = useState(false);
-  const anchorRef = useRef<HTMLButtonElement>(null);
+  const [text, setText] = useState('');
+  const anchorRef = useRef<HTMLDivElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const hoursRef = useRef<HTMLDivElement>(null);
   const minsRef = useRef<HTMLDivElement>(null);
+  const inputFocusedRef = useRef(false);
   const { h, m, ok } = parseTime(value);
 
-  // Черновик в открытом попапе — подсветка идёт за курсором, в value пишем сразу.
+  // Подсветка в попапе — только по клику, не по hover.
   const [draftH, setDraftH] = useState(h);
   const [draftM, setDraftM] = useState(m);
 
@@ -58,6 +97,12 @@ export default function ModalTimeInput({ value, onChange, style, disabled, title
 
   const hours = useMemo(() => Array.from({ length: 24 }, (_, i) => i), []);
   const minutes = useMemo(() => Array.from({ length: 60 }, (_, i) => i), []);
+
+  // Синхронизация текста поля с value, пока пользователь не печатает.
+  useEffect(() => {
+    if (inputFocusedRef.current) return;
+    setText(ok ? `${pad2(h)}:${pad2(m)}` : '');
+  }, [value, ok, h, m]);
 
   useEffect(() => {
     if (!open) return;
@@ -67,7 +112,7 @@ export default function ModalTimeInput({ value, onChange, style, disabled, title
       scrollColToIndex(hoursRef.current, h);
       scrollColToIndex(minsRef.current, m);
     });
-    // Только при открытии — иначе hover будет дёргать скролл.
+    // Только при открытии — иначе клик/ввод будут дёргать скролл.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -97,52 +142,134 @@ export default function ModalTimeInput({ value, onChange, style, disabled, title
   const pick = (nh: number, nm: number) => {
     setDraftH(nh);
     setDraftM(nm);
-    onChange(`${pad2(nh)}:${pad2(nm)}`);
+    const next = `${pad2(nh)}:${pad2(nm)}`;
+    onChange(next);
+    if (!inputFocusedRef.current) setText(next);
   };
 
-  const commitAndClose = () => {
-    pick(draftH, draftM);
-    setOpen(false);
+  const commitText = () => {
+    const parsed = tryParseComplete(text);
+    if (parsed) {
+      onChange(parsed);
+      setText(parsed);
+      const p = parseTime(parsed);
+      setDraftH(p.h);
+      setDraftM(p.m);
+      return;
+    }
+    // Невалидный/неполный ввод — вернуть отображение из value.
+    setText(ok ? `${pad2(h)}:${pad2(m)}` : '');
   };
 
-  const display = ok ? `${pad2(h)}:${pad2(m)}` : '——:——';
+  const openPicker = () => {
+    if (disabled) return;
+    if (!ok) onChange(nowTimeHHMM());
+    setOpen((v) => !v);
+  };
 
   return (
     <>
-      <button
+      <div
         ref={anchorRef}
-        type="button"
         title={title}
-        disabled={disabled}
-        onClick={() => {
-          if (disabled) return;
-          // Пустое поле при первом открытии — сразу текущее время, колесо с него.
-          if (!ok) onChange(nowTimeHHMM());
-          setOpen((v) => !v);
-        }}
         style={{
           ...modalFieldStyle({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: 8,
-            textAlign: 'left',
-            cursor: disabled ? 'not-allowed' : 'pointer',
             opacity: disabled ? 0.6 : 1,
+            paddingRight: 8,
             ...style,
           }),
         }}
       >
-        <span style={{ color: value ? '#fff' : '#64748B', flex: 1, minWidth: 0 }}>{display}</span>
-        <Clock size={15} color="#2DD4BF" strokeWidth={2} style={{ flexShrink: 0, marginRight: 2 }} />
-      </button>
+        <input
+          type="text"
+          inputMode="numeric"
+          autoComplete="off"
+          spellCheck={false}
+          disabled={disabled}
+          placeholder="——:——"
+          aria-label={title || 'Время'}
+          value={text}
+          onFocus={() => {
+            inputFocusedRef.current = true;
+          }}
+          onBlur={() => {
+            inputFocusedRef.current = false;
+            commitText();
+          }}
+          onChange={(e) => {
+            const raw = e.target.value;
+            // Ограничиваем шум: цифры и разделители, до 5 символов («08:30»).
+            const cleaned = raw.replace(/[^\d:.,]/g, '').slice(0, 5);
+            setText(cleaned);
+            const parsed = tryParseComplete(cleaned);
+            if (parsed && (/^\d{1,2}:\d{2}$/.test(cleaned.replace(/[.,]/g, ':')) || /^\d{4}$/.test(cleaned))) {
+              onChange(parsed);
+              setDraftH(parseTime(parsed).h);
+              setDraftM(parseTime(parsed).m);
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commitText();
+              (e.target as HTMLInputElement).blur();
+              setOpen(false);
+            }
+            if (e.key === 'Escape') {
+              setOpen(false);
+              setText(ok ? `${pad2(h)}:${pad2(m)}` : '');
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            border: 'none',
+            outline: 'none',
+            background: 'transparent',
+            color: text ? '#fff' : '#64748B',
+            fontSize: 'inherit',
+            fontFamily: 'inherit',
+            fontWeight: 'inherit',
+            padding: 0,
+            margin: 0,
+            cursor: disabled ? 'not-allowed' : 'text',
+          }}
+        />
+        <button
+          type="button"
+          disabled={disabled}
+          title="Выбрать время"
+          aria-label="Выбрать время"
+          aria-expanded={open}
+          onClick={openPicker}
+          style={{
+            flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: 'none',
+            background: 'transparent',
+            padding: 2,
+            marginRight: 0,
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            borderRadius: 6,
+          }}
+        >
+          <Clock size={15} color="#2DD4BF" strokeWidth={2} />
+        </button>
+      </div>
 
       <PortalPopup
         open={open}
         anchorRef={anchorRef}
         popupRef={popupRef}
         width={220}
-        estimatedHeight={300}
+        estimatedHeight={COL_H + 20}
         style={{ width: 220, padding: 0, overflow: 'hidden' }}
       >
         <div
@@ -153,7 +280,7 @@ export default function ModalTimeInput({ value, onChange, style, disabled, title
             height: COL_H,
             minHeight: COL_H,
             maxHeight: COL_H,
-            padding: '10px 10px 0',
+            padding: 10,
             boxSizing: 'border-box',
             overflow: 'hidden',
           }}
@@ -165,7 +292,6 @@ export default function ModalTimeInput({ value, onChange, style, disabled, title
                 <button
                   key={hh}
                   type="button"
-                  onMouseEnter={() => pick(hh, draftM)}
                   onClick={() => pick(hh, draftM)}
                   style={cellStyle(active)}
                 >
@@ -181,7 +307,6 @@ export default function ModalTimeInput({ value, onChange, style, disabled, title
                 <button
                   key={mm}
                   type="button"
-                  onMouseEnter={() => pick(draftH, mm)}
                   onClick={() => {
                     pick(draftH, mm);
                     setOpen(false);
@@ -193,32 +318,6 @@ export default function ModalTimeInput({ value, onChange, style, disabled, title
               );
             })}
           </div>
-        </div>
-        <div
-          style={{
-            flexShrink: 0,
-            display: 'flex',
-            justifyContent: 'flex-end',
-            padding: '8px 10px 10px',
-            borderTop: '1px solid rgba(148,163,184,0.2)',
-            background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 100%)',
-          }}
-        >
-          <button
-            type="button"
-            onClick={commitAndClose}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#2DD4BF',
-              fontWeight: 700,
-              fontSize: 13,
-              cursor: 'pointer',
-              padding: '4px 6px',
-            }}
-          >
-            Готово
-          </button>
         </div>
       </PortalPopup>
     </>

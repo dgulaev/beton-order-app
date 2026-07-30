@@ -2073,9 +2073,10 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   alignItems: 'center',
                   justifyContent: isCollapsed ? 'center' : 'flex-start',
                   flexWrap: 'nowrap',
-                  gap: 4,
+                  gap: isCollapsed ? 0 : 4,
+                  width: '100%',
                   overflow: 'hidden',
-                  transition: `justify-content ${SIDEBAR_TRANSITION}`,
+                  transition: `justify-content ${SIDEBAR_TRANSITION}, gap ${SIDEBAR_TRANSITION}`,
                 }}
               >
                 <button
@@ -2087,8 +2088,12 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: 6,
-                    padding: isCollapsed ? 6 : '4px 8px',
+                    // В collapsed gap/подпись дают сдвиг иконки влево от центра
+                    gap: isCollapsed ? 0 : 6,
+                    width: isCollapsed ? 32 : 'auto',
+                    height: isCollapsed ? 32 : 'auto',
+                    padding: isCollapsed ? 0 : '4px 8px',
+                    boxSizing: 'border-box',
                     borderRadius: 8,
                     border: '1px solid transparent',
                     background: 'transparent',
@@ -2097,7 +2102,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                     fontSize: 11,
                     fontWeight: 500,
                     lineHeight: 1,
-                    transition: `color 0.15s, background 0.15s, border-color 0.15s, padding ${SIDEBAR_TRANSITION}`,
+                    flexShrink: 0,
+                    transition: `color 0.15s, background 0.15s, border-color 0.15s, padding ${SIDEBAR_TRANSITION}, width ${SIDEBAR_TRANSITION}, height ${SIDEBAR_TRANSITION}, gap ${SIDEBAR_TRANSITION}`,
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.color = '#E2E8F0';
@@ -2110,41 +2116,35 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                     e.currentTarget.style.borderColor = 'transparent';
                   }}
                 >
-                  <Smartphone size={14} strokeWidth={1.75} />
-                  <span style={{ ...navTextStyle(isCollapsed), paddingLeft: 0, maxWidth: isCollapsed ? 0 : 90 }}>
-                    Мобильная
-                  </span>
+                  <Smartphone size={14} strokeWidth={1.75} style={{ display: 'block', flexShrink: 0 }} />
+                  {!isCollapsed && (
+                    <span style={{ whiteSpace: 'nowrap' }}>Мобильная</span>
+                  )}
                 </button>
-                {userRole === 'admin' && (
+                {userRole === 'admin' && !isCollapsed && (
                   <button
                     type="button"
                     onClick={() => { void forceLogoutAll(); }}
                     title="Разлогинить всех"
                     aria-label="Разлогинить всех"
-                    tabIndex={isCollapsed ? -1 : 0}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       gap: 6,
-                      padding: isCollapsed ? 0 : '4px 8px',
-                      maxWidth: isCollapsed ? 0 : 160,
-                      opacity: isCollapsed ? 0 : 1,
-                      overflow: 'hidden',
+                      padding: '4px 8px',
                       borderRadius: 8,
                       border: '1px solid transparent',
                       background: 'transparent',
                       color: '#94A3B8',
-                      cursor: isCollapsed ? 'default' : 'pointer',
+                      cursor: 'pointer',
                       fontSize: 11,
                       fontWeight: 500,
                       lineHeight: 1,
                       whiteSpace: 'nowrap',
-                      pointerEvents: isCollapsed ? 'none' : 'auto',
-                      transition: `color 0.15s, background 0.15s, border-color 0.15s, max-width ${SIDEBAR_TRANSITION}, opacity 0.25s ${SIDEBAR_EASE}, padding ${SIDEBAR_TRANSITION}`,
+                      transition: 'color 0.15s, background 0.15s, border-color 0.15s',
                     }}
                     onMouseEnter={(e) => {
-                      if (isCollapsed) return;
                       e.currentTarget.style.color = '#E2E8F0';
                       e.currentTarget.style.background = 'rgba(148,163,184,0.1)';
                       e.currentTarget.style.borderColor = '#475569';
@@ -2168,6 +2168,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 alignItems: 'center',
                 justifyContent: isCollapsed ? 'center' : 'space-between',
                 gap: isCollapsed ? 0 : 8,
+                width: '100%',
                 fontSize: 10,
                 lineHeight: 1.2,
                 letterSpacing: '0.01em',
@@ -2176,28 +2177,27 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 transition: `gap ${SIDEBAR_TRANSITION}, justify-content ${SIDEBAR_TRANSITION}`,
               }}
             >
-              <span
-                style={{
-                  color: '#94A3B8',
-                  whiteSpace: 'nowrap',
-                  flexShrink: 0,
-                  maxWidth: isCollapsed ? 0 : 140,
-                  opacity: isCollapsed ? 0 : 1,
-                  overflow: 'hidden',
-                  transition: `max-width ${SIDEBAR_TRANSITION}, opacity 0.25s ${SIDEBAR_EASE}`,
-                }}
-              >
-                © ООО «Трейдком»
-              </span>
+              {!isCollapsed && (
+                <span
+                  style={{
+                    color: '#94A3B8',
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
+                  }}
+                >
+                  © ООО «Трейдком»
+                </span>
+              )}
               <span
                 style={{
                   color: '#94A3B8',
                   fontWeight: 500,
                   whiteSpace: 'nowrap',
-                  textAlign: isCollapsed ? 'center' : 'right',
+                  textAlign: 'center',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   minWidth: 0,
+                  width: isCollapsed ? '100%' : 'auto',
                 }}
               >
                 {formatBuildVersion()}

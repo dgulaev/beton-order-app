@@ -1,5 +1,43 @@
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
+/** YYYY-MM-DD → DD.MM.YYYY */
+function ymdToRu(ymd: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return null;
+  return `${m[3]}.${m[2]}.${m[1]}`;
+}
+
+/**
+ * В комментарии копии заявки подменяет дату доставки исходной на новую.
+ * Формы: `2026-07-23`, `23.07.2026`, `23.07.2026г.`, `23.07.2026 г.`
+ */
+export function rewriteCommentDeliveryDate(
+  comment: string | null | undefined,
+  fromYmd: string | null | undefined,
+  toYmd: string,
+): string {
+  const text = String(comment || '');
+  if (!text) return '';
+
+  const fromRaw = String(fromYmd || '').split('T')[0];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromRaw) || !/^\d{4}-\d{2}-\d{2}$/.test(toYmd)) {
+    return text;
+  }
+  if (fromRaw === toYmd) return text;
+
+  const fromRu = ymdToRu(fromRaw);
+  const toRu = ymdToRu(toYmd);
+  if (!fromRu || !toRu) return text;
+
+  let out = text;
+  // Сначала длинные варианты с «г.», потом голая дата, потом ISO.
+  out = out.split(`${fromRu} г.`).join(`${toRu} г.`);
+  out = out.split(`${fromRu}г.`).join(`${toRu}г.`);
+  out = out.split(fromRu).join(toRu);
+  out = out.split(fromRaw).join(toYmd);
+  return out;
+}
+
 export type LeadLinkForCopy = {
   lead_id: number | null;
   lead_source: string | null;

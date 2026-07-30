@@ -627,7 +627,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
         <NavLink href="/mobile/zayavki" icon={<Package size={24} />} label="Заявки" pathname={pathname} />
         <NavLink href="/mobile/leads" icon={<Inbox size={24} />} label="Лиды" pathname={pathname} />
         {!isGuest && (
-          <NavLink href="/mobile/mixers" icon={<Truck size={24} />} label="Миксеры" pathname={pathname} />
+          <NavLink href="/mobile/mixers" icon={<Truck size={24} />} label="Техника" pathname={pathname} />
         )}
         {!isGuest && (
           <NavLink href="/mobile/warehouse" icon={<Factory size={24} />} label="Склад" pathname={pathname} />
