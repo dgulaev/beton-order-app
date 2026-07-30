@@ -40,9 +40,15 @@ import { todayMoscowYmd } from '@/lib/leads';
 import PageHelpButton from '@/app/adminCifra/components/help/PageHelpButton';
 import OrderCommentsPanel, { CommentUnreadBadge, orderModalTabStyle } from '@/app/adminCifra/components/OrderCommentsPanel';
 import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts';
-import FleetOpsTabs from '@/app/adminCifra/components/FleetOpsTabs';
+import FleetOpsTabs, { OPS_TABS } from '@/app/adminCifra/components/FleetOpsTabs';
 import type { VehicleKind } from '@/lib/fleetCatalog';
-import { bulkVolumeUnitLabel, orderMatchesFleetTab } from '@/lib/orderLogistics';
+import {
+  bulkVolumeUnitLabel,
+  countFleetTripsOnTabs,
+  mergeFetchedOrderMixers,
+  orderMatchesFleetTab,
+  upsertOrderMixersForOrder,
+} from '@/lib/orderLogistics';
 
 // ==================== Подсказка "тут есть скрытый контент" (мерцающая стрелочка вниз) ====================
 // Скроллбар у блока всегда скрыт (глобальный сброс в globals.css); вместо него —
@@ -1178,15 +1184,13 @@ ${order.customer_type?.includes('Юридическое')
   useRealtimeOrderMixers(setDayMixerAssignments, { orders: allOrders });
 
   // Локальные правки миксеров в открытой модалке сразу отражаем в KPI
-  // (не ждём round-trip broadcast). Пустой массив пропускаем — иначе при
-  // открытии модалки до ответа API затрём уже загруженные рейсы дня.
+  // (не ждём round-trip broadcast). Upsert по id: не затираем более свежий
+  // broadcast и не выкидываем INSERT другого сотрудника по этой же заявке.
   useEffect(() => {
     if (!selectedOrder?.id || !orderMixers.length) return;
-    const oid = String(selectedOrder.id);
-    setDayMixerAssignments((prev) => {
-      const others = prev.filter((m) => String(m.orderId ?? m.order_id) !== oid);
-      return [...others, ...orderMixers];
-    });
+    setDayMixerAssignments((prev) =>
+      upsertOrderMixersForOrder(prev, selectedOrder.id, orderMixers)
+    );
   }, [orderMixers, selectedOrder?.id]);
 
   // Заявку удалили (например, тестовую #604), пока её модалка была открыта —
@@ -1266,34 +1270,35 @@ ${order.customer_type?.includes('Юридическое')
   const selectedDateStr = getLocalDateString(selectedDate);
 
   // ==================== 2. ФИЛЬТРАЦИЯ ЗАЯВОК НА ВЫБРАННЫЙ ДЕНЬ (с часовым поясом) ====================
-  const dayOrders = allOrders
-    .filter((o: Order) => {
-      if (!o?.delivery_date) return false;
+  const ordersOnSelectedDay = allOrders.filter((o: Order) => {
+    if (!o?.delivery_date) return false;
 
-      let orderDate: Date;
+    let orderDate: Date;
 
-      if (typeof o.delivery_date === 'string') {
-        // Если приходит строка — парсим как local дату
-        orderDate = new Date(o.delivery_date);
-      } else {
-        orderDate = new Date(o.delivery_date);
-      }
+    if (typeof o.delivery_date === 'string') {
+      // Если приходит строка — парсим как local дату
+      orderDate = new Date(o.delivery_date);
+    } else {
+      orderDate = new Date(o.delivery_date);
+    }
 
-      // Приводим к локальной дате (учитываем часовой пояс пользователя)
-      const orderDateStr = orderDate.toLocaleDateString('ru-RU', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-      }).split('.').reverse().join('-'); // YYYY-MM-DD
+    // Приводим к локальной дате (учитываем часовой пояс пользователя)
+    const orderDateStr = orderDate.toLocaleDateString('ru-RU', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).split('.').reverse().join('-'); // YYYY-MM-DD
 
-      const selectedStr = selectedDate.toLocaleDateString('ru-RU', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-      }).split('.').reverse().join('-');
+    const selectedStr = selectedDate.toLocaleDateString('ru-RU', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).split('.').reverse().join('-');
 
-      return orderDateStr === selectedStr;
-    })
+    return orderDateStr === selectedStr;
+  });
+
+  const dayOrders = ordersOnSelectedDay
     .filter((o: Order) => orderMatchesFleetTab(o as any, fleetTab))
     .sort((a, b) => (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00'));
 
@@ -1303,6 +1308,17 @@ ${order.customer_type?.includes('Юридическое')
   // ==================== KPI ====================
   // Исключаем отменённые заявки из плана и факта (рейсы по отменённым тоже не считаем).
   const activeOrders = dayOrders.filter((o: Order) => o.status !== 'cancelled');
+
+  /**
+   * Бейджи на вкладках: dayMixerAssignments обновляется через broadcast
+   * (useRealtimeOrderMixers → order_mixers:all) — без перезагрузки у всех.
+   */
+  const fleetTripCounts = useMemo(
+    () => countFleetTripsOnTabs(dayMixerAssignments, ordersOnSelectedDay, OPS_TABS, {
+      skipCancelledOrders: true,
+    }),
+    [dayMixerAssignments, ordersOnSelectedDay],
+  );
 
   const activeOrderIds = useMemo(
     () => new Set(activeOrders.map((o: Order) => String(o.id))),
@@ -1359,24 +1375,12 @@ ${order.customer_type?.includes('Юридическое')
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (cancelled || !Array.isArray(data)) return;
-        setDayMixerAssignments((prev) => {
-          const byId = new Map<string, any>();
-          for (const m of data) byId.set(String(m.id), m);
-          for (const m of prev) {
-            const oid = String(m.orderId ?? m.order_id);
-            const id = String(m.id);
-            if (!idSet.has(oid)) {
-              // Рейсы вне текущей недели — не тащим в пул (смена недели).
-              continue;
-            }
-            const incoming = byId.get(id);
-            if (!incoming) continue; // в БД уже нет — не держим призрака
-            const tPrev = new Date(m.updated_at || 0).getTime();
-            const tIn = new Date(incoming.updated_at || 0).getTime();
-            if (tPrev > tIn) byId.set(id, m);
-          }
-          return Array.from(byId.values());
-        });
+        // Вне недели — отбрасываем; внутри — merge с защитой свежего broadcast.
+        setDayMixerAssignments((prev) =>
+          mergeFetchedOrderMixers(prev, data, idSet).filter((m) =>
+            idSet.has(String(m.orderId ?? m.order_id))
+          )
+        );
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -2271,7 +2275,7 @@ ${order.customer_type?.includes('Юридическое')
         {/* ==================== ПРАВАЯ КОЛОНКА — ОСНОВНОЙ СПИСОК ==================== */}
 <div style={{ flex: 1, minHeight: 0, height: '100%', boxSizing: 'border-box', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
 
-  <FleetOpsTabs value={fleetTab} onChange={setFleetTab} />
+  <FleetOpsTabs value={fleetTab} onChange={setFleetTab} tripCounts={fleetTripCounts} />
 
   {/* Заголовок + поиск + кнопки — всё в одну строку */}
   <div style={{ marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, flexWrap: 'wrap' }}>

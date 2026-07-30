@@ -23,9 +23,14 @@ import WeatherKpiCard from '../components/WeatherKpiCard';
 import { appAlert, appConfirm } from '../components/appDialog';
 import { CommentUnreadBadge } from '../components/OrderCommentsPanel';
 import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts';
-import FleetOpsTabs from '../components/FleetOpsTabs';
+import FleetOpsTabs, { OPS_TABS } from '../components/FleetOpsTabs';
 import type { VehicleKind } from '@/lib/fleetCatalog';
-import { fleetInWorkLabel, orderMatchesFleetTab } from '@/lib/orderLogistics';
+import {
+  countFleetTripsOnTabs,
+  fleetInWorkLabel,
+  mergeFetchedOrderMixers,
+  orderMatchesFleetTab,
+} from '@/lib/orderLogistics';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import PageHelpButton from '../components/help/PageHelpButton';
 
@@ -309,11 +314,13 @@ useEffect(() => {
         const mr = await fetch(`/api/adminCifra/order-mixers?orderIds=${ids}`);
         if (mr.ok) {
           const mixers: any[] = await mr.json();
-          setMixerAssignments(prev => {
-            const orderIdSet = new Set(data.map((o: any) => String(o.id)));
-            const others2 = prev.filter((m: any) => !orderIdSet.has(String(m.orderId)));
-            return [...others2, ...mixers];
-          });
+          setMixerAssignments((prev) =>
+            mergeFetchedOrderMixers(
+              prev,
+              mixers,
+              data.map((o: any) => o.id),
+            )
+          );
         }
       }
     } catch (err) {
@@ -429,32 +436,45 @@ const selectedDateStr = `${selectedYear}-${selectedMonth}-${selectedDay}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDateStr]);
 
-const todayOrders = allOrders
-  .filter((o: Order) => {
-    if (!o?.delivery_date) return false;
+const ordersOnSelectedDay = allOrders.filter((o: Order) => {
+  if (!o?.delivery_date) return false;
 
-    let orderDateStr = '';
+  let orderDateStr = '';
 
-    if (typeof o.delivery_date === 'string') {
-      orderDateStr = o.delivery_date.substring(0, 10);
-    } else {
-      try {
-        const date = new Date(o.delivery_date);
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-        orderDateStr = `${year}-${month}-${day}`;
-      } catch (e) {
-        orderDateStr = String(o.delivery_date).substring(0, 10);
-      }
+  if (typeof o.delivery_date === 'string') {
+    orderDateStr = o.delivery_date.substring(0, 10);
+  } else {
+    try {
+      const date = new Date(o.delivery_date);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      orderDateStr = `${year}-${month}-${day}`;
+    } catch (e) {
+      orderDateStr = String(o.delivery_date).substring(0, 10);
     }
+  }
 
-    return orderDateStr === selectedDateStr;
-  })
+  return orderDateStr === selectedDateStr;
+});
+
+const todayOrders = ordersOnSelectedDay
   .filter((o: Order) => orderMatchesFleetTab(o as any, fleetTab))
-  .sort((a: Order, b: Order) => 
+  .sort((a: Order, b: Order) =>
     (a.delivery_time || '00:00').localeCompare(b.delivery_time || '00:00')
   );
+
+/**
+ * Бейджи на вкладках: считаем из mixerAssignments (broadcast order_mixers:all),
+ * не из activeMixers — иначе чужие дни попадали в «Миксеры», а live-смена
+ * статуса на выбранном дне могла не совпасть с фильтром activeOnly.
+ */
+const fleetTripCounts = useMemo(
+  () => countFleetTripsOnTabs(mixerAssignments, ordersOnSelectedDay, OPS_TABS, {
+    skipCancelledOrders: true,
+  }),
+  [mixerAssignments, ordersOnSelectedDay],
+);
 
 const commentOrderIds = useMemo(() => todayOrders.map((o) => o.id), [todayOrders]);
 const { counts: commentUnreadCounts, setOrderUnread } = useOrderCommentUnreadCounts(commentOrderIds, true);
@@ -942,10 +962,9 @@ useEffect(() => {
         const res = await fetch(`/api/adminCifra/order-mixers?orderId=${selectedOrder.id}`);
         if (res.ok) {
           const data = await res.json();
-          setMixerAssignments((prev) => {
-            const others = prev.filter((m) => String(m.orderId) !== String(selectedOrder.id));
-            return [...others, ...data];
-          });
+          setMixerAssignments((prev) =>
+            mergeFetchedOrderMixers(prev, data, [selectedOrder.id])
+          );
           console.log(`📥 Загружено ${data.length} миксеров для заказа #${selectedOrder.id}`);
         }
       } catch (err) {
@@ -1177,7 +1196,9 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   gap: '12px',
   minWidth: 0,
 }}>
-  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'nowrap', height: 26, minWidth: 0, overflow: 'hidden' }}>
+  {/* overflow:visible — иначе translateY(3px) у плашки даты обрезает скругление
+      (родитель был height:26 + overflow:hidden → «срезанный» левый/нижний край). */}
+  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'nowrap', minHeight: 26, minWidth: 0 }}>
     <h1 style={{ 
       fontSize: 26,
       fontWeight: 700, 
@@ -1189,6 +1210,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
       display: 'inline-flex',
       alignItems: 'center',
       gap: 10,
+      flexShrink: 0,
     }}>
       <Home size={22} color="#94A3B8" style={{ flexShrink: 0, display: 'block' }} />
       <span style={{ display: 'block', lineHeight: '26px' }}>Диспетчерская</span>
@@ -1211,6 +1233,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
         borderRadius: 9999,
         cursor: 'pointer',
         whiteSpace: 'nowrap',
+        flexShrink: 0,
         border: '1px solid rgba(96,165,250,0.55)',
         background:
           'radial-gradient(120% 140% at 50% 0%, rgba(147,197,253,0.38) 0%, rgba(59,130,246,0.18) 42%, rgba(15,23,42,0.92) 78%), linear-gradient(165deg, rgba(59,130,246,0.28) 0%, rgba(30,58,138,0.22) 45%, rgba(15,23,42,0.98) 100%)',
@@ -1608,7 +1631,7 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
             position: 'relative',
           })}>
   
-  <FleetOpsTabs value={fleetTab} onChange={setFleetTab} />
+  <FleetOpsTabs value={fleetTab} onChange={setFleetTab} tripCounts={fleetTripCounts} />
 
   {/* Заголовок + Кнопки */}
   <div style={{ 

@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient'; // ← общий клиент, не создаём новый
+import { FLEET_ON_TRIP_STATUSES, normalizeMixerTripStatus } from '@/lib/orderLogistics';
 import { useRealtimeBroadcast } from './useRealtimeBroadcast';
  
 type ChangeEvent = '*' | 'INSERT' | 'UPDATE' | 'DELETE';
@@ -481,7 +482,7 @@ export function useRealtimeOrders(
 }
 
 /** Статусы миксеров, которые считаются «активными» на дашборде */
-export const ACTIVE_MIXER_STATUSES = ['Загрузка', 'В пути', 'На объекте', 'Проблема'] as const;
+export const ACTIVE_MIXER_STATUSES = FLEET_ON_TRIP_STATUSES;
 
 /** Приводит сырую строку order_mixers к формату API active-mixers / order-mixers */
 export function formatOrderMixer(record: any, orders?: any[]) {
@@ -495,7 +496,7 @@ export function formatOrderMixer(record: any, orders?: any[]) {
     order_id: orderId,
     volume: record.volume,
     time: record.time,
-    status: record.status,
+    status: normalizeMixerTripStatus(record.status),
     sortOrder: record.sort_order ?? record.sortOrder ?? 0,
     sort_order: record.sort_order ?? record.sortOrder ?? 0,
     created_at: record.created_at,
@@ -520,7 +521,9 @@ export function formatOrderMixer(record: any, orders?: any[]) {
 }
 
 export function isActiveMixerStatus(status?: string) {
-  return !!status && ACTIVE_MIXER_STATUSES.includes(status as (typeof ACTIVE_MIXER_STATUSES)[number]);
+  return (ACTIVE_MIXER_STATUSES as readonly string[]).includes(
+    normalizeMixerTripStatus(status),
+  );
 }
 
 export function useRealtimeOrderMixers(
