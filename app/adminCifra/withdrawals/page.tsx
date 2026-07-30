@@ -57,7 +57,7 @@ export default function WithdrawalsPage() {
 
   // Загрузка данных после определения роли
   useEffect(() => {
-    if (userId && ['admin', 'manager'].includes(userRole || '')) {
+    if (userId && userRole === 'admin') {
       loadWithdrawals();
     }
   }, [userId, userRole]);
@@ -69,7 +69,10 @@ export default function WithdrawalsPage() {
     try {
       const res = await fetch('/api/adminCifra/withdrawals', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(userId ? { 'x-user-id': String(userId) } : {}),
+        },
         body: JSON.stringify({ id, status: 'completed' })
       });
 
@@ -91,10 +94,10 @@ export default function WithdrawalsPage() {
     }
   };
 
-  if (!userRole || !['admin', 'manager'].includes(userRole)) {
+  if (!userRole || userRole !== 'admin') {
     return (
       <div style={{ padding: '100px', textAlign: 'center', color: '#EF4444', background: '#0F172A', minHeight: '100vh' }}>
-        Доступ запрещён. Только для администраторов и менеджеров.
+        Доступ запрещён. Только для администраторов.
       </div>
     );
   }

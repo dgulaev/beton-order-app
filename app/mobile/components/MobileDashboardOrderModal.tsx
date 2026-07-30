@@ -15,6 +15,14 @@ import {
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
 import OrderCommentsPanel from '@/app/adminCifra/components/OrderCommentsPanel';
+import ModalSelect from '@/app/adminCifra/components/ModalSelect';
+import { ORDER_MIXER_STATUSES } from '@/lib/mixerConfig';
+
+const MIXER_STATUS_OPTIONS = ORDER_MIXER_STATUSES.map((s) => ({
+  value: s,
+  label: s,
+  text: s,
+}));
 
 interface MobileOrderDetailModalProps {
   order: Order | null;
@@ -60,6 +68,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
     mixerAssignments,
     setAllOrders,
     currentUser,
+    handleStatusChange,
     deleteMixer,
     history: initialHistory,
     setHistory,
@@ -76,6 +85,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
   const role = (currentUser?.role || '').toLowerCase().trim();
   const isAdmin = role === 'admin';
   const canManageQuestionable = ['admin', 'manager', 'dispatcher', 'logist'].includes(role);
+  const canChangeMixerStatus = ['admin', 'manager', 'dispatcher', 'operator', 'logist'].includes(role);
 
   useBodyScrollLock(!!order);
 
@@ -352,19 +362,66 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
                 st === 'Разгружен' ? '#34D399' :
                 st === 'Проблема' ? '#EF4444' :
                 st === 'Возврат' ? '#94A3B8' : '#64748B';
+              const statusDisabled = !canChangeMixerStatus || isFinal;
               return (
                 <div key={mixer.id} style={volumeCardSoftStyle({
                   borderRadius: 12,
                   padding: '12px 10px',
                   marginBottom: '8px',
-                  display: 'grid',
-                  gridTemplateColumns: isAdmin ? '1fr auto auto' : '1fr auto',
-                  alignItems: 'center',
+                  display: 'flex',
+                  alignItems: 'flex-start',
                   gap: '8px',
                   borderLeft: `3px solid ${statusColor}`,
                 })}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: '14px', color: '#E2E8F0' }}>{mixer.mixerName || mixer.number || 'Миксер'}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        flexWrap: 'nowrap',
+                        minWidth: 0,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          fontSize: '14px',
+                          color: '#E2E8F0',
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {mixer.mixerName || mixer.number || 'Миксер'}
+                      </span>
+                      <ModalSelect
+                        value={st}
+                        disabled={statusDisabled}
+                        title={statusDisabled ? (isFinal ? 'Заявка завершена' : 'Нет прав') : 'Сменить статус рейса'}
+                        onChange={(status) => {
+                          void (async () => {
+                            await Promise.resolve(handleStatusChange(Number(mixer.id), status));
+                            await reloadHistory();
+                          })();
+                        }}
+                        chevronColor={statusColor}
+                        minPopupWidth={160}
+                        triggerStyle={{
+                          padding: '2px 6px',
+                          borderRadius: 9999,
+                          background: `${statusColor}18`,
+                          color: statusColor,
+                          border: `1px solid ${statusColor}40`,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          minWidth: 0,
+                          flexShrink: 0,
+                          whiteSpace: 'nowrap',
+                          lineHeight: 1.2,
+                        }}
+                        options={MIXER_STATUS_OPTIONS}
+                      />
+                    </div>
                     <div style={{ color: '#64748B', fontSize: '12px', marginTop: '2px' }}>{mixer.time}</div>
                     {onSite && (
                       <div style={{ marginTop: '6px', display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '9999px', background: hasDowntime ? '#F9731615' : 'rgba(51,65,85,0.15)', color: hasDowntime ? '#F97316' : '#64748B', fontSize: '12px' }}>
@@ -372,15 +429,9 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
                       </div>
                     )}
                   </div>
-                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: '16px', color: '#E2E8F0' }}>{Number(mixer.volume).toFixed(1)} м³</div>
-                    <div style={{
-                      marginTop: '4px', fontSize: '11px', fontWeight: 700, color: statusColor,
-                      display: 'inline-flex', alignItems: 'center', gap: '4px',
-                      padding: '2px 8px', borderRadius: '9999px',
-                      background: `${statusColor}18`, border: `1px solid ${statusColor}40`,
-                    }}>
-                      {st}
+                  <div style={{ textAlign: 'right', flexShrink: 0, paddingTop: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: '16px', color: '#E2E8F0', whiteSpace: 'nowrap' }}>
+                      {Number(mixer.volume).toFixed(1)} м³
                     </div>
                   </div>
                   {isAdmin ? (
@@ -395,6 +446,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
                       style={{
                         width: 22,
                         height: 22,
+                        marginTop: 1,
                         border: 'none',
                         background: 'transparent',
                         color: '#EF4444',

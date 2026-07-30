@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
       .eq('user_id', userId)
       .single();
 
-    if (!user || !['admin', 'manager'].includes(user.role)) {
+    if (!user || user.role !== 'admin') {
       console.warn(`[Withdrawals] Доступ запрещён для роли: ${user?.role}`);
       return NextResponse.json({ success: true, withdrawals: [] });
     }
@@ -60,9 +60,25 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// PATCH — отметить как выплачено (оставляем как было)
+// PATCH — отметить как выплачено (только admin)
 export async function PATCH(request: NextRequest) {
   try {
+    const userIdHeader = request.headers.get('x-user-id');
+    const userId = userIdHeader ? parseInt(userIdHeader, 10) : NaN;
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return NextResponse.json({ success: false, message: 'Доступ запрещён' }, { status: 403 });
+    }
+
+    const { data: user } = await supabase
+      .from('users')
+      .select('role')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (!user || user.role !== 'admin') {
+      return NextResponse.json({ success: false, message: 'Доступ запрещён' }, { status: 403 });
+    }
+
     const { id, status } = await request.json();
     if (!id) return NextResponse.json({ success: false, message: 'id required' }, { status: 400 });
 

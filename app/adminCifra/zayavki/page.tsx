@@ -36,6 +36,7 @@ import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
 import { InstantFieldHint, VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatRuDateWithWeekday, formatTimeHHMM, pluralWord } from '@/lib/ruLocale';
+import PageHelpButton from '@/app/adminCifra/components/help/PageHelpButton';
 import OrderCommentsPanel, { CommentUnreadBadge, orderModalTabStyle } from '@/app/adminCifra/components/OrderCommentsPanel';
 import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts';
 import FleetOpsTabs from '@/app/adminCifra/components/FleetOpsTabs';
@@ -1807,6 +1808,7 @@ ${order.customer_type?.includes('Юридическое')
         <Package size={26} color="#94A3B8" />
         Заявки
       </h1>
+      <PageHelpButton title="Инструкция по заявкам" />
     </div>
 
     {/* ==================== KPI — отдельные карточки по параметрам ==================== */}

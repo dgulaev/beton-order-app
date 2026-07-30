@@ -8,7 +8,7 @@ import WarehousePage from '../warehouse/page';
 import ReportsPage, { preloadReportsData } from '../reports/page';
 import RecipesPage, { type LabTab } from '../recipes/page';
 import { CARD_VOLUME_SOFT, MODAL_VOLUME_GLOW, modalCloseButtonStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
-import { UserCog, ChevronDown, UserRound, Truck } from 'lucide-react';
+import { UserCog, ChevronDown, UserRound, Truck, CircleHelp } from 'lucide-react';
 import ModalSelect from '../components/ModalSelect';
 import OperatorSilosBar from '../components/OperatorSilosBar';
 import OperatorMekaUploadCard from '../components/OperatorMekaUploadCard';
@@ -17,6 +17,7 @@ import SiloSwitchVolumeModal, {
   type SiloSwitchTrip,
 } from '../components/SiloSwitchVolumeModal';
 import { appAlert, appConfirm } from '../components/appDialog';
+import { useHelp } from '../components/help/HelpProvider';
 import { siloNameById } from '@/lib/siloConfig';
 import { formatRuDateWithWeekday, pluralRu } from '@/lib/ruLocale';
 import { findRecipeByGrade } from '@/lib/recipeAdditives';
@@ -202,6 +203,7 @@ export default function OperatorBSUPage() {
   // обезличенного имени общей учётки — так в истории заявки и логе
   // производства видно, кто конкретно выполнил действие.
   const { user } = useUserRole();
+  const { helpEnabled, openPageHelp } = useHelp();
   const operatorName = activeOperatorName || user?.full_name || user?.username || 'Оператор';
   const operatorRole = user?.role || 'operator';
   const showSiloReminder = shiftDataLoaded && activeSiloId == null;
@@ -1435,6 +1437,31 @@ export default function OperatorBSUPage() {
           </div>
         </div>
 
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        {helpEnabled && (
+          <button
+            type="button"
+            onClick={openPageHelp}
+            title="Инструкция оператора БСУ"
+            aria-label="Инструкция"
+            style={{
+              ...volumeCardSoftStyle({
+                padding: '10px 16px',
+                borderRadius: 9999,
+                color: '#E2E8F0',
+                fontWeight: 500,
+                fontSize: 14,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+              }),
+            }}
+          >
+            <CircleHelp size={18} />
+            Справка
+          </button>
+        )}
         {/* ==================== ПЕРЕКЛЮЧАТЕЛЬ "КТО НА СМЕНЕ" ==================== */}
         {/* Общая учётка на двоих (Семён/Максим) — выбор здесь не меняет логин,
             только подписывает будущие действия реальным именем и переключает
@@ -1562,6 +1589,7 @@ export default function OperatorBSUPage() {
             Кто сейчас за пультом — влияет на подпись в истории заявок
           </div>
         ) : null}
+        </div>
         </div>
       </div>
 

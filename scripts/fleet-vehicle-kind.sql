@@ -15,11 +15,12 @@ alter table public.mixers
     'dump_truck'::text,
     'tonar'::text,
     'cement_truck'::text,
-    'special'::text
+    'special'::text,
+    'tractor_unit'::text
   ]));
 
 comment on column public.mixers.vehicle_kind is
-  'Вид техники: mixer|dump_truck|tonar|cement_truck|special. Для бетонных рейсов используются только mixer.';
+  'Вид техники: mixer|dump_truck|tonar|cement_truck|special|tractor_unit. Для бетонных рейсов — только mixer.';
 
 comment on column public.mixers.specs is
   'Параметры по виду техники (грузоподъёмность, ковш, вылет стрелы и т.п.).';

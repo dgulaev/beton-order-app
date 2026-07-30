@@ -103,14 +103,54 @@ const loadData = async () => {
   const [questionableSaving, setQuestionableSaving] = useState(false);
   const [newMixerTime, setNewMixerTime] = useState(() => nowTimeHHMM());
   const [newMixerPick, setNewMixerPick] = useState('');
+  /** Сцепки + моноблоки для bulk; для бетона — пусто (берём allMixers). */
+  const [bulkAssignable, setBulkAssignable] = useState<any[]>([]);
+
+  const isBulkOrder = (order as any).order_type === 'bulk';
+  const bulkUnitLabel = bulkVolumeUnitLabel((order as any).fleet_vehicle_kind, {
+    code: order.grade,
+    name: order.grade,
+  });
 
   // Смена заявки — сброс вкладки и локального стейта
   useEffect(() => {
     setLocalOrder(order);
     setRightTab('logistics');
     setCommentUnread(initialCommentUnread);
+    setNewMixerPick('');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- только id; initialCommentUnread берём на момент открытия
   }, [order?.id]);
+
+  // Список сцепок / моноблоков для назначения на bulk-заявку
+  useEffect(() => {
+    if (!isBulkOrder) {
+      setBulkAssignable([]);
+      return;
+    }
+    const kind = String((order as any).fleet_vehicle_kind || '');
+    let cancelled = false;
+    (async () => {
+      try {
+        const qs =
+          kind === 'dump_truck'
+            ? 'assignable=1&trailer_kind=dump_truck'
+            : kind === 'tonar' || kind === 'cement_truck'
+              ? `assignable=1&trailer_kind=${kind}`
+              : 'assignable=1';
+        const res = await fetch(`/api/adminCifra/fleet-couples?${qs}`, {
+          headers: adminCifraAuthHeaders(),
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled) setBulkAssignable(Array.isArray(data.assignable) ? data.assignable : []);
+      } catch {
+        if (!cancelled) setBulkAssignable([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isBulkOrder, order?.id, (order as any).fleet_vehicle_kind]);
 
   // Актуальный бейдж с родителя (без сброса вкладки)
   useEffect(() => {
@@ -1060,7 +1100,9 @@ const formatVolume = (value: number | string) => {
           paddingTop: '10px',
           marginTop: '10px',
         }}>
-          <h4 style={{ color: '#94A3B8', marginBottom: '10px' }}>Добавить миксер</h4>
+          <h4 style={{ color: '#94A3B8', marginBottom: '10px' }}>
+            {isBulkOrder ? 'Добавить технику / сцепку' : 'Добавить миксер'}
+          </h4>
           
           <div style={{ 
             display: 'grid', 
@@ -1069,34 +1111,63 @@ const formatVolume = (value: number | string) => {
             alignItems: 'end' 
           }}>
     
-            {/* Выбор миксера из базы */}
+            {/* Выбор миксера / сцепки из базы */}
             <div>
               <label style={{ display: 'block', color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
-                Миксер
+                {isBulkOrder ? 'Сцепка / техника' : 'Миксер'}
               </label>
               <ModalSelect
                 value={newMixerPick}
-                placeholder="— Выберите миксер —"
+                placeholder={isBulkOrder ? '— Выберите сцепку —' : '— Выберите миксер —'}
                 style={{ padding: '14px', borderRadius: 12, fontSize: '15px' }}
                 onChange={(val) => {
                   setNewMixerPick(val);
                   const nameEl = document.getElementById('mixerName') as HTMLInputElement | null;
+                  const volEl = document.getElementById('mixerVolume') as HTMLInputElement | null;
                   if (!nameEl) return;
                   if (val === 'custom' || !val) {
                     nameEl.value = '';
                     return;
                   }
+                  if (isBulkOrder) {
+                    const selected = bulkAssignable.find((x) => x.value === val);
+                    if (selected) {
+                      // Сцепка — полная подпись; моноблок — госномер
+                      nameEl.value =
+                        selected.type === 'couple'
+                          ? selected.label || selected.number || ''
+                          : selected.number || '';
+                      if (volEl && selected.volume != null) {
+                        volEl.value = String(selected.volume);
+                      }
+                    }
+                    return;
+                  }
                   const selected = allMixers.find(m => m.id === Number(val));
-                  if (selected) nameEl.value = selected.number;
+                  if (selected) {
+                    nameEl.value = selected.number;
+                    if (volEl && selected.volume != null) volEl.value = String(selected.volume);
+                  }
                 }}
-                options={[
-                  ...allMixers.map((mixer) => ({
-                    value: String(mixer.id),
-                    label: `${mixer.number} — ${mixer.model} (${mixer.volume} м³)${mixer.driver ? ` · ${mixer.driver}` : ''}`,
-                    text: `${mixer.number} — ${mixer.model}`,
-                  })),
-                  { value: 'custom', label: 'Другой (ввести вручную)', text: 'Другой (ввести вручную)' },
-                ]}
+                options={
+                  isBulkOrder
+                    ? [
+                        ...bulkAssignable.map((item) => ({
+                          value: String(item.value),
+                          label: item.label,
+                          text: item.label,
+                        })),
+                        { value: 'custom', label: 'Другой (ввести вручную)', text: 'Другой (ввести вручную)' },
+                      ]
+                    : [
+                        ...allMixers.map((mixer) => ({
+                          value: String(mixer.id),
+                          label: `${mixer.number} — ${mixer.model} (${mixer.volume} м³)${mixer.driver ? ` · ${mixer.driver}` : ''}`,
+                          text: `${mixer.number} — ${mixer.model}`,
+                        })),
+                        { value: 'custom', label: 'Другой (ввести вручную)', text: 'Другой (ввести вручную)' },
+                      ]
+                }
               />
             </div>
 
@@ -1138,7 +1209,7 @@ const formatVolume = (value: number | string) => {
             {/* Объём */}
             <div>
               <label style={{ display: 'block', color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
-                м³
+                {isBulkOrder ? bulkUnitLabel : 'м³'}
               </label>
               <input 
                 type="number" 
@@ -1166,7 +1237,11 @@ const formatVolume = (value: number | string) => {
 
               // ← Обязательная проверка времени
                  if (!name || !time || vol <= 0) {
-                 alert('Пожалуйста, заполните все обязательные поля:\n• Название миксера\n• Время погрузки\n• Объём');
+                 alert(
+                   isBulkOrder
+                     ? `Заполните обязательные поля:\n• Сцепка / номер\n• Время погрузки\n• Объём (${bulkUnitLabel})`
+                     : 'Пожалуйста, заполните все обязательные поля:\n• Название миксера\n• Время погрузки\n• Объём',
+                 );
                  return;
               }
 
@@ -1183,6 +1258,18 @@ const formatVolume = (value: number | string) => {
     // (б) запишет историю добавления миксера,
     // (в) при необходимости автоматически переведёт заявку "Новая → В работе"
     // и тоже запишет это в историю — от имени "Системы", а не сотрудника.
+    const assignMeta: Record<string, unknown> = {};
+    if (isBulkOrder && newMixerPick && newMixerPick !== 'custom') {
+      const picked = bulkAssignable.find((x) => x.value === newMixerPick);
+      if (picked?.type === 'couple') {
+        assignMeta.couple_id = picked.couple_id;
+        assignMeta.tractor_id = picked.tractor_id;
+        assignMeta.trailer_id = picked.trailer_id;
+      } else if (picked?.type === 'monoblock') {
+        assignMeta.trailer_id = picked.trailer_id || picked.id;
+      }
+    }
+
     const res = await fetch('/api/adminCifra/order-mixers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1194,7 +1281,8 @@ const formatVolume = (value: number | string) => {
         sortOrder: newSortOrder,
         status: 'Загрузка',
         userName: getCurrentUserName(),
-        userRole: getCurrentRole()
+        userRole: getCurrentRole(),
+        ...assignMeta,
       })
     });
 

@@ -27,6 +27,7 @@ import FleetOpsTabs from '../components/FleetOpsTabs';
 import type { VehicleKind } from '@/lib/fleetCatalog';
 import { fleetInWorkLabel, orderMatchesFleetTab } from '@/lib/orderLogistics';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import PageHelpButton from '../components/help/PageHelpButton';
 
 export default function AdminCifraDashboard() {
 
@@ -220,7 +221,8 @@ const getStatusRussian = (status: string): string => {
 
  // ==================== 6. УВЕДОМЛЕНИЯ О ВЫВОДЕ НАЛИЧНЫХ ==========================
 const fetchNotifications = async () => {
-  if (!['admin', 'manager'].includes(userRole || '')) {
+  // Плашка выводов — только admin (меню скрыто, страница оставлена на потом).
+  if (userRole !== 'admin') {
     setNotifications([]);
     return;
   }
@@ -1223,7 +1225,8 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   </div>
 
          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', height: 26, flexShrink: 0 }}>
-  {(userRole === 'admin' || userRole === 'manager') && notifications.length > 0 && (
+  <PageHelpButton compact title="Инструкция по диспетчерской" />
+  {userRole === 'admin' && notifications.length > 0 && (
     <div 
       style={{ 
         background: '#EF4444', 

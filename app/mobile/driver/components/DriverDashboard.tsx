@@ -5,7 +5,8 @@
 // доставки, статусы "На объекте"/"Разгружен" отправляются на сервер.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { LogOut, Clock, MapPin, Package, ChevronRight, Bell, Phone } from 'lucide-react';
+import { LogOut, Clock, MapPin, Package, ChevronRight, Bell, Phone, CircleHelp } from 'lucide-react';
+import { useHelp } from '@/app/adminCifra/components/help/HelpProvider';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { driverFetch, DriverMixerInfo, DriverTrip } from '../driverClient';
@@ -93,6 +94,7 @@ const STATUS_STYLE: Record<string, { label: string; color: string; bg: string }>
 
 export default function DriverDashboard({ mixer, onLogout, readOnly = false, onBack, tripsFetcher }: Props) {
   const HISTORY_PAGE = 20;
+  const { helpEnabled, openPageHelp } = useHelp();
 
   const [tab, setTab] = useState<Tab>('today');
   const [todayTrips, setTodayTrips] = useState<DriverTrip[]>([]);
@@ -740,47 +742,71 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
               </div>
             )}
           </div>
-          {readOnly ? (
-            <button
-              onClick={onBack}
-              aria-label="Назад"
-              title="Вернуться в список миксеров"
-              style={volumeCardSoftStyle({
-                borderRadius: 9999,
-                padding: '0 14px',
-                height: 40,
-                color: '#60A5FA',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                fontSize: '13px',
-                fontWeight: 600,
-                flexShrink: 0,
-              })}
-            >
-              ← Назад
-            </button>
-          ) : (
-            <button
-              onClick={onLogout}
-              aria-label="Выйти"
-              title="Выйти / сменить пользователя"
-              style={volumeCardSoftStyle({
-                borderRadius: 9999,
-                width: 40,
-                height: 40,
-                minWidth: 40,
-                color: '#94A3B8',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-                padding: 0,
-              })}
-            >
-              <LogOut size={18} />
-            </button>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {helpEnabled && !readOnly && (
+              <button
+                type="button"
+                onClick={openPageHelp}
+                aria-label="Инструкция"
+                title="Инструкция для водителя"
+                style={volumeCardSoftStyle({
+                  borderRadius: 9999,
+                  width: 40,
+                  height: 40,
+                  minWidth: 40,
+                  color: '#E2E8F0',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  padding: 0,
+                })}
+              >
+                <CircleHelp size={18} />
+              </button>
+            )}
+            {readOnly ? (
+              <button
+                onClick={onBack}
+                aria-label="Назад"
+                title="Вернуться в список миксеров"
+                style={volumeCardSoftStyle({
+                  borderRadius: 9999,
+                  padding: '0 14px',
+                  height: 40,
+                  color: '#60A5FA',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  flexShrink: 0,
+                })}
+              >
+                ← Назад
+              </button>
+            ) : (
+              <button
+                onClick={onLogout}
+                aria-label="Выйти"
+                title="Выйти / сменить пользователя"
+                style={volumeCardSoftStyle({
+                  borderRadius: 9999,
+                  width: 40,
+                  height: 40,
+                  minWidth: 40,
+                  color: '#94A3B8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  padding: 0,
+                })}
+              >
+                <LogOut size={18} />
+              </button>
+            )}
+          </div>
         </div>
 
         {readOnly && (

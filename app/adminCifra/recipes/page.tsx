@@ -9,8 +9,9 @@ import ProductsTab from './components/ProductsTab';
 import LabSettingsModal from './components/LabSettingsModal';
 import WarehousePage from '../warehouse/page';
 import { useRealtimeOrders, useOrderChangeNotifications } from '../../../hooks/useRealtimeOrders';
-import { FlaskConical } from 'lucide-react';
+import { CircleHelp, FlaskConical } from 'lucide-react';
 import { isFbs } from './productCatalog';
+import { useHelp } from '../components/help/HelpProvider';
 
 export type LabTab = 'orders' | 'specifications' | 'recipes' | 'tests' | 'warehouse';
 
@@ -42,6 +43,7 @@ export default function LaboratoryPage({
   onTabChange,
   openRequisitesKey = 0,
 }: LaboratoryPageProps) {
+  const { helpEnabled, openPageHelp } = useHelp();
   const [internalTab, setInternalTab] = useState<LabTab>('orders');
   const tab = controlledTab ?? internalTab;
   const setTab = (next: LabTab) => {
@@ -294,14 +296,28 @@ export default function LaboratoryPage({
   );
 
   const requisitesBtn = (
-    <button
-      type="button"
-      onClick={() => setShowLabSettings(true)}
-      style={ghostButton}
-      title="Свидетельство, декларации и QR Росаккредитации"
-    >
-      Реквизиты
-    </button>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {helpEnabled && (
+        <button
+          type="button"
+          onClick={openPageHelp}
+          style={ghostButton}
+          title="Инструкция по лаборатории"
+          aria-label="Инструкция"
+        >
+          <CircleHelp size={18} />
+          Справка
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => setShowLabSettings(true)}
+        style={ghostButton}
+        title="Свидетельство, декларации и QR Росаккредитации"
+      >
+        Реквизиты
+      </button>
+    </div>
   );
 
   return (

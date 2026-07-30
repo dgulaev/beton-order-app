@@ -91,10 +91,23 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST — добавить миксер к заказу
+// POST — добавить миксер / сцепку к заказу
 export async function POST(request: NextRequest) {
   try {
-    const { orderId, mixerName, time, volume, sortOrder, status, userName, userRole } = await request.json();
+    const body = await request.json();
+    const {
+      orderId,
+      mixerName,
+      time,
+      volume,
+      sortOrder,
+      status,
+      userName,
+      userRole,
+      couple_id: coupleIdRaw,
+      tractor_id: tractorIdRaw,
+      trailer_id: trailerIdRaw,
+    } = body;
 
     if (!orderId || !mixerName || !time || volume === undefined) {
       return NextResponse.json({ error: 'Не все обязательные поля заполнены' }, { status: 400 });
@@ -117,18 +130,61 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    const { data, error } = await supabase
+    let couple_id = Number(coupleIdRaw) > 0 ? Number(coupleIdRaw) : null;
+    let tractor_id = Number(tractorIdRaw) > 0 ? Number(tractorIdRaw) : null;
+    let trailer_id = Number(trailerIdRaw) > 0 ? Number(trailerIdRaw) : null;
+
+    // Снимок сцепки: если передали couple_id — сверить с активной записью
+    // (защита от устаревшего UI / ручного POST).
+    if (couple_id) {
+      const { data: coupleRow } = await supabase
+        .from('fleet_couples')
+        .select('id, tractor_id, trailer_id, active')
+        .eq('id', couple_id)
+        .maybeSingle();
+      if (!coupleRow || coupleRow.active !== true) {
+        return NextResponse.json(
+          { error: 'Сцепка уже не активна — обновите список и выберите снова' },
+          { status: 400 },
+        );
+      }
+      tractor_id = Number(coupleRow.tractor_id);
+      trailer_id = Number(coupleRow.trailer_id);
+    }
+
+    const insertRow: Record<string, unknown> = {
+      order_id: orderId,
+      mixer_name: mixerName,
+      time: time,
+      volume: volume,
+      sort_order: sortOrder || 0,
+      status: status || 'Загрузка',
+    };
+    if (couple_id) insertRow.couple_id = couple_id;
+    if (tractor_id) insertRow.tractor_id = tractor_id;
+    if (trailer_id) insertRow.trailer_id = trailer_id;
+
+    let { data, error } = await supabase
       .from('order_mixers')
-      .insert([{
-        order_id: orderId,
-        mixer_name: mixerName,
-        time: time,
-        volume: volume,
-        sort_order: sortOrder || 0,
-        status: status || 'Загрузка'        // ← Теперь используем переданное значение
-      }])
+      .insert([insertRow])
       .select()
       .single();
+
+    // Колонки сцепки ещё не накатили — повторяем без них
+    if (
+      error &&
+      /couple_id|tractor_id|trailer_id|column/i.test(error.message || '')
+    ) {
+      const { couple_id: _c, tractor_id: _t, trailer_id: _tr, ...legacy } = insertRow;
+      void _c;
+      void _t;
+      void _tr;
+      ({ data, error } = await supabase
+        .from('order_mixers')
+        .insert([legacy])
+        .select()
+        .single());
+    }
 
     if (error) throw error;
 

@@ -20,6 +20,7 @@ import {
   Save,
   Info,
   Gavel,
+  BookOpen,
 } from 'lucide-react';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
@@ -40,6 +41,7 @@ import {
 import type { LoadingPoint } from '@/lib/loadingPoints';
 import { setRouteOriginCoordsOverride } from '@/lib/geocodeAddress';
 import { setRouteOriginAddressOverride } from '@/lib/bryanskAddress';
+import HelpSettingsTab from './HelpSettingsTab';
 
 const SECTIONS = [
   { id: 'delivery', label: 'Доставка и тарифы', icon: Truck },
@@ -47,6 +49,7 @@ const SECTIONS = [
   { id: 'integrations', label: 'Интеграции', icon: Cable },
   { id: 'loading', label: 'Точки погрузки', icon: MapPin },
   { id: 'staff', label: 'Сотрудники / торги', icon: Users },
+  { id: 'help', label: 'Инструкции', icon: BookOpen },
   { id: 'notifications', label: 'Уведомления', icon: Bell },
   { id: 'plant', label: 'Завод / гео', icon: Factory },
   { id: 'logistics', label: 'Нормы логистики', icon: Timer },
@@ -471,6 +474,15 @@ export default function SettingsPage() {
               action={<LinkPill href="/adminCifra/recipes" label="Открыть лабораторию" />}
             >
               <LabSettingsForm embedded />
+            </SectionCard>
+          )}
+
+          {active === 'help' && (
+            <SectionCard
+              title="Инструкции для сотрудников"
+              hint="Тексты справки «?» и онбординга. Дефолты в коде; сохранённые здесь переопределяют их. Если сохранение падает — в Supabase выполни NOTIFY pgrst, 'reload schema';."
+            >
+              <HelpSettingsTab />
             </SectionCard>
           )}
 

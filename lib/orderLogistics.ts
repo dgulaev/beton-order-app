@@ -81,8 +81,13 @@ export function orderFleetKind(order: {
   fleet_vehicle_kind?: string | null;
 }): VehicleKind {
   const type = normalizeOrderType(order.order_type);
-  if (type === 'bulk' && isVehicleKind(order.fleet_vehicle_kind)) {
-    return order.fleet_vehicle_kind;
+  const kind = order.fleet_vehicle_kind;
+  if (
+    type === 'bulk' &&
+    isVehicleKind(kind) &&
+    (BULK_VEHICLE_KINDS as readonly string[]).includes(kind)
+  ) {
+    return kind;
   }
   return 'mixer';
 }
@@ -99,6 +104,7 @@ export function fleetInWorkLabel(kind: VehicleKind): string {
   if (kind === 'dump_truck') return 'Самосвалы в работе';
   if (kind === 'tonar') return 'Тоннары в работе';
   if (kind === 'cement_truck') return 'Цементовозы в работе';
+  if (kind === 'tractor_unit') return 'Головы в работе';
   return `${meta.label} в работе`;
 }
 

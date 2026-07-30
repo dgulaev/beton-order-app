@@ -1,9 +1,16 @@
 /**
  * Справочник видов техники и шаблонов моделей (Фаза 1 «Техника»).
  * ownership по-прежнему в колонке mixers.type: own | rented.
+ * Головы (tractor_unit) + сцепки с прицепами — см. fleet_couples / formatCoupleLabel.
  */
 
-export type VehicleKind = 'mixer' | 'dump_truck' | 'tonar' | 'cement_truck' | 'special';
+export type VehicleKind =
+  | 'mixer'
+  | 'dump_truck'
+  | 'tonar'
+  | 'cement_truck'
+  | 'special'
+  | 'tractor_unit';
 
 export type Ownership = 'own' | 'rented';
 
@@ -20,7 +27,7 @@ export type SpecField = {
 
 export type ModelTemplate = {
   model: string;
-  /** Подставляется в volume (для миксера — м³, для остальных часто дублирует payload) */
+  /** Колонка mixers.volume; для bulk-видов зеркалится в specs (см. VOLUME_MIRROR_SPEC_KEY) */
   volume?: number;
   specs?: Record<string, string | number>;
 };
@@ -37,8 +44,16 @@ export const VEHICLE_KINDS: {
   { key: 'dump_truck', label: 'Самосвалы', singular: 'Самосвал', addLabel: '+ Добавить самосвал', volumeLabel: 'Объём кузова', volumeUnit: 'м³' },
   { key: 'tonar', label: 'Тоннары', singular: 'Тоннар', addLabel: '+ Добавить тоннар', volumeLabel: 'Грузоподъёмность', volumeUnit: 'т' },
   { key: 'cement_truck', label: 'Цементовозы', singular: 'Цементовоз', addLabel: '+ Добавить цементовоз', volumeLabel: 'Ёмкость', volumeUnit: 'т' },
+  { key: 'tractor_unit', label: 'Головы', singular: 'Голова', addLabel: '+ Добавить голову', volumeLabel: '—', volumeUnit: '' },
   { key: 'special', label: 'Спецтехника', singular: 'Спецтехника', addLabel: '+ Добавить технику', volumeLabel: 'Грузоподъёмность', volumeUnit: 'т' },
 ];
+
+/** Виды прицепов, которые можно сцеплять с головой. */
+export const TRAILER_KINDS: VehicleKind[] = ['tonar', 'cement_truck'];
+
+export function isTrailerKind(v: unknown): v is VehicleKind {
+  return v === 'tonar' || v === 'cement_truck';
+}
 
 export function vehicleKindMeta(kind: VehicleKind) {
   return VEHICLE_KINDS.find((k) => k.key === kind) || VEHICLE_KINDS[0];
@@ -48,9 +63,20 @@ export function isVehicleKind(v: unknown): v is VehicleKind {
   return VEHICLE_KINDS.some((k) => k.key === v);
 }
 
+/**
+ * Spec-ключ, который дублирует колонку mixers.volume (и подпись volumeLabel).
+ * В форме не показываем — volume остаётся единственным полем; в specs пишем при сохранении.
+ */
+export const VOLUME_MIRROR_SPEC_KEY: Partial<Record<VehicleKind, string>> = {
+  dump_truck: 'body_volume_m3',
+  tonar: 'payload_tons',
+  cement_truck: 'capacity_tons',
+};
+
 /** Поля specs по виду техники. */
 export const SPEC_FIELDS_BY_KIND: Record<VehicleKind, SpecField[]> = {
   mixer: [],
+  tractor_unit: [],
   dump_truck: [
     { key: 'payload_tons', label: 'Грузоподъёмность', type: 'number', unit: 'т', placeholder: '25' },
     { key: 'body_volume_m3', label: 'Объём кузова', type: 'number', unit: 'м³', placeholder: '16' },
@@ -82,12 +108,28 @@ export const SPEC_FIELDS_BY_KIND: Record<VehicleKind, SpecField[]> = {
   ],
 };
 
-/** Какие поля specs показывать для спецтехники с учётом subtype. */
+/** Записать volume в зеркальный ключ specs (чтобы JSON и колонка не расходились). */
+export function syncVolumeIntoSpecs(
+  kind: VehicleKind,
+  volume: number | string | null | undefined,
+  specs: Record<string, any> | null | undefined,
+): Record<string, any> {
+  const out: Record<string, any> = { ...(specs && typeof specs === 'object' ? specs : {}) };
+  const mirrorKey = VOLUME_MIRROR_SPEC_KEY[kind];
+  if (!mirrorKey) return out;
+  const n = Number(volume);
+  if (Number.isFinite(n)) out[mirrorKey] = n;
+  return out;
+}
+
+/** Какие поля specs показывать в форме (без дубля volume). */
 export function visibleSpecFields(kind: VehicleKind, specs: Record<string, any> | null | undefined): SpecField[] {
   const all = SPEC_FIELDS_BY_KIND[kind] || [];
-  if (kind !== 'special') return all;
+  const mirrorKey = VOLUME_MIRROR_SPEC_KEY[kind];
+  const withoutMirror = mirrorKey ? all.filter((f) => f.key !== mirrorKey) : all;
+  if (kind !== 'special') return withoutMirror;
   const subtype = String(specs?.subtype || 'other');
-  return all.filter((f) => {
+  return withoutMirror.filter((f) => {
     if (f.key === 'subtype') return true;
     if (subtype === 'loader') return f.key === 'lift_kg' || f.key === 'bucket_m3';
     if (subtype === 'manipulator') return f.key === 'lift_kg' || f.key === 'boom_reach_m';
@@ -115,15 +157,30 @@ export const MODEL_TEMPLATES: Record<VehicleKind, ModelTemplate[]> = {
     { model: 'Shacman F3000', volume: 25, specs: { payload_tons: 25, body_volume_m3: 25, axle_count: 4 } },
   ],
   tonar: [
+    // Прицеп под сцепку с головой (водитель не нужен)
+    { model: 'Тоннар (прицеп)', volume: 40, specs: { payload_tons: 40, length_m: 13.6 } },
+    { model: 'Тоннар 33 т (прицеп)', volume: 33, specs: { payload_tons: 33, length_m: 12 } },
+    { model: 'Тоннар 45 т (прицеп)', volume: 45, specs: { payload_tons: 45, length_m: 13.6 } },
     { model: 'Тонар-9523', volume: 40, specs: { payload_tons: 40, length_m: 13.6 } },
     { model: 'Тонар-95234', volume: 45, specs: { payload_tons: 45, length_m: 13.6 } },
     { model: 'Тонар-9989', volume: 33, specs: { payload_tons: 33, length_m: 12 } },
   ],
   cement_truck: [
-    { model: 'КАМАЗ 65115 Ц', volume: 14, specs: { capacity_tons: 14, compartments: 1 } },
-    { model: 'КАМАЗ 6520 Ц', volume: 20, specs: { capacity_tons: 20, compartments: 1 } },
-    { model: 'МАЗ цементовоз', volume: 30, specs: { capacity_tons: 30, compartments: 2 } },
-    { model: 'Howo цементовоз', volume: 35, specs: { capacity_tons: 35, compartments: 2 } },
+    // Чистая бочка-прицеп под сцепку с головой (водитель не нужен)
+    { model: 'Бочка (прицеп)', volume: 30, specs: { capacity_tons: 30, compartments: 1 } },
+    { model: 'Бочка 20 т (прицеп)', volume: 20, specs: { capacity_tons: 20, compartments: 1 } },
+    { model: 'Бочка 32 т (прицеп)', volume: 32, specs: { capacity_tons: 32, compartments: 2 } },
+    // Моноблок — машина целиком (есть свой водитель), без головы
+    { model: 'КАМАЗ 65115 Ц (моноблок)', volume: 14, specs: { capacity_tons: 14, compartments: 1 } },
+    { model: 'КАМАЗ 6520 Ц (моноблок)', volume: 20, specs: { capacity_tons: 20, compartments: 1 } },
+    { model: 'МАЗ цементовоз (моноблок)', volume: 30, specs: { capacity_tons: 30, compartments: 2 } },
+    { model: 'Howo цементовоз (моноблок)', volume: 35, specs: { capacity_tons: 35, compartments: 2 } },
+  ],
+  tractor_unit: [
+    { model: 'SITRAK', volume: 0 },
+    { model: 'Volvo', volume: 0 },
+    { model: 'КАМАЗ тягач', volume: 0 },
+    { model: 'МАЗ тягач', volume: 0 },
   ],
   special: [
     { model: 'Амкодор 342С', volume: 3, specs: { subtype: 'loader', lift_kg: 3400, bucket_m3: 1.7 } },
@@ -161,4 +218,32 @@ export function formatSpecsSummary(kind: VehicleKind, specs: Record<string, any>
     parts.push(`${f.label}: ${v}${f.unit ? ` ${f.unit}` : ''}`);
   }
   return parts.join(' · ');
+}
+
+/** Короткая подпись прицепа для сцепки: «бочка 30 т» / «тоннар 40 т». */
+export function trailerKindShortLabel(kind: string | null | undefined, volume?: number | null): string {
+  const vol = Number(volume);
+  const volPart = Number.isFinite(vol) && vol > 0 ? ` ${String(vol).replace(/\.0+$/, '')} т` : '';
+  if (kind === 'cement_truck') return `бочка${volPart}`;
+  if (kind === 'tonar') return `тоннар${volPart}`;
+  return `прицеп${volPart}`;
+}
+
+/** Подпись сцепки: «SITRAK K123AB32 + бочка 30 т». */
+export function formatCoupleLabel(opts: {
+  tractorModel?: string | null;
+  tractorNumber?: string | null;
+  trailerKind?: string | null;
+  trailerVolume?: number | null;
+  trailerNumber?: string | null;
+}): string {
+  const head = [opts.tractorModel, opts.tractorNumber].filter(Boolean).join(' ').trim() || 'Голова';
+  const trailer = trailerKindShortLabel(opts.trailerKind, opts.trailerVolume);
+  const trailerNum = opts.trailerNumber ? ` (${opts.trailerNumber})` : '';
+  return `${head} + ${trailer}${trailerNum}`;
+}
+
+/** Нужны ли водитель/телефон для вида (прицеп-бочка может быть без водителя). */
+export function vehicleRequiresDriver(kind: VehicleKind): boolean {
+  return kind === 'mixer' || kind === 'tractor_unit' || kind === 'dump_truck' || kind === 'special';
 }

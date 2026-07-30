@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useState, type CSSProperties } from '
 import { Radar, RefreshCw, ExternalLink, MessageSquare } from 'lucide-react';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
+import PageHelpButton from '../components/help/PageHelpButton';
 import { DEMAND_STATUS_LABEL, demandSourceLabel } from '@/lib/demand/labels';
 import { canProcessTenders } from '@/lib/demandProcessAccess';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -299,6 +300,7 @@ function DemandPageInner() {
             Demand Radar — тендеры и запросы на бетон
           </p>
         </div>
+        <PageHelpButton title="Инструкция по продажам" />
         <button
           type="button"
           onClick={() => void runRadar()}

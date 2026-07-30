@@ -6,10 +6,10 @@
  * Формат версии: MAJOR.MINOR.PATCH (старт с 1.0.1).
  * При каждом деплое поднимается PATCH: 1.0.1 → 1.0.2 → …
  */
-export const BUILD_VERSION = '1.0.5';
+export const BUILD_VERSION = '1.0.6';
 
 /** Дата/время сборки в формате ДД.ММ.ГГГГ ЧЧ:ММ (Москва). Пишется при деплое целиком. */
-export const BUILD_AT = '30.07.2026 00:13';
+export const BUILD_AT = '30.07.2026 09:16';
 
 /** Короткий ярлык: «v1.0.1» */
 export function formatBuildVersion(): string {

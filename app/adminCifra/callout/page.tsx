@@ -23,6 +23,7 @@ import { formatPhoneDisplay, formatPhoneInput, normalizePhone } from '@/lib/phon
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
 import AdminPagination from '../components/AdminPagination';
 import { appConfirm } from '../components/appDialog';
+import PageHelpButton from '../components/help/PageHelpButton';
 import styles from './callout.module.css';
 
 type Prospect = {
@@ -658,6 +659,7 @@ export default function CalloutPage() {
           </p>
         </div>
         <div className={styles.headerActions}>
+          <PageHelpButton title="Инструкция по продажам" />
           <input
             ref={fileRef}
             type="file"

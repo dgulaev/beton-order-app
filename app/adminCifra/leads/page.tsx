@@ -38,6 +38,7 @@ import {
 import { useRealtimeLeads } from '@/hooks/useRealtimeLeads';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
 import NewOrderModal from '../components/NewOrderModal';
+import PageHelpButton from '../components/help/PageHelpButton';
 import ModalSelect from '../components/ModalSelect';
 import { appConfirm } from '../components/appDialog';
 import { useUserRole } from '../../providers/UserRoleProvider';
@@ -817,6 +818,7 @@ function LeadsPageInner() {
           </p>
         </div>
         <div className={styles.headerActions}>
+          <PageHelpButton title="Инструкция по продажам" />
           {allowTenderProcess && (
             <button type="button" onClick={openCreateModal} style={btnPrimary}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>

@@ -2,7 +2,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
-import { isVehicleKind, type VehicleKind } from '@/lib/fleetCatalog';
+import {
+  isVehicleKind,
+  syncVolumeIntoSpecs,
+  vehicleRequiresDriver,
+  type VehicleKind,
+} from '@/lib/fleetCatalog';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -84,14 +89,22 @@ export async function POST(request: NextRequest) {
     } = body;
 
     const vehicle_kind: VehicleKind = isVehicleKind(rawKind) ? rawKind : 'mixer';
-    const specs =
-      rawSpecs && typeof rawSpecs === 'object' && !Array.isArray(rawSpecs) ? rawSpecs : {};
+    const specs = syncVolumeIntoSpecs(
+      vehicle_kind,
+      volume,
+      rawSpecs && typeof rawSpecs === 'object' && !Array.isArray(rawSpecs) ? rawSpecs : {},
+    );
 
-    if (!number || !driver) {
-      return NextResponse.json({ error: 'Номер и водитель обязательны' }, { status: 400 });
+    if (!number) {
+      return NextResponse.json({ error: 'Госномер обязателен' }, { status: 400 });
     }
 
-    if (!phone || !String(phone).trim()) {
+    const needsDriver = vehicleRequiresDriver(vehicle_kind);
+    if (needsDriver && !driver) {
+      return NextResponse.json({ error: 'Водитель обязателен' }, { status: 400 });
+    }
+
+    if (needsDriver && (!phone || !String(phone).trim())) {
       return NextResponse.json(
         { error: 'Телефон водителя обязателен — по нему водитель входит в мобильное приложение' },
         { status: 400 }
@@ -129,14 +142,14 @@ export async function POST(request: NextRequest) {
     const payload = {
       number,
       model: model || '',
-      driver,
-      phone,
-      volume: Number(volume) || 0,
+      driver: driver || '',
+      phone: phone ? String(phone).trim() : '',
+      volume: vehicle_kind === 'tractor_unit' ? 0 : Number(volume) || 0,
       type,
       status: status || 'Доступен',
       unload_allowance_min: normalizedAllowance,
       vehicle_kind,
-      specs,
+      specs: vehicle_kind === 'tractor_unit' ? {} : specs,
       updated_at: new Date().toISOString(),
     };
 

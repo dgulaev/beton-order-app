@@ -488,6 +488,62 @@ useWakeRefresh(() => {
     return { ownActive: own, rentedActive: rented };
   }, [uniqueDayMixers, allMixersList]);
 
+  /** Смена статуса рейса миксера в модалке заявки. */
+  const handleMixerStatusChange = useCallback(async (mixerId: number, newStatus: string) => {
+    const oldMixer = mixerAssignments.find((m) => String(m.id) === String(mixerId));
+    const oldStatus = oldMixer?.status || 'Загрузка';
+    if (oldStatus === newStatus) return;
+
+    setMixerAssignments((prev) =>
+      prev.map((m) => (String(m.id) === String(mixerId) ? { ...m, status: newStatus } : m)),
+    );
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (userId) headers['x-user-id'] = String(userId);
+
+      const res = await fetch('/api/adminCifra/order-mixers/status', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          id: mixerId,
+          status: newStatus,
+          userName: user?.full_name || user?.username || 'Диспетчер',
+          userRole: userRole || 'admin',
+          expectedStatus: oldStatus,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Не удалось изменить статус миксера');
+      }
+
+      if (data.data) {
+        setMixerAssignments((prev) =>
+          prev.map((m) =>
+            String(m.id) === String(mixerId)
+              ? {
+                  ...m,
+                  onSiteAt: data.data.onSiteAt ?? m.onSiteAt,
+                  unloadedAt: data.data.unloadedAt ?? m.unloadedAt,
+                  downtimeMinutes: data.data.downtimeMinutes ?? m.downtimeMinutes,
+                }
+              : m,
+          ),
+        );
+      }
+    } catch (err: any) {
+      setMixerAssignments((prev) =>
+        prev.map((m) => (String(m.id) === String(mixerId) ? { ...m, status: oldStatus } : m)),
+      );
+      await appAlert(err?.message || 'Не удалось изменить статус миксера', {
+        title: 'Статус рейса',
+        variant: 'danger',
+      });
+    }
+  }, [mixerAssignments, userId, user?.full_name, user?.username, userRole]);
+
   /** Удаление рейса в мобильной админке — только admin (в т.ч. уже отгруженные). */
   const deleteMixer = useCallback(async (mixerId: number, _index: number) => {
     if (!mixerId) return;
@@ -1298,7 +1354,7 @@ useWakeRefresh(() => {
           setAllOrders={setAllOrders}
           allMixers={activeMixers}
           currentUser={{ id: userId || 0, name: user?.full_name || '', role: userRole }}
-          handleStatusChange={() => {}}
+          handleStatusChange={handleMixerStatusChange}
           deleteMixer={deleteMixer}
           history={[]}
           addToHistory={async () => {}}

@@ -22,6 +22,7 @@ import {
   DriverMixerInfo,
 } from './driver/driverClient';
 import DriverDashboard from './driver/components/DriverDashboard';
+import HelpProvider from '@/app/adminCifra/components/help/HelpProvider';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
 import './globals.css';
@@ -421,10 +422,18 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
 
   // ==================== 11. ДАШБОРД ВОДИТЕЛЯ ====================
   if (driverMixer) {
+    const driverSession = getStoredDriverSession();
+    const driverStorageKey = driverSession
+      ? `driver:${driverSession.phone}:${driverSession.number}`
+      : `driver:mixer:${driverMixer.number}`;
     return (
       <>
         <AppDialogHost />
-        <DriverDashboard mixer={driverMixer} onLogout={handleSwitchUser} />
+        <HelpProvider
+          identity={{ role: 'driver', storageKey: driverStorageKey }}
+        >
+          <DriverDashboard mixer={driverMixer} onLogout={handleSwitchUser} />
+        </HelpProvider>
       </>
     );
   }

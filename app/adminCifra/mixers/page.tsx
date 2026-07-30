@@ -8,6 +8,7 @@ import { useUserRole } from '../../providers/UserRoleProvider';
 import { Truck } from 'lucide-react';
 import { modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import { appConfirm } from '../components/appDialog';
+import PageHelpButton from '../components/help/PageHelpButton';
 import AdminPagination from '../components/AdminPagination';
 import ViewModeToggle, { LIST_GRID_OPTIONS } from '../components/ViewModeToggle';
 import ModalSelect from '../components/ModalSelect';
@@ -16,9 +17,13 @@ import { pluralWord } from '@/lib/ruLocale';
 import {
   VEHICLE_KINDS,
   MODEL_TEMPLATES,
+  TRAILER_KINDS,
   applyModelTemplate,
   formatSpecsSummary,
+  isTrailerKind,
+  syncVolumeIntoSpecs,
   vehicleKindMeta,
+  vehicleRequiresDriver,
   visibleSpecFields,
   type VehicleKind,
   type Ownership,
@@ -30,11 +35,21 @@ function kindPlural(kind: VehicleKind, n: number): string {
     dump_truck: ['самосвал', 'самосвала', 'самосвалов'],
     tonar: ['тоннар', 'тоннара', 'тоннаров'],
     cement_truck: ['цементовоз', 'цементовоза', 'цементовозов'],
+    tractor_unit: ['голова', 'головы', 'голов'],
     special: ['единица', 'единицы', 'единиц'],
   };
   const [one, few, many] = forms[kind];
   return pluralWord(n, one, few, many);
 }
+
+type CoupleInfo = {
+  id: number;
+  tractor_id: number;
+  trailer_id: number;
+  label: string;
+  tractor?: { id: number; number: string; model: string | null };
+  trailer?: { id: number; number: string; model: string | null; volume: number | null; vehicle_kind: string | null };
+};
 
 interface MixerDriver {
   id: number;
@@ -62,7 +77,9 @@ interface FleetUnit {
 type PageTab = VehicleKind | 'delivery';
 
 export default function MixersPage() {
-  const { isAdmin } = useUserRole();
+  const { isAdmin, user } = useUserRole();
+  const role = (user?.role || '').toLowerCase();
+  const canEditCouples = ['admin', 'manager', 'dispatcher'].includes(role);
 
   // Вкладки видов техники + «Тарифы доставки» (admin)
   const [activeTab, setActiveTab] = useState<PageTab>('mixer');
@@ -77,6 +94,14 @@ export default function MixersPage() {
   const [loading, setLoading] = useState(true);
   // Маппинг: номер миксера → актуальный статус рейса (если рейс есть)
   const [activeTripMap, setActiveTripMap] = useState<Map<string, string>>(new Map());
+  const [couples, setCouples] = useState<CoupleInfo[]>([]);
+  const [tractors, setTractors] = useState<FleetUnit[]>([]);
+  const [coupleModal, setCoupleModal] = useState<{
+    mode: 'trailer' | 'tractor';
+    unit: FleetUnit;
+  } | null>(null);
+  const [couplePickId, setCouplePickId] = useState('');
+  const [coupleSaving, setCoupleSaving] = useState(false);
 
   const [filter, setFilter] = useState<'all' | 'own' | 'rented'>('all');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
@@ -114,6 +139,12 @@ export default function MixersPage() {
     if (activeTab === 'delivery') return;
     fetchMixers();
     if (vehicleKind === 'mixer') fetchActiveTrips();
+    if (vehicleKind === 'tractor_unit' || isTrailerKind(vehicleKind)) {
+      void fetchCouples();
+    }
+    if (isTrailerKind(vehicleKind)) {
+      void fetchTractors();
+    }
   }, [activeTab, vehicleKind]);
 
   const fetchMixers = async () => {
@@ -130,6 +161,168 @@ export default function MixersPage() {
       setLoading(false);
     }
   };
+
+  const fetchCouples = async () => {
+    try {
+      const res = await fetch('/api/adminCifra/fleet-couples', {
+        headers: adminCifraAuthHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setCouples(Array.isArray(data.couples) ? data.couples : []);
+    } catch {
+      setCouples([]);
+    }
+  };
+
+  const fetchTractors = async () => {
+    try {
+      const res = await fetch('/api/adminCifra/mixers?kind=tractor_unit');
+      if (!res.ok) return;
+      const data = await res.json();
+      setTractors(Array.isArray(data) ? data : []);
+    } catch {
+      setTractors([]);
+    }
+  };
+
+  const coupleByTrailerId = useMemo(() => {
+    const m = new Map<number, CoupleInfo>();
+    for (const c of couples) m.set(Number(c.trailer_id), c);
+    return m;
+  }, [couples]);
+
+  const coupleByTractorId = useMemo(() => {
+    const m = new Map<number, CoupleInfo>();
+    for (const c of couples) m.set(Number(c.tractor_id), c);
+    return m;
+  }, [couples]);
+
+  const coupleStatusLine = (unit: FleetUnit): string | null => {
+    if (unit.vehicle_kind === 'tractor_unit' || vehicleKind === 'tractor_unit') {
+      const c = coupleByTractorId.get(unit.id);
+      if (!c) return 'Свободна';
+      return `Сцеплен: ${c.label}`;
+    }
+    if (isTrailerKind(unit.vehicle_kind || vehicleKind)) {
+      const c = coupleByTrailerId.get(unit.id);
+      if (!c) return 'Без сцепки (моноблок / свободен)';
+      return `Сцеплен: ${c.label}`;
+    }
+    return null;
+  };
+
+  const openCoupleModal = (unit: FleetUnit) => {
+    const mode = vehicleKind === 'tractor_unit' ? 'tractor' : 'trailer';
+    setCoupleModal({ mode, unit });
+    if (mode === 'trailer') {
+      const existing = coupleByTrailerId.get(unit.id);
+      setCouplePickId(existing ? String(existing.tractor_id) : '');
+    } else {
+      // Для головы — выбор прицепа: список тоннаров+бочек без своей головы подтянем при открытии
+      const existing = coupleByTractorId.get(unit.id);
+      setCouplePickId(existing ? String(existing.trailer_id) : '');
+    }
+  };
+
+  const saveCouple = async () => {
+    if (!coupleModal || !couplePickId) {
+      alert('Выберите пару для сцепки');
+      return;
+    }
+    const tractor_id =
+      coupleModal.mode === 'trailer' ? Number(couplePickId) : coupleModal.unit.id;
+    const trailer_id =
+      coupleModal.mode === 'tractor' ? Number(couplePickId) : coupleModal.unit.id;
+
+    // Предупредить, если голова или прицеп уже в другой сцепке
+    const existingTractor = coupleByTractorId.get(tractor_id);
+    const existingTrailer = coupleByTrailerId.get(trailer_id);
+    const conflicts: string[] = [];
+    if (existingTractor && Number(existingTractor.trailer_id) !== trailer_id) {
+      conflicts.push(`Голова уже сцеплена: ${existingTractor.label}`);
+    }
+    if (existingTrailer && Number(existingTrailer.tractor_id) !== tractor_id) {
+      conflicts.push(`Прицеп уже сцеплен: ${existingTrailer.label}`);
+    }
+    if (conflicts.length > 0) {
+      const ok = await appConfirm(
+        `${conflicts.join('\n')}\n\nСтарые сцепки будут разорваны. Продолжить?`,
+        { title: 'Перецепка', okLabel: 'Сцепить', cancelLabel: 'Отмена' },
+      );
+      if (!ok) return;
+    }
+
+    setCoupleSaving(true);
+    try {
+      const res = await fetch('/api/adminCifra/fleet-couples', {
+        method: 'POST',
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ tractor_id, trailer_id }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json.error || 'Не удалось сцепить');
+        return;
+      }
+      setCoupleModal(null);
+      await fetchCouples();
+      await fetchMixers();
+    } finally {
+      setCoupleSaving(false);
+    }
+  };
+
+  const uncoupleUnit = async (unit: FleetUnit) => {
+    const asTrailer = isTrailerKind(unit.vehicle_kind || vehicleKind);
+    const c = asTrailer
+      ? coupleByTrailerId.get(unit.id)
+      : coupleByTractorId.get(unit.id);
+    if (!c) return;
+    if (
+      !(await appConfirm(`Отцепить?\n${c.label}`, {
+        title: 'Сцепка',
+        okLabel: 'Отцепить',
+        cancelLabel: 'Отмена',
+      }))
+    ) {
+      return;
+    }
+    const qs = asTrailer ? `trailer_id=${unit.id}` : `tractor_id=${unit.id}`;
+    const res = await fetch(`/api/adminCifra/fleet-couples?${qs}`, {
+      method: 'DELETE',
+      headers: adminCifraAuthHeaders(),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(json.error || 'Не удалось отцепить');
+      return;
+    }
+    await fetchCouples();
+  };
+
+  const [trailerPickList, setTrailerPickList] = useState<FleetUnit[]>([]);
+  useEffect(() => {
+    if (!coupleModal || coupleModal.mode !== 'tractor') {
+      setTrailerPickList([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const lists: FleetUnit[] = [];
+      for (const kind of TRAILER_KINDS) {
+        const res = await fetch(`/api/adminCifra/mixers?kind=${kind}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) lists.push(...data);
+        }
+      }
+      if (!cancelled) setTrailerPickList(lists);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [coupleModal]);
 
   const fetchActiveTrips = async () => {
     try {
@@ -261,12 +454,18 @@ export default function MixersPage() {
   };
 
   const saveMixer = async () => {
-    if (!formData.number || !formData.driver) {
-      alert('Госномер и водитель обязательны');
+    if (!formData.number) {
+      alert('Госномер обязателен');
       return;
     }
 
-    if (!formData.phone?.trim()) {
+    const needsDriver = vehicleRequiresDriver(formData.vehicle_kind);
+    if (needsDriver && !formData.driver) {
+      alert('Водитель обязателен');
+      return;
+    }
+
+    if (needsDriver && !formData.phone?.trim()) {
       alert('Телефон водителя обязателен — по нему водитель входит в мобильное приложение');
       return;
     }
@@ -281,9 +480,11 @@ export default function MixersPage() {
     }
 
     try {
-      const payload = editingMixer
-        ? { ...formData, id: editingMixer.id }
-        : formData;
+      const synced = {
+        ...formData,
+        specs: syncVolumeIntoSpecs(formData.vehicle_kind, formData.volume, formData.specs),
+      };
+      const payload = editingMixer ? { ...synced, id: editingMixer.id } : synced;
 
       const res = await fetch('/api/adminCifra/mixers', {
         method: 'POST',
@@ -392,43 +593,46 @@ export default function MixersPage() {
           Техника
         </h1>
 
-        {/* На «Тарифах» кнопку скрываем, но место оставляем — иначе шапка
-            сжимается и вкладки прыгают вверх/вниз при переключении. */}
-        {activeTab !== 'delivery' ? (
-          <button 
-            onClick={openAddModal} 
-            style={volumeCardSoftStyle({
-              padding: '10px 22px',
-              background: 'linear-gradient(165deg, #10B981 0%, #059669 100%)',
-              border: '1px solid rgba(110,231,183,0.35)',
-              borderRadius: 12,
-              color: 'white',
-              fontWeight: 700,
-              fontSize: '14.5px',
-              cursor: 'pointer',
-            })}
-            onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
-          >
-            {kindMeta.addLabel}
-          </button>
-        ) : (
-          <div
-            aria-hidden
-            style={{
-              padding: '10px 22px',
-              borderRadius: 12,
-              fontWeight: 700,
-              fontSize: '14.5px',
-              border: '1px solid transparent',
-              visibility: 'hidden',
-              pointerEvents: 'none',
-              userSelect: 'none',
-            }}
-          >
-            {vehicleKindMeta('mixer').addLabel}
-          </div>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <PageHelpButton title="Инструкция по технике" />
+          {/* На «Тарифах» кнопку скрываем, но место оставляем — иначе шапка
+              сжимается и вкладки прыгают вверх/вниз при переключении. */}
+          {activeTab !== 'delivery' ? (
+            <button 
+              onClick={openAddModal} 
+              style={volumeCardSoftStyle({
+                padding: '10px 22px',
+                background: 'linear-gradient(165deg, #10B981 0%, #059669 100%)',
+                border: '1px solid rgba(110,231,183,0.35)',
+                borderRadius: 12,
+                color: 'white',
+                fontWeight: 700,
+                fontSize: '14.5px',
+                cursor: 'pointer',
+              })}
+              onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
+            >
+              {kindMeta.addLabel}
+            </button>
+          ) : (
+            <div
+              aria-hidden
+              style={{
+                padding: '10px 22px',
+                borderRadius: 12,
+                fontWeight: 700,
+                fontSize: '14.5px',
+                border: '1px solid transparent',
+                visibility: 'hidden',
+                pointerEvents: 'none',
+                userSelect: 'none',
+              }}
+            >
+              {vehicleKindMeta('mixer').addLabel}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Виды техники + тарифы */}
@@ -625,6 +829,18 @@ export default function MixersPage() {
                         {specsLine}
                       </div>
                     ) : null}
+                    {coupleStatusLine(mixer) && (
+                      <div style={{
+                        color: coupleByTrailerId.has(mixer.id) || coupleByTractorId.has(mixer.id) ? '#4ADE80' : '#94A3B8',
+                        fontSize: '12.5px',
+                        marginBottom: '12px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {coupleStatusLine(mixer)}
+                      </div>
+                    )}
 
                     {/* Водитель + Телефон */}
                     <div style={{ marginBottom: '20px' }}>
@@ -638,9 +854,9 @@ export default function MixersPage() {
                         lineHeight: '19px',
                         height: '38px'
                       }}>
-                        {mixer.driver}
+                        {mixer.driver || '—'}
                       </div>
-                      <div style={{ color: '#94A3B8', fontSize: '14.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: '17px', height: '17px', marginTop: '3px' }}>{mixer.phone}</div>
+                      <div style={{ color: '#94A3B8', fontSize: '14.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: '17px', height: '17px', marginTop: '3px' }}>{mixer.phone || '—'}</div>
                       {(mixer.mixer_drivers?.length ?? 0) > 0 && (
                         <div style={{ color: '#60A5FA', fontSize: '12px', marginTop: '4px' }}>
                           +{mixer.mixer_drivers!.length} вод.
@@ -651,9 +867,13 @@ export default function MixersPage() {
                     {/* Объём + Статус */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', marginTop: 'auto' }}>
                       <div>
-                        <div style={{ fontSize: '32px', fontWeight: '700', lineHeight: 1 }}>
-                          {mixer.volume} <span style={{ fontSize: '18px', color: '#94A3B8' }}>{kindMeta.volumeUnit}</span>
-                        </div>
+                        {vehicleKind !== 'tractor_unit' ? (
+                          <div style={{ fontSize: '32px', fontWeight: '700', lineHeight: 1 }}>
+                            {mixer.volume} <span style={{ fontSize: '18px', color: '#94A3B8' }}>{kindMeta.volumeUnit}</span>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '15px', fontWeight: 600, color: '#94A3B8' }}>Тягач</div>
+                        )}
                       </div>
 
                       {vehicleKind === 'mixer' && (
@@ -672,7 +892,7 @@ export default function MixersPage() {
                     </div>
 
                     {/* Тонкие кнопки в стиле списка */}
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                       {vehicleKind === 'mixer' && (
                         <button
                           onClick={() => setHistoryMixer(mixer)}
@@ -692,6 +912,45 @@ export default function MixersPage() {
                           }}
                         >
                           📋 История
+                        </button>
+                      )}
+                      {canEditCouples && (vehicleKind === 'tractor_unit' || isTrailerKind(vehicleKind)) && (
+                        <button
+                          type="button"
+                          onClick={() => openCoupleModal(mixer)}
+                          style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            background: 'rgba(59,130,246,0.15)',
+                            color: '#93C5FD',
+                            border: '1px solid rgba(59,130,246,0.35)',
+                            borderRadius: '9999px',
+                            fontWeight: 500,
+                            fontSize: '13.5px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Сцепка
+                        </button>
+                      )}
+                      {canEditCouples &&
+                        (coupleByTrailerId.has(mixer.id) || coupleByTractorId.has(mixer.id)) && (
+                        <button
+                          type="button"
+                          onClick={() => void uncoupleUnit(mixer)}
+                          style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            background: 'rgba(248,113,113,0.12)',
+                            color: '#F87171',
+                            border: '1px solid rgba(248,113,113,0.35)',
+                            borderRadius: '9999px',
+                            fontWeight: 500,
+                            fontSize: '13.5px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Отцепить
                         </button>
                       )}
                       <button 
@@ -791,12 +1050,14 @@ export default function MixersPage() {
                       </div>
 
                       <div style={{ flex: 1.4, minWidth: 0, overflow: 'hidden' }}>
-                        <div style={{ fontWeight: 600, fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mixer.driver}</div>
-                        <div style={{ color: '#94A3B8', fontSize: '12.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mixer.phone}</div>
+                        <div style={{ fontWeight: 600, fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mixer.driver || '—'}</div>
+                        <div style={{ color: '#94A3B8', fontSize: '12.5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {coupleStatusLine(mixer) || mixer.phone || '—'}
+                        </div>
                       </div>
 
                       <div style={{ width: '90px', fontSize: '15px', fontWeight: 700, textAlign: 'center', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                        {mixer.volume} {kindMeta.volumeUnit}
+                        {vehicleKind === 'tractor_unit' ? '—' : `${mixer.volume} ${kindMeta.volumeUnit}`}
                       </div>
 
                       {vehicleKind === 'mixer' && (
@@ -846,6 +1107,43 @@ export default function MixersPage() {
                             }}
                           >
                             История
+                          </button>
+                        )}
+                        {canEditCouples && (vehicleKind === 'tractor_unit' || isTrailerKind(vehicleKind)) && (
+                          <button
+                            type="button"
+                            onClick={() => openCoupleModal(mixer)}
+                            style={{
+                              padding: '6px 12px',
+                              background: 'rgba(59,130,246,0.15)',
+                              color: '#93C5FD',
+                              border: '1px solid rgba(59,130,246,0.35)',
+                              borderRadius: 10,
+                              fontWeight: 600,
+                              fontSize: '12.5px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Сцепка
+                          </button>
+                        )}
+                        {canEditCouples &&
+                          (coupleByTrailerId.has(mixer.id) || coupleByTractorId.has(mixer.id)) && (
+                          <button
+                            type="button"
+                            onClick={() => void uncoupleUnit(mixer)}
+                            style={{
+                              padding: '6px 12px',
+                              background: 'rgba(248,113,113,0.12)',
+                              color: '#F87171',
+                              border: '1px solid rgba(248,113,113,0.35)',
+                              borderRadius: 10,
+                              fontWeight: 600,
+                              fontSize: '12.5px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Отцепить
                           </button>
                         )}
                         <button
@@ -949,8 +1247,21 @@ export default function MixersPage() {
                     ? [{ value: formData.model, label: formData.model }]
                     : []),
                 ]}
-                placeholder="Выберите модель"
+                placeholder={
+                  formData.vehicle_kind === 'cement_truck'
+                    ? 'Бочка (прицеп) или моноблок'
+                    : formData.vehicle_kind === 'tonar'
+                      ? 'Тоннар (прицеп) или модель'
+                      : 'Выберите модель'
+                }
               />
+              {isTrailerKind(formData.vehicle_kind) && (
+                <div style={{ color: '#64748B', fontSize: 12, marginTop: 8, lineHeight: 1.4 }}>
+                  {formData.vehicle_kind === 'cement_truck'
+                    ? '«Бочка (прицеп)» — только цистерна под сцепку с головой. «Моноблок» — цементовоз целиком со своим водителем.'
+                    : '«Тоннар (прицеп)» — полуприцеп под сцепку с головой. Водитель не нужен — его ведёт Ситрак/Volvo.'}
+                </div>
+              )}
               <input
                 type="text"
                 placeholder="Или введите модель вручную"
@@ -971,21 +1282,26 @@ export default function MixersPage() {
 
             <input 
               type="text" 
-              placeholder="ФИО водителя *" 
+              placeholder={vehicleRequiresDriver(formData.vehicle_kind) ? 'ФИО водителя *' : 'ФИО водителя (необязательно)'} 
               value={formData.driver} 
               onChange={(e) => setFormData({...formData, driver: e.target.value})} 
               style={inputStyle} 
             />
             <input 
               type="tel" 
-              placeholder="Телефон водителя *" 
+              placeholder={vehicleRequiresDriver(formData.vehicle_kind) ? 'Телефон водителя *' : 'Телефон (необязательно)'} 
               value={formData.phone} 
               onChange={(e) => setFormData({...formData, phone: e.target.value})} 
               style={inputStyle} 
             />
+            {isTrailerKind(formData.vehicle_kind) && (
+              <div style={{ color: '#64748B', fontSize: 12, marginTop: -8, marginBottom: 14 }}>
+                Для бочки/тоннара водитель не обязателен — его ведёт голова (Ситрак/Volvo).
+              </div>
+            )}
 
-            {/* ── Дополнительные водители (только при редактировании) ── */}
-            {editingMixer && (
+            {/* ── Дополнительные водители (только при редактировании миксера/головы) ── */}
+            {editingMixer && formData.vehicle_kind === 'mixer' && (
               <div style={volumeCardSoftStyle({ marginBottom: '20px', borderRadius: 12, padding: '14px' })}>
                 <div style={{ fontSize: '13px', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '10px' }}>
                   Дополнительные водители
@@ -1057,8 +1373,9 @@ export default function MixersPage() {
               </div>
             )}
 
+            {formData.vehicle_kind !== 'tractor_unit' && (
             <div style={{ marginBottom: '16px' }}>
-              <label>{kindMeta.volumeLabel} ({kindMeta.volumeUnit})</label>
+              <label>{kindMeta.volumeLabel}{kindMeta.volumeUnit ? ` (${kindMeta.volumeUnit})` : ''}</label>
               <input 
                 type="number" 
                 value={formData.volume} 
@@ -1066,6 +1383,7 @@ export default function MixersPage() {
                 style={{ ...inputStyle, marginBottom: 0, marginTop: '8px' }} 
               />
             </div>
+            )}
 
             {visibleSpecFields(formData.vehicle_kind, formData.specs).map((field) => (
               <div key={field.key} style={{ marginBottom: '16px' }}>
@@ -1158,6 +1476,103 @@ export default function MixersPage() {
                 style={{ flex: 1, padding: '14px', background: '#10B981', borderRadius: '9999px', fontWeight: '600', color: 'white', border: 'none', boxSizing: 'border-box' }}
               >
                 {editingMixer ? 'Сохранить изменения' : kindMeta.addLabel.replace(/^\+\s*/, '')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== МОДАЛКА СЦЕПКИ ==================== */}
+      {coupleModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.82)',
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => setCoupleModal(null)}
+        >
+          <div
+            style={volumeModalStyle({
+              width: '100%',
+              maxWidth: 440,
+              borderRadius: 22,
+              padding: 28,
+            })}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ marginBottom: 8, fontSize: 20 }}>
+              {coupleModal.mode === 'trailer' ? 'Сцепить с головой' : 'Сцепить с прицепом'}
+            </h2>
+            <div style={{ color: '#94A3B8', fontSize: 13, marginBottom: 18 }}>
+              {coupleModal.unit.number}
+              {coupleModal.unit.model ? ` · ${coupleModal.unit.model}` : ''}
+            </div>
+            <label style={{ display: 'block', color: '#94A3B8', fontSize: 13, marginBottom: 8 }}>
+              {coupleModal.mode === 'trailer' ? 'Голова' : 'Прицеп (бочка / тоннар)'}
+            </label>
+            <ModalSelect
+              value={couplePickId}
+              onChange={setCouplePickId}
+              placeholder="— выберите —"
+              options={
+                coupleModal.mode === 'trailer'
+                  ? tractors.map((t) => ({
+                      value: String(t.id),
+                      label: `${t.model || 'Голова'} ${t.number}${t.driver ? ` · ${t.driver}` : ''}`,
+                      text: `${t.model || ''} ${t.number}`.trim(),
+                    }))
+                  : trailerPickList.map((t) => {
+                      const linked = coupleByTrailerId.get(t.id);
+                      const unit =
+                        t.vehicle_kind === 'cement_truck' || t.vehicle_kind === 'tonar' ? ' т' : '';
+                      const kindLabel = t.vehicle_kind === 'cement_truck' ? 'Бочка' : 'Тоннар';
+                      return {
+                        value: String(t.id),
+                        label: `${kindLabel} ${t.number} · ${t.volume}${unit}${
+                          linked ? ` · уже: ${linked.label}` : ''
+                        }`,
+                        text: `${t.number} ${t.volume}`,
+                      };
+                    })
+              }
+            />
+            <div style={{ display: 'flex', gap: 12, marginTop: 22 }}>
+              <button
+                type="button"
+                onClick={() => setCoupleModal(null)}
+                style={volumeCardSoftStyle({
+                  flex: 1,
+                  padding: 14,
+                  borderRadius: 9999,
+                  color: 'white',
+                  cursor: 'pointer',
+                })}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                disabled={coupleSaving}
+                onClick={() => void saveCouple()}
+                style={{
+                  flex: 1,
+                  padding: 14,
+                  background: '#10B981',
+                  borderRadius: 9999,
+                  fontWeight: 600,
+                  color: 'white',
+                  border: 'none',
+                  cursor: coupleSaving ? 'wait' : 'pointer',
+                  opacity: coupleSaving ? 0.7 : 1,
+                }}
+              >
+                {coupleSaving ? 'Сохраняем…' : 'Сцепить'}
               </button>
             </div>
           </div>

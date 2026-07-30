@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, FlaskConical, Truck, Package, Users, UserCog, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown, Cable, MapPin, PanelLeftOpen, PanelLeftClose, Settings, X } from 'lucide-react';
-import { useEffect, useState, useRef, useLayoutEffect } from 'react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown, Cable, MapPin, PanelLeftOpen, PanelLeftClose, Settings, X, CircleHelp } from 'lucide-react';
+import { useEffect, useState, useRef, useLayoutEffect, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import Image from 'next/image';
 import { useUserRole } from '../providers/UserRoleProvider';
@@ -38,6 +38,8 @@ import {
 import { setRouteOriginCoordsOverride } from '@/lib/geocodeAddress';
 import { setRouteOriginAddressOverride } from '@/lib/bryanskAddress';
 import AppDialogHost, { appConfirm } from './components/appDialog';
+import HelpProvider, { useHelp } from './components/help/HelpProvider';
+import { isHelpEnabledForRole } from '@/lib/help/registry';
 
 /** Единица объёма в тостах: бетон — м³, отгрузка — т/шт/м³ по технике и марке. */
 function orderVolumeUnit(order: any): string {
@@ -1312,6 +1314,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const preScaleHeight = viewportH / scale;
 
   return (
+    <HelpProvider>
     <div 
       style={{
         // position: fixed выводит каркас из нормального потока документа —
@@ -1474,10 +1477,13 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
             {/* ==================== БЛОК 9.5: ЛАБОРАНТ — ТОЛЬКО «ЛАБОРАТОРИЯ» ==================== */}
             {userRole === 'laborant' ? (
+              <>
               <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
                 <FlaskConical size={22} />
                 <span style={navTextStyle(isCollapsed)}>Лаборатория</span>
               </Link>
+              <HelpNavButton isCollapsed={isCollapsed} navLinkStyle={navLinkStyle} navTextStyle={navTextStyle} />
+              </>
             ) : (
             <>
             {navOk('dashboard') && (
@@ -1884,12 +1890,15 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
             {/* ==================== БЛОК 11: ОГРАНИЧЕНИЕ МЕНЮ ==================== */}
             {userRole === 'operator' ? (
-              navOk('operator') && (
+              <>
+              {navOk('operator') && (
               <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
                 <UserCog size={22} />
                 <span style={navTextStyle(isCollapsed)}>Оператор БСУ</span>
               </Link>
-              )
+              )}
+              <HelpNavButton isCollapsed={isCollapsed} navLinkStyle={navLinkStyle} navTextStyle={navTextStyle} />
+              </>
             ) : (
               <>
                 {navOk('recipes') && (
@@ -1977,6 +1986,12 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 <Settings size={22} />
                 <span style={navTextStyle(isCollapsed)}>Настройки</span>
               </Link>
+            )}
+
+            {/* Инструкции: dispatcher / manager / admin (laborant и operator — в своих ветках меню) */}
+            {(userRole === 'admin' || userRole === 'manager' || userRole === 'dispatcher') &&
+              isHelpEnabledForRole(userRole) && (
+              <HelpNavButton isCollapsed={isCollapsed} navLinkStyle={navLinkStyle} navTextStyle={navTextStyle} />
             )}
 
             {/* ==================== БЛОК 13.1 ЛИЧНЫЙ ВЫХОД ==================== */}
@@ -2275,6 +2290,34 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       </div>
       <AppDialogHost />
     </div>
+    </HelpProvider>
+  );
+}
+
+function HelpNavButton({
+  isCollapsed,
+  navLinkStyle,
+  navTextStyle,
+}: {
+  isCollapsed: boolean;
+  navLinkStyle: (active: boolean, collapsed: boolean) => CSSProperties;
+  navTextStyle: (collapsed: boolean) => CSSProperties;
+}) {
+  const { helpEnabled, openCatalog } = useHelp();
+  if (!helpEnabled) return null;
+  return (
+    <Link
+      href="#"
+      onClick={(e) => {
+        e.preventDefault();
+        openCatalog();
+      }}
+      style={navLinkStyle(false, isCollapsed)}
+      title={isCollapsed ? 'Инструкции' : undefined}
+    >
+      <CircleHelp size={22} />
+      <span style={navTextStyle(isCollapsed)}>Инструкции</span>
+    </Link>
   );
 }
 
