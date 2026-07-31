@@ -7,9 +7,12 @@
 --
 -- Топики:
 --   orders:all              — все изменения заявок (админка, дашборд, мобильная, календарь)
---   order_mixers:all        — все изменения рейсов (оператор, дашборд)
---   order_mixers:<номер>    — рейсы конкретного миксера (кабинет водителя)
+--   order_mixers:all        — все изменения рейсов (оператор, дашборд, водитель)
 --   production_logs:all     — лента отгрузок (оператор БСУ)
+--
+-- Примечание: персональный топик order_mixers:<номер> убран — кабинет водителя
+-- слушает order_mixers:all и фильтрует по mixer_name (кириллица в имени канала
+-- ломала подписку Realtime).
 --
 -- В триггере OLD/NEW всегда содержат ВСЕ поля строки (в отличие от
 -- postgres_changes, где old зависит от REPLICA IDENTITY) — сравнение
@@ -35,30 +38,28 @@ begin
 end;
 $$;
 
--- 2) Функция для order_mixers — шлёт И в глобальный топик, И в топик миксера
+-- 2) Функция для order_mixers — только глобальный топик order_mixers:all
 create or replace function public.broadcast_order_mixers_change()
 returns trigger
 language plpgsql
 security definer
+set search_path = public
 as $$
 declare
-  mixer text;
   payload jsonb;
 begin
+  -- Транзакция apply: set_config('app.suppress_om_broadcast','on', true)
+  if current_setting('app.suppress_om_broadcast', true) = 'on' then
+    return null;
+  end if;
+
   payload := jsonb_build_object(
     'operation', TG_OP,
     'record', case when TG_OP = 'DELETE' then null else to_jsonb(NEW) end,
     'old',    case when TG_OP = 'INSERT' then null else to_jsonb(OLD) end
   );
 
-  -- Глобальный топик — для оператора и дашборда
   perform realtime.send(payload, TG_OP, 'order_mixers:all', false);
-
-  -- Топик конкретного миксера — для кабинета водителя
-  mixer := coalesce(NEW.mixer_name, OLD.mixer_name);
-  if mixer is not null then
-    perform realtime.send(payload, TG_OP, 'order_mixers:' || mixer, false);
-  end if;
 
   return null;
 end;

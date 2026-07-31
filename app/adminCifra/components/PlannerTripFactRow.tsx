@@ -1,7 +1,8 @@
 'use client';
 
-import { Lock } from 'lucide-react';
+import { GripVertical, Lock } from 'lucide-react';
 import { appAlert } from './appDialog';
+import DarkHoverTip from './DarkHoverTip';
 import {
   PICKUP_MIXER_NUMBER,
   type PlannedTrip,
@@ -32,6 +33,17 @@ type Props = {
   onShiftLoadTime?: (tripId: string, loadHhMm: string) => void;
   /** Задержка диспетчера (+N мин разгрузки) → пересчёт хвоста */
   onTripDelayMin?: (tripId: string, delayMin: number) => void;
+  /** Правка планового объёма → пересчёт хвоста и вместимости миксера */
+  onPlanVolumeChange?: (tripId: string, volume: number) => void;
+  /** Drag-and-drop рейса */
+  canDrag?: boolean;
+  dragOver?: boolean;
+  onDragStartTrip?: (tripId: string) => void;
+  onDragOverTrip?: (tripId: string) => void;
+  onDropOnTrip?: (tripId: string) => void;
+  onDragEndTrip?: () => void;
+  /** Подсветка активной волны пересчёта */
+  waveHighlight?: boolean;
 };
 
 function deltaColor(d: number | null): string {
@@ -51,6 +63,14 @@ export default function PlannerTripFactRow({
   canShiftPlan,
   onShiftLoadTime,
   onTripDelayMin,
+  onPlanVolumeChange,
+  canDrag,
+  dragOver,
+  onDragStartTrip,
+  onDragOverTrip,
+  onDropOnTrip,
+  onDragEndTrip,
+  waveHighlight,
 }: Props) {
   const isPu = Boolean(trip.pickup || trip.mixerNumber === PICKUP_MIXER_NUMBER);
   const canEdit = Boolean(fact.matchedTripId);
@@ -59,6 +79,9 @@ export default function PlannerTripFactRow({
     Boolean(canShiftPlan && onShiftLoadTime) && !isUnloaded && !trip.done;
   const showDelay =
     Boolean(canShiftPlan && onTripDelayMin) && !isUnloaded && !trip.done && !isPu;
+  const showPlanVolume =
+    Boolean(canShiftPlan && onPlanVolumeChange) && !isUnloaded && !trip.done && !isPu;
+  const allowDrag = Boolean(canDrag) && !isUnloaded && !trip.done && !isPu;
   const delayVal = Math.max(0, Math.round(Number(trip.delayMin) || 0));
 
   const headers = (): Record<string, string> => {
@@ -172,17 +195,24 @@ export default function PlannerTripFactRow({
 
   return (
     <div
-      title={
-        isPu
-          ? 'Самовывоз: слот на соске'
-          : isUnloaded
-            ? 'Рейс отработан'
-            : trip.locked
-              ? 'Зафиксирован: этап не пересчитает'
-              : canEdit
-                ? 'Есть факт по рейсу — можно править статус, время и объём'
-                : 'Нет связи с рейсом в заявке — запиши план в заявки или сверь номера миксеров'
-      }
+      draggable={allowDrag}
+      onDragStart={(e) => {
+        if (!allowDrag) return;
+        e.dataTransfer.setData('text/plain', trip.id);
+        e.dataTransfer.effectAllowed = 'move';
+        onDragStartTrip?.(trip.id);
+      }}
+      onDragOver={(e) => {
+        if (!allowDrag && !canShiftPlan) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        onDragOverTrip?.(trip.id);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDropOnTrip?.(trip.id);
+      }}
+      onDragEnd={() => onDragEndTrip?.()}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -200,23 +230,108 @@ export default function PlannerTripFactRow({
             : isPu
               ? 'rgba(251,146,60,0.07)'
               : 'linear-gradient(180deg, rgba(30,41,59,0.72) 0%, rgba(15,23,42,0.88) 100%)',
-        border: '1px solid rgba(148,163,184,0.22)',
-        boxShadow:
-          'inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 2px rgba(0,0,0,0.28)',
+        border: dragOver
+          ? '1px solid rgba(96,165,250,0.85)'
+          : waveHighlight
+            ? '1px solid rgba(96,165,250,0.55)'
+            : '1px solid rgba(148,163,184,0.22)',
+        boxShadow: dragOver
+          ? '0 0 0 2px rgba(96,165,250,0.25), 0 1px 2px rgba(0,0,0,0.28)'
+          : waveHighlight
+            ? '0 0 0 1px rgba(96,165,250,0.2), inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 2px rgba(0,0,0,0.28)'
+            : 'inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 2px rgba(0,0,0,0.28)',
         fontSize: fs(12),
         lineHeight: 1.2,
         color: '#E2E8F0',
         opacity: isUnloaded ? 0.78 : 1,
         overflowX: 'auto',
+        cursor: allowDrag ? 'grab' : undefined,
       }}
     >
-      <span style={{ fontWeight: 700, minWidth: sp(68), flexShrink: 0 }}>
-        {isPu ? PICKUP_MIXER_NUMBER : trip.mixerNumber}
-      </span>
-      <span style={{ color: '#10B981', fontWeight: 700, flexShrink: 0 }}>
-        {trip.volume} м³
-      </span>
+      {allowDrag ? (
+        <DarkHoverTip tip="Перетащить рейс (внутри заявки или в другую)">
+          <span
+            style={{
+              display: 'inline-flex',
+              color: '#64748B',
+              flexShrink: 0,
+              marginLeft: -4,
+            }}
+          >
+            <GripVertical size={14} strokeWidth={2} />
+          </span>
+        </DarkHoverTip>
+      ) : null}
+      <DarkHoverTip
+        tip={
+          isPu
+            ? 'Самовывоз: слот на соске'
+            : isUnloaded
+              ? 'Рейс отработан'
+              : trip.locked
+                ? 'Зафиксирован: этап не пересчитает'
+                : canEdit
+                  ? 'Есть факт по рейсу — можно править статус, время и объём'
+                  : 'Нет связи с рейсом в заявке — запиши план в заявки или сверь номера миксеров'
+        }
+        maxWidth={320}
+      >
+        <span style={{ fontWeight: 700, minWidth: sp(68), flexShrink: 0 }}>
+          {isPu ? PICKUP_MIXER_NUMBER : trip.mixerNumber}
+        </span>
+      </DarkHoverTip>
+      {showPlanVolume ? (
+        <DarkHoverTip tip="Плановый объём рейса — при правке хвост дня и вместимость миксера пересчитаются">
+        <label
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3,
+            color: '#10B981',
+            fontWeight: 700,
+            flexShrink: 0,
+          }}
+        >
+          <input
+            type="text"
+            disabled={busy}
+            defaultValue={String(trip.volume)}
+            key={`pvol-${trip.id}-${trip.volume}`}
+            onBlur={(e) => {
+              const raw = e.target.value.trim().replace(',', '.');
+              const n = Number(raw);
+              if (!Number.isFinite(n) || n <= 0) {
+                e.target.value = String(trip.volume);
+                return;
+              }
+              const next = Math.round(n * 10) / 10;
+              if (Math.abs(next - Number(trip.volume)) < 0.05) return;
+              onPlanVolumeChange?.(trip.id, next);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+            }}
+            style={{
+              width: 40,
+              background: 'rgba(15,23,42,0.9)',
+              color: '#6EE7B7',
+              border: '1px solid rgba(16,185,129,0.45)',
+              borderRadius: 6,
+              fontSize: controlFont,
+              padding: inputPad,
+              fontWeight: 700,
+            }}
+          />
+          м³
+        </label>
+        </DarkHoverTip>
+      ) : (
+        <span style={{ color: '#10B981', fontWeight: 700, flexShrink: 0 }}>
+          {trip.volume} м³
+        </span>
+      )}
       {showShift ? (
+        <DarkHoverTip tip="Сдвинуть план загрузки — хвост дня пересчитается">
         <label
           style={{
             display: 'inline-flex',
@@ -226,7 +341,6 @@ export default function PlannerTripFactRow({
             fontWeight: 600,
             flexShrink: 0,
           }}
-          title="Сдвинуть план загрузки — хвост дня пересчитается"
         >
           план загр.
           <input
@@ -254,15 +368,20 @@ export default function PlannerTripFactRow({
             }}
           />
         </label>
+        </DarkHoverTip>
       ) : (
-        <span style={{ color: '#FDE047', flexShrink: 0 }} title="План: загрузка на БСУ">
-          план загр. {trip.loadTime}
-        </span>
+        <DarkHoverTip tip="План: загрузка на БСУ">
+          <span style={{ color: '#FDE047', flexShrink: 0 }}>
+            план загр. {trip.loadTime}
+          </span>
+        </DarkHoverTip>
       )}
       {isPu ? (
-        <span style={{ color: '#FDBA74', flexShrink: 0 }} title="План: соска будет готова">
-          соска {trip.arriveTime}
-        </span>
+        <DarkHoverTip tip="План: соска будет готова">
+          <span style={{ color: '#FDBA74', flexShrink: 0 }}>
+            соска {trip.arriveTime}
+          </span>
+        </DarkHoverTip>
       ) : (
         <>
           <span style={{ color: '#93C5FD', flexShrink: 0 }}>
@@ -274,6 +393,10 @@ export default function PlannerTripFactRow({
         </>
       )}
       {showDelay ? (
+        <DarkHoverTip
+          tip="Задержка на объекте (мин). Пример: разгрузят 60 мин вместо 30 → поставь 30. Хвост дня пересчитается."
+          maxWidth={340}
+        >
         <label
           style={{
             display: 'inline-flex',
@@ -284,7 +407,6 @@ export default function PlannerTripFactRow({
             fontSize: controlFont,
             flexShrink: 0,
           }}
-          title="Задержка на объекте (мин). Пример: разгрузят 60 мин вместо 30 → поставь 30. Хвост дня пересчитается."
         >
           задержка
           <input
@@ -323,33 +445,37 @@ export default function PlannerTripFactRow({
           />
           <span style={{ fontWeight: 500 }}>мин</span>
         </label>
+        </DarkHoverTip>
       ) : delayVal > 0 ? (
-        <span
-          style={{
-            color: '#FCA5A5',
-            fontWeight: 700,
-            fontSize: controlFont,
-            flexShrink: 0,
-          }}
-          title="Задержка диспетчера на разгрузке"
-        >
-          +{delayVal} мин
-        </span>
+        <DarkHoverTip tip="Задержка диспетчера на разгрузке">
+          <span
+            style={{
+              color: '#FCA5A5',
+              fontWeight: 700,
+              fontSize: controlFont,
+              flexShrink: 0,
+            }}
+          >
+            +{delayVal} мин
+          </span>
+        </DarkHoverTip>
       ) : null}
       {trip.locked && !isUnloaded ? (
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 3,
-            color: '#93C5FD',
-            fontSize: controlFont,
-            fontWeight: 700,
-            flexShrink: 0,
-          }}
-        >
-          <Lock size={fs(11)} /> фикс
-        </span>
+        <DarkHoverTip tip="Зафиксирован: этап не пересчитает">
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 3,
+              color: '#93C5FD',
+              fontSize: controlFont,
+              fontWeight: 700,
+              flexShrink: 0,
+            }}
+          >
+            <Lock size={fs(11)} /> фикс
+          </span>
+        </DarkHoverTip>
       ) : null}
 
       <span
@@ -363,12 +489,13 @@ export default function PlannerTripFactRow({
       />
 
       {!fact.hasMatch ? (
-        <span
-          style={{ color: '#64748B', fontSize: controlFont, flexShrink: 0 }}
-          title="В заявке нет подходящего рейса под этот слот плана"
-        >
-          факта нет
-        </span>
+        <DarkHoverTip tip="В заявке нет подходящего рейса под этот слот плана">
+          <span
+            style={{ color: '#64748B', fontSize: controlFont, flexShrink: 0 }}
+          >
+            факта нет
+          </span>
+        </DarkHoverTip>
       ) : (
         <>
           <span
@@ -383,46 +510,49 @@ export default function PlannerTripFactRow({
             {!isUnloaded && fact.factStatus ? ` · ${fact.factStatus}` : ''}
           </span>
           {fact.factLoadStart ? (
-            <span
-              style={{ fontSize: controlFont, color: '#94A3B8', flexShrink: 0 }}
-              title="Старт загрузки на пульте"
-            >
-              старт {fact.factLoadStart}
-              {deltaLoad ? (
-                <span style={{ color: deltaColor(fact.deltaLoadMin), marginLeft: 3 }}>
-                  ({deltaLoad})
-                </span>
-              ) : null}
-            </span>
+            <DarkHoverTip tip="Старт загрузки на пульте">
+              <span
+                style={{ fontSize: controlFont, color: '#94A3B8', flexShrink: 0 }}
+              >
+                старт {fact.factLoadStart}
+                {deltaLoad ? (
+                  <span style={{ color: deltaColor(fact.deltaLoadMin), marginLeft: 3 }}>
+                    ({deltaLoad})
+                  </span>
+                ) : null}
+              </span>
+            </DarkHoverTip>
           ) : null}
           {fact.factRelease ? (
-            <span
-              style={{ fontSize: controlFont, color: '#94A3B8', flexShrink: 0 }}
-              title="Выпуск с завода (лог оператора)"
-            >
-              выпуск {fact.factRelease}
-              {deltaRel ? (
-                <span style={{ color: deltaColor(fact.deltaReleaseMin), marginLeft: 3 }}>
-                  ({deltaRel})
-                </span>
-              ) : null}
-            </span>
+            <DarkHoverTip tip="Выпуск с завода (лог оператора)">
+              <span
+                style={{ fontSize: controlFont, color: '#94A3B8', flexShrink: 0 }}
+              >
+                выпуск {fact.factRelease}
+                {deltaRel ? (
+                  <span style={{ color: deltaColor(fact.deltaReleaseMin), marginLeft: 3 }}>
+                    ({deltaRel})
+                  </span>
+                ) : null}
+              </span>
+            </DarkHoverTip>
           ) : null}
           {fact.noOperatorRecord ? (
-            <span
-              style={{
-                padding: '0 6px',
-                borderRadius: 999,
-                background: 'rgba(248,113,113,0.15)',
-                color: '#FCA5A5',
-                fontWeight: 700,
-                fontSize: fs(10),
-                flexShrink: 0,
-              }}
-              title="Статус без записи оператора на пульте"
-            >
-              без пульта
-            </span>
+            <DarkHoverTip tip="Статус без записи оператора на пульте">
+              <span
+                style={{
+                  padding: '0 6px',
+                  borderRadius: 999,
+                  background: 'rgba(248,113,113,0.15)',
+                  color: '#FCA5A5',
+                  fontWeight: 700,
+                  fontSize: fs(10),
+                  flexShrink: 0,
+                }}
+              >
+                без пульта
+              </span>
+            </DarkHoverTip>
           ) : null}
         </>
       )}
@@ -451,88 +581,97 @@ export default function PlannerTripFactRow({
             >
               отработан
             </span>
-            <span style={{ color: '#FDE047', fontWeight: 600 }} title="Время загрузки">
-              {showTime}
-            </span>
-            <span style={{ color: '#6EE7B7', fontWeight: 600 }} title="Объём рейса">
-              {showVol} м³
-            </span>
+            <DarkHoverTip tip="Время загрузки">
+              <span style={{ color: '#FDE047', fontWeight: 600 }}>
+                {showTime}
+              </span>
+            </DarkHoverTip>
+            <DarkHoverTip tip="Объём рейса">
+              <span style={{ color: '#6EE7B7', fontWeight: 600 }}>
+                {showVol} м³
+              </span>
+            </DarkHoverTip>
           </>
         ) : canEdit ? (
           <>
-            <select
-              disabled={busy}
-              value={fact.factStatus || 'Загрузка'}
-              onChange={(e) => void patchStatus(e.target.value)}
-              title="Статус рейса"
-              style={{
-                background: 'rgba(15,23,42,0.9)',
-                color: '#E2E8F0',
-                border: '1px solid rgba(71,85,105,0.9)',
-                borderRadius: 6,
-                fontSize: controlFont,
-                padding: inputPad,
-                maxWidth: 118,
-              }}
-            >
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-            <input
-              type="text"
-              disabled={busy}
-              defaultValue={fact.factPlanTime || ''}
-              key={`t-${fact.matchedTripId}-${fact.factPlanTime}`}
-              onBlur={(e) => void patchTime(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur();
-              }}
-              placeholder="ЧЧ:ММ"
-              title="Время загрузки рейса"
-              style={{
-                width: 52,
-                background: 'rgba(15,23,42,0.9)',
-                color: '#FDE047',
-                border: '1px solid rgba(71,85,105,0.9)',
-                borderRadius: 6,
-                fontSize: controlFont,
-                padding: inputPad,
-              }}
-            />
-            <input
-              type="text"
-              disabled={busy}
-              defaultValue={
-                fact.factVolume != null ? String(fact.factVolume) : ''
-              }
-              key={`v-${fact.matchedTripId}-${fact.factVolume}`}
-              onBlur={(e) => void patchVolume(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur();
-              }}
-              placeholder="м³"
-              title="Объём рейса"
-              style={{
-                width: 42,
-                background: 'rgba(15,23,42,0.9)',
-                color: '#6EE7B7',
-                border: '1px solid rgba(71,85,105,0.9)',
-                borderRadius: 6,
-                fontSize: controlFont,
-                padding: inputPad,
-              }}
-            />
+            <DarkHoverTip tip="Статус рейса">
+              <select
+                disabled={busy}
+                value={fact.factStatus || 'Загрузка'}
+                onChange={(e) => void patchStatus(e.target.value)}
+                style={{
+                  background: 'rgba(15,23,42,0.9)',
+                  color: '#E2E8F0',
+                  border: '1px solid rgba(71,85,105,0.9)',
+                  borderRadius: 6,
+                  fontSize: controlFont,
+                  padding: inputPad,
+                  maxWidth: 118,
+                }}
+              >
+                {STATUS_OPTIONS.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </DarkHoverTip>
+            <DarkHoverTip tip="Время загрузки рейса">
+              <input
+                type="text"
+                disabled={busy}
+                defaultValue={fact.factPlanTime || ''}
+                key={`t-${fact.matchedTripId}-${fact.factPlanTime}`}
+                onBlur={(e) => void patchTime(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+                placeholder="ЧЧ:ММ"
+                style={{
+                  width: 52,
+                  background: 'rgba(15,23,42,0.9)',
+                  color: '#FDE047',
+                  border: '1px solid rgba(71,85,105,0.9)',
+                  borderRadius: 6,
+                  fontSize: controlFont,
+                  padding: inputPad,
+                }}
+              />
+            </DarkHoverTip>
+            <DarkHoverTip tip="Объём рейса">
+              <input
+                type="text"
+                disabled={busy}
+                defaultValue={
+                  fact.factVolume != null ? String(fact.factVolume) : ''
+                }
+                key={`v-${fact.matchedTripId}-${fact.factVolume}`}
+                onBlur={(e) => void patchVolume(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+                placeholder="м³"
+                style={{
+                  width: 42,
+                  background: 'rgba(15,23,42,0.9)',
+                  color: '#6EE7B7',
+                  border: '1px solid rgba(71,85,105,0.9)',
+                  borderRadius: 6,
+                  fontSize: controlFont,
+                  padding: inputPad,
+                }}
+              />
+            </DarkHoverTip>
           </>
         ) : (
-          <span
-            style={{ color: '#64748B', fontSize: fs(10) }}
-            title="Запиши план в заявки кнопкой «Применить в заявки» или назначь миксеры на дашборде — тогда появятся статус, время и объём"
+          <DarkHoverTip
+            tip="Нет связи с рейсом в заявке — запиши план в заявки или сверь номера миксеров"
+            maxWidth={320}
           >
-            нет в заявке
-          </span>
+            <span style={{ color: '#64748B', fontSize: fs(10) }}>
+              нет в заявке
+            </span>
+          </DarkHoverTip>
         )}
       </span>
     </div>

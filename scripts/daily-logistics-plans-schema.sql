@@ -56,14 +56,29 @@ begin
   end if;
 end $$;
 
--- Broadcast realtime (тот же паттерн, что у orders / order_mixers)
+-- Broadcast: тонкий soft-lock — scripts/broadcast-optimize-planner.sql
+-- (fallback на общий broadcast_table_change, если оптимизацию ещё не накатили)
 drop trigger if exists daily_logistics_plans_broadcast on public.daily_logistics_plans;
-create trigger daily_logistics_plans_broadcast
-  after insert or update or delete on public.daily_logistics_plans
-  for each row execute function public.broadcast_table_change();
+do $$
+begin
+  if exists (
+    select 1 from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'broadcast_daily_logistics_plans_change'
+  ) then
+    create trigger daily_logistics_plans_broadcast
+      after insert or update or delete on public.daily_logistics_plans
+      for each row execute function public.broadcast_daily_logistics_plans_change();
+  else
+    create trigger daily_logistics_plans_broadcast
+      after insert or update or delete on public.daily_logistics_plans
+      for each row execute function public.broadcast_table_change();
+  end if;
+end $$;
 
 -- Топик: daily_logistics_plans:all
 
 -- Связанный RPC (атомарное «Применить в заявки»):
 --   scripts/apply-logistics-plan-order.sql
 --   function public.apply_logistics_plan_trips(...)
+-- Оптимизация broadcast: scripts/broadcast-optimize-planner.sql

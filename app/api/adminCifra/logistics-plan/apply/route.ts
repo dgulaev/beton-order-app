@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { pruneGhostTripsFromLogisticsPlan } from '@/lib/pruneLogisticsPlanGhosts';
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 
 const FINAL_STATUSES = ['completed', 'cancelled'];
@@ -479,6 +480,35 @@ export async function POST(request: NextRequest) {
     const deletedTotal = results.reduce((s, r) => s + r.deleted, 0);
     const success = broken.length === 0;
 
+    // Один RELOAD вместо N per-row broadcast (RPC подавляет их через
+    // app.suppress_om_broadcast). Если RPC ещё не накатили — функция может
+    // отсутствовать; тогда клиенты живут на обычных INSERT/DELETE.
+    if (insertedTotal + deletedTotal > 0) {
+      const { error: reloadErr } = await supabase.rpc('notify_order_mixers_reload');
+      if (
+        reloadErr &&
+        !/could not find the function|schema cache|does not exist|PGRST202/i.test(
+          `${reloadErr.code || ''} ${reloadErr.message || ''}`,
+        )
+      ) {
+        console.warn('notify_order_mixers_reload:', reloadErr.message);
+      }
+    }
+
+    // Убрать из плана слоты «нет в заявке» по заявкам из этого apply
+    // (в т.ч. пропущенные с ручными назначениями — призраки плана).
+    let prunedGhosts = 0;
+    try {
+      const prune = await pruneGhostTripsFromLogisticsPlan({
+        supabase,
+        orderIds: [...byOrder.keys()],
+        actorName,
+      });
+      prunedGhosts = prune.pruned;
+    } catch (e) {
+      console.warn('pruneGhostTrips after apply:', e);
+    }
+
     return NextResponse.json(
       {
         success,
@@ -488,6 +518,7 @@ export async function POST(request: NextRequest) {
         brokenOrders: broken.length,
         insertedTotal,
         deletedTotal,
+        prunedGhosts,
         results,
         links,
         ...(broken.length

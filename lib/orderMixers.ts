@@ -152,7 +152,7 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
 
   const { data: mixer, error: fetchError } = await supabase
     .from('order_mixers')
-    .select(`*, orders!inner(id, status, volume, grade, address)`)
+    .select(`*, orders!inner(id, status, volume, grade, address, delivery_date)`)
     .eq('id', id)
     .single();
 
@@ -686,6 +686,19 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
           user_name: 'Система',
           user_role: 'system',
         });
+        try {
+          const { pruneGhostTripsFromLogisticsPlan } = await import(
+            '@/lib/pruneLogisticsPlanGhosts'
+          );
+          await pruneGhostTripsFromLogisticsPlan({
+            supabase,
+            orderIds: [orderId],
+            deliveryDate: (mixer.orders as { delivery_date?: string } | null)?.delivery_date,
+            actorName: 'Система',
+          });
+        } catch (e) {
+          console.warn('pruneGhostTrips after auto-complete:', e);
+        }
       } else {
         console.error('Не удалось автоматически завершить заявку:', completeError);
       }
@@ -767,7 +780,7 @@ export async function updateOrderMixerVolume(params: UpdateOrderMixerVolumeParam
 
   const { data: mixer, error: fetchError } = await supabase
     .from('order_mixers')
-    .select(`*, orders!inner(id, status, volume)`)
+    .select(`*, orders!inner(id, status, volume, delivery_date)`)
     .eq('id', id)
     .single();
 
@@ -859,6 +872,19 @@ export async function updateOrderMixerVolume(params: UpdateOrderMixerVolumeParam
           user_name: 'Система',
           user_role: 'system',
         });
+        try {
+          const { pruneGhostTripsFromLogisticsPlan } = await import(
+            '@/lib/pruneLogisticsPlanGhosts'
+          );
+          await pruneGhostTripsFromLogisticsPlan({
+            supabase,
+            orderIds: [orderId],
+            deliveryDate: (mixer.orders as { delivery_date?: string } | null)?.delivery_date,
+            actorName: 'Система',
+          });
+        } catch (e) {
+          console.warn('pruneGhostTrips after volume auto-complete:', e);
+        }
       } else {
         console.error('Не удалось автоматически завершить заявку после правки объёма миксера:', completeError);
       }

@@ -15,6 +15,8 @@ export type SharedLogisticsPlanRecord = {
   editing_by_name?: string | null;
   editing_by_user_id?: number | null;
   editing_at?: string | null;
+  /** Soft-lock heartbeat без полного payload (серверный thin broadcast) */
+  _thin?: boolean;
 };
 
 /**

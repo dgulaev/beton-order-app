@@ -567,6 +567,11 @@ export function useRealtimeOrderMixers(
      * (потенциально урезанного) списка `mixers`.
      */
     onUpdateRow?: (formattedRecord: any) => void;
+    /**
+     * Один сигнал после apply плана (RELOAD), когда per-row INSERT/DELETE
+     * подавлены на сервере. Обычно — фоновый refetch списка миксеров.
+     */
+    onReload?: () => void;
   }
 ) {
   // Актуальный список заявок через ref — иначе onUpdate/onInsert замыкают
@@ -577,11 +582,13 @@ export function useRealtimeOrderMixers(
   const onInsertRow = options?.onInsertRow;
   const onDeleteRow = options?.onDeleteRow;
   const onUpdateRow = options?.onUpdateRow;
+  const onReload = options?.onReload;
 
   const { status } = useRealtimeBroadcast({
     topic: 'order_mixers:all',
     enabled: options?.enabled,
     onStatusChange: options?.onStatusChange,
+    onReload,
     onInsert: (newRecord) => {
       const formatted = formatOrderMixer(newRecord, ordersRef.current);
       if (activeOnly && !isActiveMixerStatus(formatted.status)) return;

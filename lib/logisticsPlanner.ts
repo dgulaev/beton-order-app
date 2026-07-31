@@ -6,6 +6,7 @@
  * Режимы: full_day | stage (не затирает locked/done).
  */
 
+import { isOutsideBryansk } from '@/lib/bryanskAddress';
 import { formatTimeHHMM, pluralRu } from '@/lib/ruLocale';
 import {
   applyRoadCalibrationFactor,
@@ -14,6 +15,75 @@ import {
   resolveUnloadMinutes,
   type PlannerCalibration,
 } from '@/lib/plannerCalibration';
+
+/**
+ * Свои миксеры «городской радиус»: только г. Брянск и не дальше LOCAL_RADIUS_MAX_KM
+ * от завода. Маркеры — нормализованный хвост госномера (кириллица→латиница).
+ * К332КК32 → 332KK32, О021УХ32 → 021YX32.
+ */
+export const LOCAL_RADIUS_MIXER_MARKERS = ['332KK32', '021YX32'] as const;
+/** Макс. дорожное расстояние от завода (км), как в travel-time v2. */
+export const LOCAL_RADIUS_MAX_KM = 30;
+/** Как в app/api/adminCifra/travel-time (формула v2). */
+const TRAVEL_AVG_SPEED_KMH = 55;
+
+const PLATE_LOOKALIKES_PLANNER: Record<string, string> = {
+  А: 'A',
+  В: 'B',
+  Е: 'E',
+  К: 'K',
+  М: 'M',
+  Н: 'H',
+  О: 'O',
+  Р: 'P',
+  С: 'C',
+  Т: 'T',
+  У: 'Y',
+  Х: 'X',
+};
+
+function normalizePlannerPlate(raw: string): string {
+  return String(raw || '')
+    .trim()
+    .toUpperCase()
+    .replace(/ё/g, 'Е')
+    .replace(/[\s\-_.]/g, '')
+    .replace(/[АВЕКМНОРСТУХ]/g, (ch) => PLATE_LOOKALIKES_PLANNER[ch] || ch);
+}
+
+/** Миксер 332 / 021 — только ближние заявки по Брянску. */
+export function isLocalRadiusMixer(mixerNumber: string): boolean {
+  const key = normalizePlannerPlate(mixerNumber);
+  return LOCAL_RADIUS_MIXER_MARKERS.some((m) => key.includes(m));
+}
+
+/** Оценка дорожного км из road_time_min (обратная к travel-time v2). */
+export function estimateDeliveryRoadKm(roadMin: number | null | undefined): number {
+  return (Math.max(0, Number(roadMin) || 0) * TRAVEL_AVG_SPEED_KMH) / 60;
+}
+
+/** Заявка подходит под «городской радиус» (г. Брянск и ≤30 км по дороге). */
+export function isLocalRadiusOrderEligible(
+  order: { address?: string | null; roadMin?: number | null },
+  opts?: { pickup?: boolean },
+): boolean {
+  if (opts?.pickup) return true;
+  if (isOutsideBryansk(order.address)) return false;
+  return estimateDeliveryRoadKm(order.roadMin) <= LOCAL_RADIUS_MAX_KM + 0.05;
+}
+
+/**
+ * Можно ли ставить миксер с ограничением радиуса на эту заявку.
+ * Самовывоз (на заводе) — всегда ок. Иначе: не «за городом» и ≤30 км по дороге.
+ */
+export function mixerAllowedForPlannerOrder(
+  mixerNumber: string,
+  order: { address?: string | null; roadMin?: number | null },
+  opts?: { pickup?: boolean },
+): boolean {
+  if (!isLocalRadiusMixer(mixerNumber)) return true;
+  return isLocalRadiusOrderEligible(order, opts);
+}
 
 /**
  * Активная калибровка на время planLogistics / связанных хелперов.
@@ -787,6 +857,10 @@ function pickMixerForChunk(
     tripCounts?: Map<string, number>;
     /** Открытие БСУ на этот день (с учётом ранних доставок) */
     plantOpenMinutes?: number;
+    /** Адрес заявки — для ограничения 332/021 */
+    orderAddress?: string | null;
+    /** Самовывоз — радиус не проверяем */
+    orderPickup?: boolean;
   },
 ): PlannerMixer | null {
   const allowNight = opts?.allowNight ?? false;
@@ -795,6 +869,11 @@ function pickMixerForChunk(
   const exclude = opts?.excludeNumbers;
   const tripCounts = opts?.tripCounts;
   const plantOpen = opts?.plantOpenMinutes ?? PLANT_OPEN_DEFAULT_MINUTES;
+  const orderForRadius = {
+    address: opts?.orderAddress,
+    roadMin: baseRoad,
+  };
+  const orderPickup = Boolean(opts?.orderPickup);
   // Штраф за уже назначенные рейсы (~интервал стыка): иначе верх рейтинга
   // забирает все слоты, а 8-й выбранный миксер сидит без рейса.
   const LOAD_BALANCE_PENALTY_MIN = 12;
@@ -837,6 +916,13 @@ function pickMixerForChunk(
   const consider = (onlyWithinWindow: boolean, allowOrphan: boolean) => {
     rankedMixers.forEach((m, rank) => {
       if (exclude?.has(m.number)) return;
+      if (
+        !mixerAllowedForPlannerOrder(m.number, orderForRadius, {
+          pickup: orderPickup,
+        })
+      ) {
+        return;
+      }
       const cap = Number(m.volume) || 0;
       if (cap <= 0.05) return;
       const vol = Math.min(remainingVolume, cap);
@@ -1258,6 +1344,25 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
 
     const baseRoadMin = Math.max(5, Number(order.roadMin) || 30);
 
+    // 332 / 021 — только г. Брянск и ≤30 км: предупредим один раз, если режем.
+    if (
+      selectedMixers.some((m) => isLocalRadiusMixer(m.number)) &&
+      !isLocalRadiusOrderEligible(
+        { address: order.address, roadMin: baseRoadMin },
+        { pickup: false },
+      )
+    ) {
+      const km = Math.round(estimateDeliveryRoadKm(baseRoadMin));
+      const why = isOutsideBryansk(order.address)
+        ? 'адрес вне г. Брянск'
+        : `~${km} км от завода (>${LOCAL_RADIUS_MAX_KM} км)`;
+      warnings.push({
+        level: 'warn',
+        message:
+          `Заявка #${order.id}: ${why} — миксеры 332 и 021 в расчёт не ставим.`,
+      });
+    }
+
     let nextArrive = arriveTarget;
     let placedVol = 0;
     let firstTrip = true;
@@ -1281,6 +1386,8 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
             excludeNumbers,
             tripCounts,
             plantOpenMinutes: plantOpen,
+            orderAddress: order.address,
+            orderPickup: false,
           },
         );
         if (!mixer) break;
@@ -1442,6 +1549,15 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
           );
         });
         for (const mixer of gapCandidates) {
+          if (
+            !mixerAllowedForPlannerOrder(
+              mixer.number,
+              { address: order.address, roadMin: baseRoadMin },
+              { pickup: false },
+            )
+          ) {
+            continue;
+          }
           const volume = Math.min(rem, Number(mixer.volume) || 0);
           if (volume <= 0.05) continue;
           const loadMin = loadMinutesForVolume(volume);
@@ -2643,4 +2759,209 @@ export function replanAfterTripDelay(input: {
     ...input,
     mutate: (t) => applyTripDelayMinutes(t, input.delayMin),
   });
+}
+
+/** Правка планового объёма рейса → пересчёт load/arrive/return и фиксация. */
+export function applyTripPlanVolume(trip: PlannedTrip, volume: number): PlannedTrip {
+  const vol = Math.round(Math.max(0.1, Math.min(20, Number(volume) || 0)) * 10) / 10;
+  const loadMin = loadMinutesForVolume(vol);
+  const unloadMin = Math.max(0, Number(trip.unloadMin) || PLANNER_UNLOAD_MIN);
+  const delay = Math.max(0, Math.round(Number(trip.delayMin) || 0));
+  const loadAt = trip.loadAtMin ?? parseHhMm(trip.loadTime) ?? 0;
+  const isPu = Boolean(trip.pickup || trip.mixerNumber === PICKUP_MIXER_NUMBER);
+  if (isPu) {
+    const ready = loadAt + loadMin;
+    return {
+      ...trip,
+      volume: vol,
+      loadMin,
+      loadAtMin: loadAt,
+      loadTime: formatMinutes(loadAt),
+      arriveAtMin: ready,
+      arriveTime: formatMinutes(ready),
+      unloadDoneTime: formatMinutes(ready),
+      returnAtMin: ready,
+      returnTime: '—',
+      locked: true,
+    };
+  }
+  const road = Math.max(0, Number(trip.roadMin) || 0);
+  const arrive = loadAt + loadMin + road;
+  const unloadDone = arrive + unloadMin;
+  const returnAt = unloadDone + road;
+  return {
+    ...trip,
+    volume: vol,
+    loadMin,
+    loadAtMin: loadAt,
+    loadTime: formatMinutes(loadAt),
+    arriveAtMin: arrive,
+    arriveTime: formatMinutes(arrive),
+    unloadDoneTime: formatMinutes(unloadDone),
+    returnAtMin: returnAt,
+    returnTime: formatMinutes(returnAt),
+    delayMin: delay || undefined,
+    locked: true,
+  };
+}
+
+/**
+ * Смена объёма рейса (бочка забита и т.п.) → фиксация рейса, хвост stage.
+ * В `mixers` передавай парк с уже уменьшенной вместимостью миксера.
+ */
+export function replanAfterTripVolumeChange(input: {
+  allTrips: PlannedTrip[];
+  tripId: string;
+  volume: number;
+  orders: PlannerOrder[];
+  mixers: PlannerMixer[];
+  doneOrderIds?: Array<number | string>;
+  allowNight?: boolean;
+  useTraffic?: boolean;
+  factDelayMin?: number;
+  dayTrips?: LiveTripFact[];
+  nowMinutes?: number | null;
+  calibration?: PlannerCalibration | null;
+}): {
+  result: PlanLogisticsResult;
+  locked: PlannedTrip[];
+  shifted: PlannedTrip | null;
+} {
+  return replanTailAfterTripMutate({
+    ...input,
+    mutate: (t) => applyTripPlanVolume(t, input.volume),
+  });
+}
+
+/**
+ * Перетаскивание рейса: внутри заявки или в другую заявку.
+ * Вставляем beforeTripId (или в конец заявки), фиксируем голову, хвост пересчитываем.
+ */
+export function replanAfterTripReorder(input: {
+  allTrips: PlannedTrip[];
+  tripId: string;
+  targetOrderId: string | number;
+  /** null/undefined — в конец рейсов целевой заявки (по текущему времени) */
+  beforeTripId?: string | null;
+  orders: PlannerOrder[];
+  mixers: PlannerMixer[];
+  doneOrderIds?: Array<number | string>;
+  allowNight?: boolean;
+  useTraffic?: boolean;
+  factDelayMin?: number;
+  dayTrips?: LiveTripFact[];
+  nowMinutes?: number | null;
+  calibration?: PlannerCalibration | null;
+}): {
+  result: PlanLogisticsResult;
+  locked: PlannedTrip[];
+  shifted: PlannedTrip | null;
+} {
+  const targetOid = String(input.targetOrderId);
+  const order = input.orders.find((o) => String(o.id) === targetOid);
+  const sorted = [...input.allTrips].sort(
+    (a, b) => tripLoadSortKey(a) - tripLoadSortKey(b),
+  );
+  const fromIdx = sorted.findIndex((t) => t.id === input.tripId);
+  if (fromIdx < 0) {
+    return replanTailAfterTripMutate({
+      ...input,
+      mutate: (t) => t,
+    });
+  }
+
+  const moving = sorted[fromIdx];
+  if (moving.done || moving.pickup || moving.mixerNumber === PICKUP_MIXER_NUMBER) {
+    return {
+      result: planLogistics({
+        mode: 'stage',
+        orders: input.orders,
+        mixers: input.mixers,
+        lockedTrips: input.allTrips.filter((t) => t.locked || t.done),
+        doneOrderIds: input.doneOrderIds,
+        allowNight: input.allowNight,
+        useTraffic: input.useTraffic,
+        factDelayMin: input.factDelayMin,
+        calibration: input.calibration,
+      }),
+      locked: [],
+      shifted: null,
+    };
+  }
+
+  const without = sorted.filter((t) => t.id !== input.tripId);
+  let insertIdx = without.length;
+  if (input.beforeTripId) {
+    const bi = without.findIndex((t) => t.id === input.beforeTripId);
+    if (bi >= 0) insertIdx = bi;
+  } else {
+    let lastOfOrder = -1;
+    for (let i = 0; i < without.length; i++) {
+      if (String(without[i].orderId) === targetOid) lastOfOrder = i;
+    }
+    insertIdx = lastOfOrder >= 0 ? lastOfOrder + 1 : without.length;
+  }
+
+  // Слот по времени: у соседа «перед нами» / прежнее время / после предыдущего
+  let slotLoad =
+    moving.loadAtMin ?? parseHhMm(moving.loadTime) ?? PLANT_OPEN_DEFAULT_MINUTES;
+  if (input.beforeTripId) {
+    const before = without.find((t) => t.id === input.beforeTripId);
+    if (before) {
+      slotLoad = before.loadAtMin ?? parseHhMm(before.loadTime) ?? slotLoad;
+    }
+  } else if (insertIdx > 0) {
+    const prev = without[insertIdx - 1];
+    const prevLoad = prev.loadAtMin ?? parseHhMm(prev.loadTime) ?? slotLoad;
+    const prevRet = prev.returnAtMin ?? parseHhMm(prev.returnTime);
+    slotLoad = Math.max(slotLoad, prevRet != null ? prevRet : prevLoad);
+  }
+
+  // При переносе в другую заявку — дорога от целевого адреса (не старого).
+  let roadForMove = Math.max(0, Number(moving.roadMin) || 0);
+  if (order && String(moving.orderId) !== targetOid) {
+    const baseRoad = Math.max(5, Number(order.roadMin) || 30);
+    roadForMove = roadWithTraffic(baseRoad, slotLoad, Boolean(input.useTraffic));
+  }
+
+  const relocated = applyManualLoadShiftToTrip(
+    {
+      ...moving,
+      orderId: order?.id ?? input.targetOrderId,
+      client: order?.client || moving.client,
+      roadMin: roadForMove,
+    },
+    slotLoad,
+  );
+
+  const nextSeq = [...without.slice(0, insertIdx), relocated, ...without.slice(insertIdx)];
+  const lockedMap = new Map<string, PlannedTrip>();
+  for (let i = 0; i <= insertIdx; i++) {
+    const t = nextSeq[i];
+    lockedMap.set(t.id, i === insertIdx ? relocated : { ...t, locked: true });
+  }
+  for (const t of nextSeq.slice(insertIdx + 1)) {
+    if (t.locked || t.done) lockedMap.set(t.id, { ...t, locked: true });
+  }
+  const locked = [...lockedMap.values()].sort(
+    (a, b) => tripLoadSortKey(a) - tripLoadSortKey(b),
+  );
+
+  const live = applyLiveFactToOrders(input.orders, input.dayTrips || [], {
+    nowMinutes: input.nowMinutes,
+  });
+
+  const result = planLogistics({
+    mode: 'stage',
+    orders: live.orders,
+    mixers: input.mixers,
+    lockedTrips: locked,
+    doneOrderIds: input.doneOrderIds,
+    allowNight: input.allowNight,
+    useTraffic: input.useTraffic,
+    factDelayMin: input.factDelayMin,
+    calibration: input.calibration,
+  });
+
+  return { result, locked, shifted: relocated };
 }

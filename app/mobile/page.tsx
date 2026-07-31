@@ -105,48 +105,6 @@ export default function MobileDashboard() {
     }
   );
 
-  // 🔥 Live-обновление миксеров по broadcast (order_mixers:all).
-  // Раньше activeMixers/mixerAssignments грузились только fetch'ем при открытии
-  // страницы — смена «Загрузка» → «В пути» на десктопе не доходила до мобилки,
-  // пока не разбудят вкладку (useWakeRefresh).
-  const mixersRealtimeEnabled = Boolean(userId) && initialOrdersLoaded;
-
-  useRealtimeOrderMixers(setActiveMixers, {
-    activeOnly: true,
-    orders: allOrders,
-    enabled: mixersRealtimeEnabled,
-  });
-
-  useRealtimeOrderMixers(setMixerAssignments, {
-    orders: allOrders,
-    enabled: mixersRealtimeEnabled,
-  });
-
-  // Подтягиваем delivery_date/клиента в миксеры, когда подгрузились/обновились заявки
-  useEffect(() => {
-    if (!allOrders.length) return;
-    setActiveMixers((prev) => prev.map((m) => formatOrderMixer(m, allOrders)));
-    setMixerAssignments((prev) => prev.map((m) => formatOrderMixer(m, allOrders)));
-  }, [allOrders]);
-
-  // Синхронизация открытой модалки с realtime-обновлениями allOrders
-  // (статус/логистика/«под вопросом» меняются с сервера или с другого экрана).
-  useEffect(() => {
-    if (!selectedOrder?.id) return;
-    const fresh = allOrders.find((o) => String(o.id) === String(selectedOrder.id));
-    if (
-      fresh &&
-      (fresh.status !== selectedOrder.status ||
-        (fresh as any).logistics_ready !== (selectedOrder as any).logistics_ready ||
-        !!(fresh as any).is_questionable !== !!(selectedOrder as any).is_questionable)
-    ) {
-      setSelectedOrder((prev: any) => (prev ? { ...prev, ...fresh } : prev));
-    }
-    if (!fresh && allOrders.length > 0) {
-      setSelectedOrder(null);
-    }
-  }, [allOrders, selectedOrder?.id]);
-
   // 🔥 Реалтайм присылает ТОЛЬКО будущие изменения (INSERT/UPDATE/DELETE),
   // он никогда не отдаёт уже существующие строки. Без этого fetch страница
   // при открытии/смене даты будет пустой, пока кто-то не изменит заказ.
@@ -210,6 +168,67 @@ const orderIdsKey = useMemo(
   () => allOrders.map((o: any) => o.id).join(','),
   [allOrders]
 );
+
+  // 🔥 Live-обновление миксеров по broadcast (order_mixers:all).
+  // Раньше activeMixers/mixerAssignments грузились только fetch'ем при открытии
+  // страницы — смена «Загрузка» → «В пути» на десктопе не доходила до мобилки,
+  // пока не разбудят вкладку (useWakeRefresh).
+  // После apply: один общий onReload (два хука на один топик — без двойного fetch).
+  const mixersRealtimeEnabled = Boolean(userId) && initialOrdersLoaded;
+
+  const onMixersReload = useCallback(() => {
+    fetch('/api/adminCifra/active-mixers')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((mixers) => {
+        if (Array.isArray(mixers)) setActiveMixers(mixers);
+      })
+      .catch(() => {});
+    if (!orderIdsKey) return;
+    fetch(`/api/adminCifra/order-mixers?orderIds=${orderIdsKey}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((assignments) => {
+        if (Array.isArray(assignments)) setMixerAssignments(assignments);
+      })
+      .catch(() => {});
+  }, [orderIdsKey]);
+
+  useRealtimeOrderMixers(setActiveMixers, {
+    activeOnly: true,
+    orders: allOrders,
+    enabled: mixersRealtimeEnabled,
+    // Один onReload на топик (второй хук без onReload — иначе двойной fetch)
+    onReload: onMixersReload,
+  });
+
+  useRealtimeOrderMixers(setMixerAssignments, {
+    orders: allOrders,
+    enabled: mixersRealtimeEnabled,
+  });
+
+  // Подтягиваем delivery_date/клиента в миксеры, когда подгрузились/обновились заявки
+  useEffect(() => {
+    if (!allOrders.length) return;
+    setActiveMixers((prev) => prev.map((m) => formatOrderMixer(m, allOrders)));
+    setMixerAssignments((prev) => prev.map((m) => formatOrderMixer(m, allOrders)));
+  }, [allOrders]);
+
+  // Синхронизация открытой модалки с realtime-обновлениями allOrders
+  // (статус/логистика/«под вопросом» меняются с сервера или с другого экрана).
+  useEffect(() => {
+    if (!selectedOrder?.id) return;
+    const fresh = allOrders.find((o) => String(o.id) === String(selectedOrder.id));
+    if (
+      fresh &&
+      (fresh.status !== selectedOrder.status ||
+        (fresh as any).logistics_ready !== (selectedOrder as any).logistics_ready ||
+        !!(fresh as any).is_questionable !== !!(selectedOrder as any).is_questionable)
+    ) {
+      setSelectedOrder((prev: any) => (prev ? { ...prev, ...fresh } : prev));
+    }
+    if (!fresh && allOrders.length > 0) {
+      setSelectedOrder(null);
+    }
+  }, [allOrders, selectedOrder?.id]);
 
 useEffect(() => {
   let cancelled = false;

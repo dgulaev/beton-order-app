@@ -140,7 +140,13 @@ function PlanningPageInner() {
   }, [monthKey, fetchOrdersForMonth]);
 
   useRealtimeOrders(setAllOrders);
-  useRealtimeOrderMixers(setMixerAssignments, { orders: allOrders });
+  useRealtimeOrderMixers(setMixerAssignments, {
+    orders: allOrders,
+    onReload: () => {
+      const [y, m] = monthKey.split('-').map(Number);
+      void fetchOrdersForMonth(y, m);
+    },
+  });
 
   useEffect(() => {
     if (!allOrders.length) return;

@@ -158,6 +158,8 @@ export default function DayPlanKpiCard({
   useRealtimeDailyLogisticsPlan(
     dateKey,
     (record) => {
+      // Тонкий soft-lock: без payload, revision тот же — KPI не трогаем
+      if (record._thin) return;
       if (!record.payload || !record.revision) {
         setPlan(null);
         revisionRef.current = 0;

@@ -27,6 +27,8 @@ import {
 } from '@/lib/orderLogistics';
 import { isVehicleKind, type VehicleKind } from '@/lib/fleetCatalog';
 import { loadingPointCoords, type LoadingPoint } from '@/lib/loadingPoints';
+import { normalizeGradeKey } from '@/lib/mekaGradeMap';
+import { findRecipeByGrade } from '@/lib/recipeAdditives';
 
 interface NewOrderModalProps {
   isOpen: boolean;                    // ← обязательно
@@ -207,11 +209,36 @@ export default function NewOrderModal({
 
   useEffect(() => {
     setForm((prev) => {
-      if (recipes.length === 0) {
-        return prev.grade ? { ...prev, grade: '' } : prev;
+      // Рецепты ещё не пришли — не затираем марку из копирования / initialData.
+      // Раньше тут ставили grade: '' → после загрузки всегда подставлялся М300.
+      if (recipes.length === 0) return prev;
+
+      const trim = String(prev.grade || '').trim();
+      if (trim) {
+        const exact = recipes.find((r: any) => String(r.code || '').trim() === trim);
+        if (exact?.code) {
+          return prev.grade === exact.code ? prev : { ...prev, grade: exact.code };
+        }
+        const key = normalizeGradeKey(trim);
+        const byKey = recipes.find(
+          (r: any) => normalizeGradeKey(String(r.code || '')) === key,
+        );
+        if (byKey?.code) return { ...prev, grade: byKey.code };
+
+        const soft = findRecipeByGrade(recipes, trim);
+        if (soft?.code && recipes.some((r: any) => r.code === soft.code)) {
+          return { ...prev, grade: soft.code };
+        }
+
+        // Марка из исходной заявки есть, но в текущем фильтре не нашлась —
+        // оставляем как есть (не подменяем на М300).
+        const initialGrade = String(initialData?.grade || '').trim();
+        if (initialGrade && normalizeGradeKey(initialGrade) === key) {
+          return prev;
+        }
       }
-      const codes = new Set(recipes.map((r: any) => r.code));
-      if (prev.grade && codes.has(prev.grade)) return prev;
+
+      // Пустая форма / смена типа без валидной марки — дефолт
       if (orderType === 'concrete') {
         const m300 =
           recipes.find((r: any) => r.code === 'М300') ||
@@ -220,7 +247,7 @@ export default function NewOrderModal({
       }
       return recipes[0]?.code ? { ...prev, grade: recipes[0].code } : { ...prev, grade: '' };
     });
-  }, [recipes, orderType]);
+  }, [recipes, orderType, initialData?.grade]);
 
   // ==================== 4.1 ЗАГРУЗКА ТАРИФОВ ДОСТАВКИ ====================
   // Тарифы (цены за рейс, ставка за км за городом и т.п.) редактирует admin
@@ -759,11 +786,17 @@ const handleSubmit = async (e: React.FormEvent) => {
                   value={form.grade}
                   onChange={(grade) => setForm((p) => ({ ...p, grade }))}
                   style={{ padding: s('12px', '14px') }}
-                  options={recipes.map((r) => ({
-                    value: r.code,
-                    label: r.name,
-                    text: r.name,
-                  }))}
+                  options={[
+                    ...recipes.map((r) => ({
+                      value: r.code,
+                      label: r.name,
+                      text: r.name,
+                    })),
+                    // Копия заявки: марка из исходника, если её нет в текущем списке
+                    ...(form.grade && !recipes.some((r) => r.code === form.grade)
+                      ? [{ value: form.grade, label: form.grade, text: form.grade }]
+                      : []),
+                  ]}
                 />
 
                 <input 

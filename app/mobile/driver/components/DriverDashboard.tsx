@@ -328,6 +328,11 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
       fetchToday();
       fetchHistory();
     },
+    // Apply плана: без per-row INSERT — один refetch (без баннера на каждый рейс)
+    onReload: () => {
+      void fetchToday();
+      void fetchHistory();
+    },
   });
 
   // ==================== ТАЙМЕР АКТИВНЫХ РЕЙСОВ ====================

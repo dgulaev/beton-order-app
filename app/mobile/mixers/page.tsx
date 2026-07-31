@@ -481,7 +481,17 @@ export default function MobileMixersPage() {
     void fetchUnits(tab);
   }, [tab, fetchUnits]);
 
-  useRealtimeOrderMixers(setActiveTrips, { activeOnly: true });
+  useRealtimeOrderMixers(setActiveTrips, {
+    activeOnly: true,
+    onReload: () => {
+      fetch('/api/adminCifra/active-mixers')
+        .then((res) => (res.ok ? res.json() : null))
+        .then((trips) => {
+          if (Array.isArray(trips)) setActiveTrips(trips);
+        })
+        .catch(() => {});
+    },
+  });
 
   useWakeRefresh(() => {
     if (vehicleKind !== 'mixer') return;

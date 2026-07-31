@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { pruneGhostTripsFromLogisticsPlan } from '@/lib/pruneLogisticsPlanGhosts';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -300,6 +301,26 @@ export async function PUT(request: NextRequest) {
     }
 
    // console.log(`✅ Заявка #${id} успешно обновлена. Новый статус: ${updateData.status || currentOrder.status}`);
+
+    // Закрытие/отмена → вычистить призраков плана («нет в заявке»)
+    const newStatus = updateData.status != null ? String(updateData.status) : null;
+    if (
+      newStatus &&
+      (newStatus === 'completed' || newStatus === 'cancelled') &&
+      String(currentOrder.status) !== newStatus
+    ) {
+      try {
+        await pruneGhostTripsFromLogisticsPlan({
+          supabase,
+          orderIds: [id],
+          deliveryDate: currentOrder.delivery_date,
+          removeAllOrderIds: newStatus === 'cancelled' ? [id] : undefined,
+          actorName: finalUserName,
+        });
+      } catch (e) {
+        console.warn('pruneGhostTrips after order status:', e);
+      }
+    }
 
     return NextResponse.json({ 
       success: true, 

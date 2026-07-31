@@ -16,6 +16,8 @@ import PlannerTripFactRow from './PlannerTripFactRow';
 import PlannerOperatorView from './PlannerOperatorView';
 import OrderPlanProgressBar from './OrderPlanProgressBar';
 import PlannerInsightsPanel from './PlannerInsightsPanel';
+import PlannerFleetMixerChip from './PlannerFleetMixerChip';
+import DarkHoverTip from './DarkHoverTip';
 import { appAlert, appConfirm } from './appDialog';
 import { useUserRole } from '@/app/providers/UserRoleProvider';
 import {
@@ -47,6 +49,8 @@ import {
   rankFleetForDay,
   replanAfterManualTripShift,
   replanAfterTripDelay,
+  replanAfterTripReorder,
+  replanAfterTripVolumeChange,
   resolvePlantOpenMinutes,
   type PlannedTrip,
   type PlannerMixer,
@@ -124,6 +128,9 @@ type FleetRow = {
   volume: number;
   type: string;
   unload_allowance_min?: number | null;
+  model?: string | null;
+  driver?: string | null;
+  driverPhone?: string | null;
 };
 
 type Props = {
@@ -161,6 +168,7 @@ type DraftState = {
   orderShifts?: PlannerOrderShift[];
   warnings?: PlannerWarning[];
   waves?: PlannerWave[];
+  mixerVolumeOverrides?: Record<string, number>;
 };
 
 type SharedPlanMeta = {
@@ -208,7 +216,20 @@ function payloadFromDraft(
     orderShifts: draft.orderShifts,
     warnings,
     waves: draft.waves,
+    mixerVolumeOverrides: draft.mixerVolumeOverrides,
   };
+}
+
+function parseMixerVolumeOverrides(
+  raw: unknown,
+): Record<string, number> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) out[String(k)] = Math.round(n * 10) / 10;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function parseSharedPayload(raw: unknown): DailyLogisticsPlanPayload | null {
@@ -228,6 +249,7 @@ function parseSharedPayload(raw: unknown): DailyLogisticsPlanPayload | null {
     orderShifts: Array.isArray(p.orderShifts) ? p.orderShifts : [],
     warnings: Array.isArray(p.warnings) ? p.warnings : [],
     waves: Array.isArray(p.waves) ? p.waves : [],
+    mixerVolumeOverrides: parseMixerVolumeOverrides(p.mixerVolumeOverrides),
   };
 }
 
@@ -319,6 +341,15 @@ export default function LogisticsPlannerTab({
   /** V2: калибровка норм из истории */
   const [calibration, setCalibration] = useState<PlannerCalibration | null>(null);
   const calibrationRef = useRef<PlannerCalibration | null>(null);
+  /** Правки вместимости миксера на день (номер → м³) */
+  const [mixerVolumeOverrides, setMixerVolumeOverrides] = useState<
+    Record<string, number>
+  >({});
+  const mixerVolumeOverridesRef = useRef<Record<string, number>>({});
+  /** DnD рейсов в окне интеллекта */
+  const [dragTripId, setDragTripId] = useState<string | null>(null);
+  const [dragOverTripId, setDragOverTripId] = useState<string | null>(null);
+  const [dragOverOrderId, setDragOverOrderId] = useState<string | null>(null);
   const dayOrderIdSet = useMemo(
     () => new Set(orders.map((o) => String(o.id))),
     [orders],
@@ -680,13 +711,24 @@ export default function LogisticsPlannerTab({
         if (cancelled) return;
         const rows: FleetRow[] = (Array.isArray(mixers) ? mixers : [])
           .filter((m: any) => m.status !== 'inactive' && m.status !== 'archived')
-          .map((m: any) => ({
-            id: m.id,
-            number: String(m.number || ''),
-            volume: Number(m.volume) || 0,
-            type: m.type === 'rented' ? 'rented' : 'own',
-            unload_allowance_min: m.unload_allowance_min ?? null,
-          }))
+          .map((m: any) => {
+            const drivers = Array.isArray(m.mixer_drivers) ? m.mixer_drivers : [];
+            const primary = drivers[0] || null;
+            const driverName =
+              String(m.driver || primary?.driver_name || '').trim() || null;
+            const driverPhone =
+              String(primary?.phone || '').trim() || null;
+            return {
+              id: m.id,
+              number: String(m.number || ''),
+              volume: Number(m.volume) || 0,
+              type: m.type === 'rented' ? 'rented' : 'own',
+              unload_allowance_min: m.unload_allowance_min ?? null,
+              model: String(m.model || '').trim() || null,
+              driver: driverName,
+              driverPhone,
+            };
+          })
           .filter((m: FleetRow) => m.number && m.volume > 0);
         setFleet(rows);
         setStats(statsJson.stats || {});
@@ -735,6 +777,9 @@ export default function LogisticsPlannerTab({
         setUseTraffic(Boolean(draft?.useTraffic));
         setOrderShifts(Array.isArray(draft?.orderShifts) ? draft.orderShifts : []);
         setWaves(Array.isArray(draft?.waves) ? draft.waves : []);
+        const volOv = parseMixerVolumeOverrides(draft?.mixerVolumeOverrides) || {};
+        setMixerVolumeOverrides(volOv);
+        mixerVolumeOverridesRef.current = volOv;
         setActiveWaveId(null);
         setScenarios([]);
         setActiveScenarioId(null);
@@ -764,6 +809,7 @@ export default function LogisticsPlannerTab({
               orderShifts: sharedPayload.orderShifts,
               warnings: sharedPayload.warnings,
               waves: sharedPayload.waves,
+              mixerVolumeOverrides: sharedPayload.mixerVolumeOverrides,
             });
           }
         } else {
@@ -807,22 +853,50 @@ export default function LogisticsPlannerTab({
     });
   }, [orders, dateKey]);
 
+  // Разовая очистка «нет в заявке» у отработанных заявок дня (completed или
+  // объём уже закрыт фактом — даже при status=processing). Результат придёт
+  // через realtime → applyRemotePlan.
+  const prunedDateRef = useRef<string>('');
+  useEffect(() => {
+    if (loadingFleet || !canEditPlan || isOperatorView) return;
+    const apiDate = normalizePlanDateKey(toApiDateKey(dateKey)) || toApiDateKey(dateKey);
+    if (!apiDate || prunedDateRef.current === apiDate) return;
+    let cancelled = false;
+    void fetch('/api/adminCifra/logistics-plan/prune-ghosts', {
+      method: 'POST',
+      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ date: apiDate }),
+    })
+      .then(async (res) => {
+        if (cancelled) return;
+        if (res.ok) prunedDateRef.current = apiDate;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [dateKey, loadingFleet, canEditPlan, isOperatorView]);
+
   const plannerMixers: PlannerMixer[] = useMemo(() => {
     return fleet
       .filter((f) => selectedIds.has(String(f.id)))
       .map((f) => {
         const st = stats[f.number] || { tripCount: 0, volumeSum: 0 };
+        const ov = mixerVolumeOverrides[f.number];
         return {
           id: f.id,
           number: f.number,
-          volume: f.volume,
+          volume:
+            ov != null && ov > 0
+              ? Math.round(Math.min(Number(f.volume) || ov, ov) * 10) / 10
+              : f.volume,
           type: f.type,
           unloadMin: f.unload_allowance_min,
           tripCount: st.tripCount,
           volumeSum: st.volumeSum,
         };
       });
-  }, [fleet, selectedIds, stats]);
+  }, [fleet, selectedIds, stats, mixerVolumeOverrides]);
 
   const rankedAll = useMemo(() => {
     return rankFleetForDay(
@@ -840,6 +914,12 @@ export default function LogisticsPlannerTab({
       }),
     );
   }, [fleet, stats]);
+
+  const fleetById = useMemo(() => {
+    const map = new Map<string, FleetRow>();
+    for (const f of fleet) map.set(String(f.id), f);
+    return map;
+  }, [fleet]);
 
   // Зелёный баннер: всегда от текущего выбора миксеров (клик по тегу → сразу пересчёт).
   const hintText = useMemo(() => {
@@ -1025,6 +1105,10 @@ export default function LogisticsPlannerTab({
     wavesRef.current = waves;
   }, [waves]);
 
+  useEffect(() => {
+    mixerVolumeOverridesRef.current = mixerVolumeOverrides;
+  }, [mixerVolumeOverrides]);
+
   const persist = useCallback(
     (next: Partial<DraftState> & { trips?: PlannedTrip[]; lockedTrips?: PlannedTrip[] }) => {
       const draft: DraftState = {
@@ -1037,6 +1121,8 @@ export default function LogisticsPlannerTab({
         orderShifts: next.orderShifts ?? orderShifts,
         warnings: next.warnings ?? warningsRef.current,
         waves: next.waves ?? wavesRef.current,
+        mixerVolumeOverrides:
+          next.mixerVolumeOverrides ?? mixerVolumeOverridesRef.current,
       };
       if (next.selectedMixerIds) draft.selectedMixerIds = next.selectedMixerIds;
       draftSnapshotRef.current = draft;
@@ -1049,6 +1135,22 @@ export default function LogisticsPlannerTab({
   const applyRemotePlan = useCallback(
     (record: SharedLogisticsPlanRecord, opts?: { force?: boolean }) => {
       const rev = Number(record.revision) || 0;
+
+      // Тонкий soft-lock broadcast — только «сейчас правит…», без payload
+      if (record._thin && !opts?.force) {
+        setSharedMeta((prev) =>
+          prev
+            ? {
+                ...prev,
+                editingByName: record.editing_by_name ?? prev.editingByName,
+                editingByUserId:
+                  record.editing_by_user_id ?? prev.editingByUserId ?? null,
+                editingAt: record.editing_at ?? prev.editingAt,
+              }
+            : prev,
+        );
+        return;
+      }
 
       // Обновить только heartbeat editing_*, если revision не новее
       if (rev > 0 && rev <= localRevisionRef.current && !opts?.force) {
@@ -1093,6 +1195,8 @@ export default function LogisticsPlannerTab({
         setActiveWaveId(null);
         setAllowNight(false);
         setUseTraffic(false);
+        setMixerVolumeOverrides({});
+        mixerVolumeOverridesRef.current = {};
         setScenarios([]);
         setActiveScenarioId(null);
         try {
@@ -1155,11 +1259,15 @@ export default function LogisticsPlannerTab({
       setOrderShifts(payload.orderShifts || []);
       setWaves(payload.waves || []);
       wavesRef.current = payload.waves || [];
+      const volOv = payload.mixerVolumeOverrides || {};
+      setMixerVolumeOverrides(volOv);
+      mixerVolumeOverridesRef.current = volOv;
       saveDraft(dateKey, {
         ...payload,
         lockedTrips: onlyToday(payload.lockedTrips),
         trips: onlyToday(payload.trips),
         waves: payload.waves || [],
+        mixerVolumeOverrides: volOv,
       });
       setTimeout(() => {
         suppressPublishRef.current = false;
@@ -1191,6 +1299,7 @@ export default function LogisticsPlannerTab({
           orderShifts,
           warnings: warningsRef.current,
           waves: wavesRef.current,
+          mixerVolumeOverrides: mixerVolumeOverridesRef.current,
         } satisfies DraftState);
       const apiDate = normalizePlanDateKey(toApiDateKey(dateKey)) || toApiDateKey(dateKey);
       setPublishing(true);
@@ -1433,6 +1542,7 @@ export default function LogisticsPlannerTab({
         orderShifts: opts?.orderShifts ?? orderShifts,
         warnings: nextWarnings,
         waves: nextWaves,
+        mixerVolumeOverrides: mixerVolumeOverridesRef.current,
       },
       immediate: true,
       captureMorning: mode === 'full_day',
@@ -1762,6 +1872,183 @@ export default function LogisticsPlannerTab({
     } finally {
       setBusy(false);
     }
+  };
+
+  /** Правка планового объёма рейса (бочка забита и т.п.) → вместимость миксера + хвост. */
+  const applyTripPlanVolume = async (tripId: string, volume: number) => {
+    if (!canMutatePlan) return;
+    const target = trips.find((t) => t.id === tripId);
+    if (!target) return;
+    const nextVol = Math.round(Math.max(0.1, Math.min(20, Number(volume) || 0)) * 10) / 10;
+    const prevVol = Number(target.volume) || 0;
+    if (Math.abs(nextVol - prevVol) < 0.05) return;
+
+    const ok = await appConfirm(
+      `Изменить объём рейса ${target.mixerNumber} с ${prevVol} на ${nextVol} м³?\n\nВместимость миксера на день станет ${nextVol} м³, время загрузки/разгрузки и хвост дня пересчитаются.`,
+      {
+        title: 'Объём рейса',
+        okLabel: 'Пересчитать',
+        variant: 'warning',
+      },
+    );
+    if (!ok) return;
+
+    const nextOverrides = {
+      ...mixerVolumeOverridesRef.current,
+      [String(target.mixerNumber)]: nextVol,
+    };
+    setMixerVolumeOverrides(nextOverrides);
+    mixerVolumeOverridesRef.current = nextOverrides;
+
+    const mixersForPlan = plannerMixers.map((m) =>
+      String(m.number) === String(target.mixerNumber)
+        ? { ...m, volume: nextVol }
+        : m,
+    );
+
+    setBusy(true);
+    try {
+      const nowMin = nowMinutesIfDateKeyIsToday(dateKey);
+      const delayFactMin = medianFactDelayMin(
+        [...planFactByTripId.values()].map((f) => f.deltaLoadMin ?? f.deltaReleaseMin),
+      );
+      const doneOrderIds = plannerOrders
+        .filter((o) => {
+          if (manualDone.has(String(o.id))) return true;
+          return orderProgressStatus(o, dayTrips, trips, false) === 'done';
+        })
+        .map((o) => o.id);
+
+      const { result, locked, shifted } = replanAfterTripVolumeChange({
+        allTrips: trips,
+        tripId,
+        volume: nextVol,
+        orders: plannerOrders.filter((o) => !manualDone.has(String(o.id))),
+        mixers: mixersForPlan,
+        doneOrderIds,
+        allowNight,
+        useTraffic,
+        factDelayMin: delayFactMin || undefined,
+        dayTrips,
+        nowMinutes: nowMin,
+        calibration: calibrationRef.current || calibration,
+      });
+      if (!shifted) {
+        await appAlert('Рейс не найден в плане', {
+          title: 'Объём',
+          variant: 'danger',
+        });
+        return;
+      }
+      setScenarios([]);
+      setActiveScenarioId(null);
+      persist({ mixerVolumeOverrides: nextOverrides });
+      commitWavePlan('shift', result.trips, locked, result.warnings, {
+        newTripIds: [shifted.id, ...result.newTrips.map((t) => t.id)],
+        summary: `${target.mixerNumber} · объём ${prevVol}→${nextVol} м³`,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Перетаскивание рейса внутри заявки или в другую заявку. */
+  const reorderTrip = async (
+    tripId: string,
+    targetOrderId: string,
+    beforeTripId: string | null,
+  ) => {
+    if (!canMutatePlan) return;
+    const target = trips.find((t) => t.id === tripId);
+    if (!target) return;
+    if (beforeTripId && beforeTripId === tripId) return;
+
+    const sameOrder = String(target.orderId) === String(targetOrderId);
+    if (sameOrder && beforeTripId) {
+      const orderTrips = trips
+        .filter((t) => String(t.orderId) === String(targetOrderId))
+        .sort(
+          (a, b) =>
+            (a.loadAtMin ?? 0) - (b.loadAtMin ?? 0) ||
+            String(a.id).localeCompare(String(b.id)),
+        );
+      const from = orderTrips.findIndex((t) => t.id === tripId);
+      const to = orderTrips.findIndex((t) => t.id === beforeTripId);
+      if (from >= 0 && to >= 0 && (to === from || to === from + 1)) return;
+    }
+    if (sameOrder && !beforeTripId) {
+      const orderTrips = trips
+        .filter((t) => String(t.orderId) === String(targetOrderId))
+        .sort(
+          (a, b) =>
+            (a.loadAtMin ?? 0) - (b.loadAtMin ?? 0) ||
+            String(a.id).localeCompare(String(b.id)),
+        );
+      if (orderTrips.length && orderTrips[orderTrips.length - 1]?.id === tripId) {
+        return;
+      }
+    }
+
+    const orderLabel =
+      plannerOrders.find((o) => String(o.id) === String(targetOrderId))?.client ||
+      `#${targetOrderId}`;
+
+    setBusy(true);
+    try {
+      const nowMin = nowMinutesIfDateKeyIsToday(dateKey);
+      const delayFactMin = medianFactDelayMin(
+        [...planFactByTripId.values()].map((f) => f.deltaLoadMin ?? f.deltaReleaseMin),
+      );
+      const doneOrderIds = plannerOrders
+        .filter((o) => {
+          if (manualDone.has(String(o.id))) return true;
+          return orderProgressStatus(o, dayTrips, trips, false) === 'done';
+        })
+        .map((o) => o.id);
+
+      const { result, locked, shifted } = replanAfterTripReorder({
+        allTrips: trips,
+        tripId,
+        targetOrderId,
+        beforeTripId,
+        orders: plannerOrders.filter((o) => !manualDone.has(String(o.id))),
+        mixers: plannerMixers,
+        doneOrderIds,
+        allowNight,
+        useTraffic,
+        factDelayMin: delayFactMin || undefined,
+        dayTrips,
+        nowMinutes: nowMin,
+        calibration: calibrationRef.current || calibration,
+      });
+      if (!shifted) {
+        await appAlert('Не удалось переместить рейс', {
+          title: 'Перестановка',
+          variant: 'danger',
+        });
+        return;
+      }
+      setScenarios([]);
+      setActiveScenarioId(null);
+      const where = beforeTripId
+        ? `перед рейсом в «${orderLabel}»`
+        : `в конец «${orderLabel}»`;
+      commitWavePlan('shift', result.trips, locked, result.warnings, {
+        newTripIds: [shifted.id, ...result.newTrips.map((t) => t.id)],
+        summary: `${target.mixerNumber} · ${where}`,
+      });
+    } finally {
+      setBusy(false);
+      setDragTripId(null);
+      setDragOverTripId(null);
+      setDragOverOrderId(null);
+    }
+  };
+
+  const clearTripDrag = () => {
+    setDragTripId(null);
+    setDragOverTripId(null);
+    setDragOverOrderId(null);
   };
 
   const lockAllCurrent = () => {
@@ -2142,6 +2429,9 @@ export default function LogisticsPlannerTab({
     setFleetGrowNote('');
     setAllowNight(false);
     setUseTraffic(false);
+    setMixerVolumeOverrides({});
+    mixerVolumeOverridesRef.current = {};
+    clearTripDrag();
     setSelectedIds(
       new Set(fleet.filter((f) => f.type === 'own').map((f) => String(f.id))),
     );
@@ -2420,31 +2710,27 @@ export default function LogisticsPlannerTab({
         >
           {rankedAll.map((m) => {
             const id = String(m.id);
-            const on = selectedIds.has(id);
+            const meta = fleetById.get(id);
             return (
-              <button
+              <PlannerFleetMixerChip
                 key={id}
-                type="button"
-                onClick={() => toggleMixer(id)}
-                disabled={!canMutatePlan}
-                style={{
-                  padding: `${sp(7)}px ${sp(11)}px`,
-                  borderRadius: 10,
-                  border: on
-                    ? '1px solid rgba(16,185,129,0.55)'
-                    : '1px solid rgba(51,65,85,0.9)',
-                  background: on ? 'rgba(16,185,129,0.15)' : 'rgba(15,23,42,0.6)',
-                  color: on ? '#A7F3D0' : '#94A3B8',
-                  fontSize: fs(13),
-                  fontWeight: 600,
-                  cursor: canEditPlan ? 'pointer' : 'default',
-                  opacity: canEditPlan ? 1 : 0.7,
+                mixer={{
+                  id: m.id,
+                  number: m.number,
+                  volume: m.volume,
+                  type: m.type,
+                  model: meta?.model,
+                  driver: meta?.driver,
+                  driverPhone: meta?.driverPhone,
+                  tripCount: m.tripCount,
                 }}
-                title={`${m.type === 'own' ? 'Свой' : 'Наёмный'} · рейсов в истории ${m.tripCount || 0}`}
-              >
-                {m.number} · {m.volume}м³
-                {m.type === 'own' ? '' : ' ·Н'}
-              </button>
+                selected={selectedIds.has(id)}
+                disabled={!canMutatePlan}
+                canEdit={canEditPlan}
+                onToggle={() => toggleMixer(id)}
+                fs={fs}
+                sp={sp}
+              />
             );
           })}
         </div>
@@ -2581,61 +2867,69 @@ export default function LogisticsPlannerTab({
           onClick={() => void refreshRoadTimes()}
           disabled={roadsRefreshing || !orders.length}
         />
-        <label
-          title="Утро 7–9 и вечер 16–18: дорога чуть дольше (×1.25–1.35) к обычному времени в пути. Выкл — считаем без надбавки за пробки."
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: sp(8),
-            marginLeft: 'auto',
-            color: '#CBD5E1',
-            fontSize: fs(14),
-            fontWeight: 600,
-            cursor: canEditPlan ? 'pointer' : 'default',
-            userSelect: 'none',
-            opacity: canEditPlan ? 1 : 0.55,
-          }}
+        <DarkHoverTip
+          tip="Утро 7–9 и вечер 16–18: дорога чуть дольше (×1.25–1.35) к обычному времени в пути. Выкл — считаем без надбавки за пробки."
+          maxWidth={340}
+          style={{ marginLeft: 'auto' }}
         >
-          <input
-            type="checkbox"
-            checked={useTraffic}
-            disabled={!canMutatePlan}
-            onChange={(e) => {
-              setUseTraffic(e.target.checked);
-              setScenarios([]);
-              setActiveScenarioId(null);
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: sp(8),
+              color: '#CBD5E1',
+              fontSize: fs(14),
+              fontWeight: 600,
+              cursor: canEditPlan ? 'pointer' : 'default',
+              userSelect: 'none',
+              opacity: canEditPlan ? 1 : 0.55,
             }}
-            style={{ width: fs(16), height: fs(16), accentColor: '#38BDF8' }}
-          />
-          Учитывать пробки
-        </label>
-        <label
-          title="Без галочки возврат на базу ≤ 21:00. Открытие соски сдвигается раньше 06:00, если есть ранние доставки (к 06:00 и т.п.). С галочкой — рейсы после 21:00 и на следующие сутки."
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: sp(8),
-            color: '#CBD5E1',
-            fontSize: fs(14),
-            fontWeight: 600,
-            cursor: canEditPlan ? 'pointer' : 'default',
-            userSelect: 'none',
-            opacity: canEditPlan ? 1 : 0.55,
-          }}
+          >
+            <input
+              type="checkbox"
+              checked={useTraffic}
+              disabled={!canMutatePlan}
+              onChange={(e) => {
+                setUseTraffic(e.target.checked);
+                setScenarios([]);
+                setActiveScenarioId(null);
+              }}
+              style={{ width: fs(16), height: fs(16), accentColor: '#38BDF8' }}
+            />
+            Учитывать пробки
+          </label>
+        </DarkHoverTip>
+        <DarkHoverTip
+          tip="Без галочки возврат на базу ≤ 21:00. Открытие соски сдвигается раньше 06:00, если есть ранние доставки (к 06:00 и т.п.). С галочкой — рейсы после 21:00 и на следующие сутки."
+          maxWidth={360}
         >
-          <input
-            type="checkbox"
-            checked={allowNight}
-            disabled={!canMutatePlan}
-            onChange={(e) => {
-              setAllowNight(e.target.checked);
-              setScenarios([]);
-              setActiveScenarioId(null);
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: sp(8),
+              color: '#CBD5E1',
+              fontSize: fs(14),
+              fontWeight: 600,
+              cursor: canEditPlan ? 'pointer' : 'default',
+              userSelect: 'none',
+              opacity: canEditPlan ? 1 : 0.55,
             }}
-            style={{ width: fs(16), height: fs(16), accentColor: '#F59E0B' }}
-          />
-          Включая ночь
-        </label>
+          >
+            <input
+              type="checkbox"
+              checked={allowNight}
+              disabled={!canMutatePlan}
+              onChange={(e) => {
+                setAllowNight(e.target.checked);
+                setScenarios([]);
+                setActiveScenarioId(null);
+              }}
+              style={{ width: fs(16), height: fs(16), accentColor: '#F59E0B' }}
+            />
+            Включая ночь
+          </label>
+        </DarkHoverTip>
       </div>
       {/* Липкий низ */}
       <div
@@ -2659,58 +2953,66 @@ export default function LogisticsPlannerTab({
             gap: sp(12),
           }}
         >
-          <label
-            title="Если включено — во списке заявок появляется вторая галочка (фиолетовая): применить план только к отмеченным. Иначе — ко всем заявкам с рейсами."
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: sp(8),
-              color: '#CBD5E1',
-              fontSize: fs(13),
-              fontWeight: 600,
-              cursor: canEditPlan ? 'pointer' : 'default',
-              userSelect: 'none',
-              opacity: canEditPlan ? 1 : 0.55,
-            }}
+          <DarkHoverTip
+            tip="Если включено — во списке заявок появляется вторая галочка (фиолетовая): применить план только к отмеченным. Иначе — ко всем заявкам с рейсами."
+            maxWidth={340}
           >
-            <input
-              type="checkbox"
-              checked={applyOnlySelected}
-              disabled={!canMutatePlan}
-              onChange={(e) => setApplyOnlySelected(e.target.checked)}
-              style={{ width: fs(16), height: fs(16), accentColor: '#A78BFA' }}
-            />
-            Только выбранные заявки
-            {applyOnlySelected && applyableOrderIds.size > 0 ? (
-              <span style={{ color: '#A78BFA', fontWeight: 700 }}>
-                ({[...applyOrderIds].filter((id) => applyableOrderIds.has(id)).length}/
-                {applyableOrderIds.size})
-              </span>
-            ) : null}
-          </label>
-          <label
-            title="По умолчанию выкл: заявки, где диспетчер уже поставил миксеры («Загрузка»), интеллект не трогает. Включи только если сознательно хочешь заменить ручные назначения планом."
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: sp(8),
-              color: overwriteManual ? '#FCA5A5' : '#CBD5E1',
-              fontSize: fs(13),
-              fontWeight: 600,
-              cursor: canEditPlan ? 'pointer' : 'default',
-              userSelect: 'none',
-              opacity: canEditPlan ? 1 : 0.55,
-            }}
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: sp(8),
+                color: '#CBD5E1',
+                fontSize: fs(13),
+                fontWeight: 600,
+                cursor: canEditPlan ? 'pointer' : 'default',
+                userSelect: 'none',
+                opacity: canEditPlan ? 1 : 0.55,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={applyOnlySelected}
+                disabled={!canMutatePlan}
+                onChange={(e) => setApplyOnlySelected(e.target.checked)}
+                style={{ width: fs(16), height: fs(16), accentColor: '#A78BFA' }}
+              />
+              Только выбранные заявки
+              {applyOnlySelected && applyableOrderIds.size > 0 ? (
+                <span style={{ color: '#A78BFA', fontWeight: 700 }}>
+                  ({[...applyOrderIds].filter((id) => applyableOrderIds.has(id)).length}/
+                  {applyableOrderIds.size})
+                </span>
+              ) : null}
+            </label>
+          </DarkHoverTip>
+          <DarkHoverTip
+            tip="По умолчанию выкл: заявки, где диспетчер уже поставил миксеры («Загрузка»), интеллект не трогает. Включи только если сознательно хочешь заменить ручные назначения планом."
+            maxWidth={360}
           >
-            <input
-              type="checkbox"
-              checked={overwriteManual}
-              disabled={!canMutatePlan}
-              onChange={(e) => setOverwriteManual(e.target.checked)}
-              style={{ width: fs(16), height: fs(16), accentColor: '#F87171' }}
-            />
-            Заменить ручные «Загрузка»
-          </label>
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: sp(8),
+                color: overwriteManual ? '#FCA5A5' : '#CBD5E1',
+                fontSize: fs(13),
+                fontWeight: 600,
+                cursor: canEditPlan ? 'pointer' : 'default',
+                userSelect: 'none',
+                opacity: canEditPlan ? 1 : 0.55,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={overwriteManual}
+                disabled={!canMutatePlan}
+                onChange={(e) => setOverwriteManual(e.target.checked)}
+                style={{ width: fs(16), height: fs(16), accentColor: '#F87171' }}
+              />
+              Заменить ручные «Загрузка»
+            </label>
+          </DarkHoverTip>
         </div>
         <ModalActionButton
           color={publishDirty ? '#A78BFA' : '#818CF8'}
@@ -2949,6 +3251,27 @@ export default function LogisticsPlannerTab({
               return (
                 <div key={oid} style={{ display: 'flex', flexDirection: 'column', gap: sp(5) }}>
                   <div
+                    onDragOver={(e) => {
+                      if (!canMutatePlan || !dragTripId || pickup || st === 'done') return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      setDragOverOrderId(oid);
+                      setDragOverTripId(null);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (!canMutatePlan || !dragTripId || pickup || st === 'done') return;
+                      const id = e.dataTransfer.getData('text/plain') || dragTripId;
+                      void reorderTrip(id, oid, null);
+                    }}
+                    onDragLeave={() => {
+                      setDragOverOrderId((prev) => (prev === oid ? null : prev));
+                    }}
+                    title={
+                      dragTripId && !pickup && st !== 'done'
+                        ? 'Отпусти здесь — рейс в конец заявки'
+                        : undefined
+                    }
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -2965,9 +3288,14 @@ export default function LogisticsPlannerTab({
                         st === 'done'
                           ? 'linear-gradient(180deg, rgba(15,23,42,0.55) 0%, rgba(15,23,42,0.72) 100%)'
                           : 'linear-gradient(180deg, rgba(30,41,59,0.75) 0%, rgba(15,23,42,0.88) 100%)',
-                      border: '1px solid rgba(148,163,184,0.2)',
+                      border:
+                        dragOverOrderId === oid
+                          ? '1px solid rgba(96,165,250,0.85)'
+                          : '1px solid rgba(148,163,184,0.2)',
                       boxShadow:
-                        'inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.25)',
+                        dragOverOrderId === oid
+                          ? '0 0 0 2px rgba(96,165,250,0.25), 0 1px 2px rgba(0,0,0,0.25)'
+                          : 'inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.25)',
                       opacity: st === 'done' ? 0.7 : 1,
                       fontSize: fs(13),
                       lineHeight: 1.2,
@@ -3069,10 +3397,7 @@ export default function LogisticsPlannerTab({
                       <div
                         key={t.id}
                         style={{
-                          outline: waveHighlight
-                            ? '1px solid rgba(96,165,250,0.55)'
-                            : undefined,
-                          borderRadius: 8,
+                          opacity: dragTripId === t.id ? 0.55 : 1,
                         }}
                       >
                         <PlannerTripFactRow
@@ -3097,6 +3422,29 @@ export default function LogisticsPlannerTab({
                           canShiftPlan={canMutatePlan}
                           onShiftLoadTime={(id, hhmm) => void shiftTripLoad(id, hhmm)}
                           onTripDelayMin={(id, mins) => void applyTripDelay(id, mins)}
+                          onPlanVolumeChange={(id, vol) => void applyTripPlanVolume(id, vol)}
+                          canDrag={canMutatePlan}
+                          dragOver={dragOverTripId === t.id}
+                          waveHighlight={waveHighlight}
+                          onDragStartTrip={(id) => {
+                            setDragTripId(id);
+                            setDragOverTripId(null);
+                            setDragOverOrderId(null);
+                          }}
+                          onDragOverTrip={(id) => {
+                            if (!dragTripId || id === dragTripId) return;
+                            setDragOverTripId(id);
+                            setDragOverOrderId(null);
+                          }}
+                          onDropOnTrip={(id) => {
+                            const moving = dragTripId;
+                            if (!moving || moving === id) {
+                              clearTripDrag();
+                              return;
+                            }
+                            void reorderTrip(moving, oid, id);
+                          }}
+                          onDragEndTrip={clearTripDrag}
                         />
                       </div>
                     );
@@ -3419,6 +3767,27 @@ export default function LogisticsPlannerTab({
               return (
                 <div key={oid} style={{ display: 'flex', flexDirection: 'column', gap: sp(5) }}>
                   <div
+                    onDragOver={(e) => {
+                      if (!canMutatePlan || !dragTripId || pickup || st === 'done') return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      setDragOverOrderId(oid);
+                      setDragOverTripId(null);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (!canMutatePlan || !dragTripId || pickup || st === 'done') return;
+                      const id = e.dataTransfer.getData('text/plain') || dragTripId;
+                      void reorderTrip(id, oid, null);
+                    }}
+                    onDragLeave={() => {
+                      setDragOverOrderId((prev) => (prev === oid ? null : prev));
+                    }}
+                    title={
+                      dragTripId && !pickup && st !== 'done'
+                        ? 'Отпусти здесь — рейс в конец заявки'
+                        : undefined
+                    }
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -3435,9 +3804,14 @@ export default function LogisticsPlannerTab({
                         st === 'done'
                           ? 'linear-gradient(180deg, rgba(15,23,42,0.55) 0%, rgba(15,23,42,0.72) 100%)'
                           : 'linear-gradient(180deg, rgba(30,41,59,0.75) 0%, rgba(15,23,42,0.88) 100%)',
-                      border: '1px solid rgba(148,163,184,0.2)',
+                      border:
+                        dragOverOrderId === oid
+                          ? '1px solid rgba(96,165,250,0.85)'
+                          : '1px solid rgba(148,163,184,0.2)',
                       boxShadow:
-                        'inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.25)',
+                        dragOverOrderId === oid
+                          ? '0 0 0 2px rgba(96,165,250,0.25), 0 1px 2px rgba(0,0,0,0.25)'
+                          : 'inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.25)',
                       opacity: st === 'done' ? 0.7 : 1,
                       fontSize: fs(13),
                       lineHeight: 1.2,
@@ -3539,10 +3913,7 @@ export default function LogisticsPlannerTab({
                       <div
                         key={t.id}
                         style={{
-                          outline: waveHighlight
-                            ? '1px solid rgba(96,165,250,0.55)'
-                            : undefined,
-                          borderRadius: 8,
+                          opacity: dragTripId === t.id ? 0.55 : 1,
                         }}
                       >
                         <PlannerTripFactRow
@@ -3567,6 +3938,29 @@ export default function LogisticsPlannerTab({
                           canShiftPlan={canMutatePlan}
                           onShiftLoadTime={(id, hhmm) => void shiftTripLoad(id, hhmm)}
                           onTripDelayMin={(id, mins) => void applyTripDelay(id, mins)}
+                          onPlanVolumeChange={(id, vol) => void applyTripPlanVolume(id, vol)}
+                          canDrag={canMutatePlan}
+                          dragOver={dragOverTripId === t.id}
+                          waveHighlight={waveHighlight}
+                          onDragStartTrip={(id) => {
+                            setDragTripId(id);
+                            setDragOverTripId(null);
+                            setDragOverOrderId(null);
+                          }}
+                          onDragOverTrip={(id) => {
+                            if (!dragTripId || id === dragTripId) return;
+                            setDragOverTripId(id);
+                            setDragOverOrderId(null);
+                          }}
+                          onDropOnTrip={(id) => {
+                            const moving = dragTripId;
+                            if (!moving || moving === id) {
+                              clearTripDrag();
+                              return;
+                            }
+                            void reorderTrip(moving, oid, id);
+                          }}
+                          onDragEndTrip={clearTripDrag}
                         />
                       </div>
                     );
@@ -3647,31 +4041,27 @@ export default function LogisticsPlannerTab({
         >
           {rankedAll.map((m) => {
             const id = String(m.id);
-            const on = selectedIds.has(id);
+            const meta = fleetById.get(id);
             return (
-              <button
+              <PlannerFleetMixerChip
                 key={id}
-                type="button"
-                onClick={() => toggleMixer(id)}
-                disabled={!canMutatePlan}
-                style={{
-                  padding: `${sp(7)}px ${sp(11)}px`,
-                  borderRadius: 10,
-                  border: on
-                    ? '1px solid rgba(16,185,129,0.55)'
-                    : '1px solid rgba(51,65,85,0.9)',
-                  background: on ? 'rgba(16,185,129,0.15)' : 'rgba(15,23,42,0.6)',
-                  color: on ? '#A7F3D0' : '#94A3B8',
-                  fontSize: fs(13),
-                  fontWeight: 600,
-                  cursor: canEditPlan ? 'pointer' : 'default',
-                  opacity: canEditPlan ? 1 : 0.7,
+                mixer={{
+                  id: m.id,
+                  number: m.number,
+                  volume: m.volume,
+                  type: m.type,
+                  model: meta?.model,
+                  driver: meta?.driver,
+                  driverPhone: meta?.driverPhone,
+                  tripCount: m.tripCount,
                 }}
-                title={`${m.type === 'own' ? 'Свой' : 'Наёмный'} · рейсов в истории ${m.tripCount || 0}`}
-              >
-                {m.number} · {m.volume}м³
-                {m.type === 'own' ? '' : ' ·Н'}
-              </button>
+                selected={selectedIds.has(id)}
+                disabled={!canMutatePlan}
+                canEdit={canEditPlan}
+                onToggle={() => toggleMixer(id)}
+                fs={fs}
+                sp={sp}
+              />
             );
           })}
         </div>
@@ -3807,61 +4197,69 @@ export default function LogisticsPlannerTab({
           onClick={() => void refreshRoadTimes()}
           disabled={roadsRefreshing || !orders.length}
         />
-        <label
-          title="Утро 7–9 и вечер 16–18: дорога чуть дольше (×1.25–1.35) к обычному времени в пути. Выкл — считаем без надбавки за пробки."
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: sp(8),
-            marginLeft: 'auto',
-            color: '#CBD5E1',
-            fontSize: fs(14),
-            fontWeight: 600,
-            cursor: canEditPlan ? 'pointer' : 'default',
-            userSelect: 'none',
-            opacity: canEditPlan ? 1 : 0.55,
-          }}
+        <DarkHoverTip
+          tip="Утро 7–9 и вечер 16–18: дорога чуть дольше (×1.25–1.35) к обычному времени в пути. Выкл — считаем без надбавки за пробки."
+          maxWidth={340}
+          style={{ marginLeft: 'auto' }}
         >
-          <input
-            type="checkbox"
-            checked={useTraffic}
-            disabled={!canMutatePlan}
-            onChange={(e) => {
-              setUseTraffic(e.target.checked);
-              setScenarios([]);
-              setActiveScenarioId(null);
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: sp(8),
+              color: '#CBD5E1',
+              fontSize: fs(14),
+              fontWeight: 600,
+              cursor: canEditPlan ? 'pointer' : 'default',
+              userSelect: 'none',
+              opacity: canEditPlan ? 1 : 0.55,
             }}
-            style={{ width: fs(16), height: fs(16), accentColor: '#38BDF8' }}
-          />
-          Учитывать пробки
-        </label>
-        <label
-          title="Без галочки возврат на базу ≤ 21:00. Открытие соски сдвигается раньше 06:00, если есть ранние доставки (к 06:00 и т.п.). С галочкой — рейсы после 21:00 и на следующие сутки."
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: sp(8),
-            color: '#CBD5E1',
-            fontSize: fs(14),
-            fontWeight: 600,
-            cursor: canEditPlan ? 'pointer' : 'default',
-            userSelect: 'none',
-            opacity: canEditPlan ? 1 : 0.55,
-          }}
+          >
+            <input
+              type="checkbox"
+              checked={useTraffic}
+              disabled={!canMutatePlan}
+              onChange={(e) => {
+                setUseTraffic(e.target.checked);
+                setScenarios([]);
+                setActiveScenarioId(null);
+              }}
+              style={{ width: fs(16), height: fs(16), accentColor: '#38BDF8' }}
+            />
+            Учитывать пробки
+          </label>
+        </DarkHoverTip>
+        <DarkHoverTip
+          tip="Без галочки возврат на базу ≤ 21:00. Открытие соски сдвигается раньше 06:00, если есть ранние доставки (к 06:00 и т.п.). С галочкой — рейсы после 21:00 и на следующие сутки."
+          maxWidth={360}
         >
-          <input
-            type="checkbox"
-            checked={allowNight}
-            disabled={!canMutatePlan}
-            onChange={(e) => {
-              setAllowNight(e.target.checked);
-              setScenarios([]);
-              setActiveScenarioId(null);
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: sp(8),
+              color: '#CBD5E1',
+              fontSize: fs(14),
+              fontWeight: 600,
+              cursor: canEditPlan ? 'pointer' : 'default',
+              userSelect: 'none',
+              opacity: canEditPlan ? 1 : 0.55,
             }}
-            style={{ width: fs(16), height: fs(16), accentColor: '#F59E0B' }}
-          />
-          Включая ночь
-        </label>
+          >
+            <input
+              type="checkbox"
+              checked={allowNight}
+              disabled={!canMutatePlan}
+              onChange={(e) => {
+                setAllowNight(e.target.checked);
+                setScenarios([]);
+                setActiveScenarioId(null);
+              }}
+              style={{ width: fs(16), height: fs(16), accentColor: '#F59E0B' }}
+            />
+            Включая ночь
+          </label>
+        </DarkHoverTip>
       </div>
 
 
@@ -3887,58 +4285,66 @@ export default function LogisticsPlannerTab({
             gap: sp(12),
           }}
         >
-          <label
-            title="Если включено — во списке заявок появляется вторая галочка (фиолетовая): применить план только к отмеченным. Иначе — ко всем заявкам с рейсами."
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: sp(8),
-              color: '#CBD5E1',
-              fontSize: fs(13),
-              fontWeight: 600,
-              cursor: canEditPlan ? 'pointer' : 'default',
-              userSelect: 'none',
-              opacity: canEditPlan ? 1 : 0.55,
-            }}
+          <DarkHoverTip
+            tip="Если включено — во списке заявок появляется вторая галочка (фиолетовая): применить план только к отмеченным. Иначе — ко всем заявкам с рейсами."
+            maxWidth={340}
           >
-            <input
-              type="checkbox"
-              checked={applyOnlySelected}
-              disabled={!canMutatePlan}
-              onChange={(e) => setApplyOnlySelected(e.target.checked)}
-              style={{ width: fs(16), height: fs(16), accentColor: '#A78BFA' }}
-            />
-            Только выбранные заявки
-            {applyOnlySelected && applyableOrderIds.size > 0 ? (
-              <span style={{ color: '#A78BFA', fontWeight: 700 }}>
-                ({[...applyOrderIds].filter((id) => applyableOrderIds.has(id)).length}/
-                {applyableOrderIds.size})
-              </span>
-            ) : null}
-          </label>
-          <label
-            title="По умолчанию выкл: заявки, где диспетчер уже поставил миксеры («Загрузка»), интеллект не трогает. Включи только если сознательно хочешь заменить ручные назначения планом."
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: sp(8),
-              color: overwriteManual ? '#FCA5A5' : '#CBD5E1',
-              fontSize: fs(13),
-              fontWeight: 600,
-              cursor: canEditPlan ? 'pointer' : 'default',
-              userSelect: 'none',
-              opacity: canEditPlan ? 1 : 0.55,
-            }}
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: sp(8),
+                color: '#CBD5E1',
+                fontSize: fs(13),
+                fontWeight: 600,
+                cursor: canEditPlan ? 'pointer' : 'default',
+                userSelect: 'none',
+                opacity: canEditPlan ? 1 : 0.55,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={applyOnlySelected}
+                disabled={!canMutatePlan}
+                onChange={(e) => setApplyOnlySelected(e.target.checked)}
+                style={{ width: fs(16), height: fs(16), accentColor: '#A78BFA' }}
+              />
+              Только выбранные заявки
+              {applyOnlySelected && applyableOrderIds.size > 0 ? (
+                <span style={{ color: '#A78BFA', fontWeight: 700 }}>
+                  ({[...applyOrderIds].filter((id) => applyableOrderIds.has(id)).length}/
+                  {applyableOrderIds.size})
+                </span>
+              ) : null}
+            </label>
+          </DarkHoverTip>
+          <DarkHoverTip
+            tip="По умолчанию выкл: заявки, где диспетчер уже поставил миксеры («Загрузка»), интеллект не трогает. Включи только если сознательно хочешь заменить ручные назначения планом."
+            maxWidth={360}
           >
-            <input
-              type="checkbox"
-              checked={overwriteManual}
-              disabled={!canMutatePlan}
-              onChange={(e) => setOverwriteManual(e.target.checked)}
-              style={{ width: fs(16), height: fs(16), accentColor: '#F87171' }}
-            />
-            Заменить ручные «Загрузка»
-          </label>
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: sp(8),
+                color: overwriteManual ? '#FCA5A5' : '#CBD5E1',
+                fontSize: fs(13),
+                fontWeight: 600,
+                cursor: canEditPlan ? 'pointer' : 'default',
+                userSelect: 'none',
+                opacity: canEditPlan ? 1 : 0.55,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={overwriteManual}
+                disabled={!canMutatePlan}
+                onChange={(e) => setOverwriteManual(e.target.checked)}
+                style={{ width: fs(16), height: fs(16), accentColor: '#F87171' }}
+              />
+              Заменить ручные «Загрузка»
+            </label>
+          </DarkHoverTip>
         </div>
         <ModalActionButton
           color={publishDirty ? '#A78BFA' : '#818CF8'}

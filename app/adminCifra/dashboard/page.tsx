@@ -365,6 +365,19 @@ useEffect(() => {
     fetchActiveMixers();
   }, []);
 
+  // После apply плана — один RELOAD (per-row INSERT подавлены на сервере).
+  // Два хука на order_mixers:all делят один общий onReload (активные + месяц).
+  const onMixersReload = useCallback(() => {
+    fetch('/api/adminCifra/active-mixers')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (Array.isArray(data)) setActiveMixers(data);
+      })
+      .catch(() => {});
+    const [yearStr, monthStr] = selectedOrdersMonthKey.split('-');
+    void fetchOrdersForMonth(Number(yearStr), Number(monthStr));
+  }, [selectedOrdersMonthKey, fetchOrdersForMonth]);
+
   // ==================== REALTIME: ЗАЯВКИ ====================
   const { status: ordersRealtimeStatus } = useRealtimeOrders(setAllOrders);
 
@@ -372,10 +385,14 @@ useEffect(() => {
   const { status: mixersRealtimeStatus } = useRealtimeOrderMixers(setActiveMixers, {
     activeOnly: true,
     orders: allOrders,
+    // Один onReload на топик (второй хук ниже без onReload — иначе двойной fetch)
+    onReload: onMixersReload,
   });
 
   // ==================== REALTIME: ВСЕ НАЗНАЧЕНИЯ МИКСЕРОВ ====================
-  useRealtimeOrderMixers(setMixerAssignments, { orders: allOrders });
+  useRealtimeOrderMixers(setMixerAssignments, {
+    orders: allOrders,
+  });
 
   // Обогащаем миксеры данными заказа при обновлении allOrders
   useEffect(() => {

@@ -37,6 +37,10 @@ begin
     raise exception 'invalid order_id';
   end if;
 
+  -- Подавить per-row broadcast; API шлёт один RELOAD после всех заявок
+  -- (см. scripts/broadcast-optimize-planner.sql → notify_order_mixers_reload)
+  perform set_config('app.suppress_om_broadcast', 'on', true);
+
   -- 1) Удалить незащищённые рейсы (только этой заявки)
   if p_delete_ids is not null and coalesce(array_length(p_delete_ids, 1), 0) > 0 then
     delete from public.order_mixers

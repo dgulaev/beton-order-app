@@ -1,5 +1,7 @@
 'use client';
 
+import DarkHoverTip from './DarkHoverTip';
+
 /**
  * Компактный прогресс выполнения плана по заявке (отгружено / план м³).
  */
@@ -26,8 +28,8 @@ export default function OrderPlanProgressBar({
   };
 
   return (
+    <DarkHoverTip tip={`Отгружено ${fmt(shipped)} из ${fmt(planVol)} м³ (${pct}%)`}>
     <div
-      title={`Отгружено ${fmt(shipped)} из ${fmt(planVol)} м³ (${pct}%)`}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -73,5 +75,6 @@ export default function OrderPlanProgressBar({
         {pct}%
       </span>
     </div>
+    </DarkHoverTip>
   );
 }

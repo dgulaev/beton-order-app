@@ -103,11 +103,12 @@ export const useTodayLoadingMixers = (options?: {
   }, [fetchMixers]);
 
   // Live-обновления статусов миксеров.
-  // onInsertRow: order_mixers не хранит клиента/марку/дату заказа — после
-  // пачки INSERT (apply плана) один debounce-рефетч, не N параллельных.
+  // onInsertRow: fallback, если per-row broadcast ещё не подавлен.
+  // onReload: основной путь после apply (один RELOAD вместо N INSERT).
   useRealtimeOrderMixers(setAllMixers, {
     activeOnly: false,
     onInsertRow: () => scheduleRefetch(),
+    onReload: () => scheduleRefetch(),
     onDeleteRow: options?.onMixerDeleted,
     onUpdateRow: options?.onMixerUpdated,
   });

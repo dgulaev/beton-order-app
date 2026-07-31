@@ -2419,7 +2419,9 @@ export default function OperatorBSUPage() {
                       : undefined}
                     style={volumeCardSoftStyle({
                       borderRadius: 12,
-                      padding: '12px 16px',
+                      // Компактный вертикальный padding — раньше 12px + двухстрочный
+                      // прогресс давали «провал» текста вниз относительно карточки.
+                      padding: '7px 14px',
                       display: 'grid',
                       // Фиксированные колонки вместо flex+space-between — иначе на
                       // широких экранах (4K) панель просто "растягивала" пустое
@@ -2431,8 +2433,8 @@ export default function OperatorBSUPage() {
                       gridTemplateColumns: '48px 40px 88px 96px 56px 154px 1fr',
                       gap: '8px',
                       alignItems: 'center',
-                      minHeight: '28px',
                       fontSize: '13.5px',
+                      lineHeight: 1.15,
                       // Рейс, никогда не прошедший через кнопку оператора "Загружен"
                       // (статус выставлен диспетчером/водителем напрямую) — выделяем
                       // янтарной полосой слева, чтобы это было заметно с первого взгляда.
@@ -2441,10 +2443,10 @@ export default function OperatorBSUPage() {
                         : {}),
                     })}
                   >
-                      <div style={{ fontWeight: '600', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <div style={{ fontWeight: '600', color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
                         {trip.time || '—'}
                       </div>
-                      <div style={{ fontWeight: '700', color: '#60A5FA', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <div style={{ fontWeight: '700', color: '#60A5FA', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
                         #{trip.order_id || trip.orderId}
                       </div>
                       <div style={{ fontWeight: '700', display: 'flex', alignItems: 'center', gap: '5px', overflow: 'hidden' }}>
@@ -2471,7 +2473,7 @@ export default function OperatorBSUPage() {
                       {/* Марка может быть длинным текстом ("Ц/П смесь М100" и т.п.) —
                           title показывает полный текст при наведении, даже если
                           он обрезан "…" из-за нехватки места в колонке. */}
-                      <div title={trip.concrete_grade || ''} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <div title={trip.concrete_grade || ''} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
                         {trip.concrete_grade || '—'} 
                         <span style={{ 
                           color: '#10B981', 
@@ -2483,7 +2485,7 @@ export default function OperatorBSUPage() {
                       </div>
                       {/* ======================================================== */}
 
-                      <div style={{ fontWeight: '600', whiteSpace: 'nowrap' }}>
+                      <div style={{ fontWeight: '600', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
                         {trip.volume} м³
                       </div>
                       {/* alignSelf: 'stretch' — растягиваем ячейку на всю высоту строки
@@ -2530,7 +2532,7 @@ export default function OperatorBSUPage() {
                       const progress = orderProgressMap.get(orderId);
                       if (!progress || progress.orderVolume == null || progress.orderVolume <= 0) {
                         return (
-                          <div style={{ color: '#64748B', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>В пути</div>
+                          <div style={{ color: '#64748B', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>В пути</div>
                         );
                       }
 
@@ -2539,23 +2541,20 @@ export default function OperatorBSUPage() {
                       const isComplete = delivered >= total;
                       const percent = Math.min(100, Math.round((delivered / total) * 100));
 
-                      // Показываем % вместо "N из M м³" — дробная запись у крупных
-                      // заявок (например, 635 из 635 м³) физически не влезает ни в
-                      // одну разумную ширину колонки, а процент всегда занимает
-                      // максимум 4 символа ("100%") при любом объёме заявки. Точные
-                      // кубы — в подсказке по наведению.
+                      // Компактный прогресс в одну линию (% + полоска) — не раздувает
+                      // высоту строки и не «толкает» остальной текст вниз.
                       return (
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', overflow: 'hidden' }}>
                           <div
                             title={`По заявке #${orderId} отгружено ${delivered} из ${total} м³ (${percent}%)`}
                             style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '3px',
-                              padding: '3px 7px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '2px 7px',
                               borderRadius: '9999px',
                               background: isComplete ? 'rgba(16, 185, 129, 0.16)' : 'rgba(148, 163, 184, 0.14)',
-                              maxWidth: '100%'
+                              maxWidth: '100%',
                             }}
                           >
                             <span style={{
@@ -2563,11 +2562,11 @@ export default function OperatorBSUPage() {
                               fontWeight: '600',
                               color: isComplete ? '#34D399' : '#94A3B8',
                               whiteSpace: 'nowrap',
-                              textAlign: 'center'
+                              lineHeight: 1,
                             }}>
                               {percent}%
                             </span>
-                            <div style={{ width: '30px', height: '3px', borderRadius: '2px', background: 'rgba(148, 163, 184, 0.25)', overflow: 'hidden' }}>
+                            <div style={{ width: '28px', height: '3px', borderRadius: '2px', background: 'rgba(148, 163, 184, 0.25)', overflow: 'hidden', flexShrink: 0 }}>
                               <div style={{
                                 width: `${percent}%`,
                                 height: '100%',

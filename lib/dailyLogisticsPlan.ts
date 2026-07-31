@@ -27,6 +27,8 @@ export type DailyLogisticsPlanPayload = {
   warnings?: PlannerWarning[];
   /** Фаза 4: история волн дня */
   waves?: PlannerWave[];
+  /** Правки вместимости миксера на день (номер → м³), напр. бочка забита 10→9 */
+  mixerVolumeOverrides?: Record<string, number>;
 };
 
 export type DailyLogisticsPlanRow = {

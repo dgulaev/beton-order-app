@@ -27,6 +27,8 @@ interface BroadcastListener {
   onInsert?: (record: any) => void;
   onUpdate?: (record: any, old?: any) => void;
   onDelete?: (old: any) => void;
+  /** Один сигнал после пачки изменений (apply плана) — вместо N INSERT/DELETE */
+  onReload?: () => void;
   onStatusChange?: (status: RealtimeStatus) => void;
   /** Выставлен при unmount — игнор после hardReset, если listener ещё в preserved set */
   dead?: boolean;
@@ -40,7 +42,12 @@ interface BroadcastEntry {
   // Отложенное проставление статуса ERROR — чтобы индикатор не мигал красным
   // на короткие промежуточные сбои, из которых соединение само выходит.
   errorTimer?: ReturnType<typeof setTimeout>;
+  /** Склеить пачку RELOAD за короткое окно в один проход колбэков */
+  reloadTimer?: ReturnType<typeof setTimeout>;
 }
+
+/** Окно склейки RELOAD (мс) — два слушателя / двойной сигнал → один проход */
+const RELOAD_DEBOUNCE_MS = 120;
 
 const registry = new Map<string, BroadcastEntry>();
 let globalListenersAttached = false;
@@ -192,9 +199,28 @@ function notify(topic: string, status: RealtimeStatus) {
   notifyGlobal();
 }
 
-function dispatch(topic: string, kind: 'insert' | 'update' | 'delete', record: any, old?: any) {
+function dispatch(
+  topic: string,
+  kind: 'insert' | 'update' | 'delete' | 'reload',
+  record?: any,
+  old?: any,
+) {
   const entry = registry.get(topic);
   if (!entry) return;
+  if (kind === 'reload') {
+    // Несколько RELOAD подряд (или два хука на один топик) — один проход.
+    if (entry.reloadTimer) clearTimeout(entry.reloadTimer);
+    entry.reloadTimer = setTimeout(() => {
+      entry.reloadTimer = undefined;
+      const current = registry.get(topic);
+      if (!current) return;
+      current.listeners.forEach((l) => {
+        if (l.dead) return;
+        l.onReload?.();
+      });
+    }, RELOAD_DEBOUNCE_MS);
+    return;
+  }
   entry.listeners.forEach((l) => {
     if (l.dead) return;
     if (kind === 'insert') l.onInsert?.(record);
@@ -249,6 +275,9 @@ function connect(topic: string): BroadcastEntry {
     })
     .on('broadcast', { event: 'DELETE' }, (msg: any) => {
       dispatch(topic, 'delete', msg.payload?.record ?? msg.payload, msg.payload?.old);
+    })
+    .on('broadcast', { event: 'RELOAD' }, () => {
+      dispatch(topic, 'reload');
     })
     .subscribe((s, err) => {
       const e = registry.get(topic);
@@ -518,10 +547,11 @@ export function useRealtimeBroadcast({
   onInsert,
   onUpdate,
   onDelete,
+  onReload,
   onStatusChange,
 }: BroadcastOptions) {
   const cbRef = useRef<BroadcastListener>({});
-  cbRef.current = { onInsert, onUpdate, onDelete, onStatusChange };
+  cbRef.current = { onInsert, onUpdate, onDelete, onReload, onStatusChange };
 
   const [status, setStatus] = useState<RealtimeStatus>('CONNECTING');
 
@@ -542,6 +572,7 @@ export function useRealtimeBroadcast({
       onInsert: (r) => cbRef.current.onInsert?.(r),
       onUpdate: (r, o) => cbRef.current.onUpdate?.(r, o),
       onDelete: (o) => cbRef.current.onDelete?.(o),
+      onReload: () => cbRef.current.onReload?.(),
       onStatusChange: (s) => {
         if (listener.dead) return;
         cbRef.current.onStatusChange?.(s);

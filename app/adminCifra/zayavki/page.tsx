@@ -1185,9 +1185,6 @@ ${order.customer_type?.includes('Юридическое')
   // ==================== REALTIME (начальная загрузка + live-обновления) ====================
   const { status: ordersRealtimeStatus } = useRealtimeOrders(setAllOrders);
 
-  // Live-обновление рейсов для KPI-бара (фильтр по дню — в метриках)
-  useRealtimeOrderMixers(setDayMixerAssignments, { orders: allOrders });
-
   // Локальные правки миксеров в открытой модалке сразу отражаем в KPI
   // (не ждём round-trip broadcast). Upsert по id: не затираем более свежий
   // broadcast и не выкидываем INSERT другого сотрудника по этой же заявке.
@@ -1390,6 +1387,27 @@ ${order.customer_type?.includes('Юридическое')
       .catch(() => {});
     return () => { cancelled = true; };
   }, [weekOrderIdsKey]);
+
+  // Live-обновление рейсов для KPI-бара (фильтр по дню — в метриках).
+  // RELOAD после apply: перезапрашиваем рейсы недели (тот же merge, что выше).
+  useRealtimeOrderMixers(setDayMixerAssignments, {
+    orders: allOrders,
+    onReload: () => {
+      if (!weekOrderIdsKey) return;
+      const idSet = new Set(weekOrderIdsKey.split(',').map(String));
+      fetch(`/api/adminCifra/order-mixers?orderIds=${weekOrderIdsKey}`)
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data) => {
+          if (!Array.isArray(data)) return;
+          setDayMixerAssignments((prev) =>
+            mergeFetchedOrderMixers(prev, data, idSet).filter((m) =>
+              idSet.has(String(m.orderId ?? m.order_id)),
+            ),
+          );
+        })
+        .catch(() => {});
+    },
+  });
 
   // KPI выбранного дня — только активные заявки этого дня (не вся неделя).
   const dayMixerTrips = useMemo(
