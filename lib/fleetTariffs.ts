@@ -1,21 +1,30 @@
 /**
  * Тарифы единиц техники (кроме миксеров — у них delivery_settings).
  * Хранятся в mixers.specs; расчёт в рейсах/отгрузках — этап 2.
+ *
+ * Денежные ставки — пара нал / безнал.
+ * Старые ключи без суффикса (`hour_rate_rub` и т.п.) = нал (обратная совместимость).
  */
 
 import type { SpecField, VehicleKind } from '@/lib/fleetCatalog';
 
 export const TARIFF_SPEC_KEYS = [
   'hour_rate_rub',
+  'hour_rate_noncash_rub',
   'min_shift_hours',
   'trip_rate_rub',
+  'trip_rate_noncash_rub',
   'primer_mix_cost_rub',
+  'primer_mix_cost_noncash_rub',
   'km_rate_rub',
+  'km_rate_noncash_rub',
 ] as const;
 
 export type TariffSpecKey = (typeof TARIFF_SPEC_KEYS)[number];
 
 export const TARIFF_KEY_SET = new Set<string>(TARIFF_SPEC_KEYS);
+
+export type PaymentKind = 'cash' | 'noncash';
 
 export function formatRub(amount: number): string {
   return `${Math.round(amount).toLocaleString('ru-RU')} ₽`;
@@ -28,10 +37,17 @@ export function unitHasFleetTariffs(kind: VehicleKind | string | null | undefine
 const FIELD: Record<TariffSpecKey, SpecField> = {
   hour_rate_rub: {
     key: 'hour_rate_rub',
-    label: 'Стоимость часа работы',
+    label: 'Стоимость часа (нал)',
     type: 'number',
     unit: '₽/ч',
     placeholder: '8000',
+  },
+  hour_rate_noncash_rub: {
+    key: 'hour_rate_noncash_rub',
+    label: 'Стоимость часа (безнал)',
+    type: 'number',
+    unit: '₽/ч',
+    placeholder: '9500',
   },
   min_shift_hours: {
     key: 'min_shift_hours',
@@ -42,24 +58,45 @@ const FIELD: Record<TariffSpecKey, SpecField> = {
   },
   trip_rate_rub: {
     key: 'trip_rate_rub',
-    label: 'Стоимость рейса',
+    label: 'Стоимость рейса (нал)',
     type: 'number',
     unit: '₽/рейс',
     placeholder: '12000',
   },
+  trip_rate_noncash_rub: {
+    key: 'trip_rate_noncash_rub',
+    label: 'Стоимость рейса (безнал)',
+    type: 'number',
+    unit: '₽/рейс',
+    placeholder: '14000',
+  },
   primer_mix_cost_rub: {
     key: 'primer_mix_cost_rub',
-    label: 'Стоимость пусковой смеси',
+    label: 'Пусковая смесь (нал)',
     type: 'number',
     unit: '₽',
     placeholder: '5000',
   },
+  primer_mix_cost_noncash_rub: {
+    key: 'primer_mix_cost_noncash_rub',
+    label: 'Пусковая смесь (безнал)',
+    type: 'number',
+    unit: '₽',
+    placeholder: '5500',
+  },
   km_rate_rub: {
     key: 'km_rate_rub',
-    label: 'Ставка за км',
+    label: 'Ставка за км (нал)',
     type: 'number',
     unit: '₽/км',
     placeholder: '80',
+  },
+  km_rate_noncash_rub: {
+    key: 'km_rate_noncash_rub',
+    label: 'Ставка за км (безнал)',
+    type: 'number',
+    unit: '₽/км',
+    placeholder: '90',
   },
 };
 
@@ -75,26 +112,46 @@ export function tariffFieldsForUnit(
   if (!unitHasFleetTariffs(kind)) return [];
 
   if (kind === 'dump_truck' || kind === 'tonar' || kind === 'cement_truck') {
-    return fields('trip_rate_rub', 'hour_rate_rub', 'min_shift_hours', 'km_rate_rub');
+    return fields(
+      'trip_rate_rub',
+      'trip_rate_noncash_rub',
+      'hour_rate_rub',
+      'hour_rate_noncash_rub',
+      'min_shift_hours',
+      'km_rate_rub',
+      'km_rate_noncash_rub',
+    );
   }
   if (kind === 'tractor_unit') {
-    return fields('hour_rate_rub', 'min_shift_hours');
+    return fields('hour_rate_rub', 'hour_rate_noncash_rub', 'min_shift_hours');
   }
   if (kind === 'special') {
     const subtype = String(specs?.subtype || 'other');
     if (subtype === 'concrete_pump') {
-      return fields('hour_rate_rub', 'min_shift_hours', 'primer_mix_cost_rub');
+      return fields(
+        'hour_rate_rub',
+        'hour_rate_noncash_rub',
+        'min_shift_hours',
+        'primer_mix_cost_rub',
+        'primer_mix_cost_noncash_rub',
+      );
     }
-    return fields('hour_rate_rub', 'min_shift_hours');
+    return fields('hour_rate_rub', 'hour_rate_noncash_rub', 'min_shift_hours');
   }
   return [];
 }
 
-export type FleetTariffTotal = {
+export type FleetTariffSide = {
   amount: number;
-  /** Короткий ярлык для карточки */
+  detail: string;
+};
+
+export type FleetTariffTotal = {
   label: 'Смена от' | 'Рейс от';
-  /** Расшифровка: «8000 ₽/ч × 7 ч + смесь …» */
+  cash: FleetTariffSide | null;
+  noncash: FleetTariffSide | null;
+  /** Меньшая из заполненных сторон — для «от …» и старых вызовов */
+  amount: number;
   detail: string;
 };
 
@@ -110,51 +167,92 @@ function isConcretePump(
   return kind === 'special' && String(specs?.subtype || '') === 'concrete_pump';
 }
 
-/** Итог для карточки: смена (час×часы[+смесь]) или рейс. */
+function shiftSide(rate: number, hours: number, primer: number): FleetTariffSide | null {
+  if (!(rate > 0 && hours > 0)) return null;
+  const amount = rate * hours + (primer > 0 ? primer : 0);
+  const parts = [`${rate.toLocaleString('ru-RU')} ₽/ч × ${hours} ч`];
+  if (primer > 0) parts.push(`смесь ${primer.toLocaleString('ru-RU')} ₽`);
+  return { amount, detail: parts.join(' + ') };
+}
+
+function tripSide(
+  trip: number,
+  km: number,
+  rate: number,
+  hours: number,
+): FleetTariffSide | null {
+  if (!(trip > 0)) return null;
+  const parts: string[] = [`${trip.toLocaleString('ru-RU')} ₽/рейс`];
+  if (km > 0) parts.push(`${km.toLocaleString('ru-RU')} ₽/км`);
+  if (rate > 0 && hours > 0) {
+    parts.push(`${rate.toLocaleString('ru-RU')} ₽/ч × ${hours} ч`);
+  }
+  return { amount: trip, detail: parts.join(' · ') };
+}
+
+function packTotal(
+  label: 'Смена от' | 'Рейс от',
+  cash: FleetTariffSide | null,
+  noncash: FleetTariffSide | null,
+): FleetTariffTotal | null {
+  if (!cash && !noncash) return null;
+  const amounts = [cash?.amount, noncash?.amount].filter((n): n is number => n != null && n > 0);
+  const amount = Math.min(...amounts);
+  const detailParts: string[] = [];
+  if (cash) detailParts.push(`нал ${cash.detail}`);
+  if (noncash) detailParts.push(`безнал ${noncash.detail}`);
+  return { label, cash, noncash, amount, detail: detailParts.join(' · ') };
+}
+
+/** Итог для карточки: смена / рейс, отдельно нал и безнал. */
 export function unitShiftOrTripTotal(
   kind: VehicleKind | string | null | undefined,
   specs?: Record<string, any> | null,
 ): FleetTariffTotal | null {
   if (!unitHasFleetTariffs(kind)) return null;
 
-  const rate = num(specs, 'hour_rate_rub');
   const hours = num(specs, 'min_shift_hours');
-  const primer = num(specs, 'primer_mix_cost_rub');
-  const trip = num(specs, 'trip_rate_rub');
-  const primerApplies = isConcretePump(kind, specs) && primer > 0;
-
-  const shiftOk = rate > 0 && hours > 0;
-  const shiftAmount = shiftOk ? rate * hours + (primerApplies ? primer : 0) : null;
+  const rateCash = num(specs, 'hour_rate_rub');
+  const rateNoncash = num(specs, 'hour_rate_noncash_rub');
+  const tripCash = num(specs, 'trip_rate_rub');
+  const tripNoncash = num(specs, 'trip_rate_noncash_rub');
+  const kmCash = num(specs, 'km_rate_rub');
+  const kmNoncash = num(specs, 'km_rate_noncash_rub');
+  const primerCash = isConcretePump(kind, specs) ? num(specs, 'primer_mix_cost_rub') : NaN;
+  const primerNoncash = isConcretePump(kind, specs) ? num(specs, 'primer_mix_cost_noncash_rub') : NaN;
 
   // Bulk: приоритет рейса, иначе смена
   if (kind === 'dump_truck' || kind === 'tonar' || kind === 'cement_truck') {
-    if (trip > 0) {
-      const parts: string[] = [`${trip.toLocaleString('ru-RU')} ₽/рейс`];
-      const km = num(specs, 'km_rate_rub');
-      if (km > 0) parts.push(`${km.toLocaleString('ru-RU')} ₽/км`);
-      if (shiftOk) parts.push(`${rate.toLocaleString('ru-RU')} ₽/ч × ${hours} ч`);
-      return { amount: trip, label: 'Рейс от', detail: parts.join(' · ') };
+    const cashTrip = tripSide(tripCash, kmCash, rateCash, hours);
+    const noncashTrip = tripSide(tripNoncash, kmNoncash, rateNoncash, hours);
+    if (cashTrip || noncashTrip) {
+      return packTotal('Рейс от', cashTrip, noncashTrip);
     }
-    if (shiftAmount != null) {
-      return {
-        amount: shiftAmount,
-        label: 'Смена от',
-        detail: `${rate.toLocaleString('ru-RU')} ₽/ч × ${hours} ч`,
-      };
-    }
-    return null;
+    return packTotal(
+      'Смена от',
+      shiftSide(rateCash, hours, 0),
+      shiftSide(rateNoncash, hours, 0),
+    );
   }
 
-  if (shiftAmount != null) {
-    const parts = [`${rate.toLocaleString('ru-RU')} ₽/ч × ${hours} ч`];
-    if (primerApplies) {
-      parts.push(`смесь ${primer.toLocaleString('ru-RU')} ₽`);
-    }
-    return { amount: shiftAmount, label: 'Смена от', detail: parts.join(' + ') };
-  }
-
-  return null;
+  return packTotal(
+    'Смена от',
+    shiftSide(rateCash, hours, primerCash > 0 ? primerCash : 0),
+    shiftSide(rateNoncash, hours, primerNoncash > 0 ? primerNoncash : 0),
+  );
 }
+
+const SHORT_LABEL: Partial<Record<TariffSpecKey, string>> = {
+  hour_rate_rub: 'Час (нал)',
+  hour_rate_noncash_rub: 'Час (безнал)',
+  min_shift_hours: 'Мин. часов смены',
+  trip_rate_rub: 'Рейс (нал)',
+  trip_rate_noncash_rub: 'Рейс (безнал)',
+  primer_mix_cost_rub: 'Смесь (нал)',
+  primer_mix_cost_noncash_rub: 'Смесь (безнал)',
+  km_rate_rub: 'Км (нал)',
+  km_rate_noncash_rub: 'Км (безнал)',
+};
 
 /** Строки расшифровки для тултипа по сумме тарифа. */
 export function tariffBreakdownLines(
@@ -165,18 +263,7 @@ export function tariffBreakdownLines(
   for (const f of tariffFieldsForUnit(kind, specs)) {
     const n = num(specs, f.key);
     if (!(n > 0)) continue;
-    const shortLabel =
-      f.key === 'hour_rate_rub'
-        ? 'Стоимость часа'
-        : f.key === 'min_shift_hours'
-          ? 'Мин. часов смены'
-          : f.key === 'trip_rate_rub'
-            ? 'Стоимость рейса'
-            : f.key === 'primer_mix_cost_rub'
-              ? 'Пусковая смесь'
-              : f.key === 'km_rate_rub'
-                ? 'Ставка за км'
-                : f.label;
+    const shortLabel = SHORT_LABEL[f.key as TariffSpecKey] || f.label;
     const value =
       f.key === 'min_shift_hours'
         ? `${n} ч`
@@ -188,10 +275,11 @@ export function tariffBreakdownLines(
   return lines;
 }
 
-/** Совместимость со старым хелпером бетононасоса. */
+/** Совместимость со старым хелпером бетононасоса (нал, иначе безнал). */
 export function concretePumpShiftTotal(specs: Record<string, any> | null | undefined): number | null {
   if (!specs || String(specs.subtype) !== 'concrete_pump') return null;
-  return unitShiftOrTripTotal('special', specs)?.amount ?? null;
+  const t = unitShiftOrTripTotal('special', specs);
+  return t?.cash?.amount ?? t?.noncash?.amount ?? null;
 }
 
 /** Вырезать тарифные ключи из specs (для merge при сохранении только тарифа). */
@@ -255,6 +343,7 @@ export function specsAfterSpecialSubtypeChange(
   const tariffs = pickTariffSpecs(prevSpecs);
   if (newSubtype !== 'concrete_pump') {
     delete tariffs.primer_mix_cost_rub;
+    delete tariffs.primer_mix_cost_noncash_rub;
   }
   return sanitizeFleetSpecs('special', { subtype: newSubtype, ...tariffs });
 }

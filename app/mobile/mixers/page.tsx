@@ -983,17 +983,21 @@ export default function MobileMixersPage() {
                           background: 'rgba(251,191,36,0.10)',
                           border: '1px solid rgba(251,191,36,0.25)',
                         }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-                            <span style={{ fontSize: 10, fontWeight: 700, color: '#FBBF24', letterSpacing: '0.05em' }}>
-                              {tariffTotal.label.toUpperCase()}
-                            </span>
-                            <span style={{ fontSize: 16, fontWeight: 800, color: '#FBBF24' }}>{formatRub(tariffTotal.amount)}</span>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: '#FBBF24', letterSpacing: '0.05em', marginBottom: 6 }}>
+                            {tariffTotal.label.toUpperCase()}
                           </div>
-                          {tariffTotal.detail ? (
-                            <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 3 }}>
-                              {tariffTotal.detail}
+                          {tariffTotal.cash && (
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'baseline', gap: 6, marginBottom: 3 }}>
+                              <span style={{ fontSize: 15, fontWeight: 800, color: '#FBBF24' }}>{formatRub(tariffTotal.cash.amount)}</span>
+                              <span style={{ fontSize: 11, color: '#94A3B8', fontWeight: 600 }}>нал</span>
                             </div>
-                          ) : null}
+                          )}
+                          {tariffTotal.noncash && (
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'baseline', gap: 6 }}>
+                              <span style={{ fontSize: 15, fontWeight: 800, color: '#FDE68A' }}>{formatRub(tariffTotal.noncash.amount)}</span>
+                              <span style={{ fontSize: 11, color: '#94A3B8', fontWeight: 600 }}>безнал</span>
+                            </div>
+                          )}
                         </div>
                       ) : null}
                     </button>
@@ -1157,7 +1161,12 @@ export default function MobileMixersPage() {
                         />
                       );
                     })}
-                    <InfoRow label={tariff.label} value={formatRub(tariff.amount)} />
+                    {tariff.cash && (
+                      <InfoRow label={`${tariff.label} · нал`} value={formatRub(tariff.cash.amount)} />
+                    )}
+                    {tariff.noncash && (
+                      <InfoRow label={`${tariff.label} · безнал`} value={formatRub(tariff.noncash.amount)} />
+                    )}
                   </>
                 );
               })()}
@@ -1383,19 +1392,26 @@ export default function MobileMixersPage() {
                     <div style={{
                       marginTop: 4, paddingTop: 12,
                       borderTop: '1px solid rgba(148,163,184,0.18)',
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10,
+                      display: 'flex', flexDirection: 'column', gap: 6,
                     }}>
-                      <div>
-                        <div style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>
-                          {formTariff?.label || 'Итого'}
-                        </div>
-                        <div style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
-                          {formTariff?.detail || 'Заполните поля тарифа'}
-                        </div>
+                      <div style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>
+                        {formTariff?.label || 'Итого'}
                       </div>
-                      <div style={{ fontSize: 20, fontWeight: 800, color: formTariff ? '#FBBF24' : '#64748B' }}>
-                        {formTariff ? formatRub(formTariff.amount) : '—'}
-                      </div>
+                      {formTariff?.cash && (
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'baseline', gap: 6 }}>
+                          <span style={{ fontSize: 18, fontWeight: 800, color: '#FBBF24' }}>{formatRub(formTariff.cash.amount)}</span>
+                          <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>нал</span>
+                        </div>
+                      )}
+                      {formTariff?.noncash && (
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'baseline', gap: 6 }}>
+                          <span style={{ fontSize: 18, fontWeight: 800, color: '#FDE68A' }}>{formatRub(formTariff.noncash.amount)}</span>
+                          <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>безнал</span>
+                        </div>
+                      )}
+                      {!formTariff && (
+                        <div style={{ fontSize: 11, color: '#64748B' }}>Заполните нал и/или безнал</div>
+                      )}
                     </div>
                   </div>
                 );

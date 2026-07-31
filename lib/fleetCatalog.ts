@@ -277,7 +277,8 @@ export const MODEL_TEMPLATES: Record<VehicleKind, ModelTemplate[]> = {
       volume: 0,
       specs: {
         subtype: 'concrete_pump', boom_reach_m: 36, pump_output_m3h: 90,
-        hour_rate_rub: 9000, min_shift_hours: 7, primer_mix_cost_rub: 5000,
+        hour_rate_rub: 9000, hour_rate_noncash_rub: 10500,
+        min_shift_hours: 7, primer_mix_cost_rub: 5000, primer_mix_cost_noncash_rub: 5500,
       },
     },
     {
@@ -285,7 +286,8 @@ export const MODEL_TEMPLATES: Record<VehicleKind, ModelTemplate[]> = {
       volume: 0,
       specs: {
         subtype: 'concrete_pump', boom_reach_m: 36, pump_output_m3h: 100,
-        hour_rate_rub: 9500, min_shift_hours: 7, primer_mix_cost_rub: 5500,
+        hour_rate_rub: 9500, hour_rate_noncash_rub: 11000,
+        min_shift_hours: 7, primer_mix_cost_rub: 5500, primer_mix_cost_noncash_rub: 6000,
       },
     },
     {
@@ -293,7 +295,8 @@ export const MODEL_TEMPLATES: Record<VehicleKind, ModelTemplate[]> = {
       volume: 0,
       specs: {
         subtype: 'concrete_pump', boom_reach_m: 36, pump_output_m3h: 120,
-        hour_rate_rub: 10000, min_shift_hours: 7, primer_mix_cost_rub: 6000,
+        hour_rate_rub: 10000, hour_rate_noncash_rub: 11500,
+        min_shift_hours: 7, primer_mix_cost_rub: 6000, primer_mix_cost_noncash_rub: 6500,
       },
     },
   ],

@@ -99,11 +99,13 @@ function TariffAmountTip({
   specs,
   total,
   size = 'md',
+  align = 'center',
 }: {
   kind: VehicleKind;
   specs?: Record<string, any> | null;
   total: FleetTariffTotal;
   size?: 'sm' | 'md' | 'lg';
+  align?: 'center' | 'left';
 }) {
   const [pos, setPos] = useState<{
     x: number;
@@ -111,15 +113,20 @@ function TariffAmountTip({
     place: 'above' | 'below';
   } | null>(null);
   const lines = tariffBreakdownLines(kind, specs);
-  const fontSize = size === 'lg' ? 22 : size === 'sm' ? 14 : 15;
+  const amountSize = size === 'lg' ? 18 : size === 'sm' ? 13 : 14.5;
+  const both = Boolean(total.cash && total.noncash);
+  const rows = [
+    total.cash ? { amount: total.cash.amount, label: 'нал', color: '#FBBF24' as const } : null,
+    total.noncash ? { amount: total.noncash.amount, label: 'безнал', color: both ? '#FDE68A' : '#FBBF24' } : null,
+  ].filter(Boolean) as { amount: number; label: string; color: string }[];
 
   return (
     <>
-      <span
+      <div
         onMouseEnter={(e) => {
           const r = e.currentTarget.getBoundingClientRect();
-          const place = r.top < 220 ? 'below' : 'above';
-          const x = Math.min(Math.max(r.left + r.width / 2, 140), window.innerWidth - 140);
+          const place = r.top < 260 ? 'below' : 'above';
+          const x = Math.min(Math.max(r.left + r.width / 2, 160), window.innerWidth - 160);
           setPos({
             x,
             y: place === 'above' ? r.top - 10 : r.bottom + 10,
@@ -128,16 +135,50 @@ function TariffAmountTip({
         }}
         onMouseLeave={() => setPos(null)}
         style={{
-          color: '#FBBF24',
-          fontSize,
-          fontWeight: 800,
-          letterSpacing: '-0.01em',
+          display: 'inline-grid',
+          gridTemplateColumns: both ? 'max-content 46px' : 'auto',
+          columnGap: 6,
+          rowGap: both ? 3 : 0,
+          alignItems: 'baseline',
+          justifyItems: 'start',
           cursor: 'help',
-          borderBottom: '1px dotted rgba(251,191,36,0.45)',
+          borderBottom: '1px dotted rgba(251,191,36,0.35)',
+          margin: 0,
         }}
       >
-        {formatRub(total.amount)}
-      </span>
+        {rows.flatMap((row) => [
+          <span
+            key={`${row.label}-amt`}
+            style={{
+              color: row.color,
+              fontSize: amountSize,
+              fontWeight: 800,
+              letterSpacing: '-0.01em',
+              fontVariantNumeric: 'tabular-nums',
+              textAlign: both ? 'right' : 'left',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {formatRub(row.amount)}
+          </span>,
+          ...(both
+            ? [(
+              <span
+                key={`${row.label}-lbl`}
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  color: '#94A3B8',
+                  textAlign: 'left',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {row.label}
+              </span>
+            )]
+            : []),
+        ])}
+      </div>
       {pos &&
         typeof document !== 'undefined' &&
         createPortal(
@@ -148,8 +189,8 @@ function TariffAmountTip({
               top: pos.y,
               transform: pos.place === 'above' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
               zIndex: 10050,
-              minWidth: 220,
-              maxWidth: 300,
+              minWidth: 240,
+              maxWidth: 320,
               padding: '12px 14px',
               borderRadius: 12,
               background: '#0F172A',
@@ -185,25 +226,35 @@ function TariffAmountTip({
                 <span style={{ color: '#E2E8F0', fontWeight: 600, whiteSpace: 'nowrap' }}>{line.value}</span>
               </div>
             ))}
-            {total.detail ? (
-              <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2 }}>
-                {total.detail}
+            {(total.cash || total.noncash) && (
+              <div
+                style={{
+                  marginTop: 8,
+                  paddingTop: 8,
+                  borderTop: '1px solid rgba(148,163,184,0.2)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 5,
+                }}
+              >
+                {total.cash && (
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ fontSize: 14, fontWeight: 800, color: '#FBBF24' }}>
+                      {formatRub(total.cash.amount)}
+                    </span>
+                    <span style={{ fontSize: 11, color: '#94A3B8' }}>нал</span>
+                  </div>
+                )}
+                {total.noncash && (
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ fontSize: 14, fontWeight: 800, color: '#FDE68A' }}>
+                      {formatRub(total.noncash.amount)}
+                    </span>
+                    <span style={{ fontSize: 11, color: '#94A3B8' }}>безнал</span>
+                  </div>
+                )}
               </div>
-            ) : null}
-            <div
-              style={{
-                marginTop: 8,
-                paddingTop: 8,
-                borderTop: '1px solid rgba(148,163,184,0.2)',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'baseline',
-                gap: 12,
-              }}
-            >
-              <span style={{ fontSize: 12, color: '#94A3B8' }}>Итого</span>
-              <span style={{ fontSize: 15, fontWeight: 800, color: '#FBBF24' }}>{formatRub(total.amount)}</span>
-            </div>
+            )}
             <div
               style={{
                 position: 'absolute',
@@ -1058,7 +1109,7 @@ export default function MixersPage() {
                             <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4, fontWeight: 600, letterSpacing: '0.04em' }}>
                               {tariffTotal.label.toUpperCase()}
                             </div>
-                            <TariffAmountTip kind={vehicleKind} specs={mixer.specs} total={tariffTotal} size="lg" />
+                            <TariffAmountTip kind={vehicleKind} specs={mixer.specs} total={tariffTotal} size="lg" align="left" />
                             <div style={{ fontSize: 11, color: '#64748B', marginTop: 4 }}>
                               {vehicleKind === 'special'
                                 ? specialListMetric(mixer.volume, mixer.specs)
@@ -1218,10 +1269,10 @@ export default function MixersPage() {
                     display: 'grid',
                     gridTemplateColumns: vehicleKind === 'mixer'
                       ? '112px minmax(200px,1.6fr) minmax(150px,1.1fr) 88px 118px 92px minmax(200px,auto)'
-                      : '112px minmax(220px,1.7fr) minmax(150px,1.1fr) 148px 92px minmax(200px,auto)',
+                      : '112px minmax(200px,1.6fr) minmax(140px,1fr) 168px 92px minmax(200px,auto)',
                     gap: 12,
                     padding: '0 18px 4px',
-                    minWidth: vehicleKind === 'mixer' ? 920 : 900,
+                    minWidth: vehicleKind === 'mixer' ? 920 : 940,
                     flexShrink: 0,
                     color: '#64748B',
                     fontSize: 11,
@@ -1233,7 +1284,7 @@ export default function MixersPage() {
                   <div>Номер</div>
                   <div>Модель / параметры</div>
                   <div>Водитель</div>
-                  <div style={{ textAlign: 'center' }}>
+                  <div style={{ textAlign: vehicleKind === 'mixer' ? 'center' : 'left' }}>
                     {vehicleKind === 'mixer' ? 'Объём' : 'Тариф'}
                   </div>
                   {vehicleKind === 'mixer' && <div style={{ textAlign: 'center' }}>Статус</div>}
@@ -1274,14 +1325,14 @@ export default function MixersPage() {
                         display: 'grid',
                         gridTemplateColumns: vehicleKind === 'mixer'
                           ? '112px minmax(200px,1.6fr) minmax(150px,1.1fr) 88px 118px 92px minmax(200px,auto)'
-                          : '112px minmax(220px,1.7fr) minmax(150px,1.1fr) 148px 92px minmax(200px,auto)',
+                          : '112px minmax(200px,1.6fr) minmax(140px,1fr) 168px 92px minmax(200px,auto)',
                         alignItems: 'center',
                         padding: '10px 18px',
                         borderRadius: 12,
                         transition: 'filter 0.2s ease',
                         flexShrink: 0,
                         gap: 12,
-                        minWidth: vehicleKind === 'mixer' ? 920 : 900,
+                        minWidth: vehicleKind === 'mixer' ? 920 : 940,
                       })}
                       onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
@@ -1318,17 +1369,29 @@ export default function MixersPage() {
                         </div>
                       </div>
 
-                      <div style={{ whiteSpace: 'nowrap', textAlign: 'center' }}>
+                      <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: vehicleKind === 'mixer' ? 'center' : 'flex-start',
+                        justifyContent: 'center',
+                        whiteSpace: 'nowrap',
+                        textAlign: vehicleKind === 'mixer' ? 'center' : 'left',
+                      }}>
                         {tariffTotal ? (
-                          <div>
-                            <TariffAmountTip kind={vehicleKind} specs={mixer.specs} total={tariffTotal} />
-                            <div style={{ color: '#64748B', fontSize: 11, fontWeight: 500, marginTop: 2 }}>
+                          <>
+                            <TariffAmountTip
+                              kind={vehicleKind}
+                              specs={mixer.specs}
+                              total={tariffTotal}
+                              align="left"
+                            />
+                            <div style={{ color: '#64748B', fontSize: 11, fontWeight: 500, marginTop: 4 }}>
                               {tariffTotal.label}
                               {vehicleKind !== 'special' && vehicleKind !== 'tractor_unit' && mixer.volume
                                 ? ` · ${mixer.volume} ${kindMeta.volumeUnit}`
                                 : ''}
                             </div>
-                          </div>
+                          </>
                         ) : (
                           <div style={{ fontSize: 15, fontWeight: 700, color: '#E2E8F0' }}>
                             {metricLabel}
@@ -1779,19 +1842,34 @@ export default function MixersPage() {
                   <div style={{
                     marginTop: 4, paddingTop: 12,
                     borderTop: '1px solid rgba(148,163,184,0.18)',
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12,
+                    display: 'flex', flexDirection: 'column', gap: 8,
                   }}>
-                    <div>
-                      <div style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>
-                        {formTariff?.label || 'Итого'}
-                      </div>
-                      <div style={{ fontSize: 11, color: '#64748B', marginTop: 3 }}>
-                        {formTariff?.detail || 'Заполните поля тарифа'}
-                      </div>
+                    <div style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>
+                      {formTariff?.label || 'Итого'}
                     </div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: formTariff ? '#FBBF24' : '#64748B' }}>
-                      {formTariff ? formatRub(formTariff.amount) : '—'}
-                    </div>
+                    {formTariff ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {formTariff.cash && (
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'baseline', gap: 8 }}>
+                            <span style={{ fontSize: 20, fontWeight: 800, color: '#FBBF24' }}>
+                              {formatRub(formTariff.cash.amount)}
+                            </span>
+                            <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>нал</span>
+                          </div>
+                        )}
+                        {formTariff.noncash && (
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'baseline', gap: 8 }}>
+                            <span style={{ fontSize: 20, fontWeight: 800, color: '#FDE68A' }}>
+                              {formatRub(formTariff.noncash.amount)}
+                            </span>
+                            <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>безнал</span>
+                          </div>
+                        )}
+                        <div style={{ fontSize: 11, color: '#64748B' }}>{formTariff.detail}</div>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 11, color: '#64748B' }}>Заполните поля тарифа (нал и/или безнал)</div>
+                    )}
                   </div>
                 </div>
               );

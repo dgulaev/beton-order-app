@@ -351,13 +351,20 @@ export default function FleetTariffsSettingsTab() {
                       <div style={{ fontSize: 10, fontWeight: 700, color: '#64748B', letterSpacing: '0.05em' }}>
                         {(total?.label || 'Итого').toUpperCase()}
                       </div>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: total ? '#FBBF24' : '#64748B' }}>
-                        {total ? formatRub(total.amount) : '—'}
-                      </div>
-                      {total?.detail && (
-                        <div style={{ fontSize: 11, color: '#64748B', marginTop: 2, maxWidth: 220 }}>
-                          {total.detail}
+                      {total?.cash && (
+                        <div style={{ fontSize: 16, fontWeight: 800, color: '#FBBF24', whiteSpace: 'nowrap' }}>
+                          {formatRub(total.cash.amount)}
+                          <span style={{ fontSize: 11, fontWeight: 600, color: '#94A3B8', marginLeft: 6 }}>нал</span>
                         </div>
+                      )}
+                      {total?.noncash && (
+                        <div style={{ fontSize: 15, fontWeight: 800, color: '#FDE68A', marginTop: 2, whiteSpace: 'nowrap' }}>
+                          {formatRub(total.noncash.amount)}
+                          <span style={{ fontSize: 11, fontWeight: 600, color: '#94A3B8', marginLeft: 6 }}>безнал</span>
+                        </div>
+                      )}
+                      {!total && (
+                        <div style={{ fontSize: 18, fontWeight: 800, color: '#64748B' }}>—</div>
                       )}
                     </div>
                   </div>
