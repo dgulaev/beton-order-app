@@ -7,6 +7,7 @@ import { dashboardArticle } from './articles/dashboard';
 import { zayavkiArticle } from './articles/zayavki';
 import { salesArticle } from './articles/sales';
 import { mixersArticle } from './articles/mixers';
+import { planningArticle } from './articles/planning';
 import { driverIntroArticle } from './articles/driverIntro';
 import { driverArticle } from './articles/driver';
 import type { HelpArticle } from './types';
@@ -20,6 +21,7 @@ export const DEFAULT_HELP_ARTICLES: HelpArticle[] = [
   opsIntroArticle,
   dashboardArticle,
   zayavkiArticle,
+  planningArticle,
   salesArticle,
   mixersArticle,
   driverIntroArticle,

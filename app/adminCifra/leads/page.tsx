@@ -4,6 +4,8 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
+  ChevronDown,
+  ChevronUp,
   FileText,
   History,
   Inbox,
@@ -63,6 +65,37 @@ const STATUS_FILTERS = [
   'rejected',
   'spam',
 ] as const;
+
+type HistoryKind = '' | 'status' | 'assign' | 'processing' | 'contract' | 'order';
+type HistoryPeriod = '' | 'today' | '7d';
+
+const HISTORY_KIND_FILTERS: Array<{ id: HistoryKind; label: string }> = [
+  { id: '', label: 'Все' },
+  { id: 'status', label: 'Статусы' },
+  { id: 'assign', label: 'Назначения' },
+  { id: 'processing', label: 'Обработка' },
+  { id: 'contract', label: 'Контракты' },
+  { id: 'order', label: 'Заказы' },
+];
+
+const HISTORY_PERIOD_FILTERS: Array<{ id: HistoryPeriod; label: string }> = [
+  { id: '', label: 'Всё время' },
+  { id: 'today', label: 'Сегодня' },
+  { id: '7d', label: '7 дней' },
+];
+
+const HISTORY_PAGE_SIZE = 40;
+
+function historySinceIso(period: HistoryPeriod): string | null {
+  if (!period) return null;
+  const d = new Date();
+  if (period === 'today') {
+    d.setHours(0, 0, 0, 0);
+  } else {
+    d.setDate(d.getDate() - 7);
+  }
+  return d.toISOString();
+}
 
 type LeadShipmentsInfo = {
   plan_m3: number | null;
@@ -214,24 +247,24 @@ function groupHistoryByLead(entries: LeadHistoryEntry[]): Record<number, LeadHis
 }
 
 const btnPrimary: CSSProperties = {
-  padding: '10px 12px',
+  padding: '8px 10px',
   borderRadius: 10,
   border: 'none',
   background: '#2563EB',
   color: '#fff',
   fontWeight: 600,
   cursor: 'pointer',
-  fontSize: 13,
+  fontSize: 12,
 };
 
 const btnGhost: CSSProperties = {
-  padding: '8px 12px',
+  padding: '7px 10px',
   borderRadius: 10,
   border: '1px solid #334155',
   background: 'transparent',
   color: '#94A3B8',
   cursor: 'pointer',
-  fontSize: 13,
+  fontSize: 12,
 };
 
 const btnDanger: CSSProperties = {
@@ -271,7 +304,14 @@ function LeadsPageInner() {
   const [history, setHistory] = useState<LeadHistoryEntry[]>([]);
   const [historyByLead, setHistoryByLead] = useState<Record<number, LeadHistoryEntry[]>>({});
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyKind, setHistoryKind] = useState<HistoryKind>('');
+  const [historyPeriod, setHistoryPeriod] = useState<HistoryPeriod>('');
+  const [historyMine, setHistoryMine] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Record<number, boolean>>({});
+  const [detailsOpenIds, setDetailsOpenIds] = useState<Record<number, boolean>>({});
+  const historyScrollRef = useRef<HTMLDivElement | null>(null);
   const initialStatus = searchParams.get('status');
   const initialSource = searchParams.get('source');
   const initialLeadIdRaw = searchParams.get('leadId');
@@ -312,7 +352,7 @@ function LeadsPageInner() {
 
   const refreshHistoryFeed = useCallback(async () => {
     try {
-      const res = await fetch('/api/adminCifra/leads/history?limit=200', {
+      const res = await fetch(`/api/adminCifra/leads/history?limit=${HISTORY_PAGE_SIZE}`, {
         headers: adminCifraAuthHeaders(),
       });
       const json = await res.json();
@@ -323,33 +363,100 @@ function LeadsPageInner() {
     }
   }, []);
 
-  const loadHistory = useCallback(async (leadId?: number | null) => {
-    setHistoryLoading(true);
-    try {
-      const qs = new URLSearchParams({ limit: '100' });
+  const buildHistoryQs = useCallback(
+    (leadId: number | null | undefined, offset: number) => {
+      const qs = new URLSearchParams({
+        limit: String(HISTORY_PAGE_SIZE),
+        offset: String(offset),
+      });
       if (leadId) qs.set('leadId', String(leadId));
+      if (historyKind) qs.set('kind', historyKind);
+      const since = historySinceIso(historyPeriod);
+      if (since) qs.set('since', since);
+      if (historyMine) qs.set('mine', '1');
+      return qs;
+    },
+    [historyKind, historyPeriod, historyMine],
+  );
+
+  const loadHistory = useCallback(
+    async (leadId?: number | null) => {
+      setHistoryLoading(true);
+      try {
+        const qs = buildHistoryQs(leadId, 0);
+        const res = await fetch(`/api/adminCifra/leads/history?${qs}`, {
+          headers: adminCifraAuthHeaders(),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          setHistory([]);
+          setHistoryHasMore(false);
+          return;
+        }
+        const list = (json.history || []) as LeadHistoryEntry[];
+        setHistory(list);
+        setHistoryHasMore(Boolean(json.hasMore));
+        if (!leadId) {
+          setHistoryByLead((prev) => ({ ...prev, ...groupHistoryByLead(list) }));
+        } else {
+          setHistoryByLead((prev) => ({ ...prev, [leadId]: list }));
+        }
+        if (historyScrollRef.current) historyScrollRef.current.scrollTop = 0;
+      } catch (e) {
+        console.error(e);
+        setHistory([]);
+        setHistoryHasMore(false);
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [buildHistoryQs],
+  );
+
+  const loadMoreHistory = useCallback(async () => {
+    if (historyLoadingMore || historyLoading || !historyHasMore) return;
+    setHistoryLoadingMore(true);
+    try {
+      const qs = buildHistoryQs(selectedLeadId, history.length);
       const res = await fetch(`/api/adminCifra/leads/history?${qs}`, {
         headers: adminCifraAuthHeaders(),
       });
       const json = await res.json();
-      if (!res.ok || !json.success) {
-        setHistory([]);
-        return;
-      }
+      if (!res.ok || !json.success) return;
       const list = (json.history || []) as LeadHistoryEntry[];
-      setHistory(list);
-      if (!leadId) {
-        setHistoryByLead(groupHistoryByLead(list));
-      } else {
-        setHistoryByLead((prev) => ({ ...prev, [leadId]: list }));
+      setHistory((prev) => {
+        const seen = new Set(prev.map((e) => e.id));
+        const merged = [...prev];
+        for (const row of list) {
+          if (!seen.has(row.id)) merged.push(row);
+        }
+        return merged;
+      });
+      setHistoryHasMore(Boolean(json.hasMore));
+      if (selectedLeadId) {
+        setHistoryByLead((prev) => {
+          const cur = prev[selectedLeadId] || [];
+          const seen = new Set(cur.map((e) => e.id));
+          const next = [...cur];
+          for (const row of list) {
+            if (!seen.has(row.id)) next.push(row);
+          }
+          return { ...prev, [selectedLeadId]: next };
+        });
       }
     } catch (e) {
       console.error(e);
-      setHistory([]);
     } finally {
-      setHistoryLoading(false);
+      setHistoryLoadingMore(false);
     }
-  }, []);
+  }, [
+    buildHistoryQs,
+    historyHasMore,
+    historyLoading,
+    historyLoadingMore,
+    history.length,
+    selectedLeadId,
+  ]);
 
   const loadContracts = useCallback(async (leadList: Lead[]) => {
     const ids = leadList.map((l) => l.id);
@@ -464,8 +571,9 @@ function LeadsPageInner() {
     const activate = (leadId: number) => {
       deepLinkLeadDoneRef.current = true;
       setSelectedLeadId(leadId);
+      setDetailsOpenIds((d) => ({ ...d, [leadId]: true }));
       const el = document.getElementById(`lead-card-${leadId}`);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       if (typeof window !== 'undefined') {
         window.history.replaceState({}, '', '/adminCifra/leads');
       }
@@ -961,8 +1069,9 @@ function LeadsPageInner() {
                 const platform = leadPlatform(lead);
                 const contracts = contractsByLead[lead.id] || [];
                 const text = lead.raw_text || '—';
-                const longText = text.length > 280 || text.split('\n').length > 5;
+                const longText = text.length > 160 || text.split('\n').length > 3;
                 const expanded = !!expandedIds[lead.id];
+                const detailsOpen = !!detailsOpenIds[lead.id];
                 const payload =
                   lead.raw_payload && typeof lead.raw_payload === 'object'
                     ? (lead.raw_payload as Record<string, unknown>)
@@ -971,7 +1080,7 @@ function LeadsPageInner() {
                 const docsUrl = String(payload?.docs_url ?? '').trim();
                 const takenBy = String(payload?.taken_by_name ?? '').trim();
                 const takenAt = formatDateTime(String(payload?.taken_at ?? '').trim());
-                const cardHistory = (historyByLead[lead.id] || []).slice(0, 5);
+                const cardHistory = (historyByLead[lead.id] || []).slice(0, 3);
                 const shipments = shipmentsByLead[lead.id];
                 const dateHints = getLeadDateHints(lead);
                 const canCreateOrder =
@@ -1027,9 +1136,24 @@ function LeadsPageInner() {
                         {lead.score != null && lead.score > 0 && (
                           <span className={styles.score}>оценка {lead.score}</span>
                         )}
+                        <button
+                          type="button"
+                          className={styles.toggleDetails}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDetailsOpenIds((prev) => ({
+                              ...prev,
+                              [lead.id]: !prev[lead.id],
+                            }));
+                          }}
+                          aria-expanded={detailsOpen}
+                        >
+                          {detailsOpen ? 'Свернуть' : 'Подробнее'}
+                          {detailsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        </button>
                       </div>
 
-                      {actor && (
+                      {detailsOpen && actor && (
                         <p className={styles.actor}>
                           <UserRound size={14} style={{ marginRight: 6, verticalAlign: -2 }} />
                           {actorLabel(lead, actor)}
@@ -1044,11 +1168,13 @@ function LeadsPageInner() {
                         <span className={styles.peopleChip} style={{ color: '#FDE68A' }}>
                           Исполнитель: {assignee || 'не назначен'}
                         </span>
-                        <span className={styles.peopleChip} style={{ color: '#FDE68A' }}>
-                          Соисполнители:{' '}
-                          {coNames.length > 0 ? coNames.join(', ') : 'нет'}
-                        </span>
-                        {(takenBy || takenAt) && lead.status !== 'new' && (
+                        {detailsOpen && (
+                          <span className={styles.peopleChip} style={{ color: '#FDE68A' }}>
+                            Соисполнители:{' '}
+                            {coNames.length > 0 ? coNames.join(', ') : 'нет'}
+                          </span>
+                        )}
+                        {detailsOpen && (takenBy || takenAt) && lead.status !== 'new' && (
                           <span className={styles.peopleChip} style={{ color: '#86EFAC' }}>
                             Взял в работу: {takenBy || '—'}
                             {takenAt ? ` · ${takenAt}` : ''}
@@ -1058,13 +1184,79 @@ function LeadsPageInner() {
 
                       <p
                         className={`${styles.preview}${
-                          longText && !expanded ? ` ${styles.previewClamped}` : ''
+                          !detailsOpen || (longText && !expanded)
+                            ? ` ${styles.previewClamped}${
+                                detailsOpen && longText && !expanded
+                                  ? ` ${styles.previewClampedWide}`
+                                  : ''
+                              }`
+                            : ''
                         }`}
                       >
                         {text}
                       </p>
 
-                      {cardHistory.length > 0 && (
+                      {detailsOpen && longText && (
+                        <button
+                          type="button"
+                          className={styles.expandBtn}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setExpandedIds((prev) => ({ ...prev, [lead.id]: !prev[lead.id] }));
+                          }}
+                        >
+                          {expanded ? 'Свернуть текст' : 'Показать полностью'}
+                        </button>
+                      )}
+
+                      <div className={detailsOpen ? styles.meta : styles.metaCompact}>
+                        {lead.name && <span>{lead.name}</span>}
+                        {lead.phone && (
+                          <a
+                            href={`tel:${lead.phone}`}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                              color: '#93C5FD',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            <Phone size={14} /> {lead.phone}
+                          </a>
+                        )}
+                        {lead.grade && <span>{lead.grade}</span>}
+                        {lead.volume_m3 != null && <span>{lead.volume_m3} м³</span>}
+                        {lead.city && <span>{lead.city}</span>}
+                        {detailsOpen && dateHints.submissionDeadline && (
+                          <span style={{ color: '#94A3B8', fontWeight: 500 }}>
+                            Подача до: {formatLeadDateRu(dateHints.submissionDeadline)}
+                          </span>
+                        )}
+                        {dateHints.deliveryDate && (
+                          <span
+                            style={{
+                              color: dateHints.deliveryOverdue ? '#FCA5A5' : '#FDE68A',
+                              fontWeight: dateHints.deliveryOverdue ? 700 : 500,
+                            }}
+                          >
+                            Поставка: {formatLeadDateRu(dateHints.deliveryDate)}
+                            {dateHints.deliveryOverdue ? ' · просрочена' : ''}
+                          </span>
+                        )}
+                        <span>
+                          {detailsOpen
+                            ? new Date(lead.created_at).toLocaleString('ru-RU')
+                            : new Date(lead.created_at).toLocaleDateString('ru-RU')}
+                        </span>
+                        {!detailsOpen && cardHistory[0] && (
+                          <span style={{ color: '#64748B' }}>
+                            {cardHistory[0].action}
+                          </span>
+                        )}
+                      </div>
+
+                      {detailsOpen && cardHistory.length > 0 && (
                         <div className={styles.cardTimeline}>
                           {cardHistory.map((entry) => {
                             const detail = historyEntryDetail(entry);
@@ -1084,58 +1276,10 @@ function LeadsPageInner() {
                           })}
                         </div>
                       )}
-                      {longText && (
-                        <button
-                          type="button"
-                          className={styles.expandBtn}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setExpandedIds((prev) => ({ ...prev, [lead.id]: !prev[lead.id] }));
-                          }}
-                        >
-                          {expanded ? 'Свернуть' : 'Показать полностью'}
-                        </button>
-                      )}
 
-                      <div className={styles.meta}>
-                        {lead.name && <span>{lead.name}</span>}
-                        {lead.phone && (
-                          <a
-                            href={`tel:${lead.phone}`}
-                            onClick={(e) => e.stopPropagation()}
-                            style={{
-                              color: '#93C5FD',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 4,
-                            }}
-                          >
-                            <Phone size={14} /> {lead.phone}
-                          </a>
-                        )}
-                        {lead.grade && <span>{lead.grade}</span>}
-                        {lead.volume_m3 != null && <span>{lead.volume_m3} м³</span>}
-                        {lead.city && <span>{lead.city}</span>}
-                        {dateHints.submissionDeadline && (
-                          <span style={{ color: '#94A3B8', fontWeight: 500 }}>
-                            Подача до: {formatLeadDateRu(dateHints.submissionDeadline)}
-                          </span>
-                        )}
-                        {dateHints.deliveryDate && (
-                          <span
-                            style={{
-                              color: dateHints.deliveryOverdue ? '#FCA5A5' : '#FDE68A',
-                              fontWeight: dateHints.deliveryOverdue ? 700 : 500,
-                            }}
-                          >
-                            Поставка: {formatLeadDateRu(dateHints.deliveryDate)}
-                            {dateHints.deliveryOverdue ? ' · просрочена' : ''}
-                          </span>
-                        )}
-                        <span>{new Date(lead.created_at).toLocaleString('ru-RU')}</span>
-                      </div>
-
-                      {shipments && (shipments.orders.length > 0 || shipments.plan_m3 != null) && (
+                      {detailsOpen &&
+                        shipments &&
+                        (shipments.orders.length > 0 || shipments.plan_m3 != null) && (
                         <div
                           style={{
                             marginTop: 10,
@@ -1246,8 +1390,9 @@ function LeadsPageInner() {
                         </div>
                       )}
 
+                      {detailsOpen && (
                       <div
-                        style={{ marginTop: 10 }}
+                        className={styles.cardDetails}
                         onClick={(e) => e.stopPropagation()}
                       >
                         {allowTenderProcess ? (
@@ -1361,12 +1506,8 @@ function LeadsPageInner() {
                             )}
                           </div>
                         )}
-                      </div>
 
-                      <div
-                        style={{ marginTop: 10 }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
+                        <div>
                         <div
                           style={{
                             display: 'flex',
@@ -1429,7 +1570,9 @@ function LeadsPageInner() {
                             ))}
                           </ul>
                         )}
+                        </div>
                       </div>
+                      )}
                     </div>
 
                     <div className={styles.actions} onClick={(e) => e.stopPropagation()}>
@@ -1505,6 +1648,8 @@ function LeadsPageInner() {
                           Исполнен
                         </button>
                       )}
+                      {detailsOpen && (
+                      <div className={styles.actionsSecondary}>
                       {(etpUrl || lead.chat_url) && (
                         <a
                           href={etpUrl || lead.chat_url || '#'}
@@ -1636,6 +1781,8 @@ function LeadsPageInner() {
                           Удалить
                         </button>
                       )}
+                      </div>
+                      )}
                       {shipments && shipments.orders.length > 0 ? (
                         shipments.orders.length === 1 ? (
                           <Link
@@ -1695,7 +1842,10 @@ function LeadsPageInner() {
             {selectedLeadId != null && (
               <button
                 type="button"
-                onClick={() => setSelectedLeadId(null)}
+                onClick={() => {
+                  setSelectedLeadId(null);
+                  setDetailsOpenIds({});
+                }}
                 style={{
                   border: '1px solid #334155',
                   background: 'transparent',
@@ -1712,12 +1862,59 @@ function LeadsPageInner() {
             )}
           </div>
 
-          <div className={styles.historyScroll}>
+          <div className={styles.historyFilters}>
+            {HISTORY_KIND_FILTERS.map((f) => (
+              <button
+                key={f.id || 'all'}
+                type="button"
+                className={`${styles.historyChip}${
+                  historyKind === f.id ? ` ${styles.historyChipActive}` : ''
+                }`}
+                onClick={() => setHistoryKind(f.id)}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <div className={styles.historyFilters}>
+            {HISTORY_PERIOD_FILTERS.map((f) => (
+              <button
+                key={f.id || 'all-time'}
+                type="button"
+                className={`${styles.historyChip}${
+                  historyPeriod === f.id ? ` ${styles.historyChipActive}` : ''
+                }`}
+                onClick={() => setHistoryPeriod(f.id)}
+              >
+                {f.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={`${styles.historyChip}${
+                historyMine ? ` ${styles.historyChipActive}` : ''
+              }`}
+              onClick={() => setHistoryMine((v) => !v)}
+            >
+              Мои
+            </button>
+          </div>
+
+          <div
+            ref={historyScrollRef}
+            className={styles.historyScroll}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
+                void loadMoreHistory();
+              }
+            }}
+          >
             {historyLoading ? (
               <p style={{ color: '#94A3B8', fontSize: 13, margin: 0 }}>Загрузка…</p>
             ) : history.length === 0 ? (
               <p style={{ color: '#64748B', fontSize: 13, margin: 0, lineHeight: 1.45 }}>
-                Пока нет записей. История появится после действий по лидам.
+                Нет записей по выбранным фильтрам.
               </p>
             ) : (
               <div className={styles.timeline}>
@@ -1761,6 +1958,16 @@ function LeadsPageInner() {
                     </div>
                   );
                 })}
+                {historyHasMore && (
+                  <button
+                    type="button"
+                    className={styles.historyLoadMore}
+                    disabled={historyLoadingMore}
+                    onClick={() => void loadMoreHistory()}
+                  >
+                    {historyLoadingMore ? 'Загрузка…' : 'Показать ещё'}
+                  </button>
+                )}
               </div>
             )}
           </div>

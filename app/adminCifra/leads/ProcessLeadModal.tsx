@@ -427,8 +427,19 @@ export default function ProcessLeadModal({ open, lead, onClose, onSaved }: Props
         alert(json.error || 'Не удалось сохранить');
         return;
       }
-      if (json.callout_watch?.prospect_id && json.callout_watch?.message) {
-        alert(`${json.callout_watch.message}\nКарточка — в разделе «Обзвон».`);
+      if (json.callout_watch?.message) {
+        const cw = json.callout_watch as {
+          ok?: boolean;
+          message: string;
+          prospect_id?: number;
+        };
+        if (cw.prospect_id) {
+          alert(`${cw.message}\nКарточка — в разделе «Обзвон».`);
+        } else if (cw.ok === false) {
+          alert(`Обзвон: ${cw.message}`);
+        } else {
+          alert(`${cw.message}\nСмотри вкладку «Без победителя» в Обзвоне.`);
+        }
       }
       onSaved(json.lead as Lead);
     } catch {

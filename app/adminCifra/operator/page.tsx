@@ -21,6 +21,7 @@ import { useHelp } from '../components/help/HelpProvider';
 import { siloNameById } from '@/lib/siloConfig';
 import { formatRuDateWithWeekday, pluralRu } from '@/lib/ruLocale';
 import { findRecipeByGrade } from '@/lib/recipeAdditives';
+import { isPickupOrder } from '@/lib/logisticsPlanner';
 
 const LAB_MENU_ITEMS: { key: LabTab; label: string }[] = [
   { key: 'orders', label: 'Заявки' },
@@ -956,8 +957,12 @@ export default function OperatorBSUPage() {
       console.error(`❌ [Оператор] Не удалось записать отгрузку миксера ${trip.mixer_name || trip.number || trip.id} после всех попыток:`, err);
     }
 
-    // Шаг 2: смена статуса миксера на "В пути" — это главное, повторяем настойчивее
+    // Шаг 2: смена статуса — обычный рейс «В пути»; самовывоз сразу «Разгружен»
+    // (бетон отдан клиенту; сервер пишет задержку статуса 5 мин в on_site→unloaded).
     try {
+      const nextStatus = isPickupOrder(trip.address || trip.order_address)
+        ? 'Разгружен'
+        : 'В пути';
       const res = await fetchWithRetry(
         '/api/adminCifra/order-mixers/status',
         {
@@ -965,7 +970,7 @@ export default function OperatorBSUPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             id: trip.id,
-            status: 'В пути',
+            status: nextStatus,
             userName: operatorName,
             userRole: operatorRole,
             // Мы стартовали загрузку от статуса "Загрузка" — если к моменту

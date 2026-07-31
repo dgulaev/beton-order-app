@@ -29,11 +29,19 @@ export async function POST(request: NextRequest) {
 
     const parsedId = headerId;
 
-    const { data: user } = await supabase
+    const { data: user, error: userErr } = await supabase
       .from('users')
       .select('user_id, role, force_logout_version')
       .eq('user_id', parsedId)
       .maybeSingle();
+
+    if (userErr) {
+      console.error('Heartbeat users lookup:', userErr);
+      return NextResponse.json(
+        { success: false, message: 'upstream', code: 'auth_upstream' },
+        { status: 503 },
+      );
+    }
 
     if (!user) {
       return NextResponse.json({ success: false, forcedLogout: true }, { status: 403 });

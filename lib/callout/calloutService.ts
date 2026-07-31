@@ -178,13 +178,8 @@ export async function matchClientForCallout(opts: {
     return ck === key;
   });
 
-  // Только точное совпадение ключа (без «строй» → чужой клиент)
+  // Только однозначное совпадение — иначе риск чужого телефона
   if (hits.length === 1) return hits[0] as MatchedClient;
-  if (hits.length > 1) {
-    // Несколько одинаковых ключей — берём только если один с телефоном, иначе первый
-    const withPhone = hits.filter((c) => String(c.phone || '').trim());
-    return (withPhone[0] || hits[0]) as MatchedClient;
-  }
   return null;
 }
 
@@ -196,7 +191,10 @@ export async function upsertProspect(input: {
   email?: string | null;
   address?: string | null;
   source?: string;
+  /** Перезаписать телефон/почту/адрес/имя из ЕИС (кнопка refresh / force). */
+  forceOverwrite?: boolean;
 }): Promise<CalloutProspect | null> {
+  const force = Boolean(input.forceOverwrite);
   let inn = normalizeInn(input.inn);
   let name = String(input.organization_name || '').trim() || null;
   if (inn && isWeakOrgName(name, inn)) {
@@ -221,6 +219,7 @@ export async function upsertProspect(input: {
       .from('callout_prospects')
       .select('*')
       .eq('inn', inn)
+      .limit(1)
       .maybeSingle();
 
     if (existing) {
@@ -229,18 +228,28 @@ export async function upsertProspect(input: {
         matched_client_id: matchedId ?? existing.matched_client_id,
       };
       const existingWeak = isWeakOrgName(existing.organization_name, inn);
-      if (existingWeak && name) patch.organization_name = name;
-      else if (
+      if (force && name && !isWeakOrgName(name, inn)) {
+        patch.organization_name = name;
+      } else if (existingWeak && name) {
+        patch.organization_name = name;
+      } else if (
         name &&
         !isWeakOrgName(name, inn) &&
         (existingWeak || !existing.organization_name)
       ) {
         patch.organization_name = name;
       }
-      if (input.phone && !existing.phone) patch.phone = input.phone;
-      else if (!existing.phone && phoneFromClient) patch.phone = phoneFromClient;
-      if (input.email && !existing.email) patch.email = input.email;
-      if (input.address && !existing.address) patch.address = input.address;
+      if (force) {
+        if (input.phone) patch.phone = input.phone;
+        else if (!existing.phone && phoneFromClient) patch.phone = phoneFromClient;
+        if (input.email) patch.email = input.email;
+        if (input.address) patch.address = input.address;
+      } else {
+        if (input.phone && !existing.phone) patch.phone = input.phone;
+        else if (!existing.phone && phoneFromClient) patch.phone = phoneFromClient;
+        if (input.email && !existing.email) patch.email = input.email;
+        if (input.address && !existing.address) patch.address = input.address;
+      }
       const { data } = await supabaseAdmin
         .from('callout_prospects')
         .update(patch)
@@ -276,11 +285,12 @@ export async function upsertProspect(input: {
 
   const key = normalizeOrgKey(name);
   if (key.length >= 4) {
+    const token = key.split(' ').sort((a, b) => b.length - a.length)[0] || key;
     const { data: existingByName } = await supabaseAdmin
       .from('callout_prospects')
       .select('*')
       .is('inn', null)
-      .ilike('organization_name', `%${key.split(' ').sort((a, b) => b.length - a.length)[0]}%`)
+      .ilike('organization_name', `%${token.replace(/[%_]/g, '')}%`)
       .limit(15);
     const hit = (existingByName || []).find(
       (p) => normalizeOrgKey(p.organization_name) === key,
@@ -291,11 +301,19 @@ export async function upsertProspect(input: {
         matched_client_id: matchedId ?? hit.matched_client_id,
       };
       if (inn) patch.inn = inn;
-      if (!hit.phone && (input.phone || phoneFromClient)) {
-        patch.phone = input.phone || phoneFromClient;
+      if (force) {
+        if (input.phone) patch.phone = input.phone;
+        else if (!hit.phone && phoneFromClient) patch.phone = phoneFromClient;
+        if (input.email) patch.email = input.email;
+        if (input.address) patch.address = input.address;
+        if (name) patch.organization_name = name;
+      } else {
+        if (!hit.phone && (input.phone || phoneFromClient)) {
+          patch.phone = input.phone || phoneFromClient;
+        }
+        if (input.email && !hit.email) patch.email = input.email;
+        if (input.address && !hit.address) patch.address = input.address;
       }
-      if (input.email && !hit.email) patch.email = input.email;
-      if (input.address && !hit.address) patch.address = input.address;
       const { data } = await supabaseAdmin
         .from('callout_prospects')
         .update(patch)
@@ -526,15 +544,19 @@ export async function refreshTenderWinner(tenderId: number): Promise<{
     email,
     address,
     source: 'eis',
+    forceOverwrite: true,
   });
 
   if (!prospect) {
+    const nextFail = new Date();
+    nextFail.setDate(nextFail.getDate() + 3);
     await supabaseAdmin
       .from('callout_tenders')
       .update({
-        winner_status: 'failed',
+        winner_status: attempts >= 12 ? 'failed' : 'pending',
         winner_checked_at: now,
         winner_attempts: attempts,
+        winner_poll_after: attempts >= 12 ? null : nextFail.toISOString(),
         updated_at: now,
       })
       .eq('id', tenderId);
@@ -548,7 +570,7 @@ export async function refreshTenderWinner(tenderId: number): Promise<{
       purchase_number: tender.purchase_number || winner.purchase_number || null,
       contract_reg_num: winner.contract_reg_num || tender.contract_reg_num,
       contract_price: winner.contract_price ?? tender.contract_price,
-      object_info: tender.object_info || winner.object_info,
+      object_info: winner.object_info || tender.object_info,
       winner_status: 'found',
       winner_checked_at: now,
       winner_attempts: attempts,
@@ -564,14 +586,42 @@ export async function refreshTenderWinner(tenderId: number): Promise<{
   };
 }
 
-/** Cron: все pending, у которых poll_after наступил. */
-export async function runCalloutWinnerPoll(limit = 40): Promise<{
+/** Cron: pending с наступившим poll_after + редкий retry для missing/failed. */
+export async function runCalloutWinnerPoll(limit = 5): Promise<{
   checked: number;
   found: number;
   pending: number;
+  reclaimed: number;
   errors: string[];
 }> {
   const nowIso = new Date().toISOString();
+  let reclaimed = 0;
+
+  // Вернуть в очередь «нет данных» / failed (не чаще чем раз в ~7 дней по checked_at)
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  const reclaimSlots = Math.min(2, Math.max(1, Math.floor(limit / 2)));
+  const { data: stale } = await supabaseAdmin
+    .from('callout_tenders')
+    .select('id')
+    .in('winner_status', ['missing', 'failed'])
+    .lt('winner_attempts', 18)
+    .or(`winner_checked_at.is.null,winner_checked_at.lte.${weekAgo.toISOString()}`)
+    .order('winner_checked_at', { ascending: true })
+    .limit(reclaimSlots);
+  if (stale?.length) {
+    const ids = stale.map((r) => r.id);
+    const { error: reclaimErr } = await supabaseAdmin
+      .from('callout_tenders')
+      .update({
+        winner_status: 'pending',
+        winner_poll_after: nowIso,
+        updated_at: nowIso,
+      })
+      .in('id', ids);
+    if (!reclaimErr) reclaimed = ids.length;
+  }
+
   const { data: rows, error } = await supabaseAdmin
     .from('callout_tenders')
     .select('id')
@@ -581,7 +631,7 @@ export async function runCalloutWinnerPoll(limit = 40): Promise<{
     .limit(limit);
 
   if (error) {
-    return { checked: 0, found: 0, pending: 0, errors: [error.message] };
+    return { checked: 0, found: 0, pending: 0, reclaimed, errors: [error.message] };
   }
 
   let found = 0;
@@ -593,14 +643,14 @@ export async function runCalloutWinnerPoll(limit = 40): Promise<{
       const res = await refreshTenderWinner(row.id);
       if (res.ok) found += 1;
       else pending += 1;
-      // Пауза под лимит ГосПлана
-      await new Promise((r) => setTimeout(r, 700));
+      // Пауза: ЕИС HTML + ГосПлан
+      await new Promise((r) => setTimeout(r, 800));
     } catch (e) {
       errors.push(e instanceof Error ? e.message : String(e));
     }
   }
 
-  return { checked: (rows || []).length, found, pending, errors };
+  return { checked: (rows || []).length, found, pending, reclaimed, errors };
 }
 
 /**
@@ -640,15 +690,17 @@ export async function watchLeadForCallout(input: {
     return { ok: false, message: 'Нет номера закупки, контракта или ссылки ЕИС' };
   }
 
-  // Дедуп по lead_id — при смене № закупки/ссылки в обработке лида обновляем запись
+  // Дедуп по lead_id — при смене № закупки/ссылки обновляем и перерезолвим победителя
   {
-    const { data: existing } = await supabaseAdmin
+    const { data: existingRows } = await supabaseAdmin
       .from('callout_tenders')
       .select(
         'id, prospect_id, winner_status, purchase_number, purchase_url, contract_reg_num, object_info, nmck, deadline, law',
       )
       .eq('lead_id', input.leadId)
-      .maybeSingle();
+      .order('id', { ascending: true })
+      .limit(5);
+    const existing = existingRows?.[0];
     if (existing) {
       const nextPn = purchaseNumber;
       const nextUrl = purchaseUrl;
@@ -661,8 +713,9 @@ export async function watchLeadForCallout(input: {
       const regChanged =
         Boolean(nextReg) &&
         String(existing.contract_reg_num || '').replace(/\D/g, '') !== nextReg;
+      const keysChanged = pnChanged || urlChanged || regChanged;
 
-      if (!existing.prospect_id && (pnChanged || urlChanged || regChanged || customerName)) {
+      if (keysChanged || customerName || !existing.prospect_id) {
         const lawRaw = String(input.law || '');
         const lawLabel =
           /223/i.test(lawRaw) || /notice223/i.test(nextUrl || '')
@@ -684,23 +737,25 @@ export async function watchLeadForCallout(input: {
           updated_at: new Date().toISOString(),
         };
         if (customerName) patch.customer_name = customerName;
-        if (pnChanged || urlChanged || regChanged) {
+        if (keysChanged) {
+          // Смена закупки — отвязать старого победителя и искать заново
+          patch.prospect_id = null;
           patch.winner_status = 'pending';
           patch.winner_poll_after = new Date().toISOString();
           patch.winner_attempts = 0;
+          if (nextReg) patch.contract_reg_num = nextReg;
         }
         const { error: updErr } = await supabaseAdmin
           .from('callout_tenders')
           .update(patch)
           .eq('id', existing.id);
-        // Колонка customer_name может ещё не быть в БД — повторим без неё
         if (updErr && customerName && /customer_name/i.test(updErr.message)) {
           delete patch.customer_name;
           await supabaseAdmin.from('callout_tenders').update(patch).eq('id', existing.id);
         }
       }
 
-      if (!existing.prospect_id) {
+      if (!existing.prospect_id || keysChanged) {
         const refreshed = await refreshTenderWinner(existing.id);
         return {
           ok: true,
@@ -708,7 +763,7 @@ export async function watchLeadForCallout(input: {
           prospect_id: refreshed.prospect_id,
           message: refreshed.ok
             ? refreshed.message
-            : pnChanged || urlChanged || regChanged
+            : keysChanged
               ? 'Закупка в обзвоне обновлена — ждём победителя в ЕИС'
               : 'Уже на наблюдении (победитель пока не найден)',
         };
@@ -723,13 +778,33 @@ export async function watchLeadForCallout(input: {
   }
 
   if (contractReestr) {
-    const { data: byReg } = await supabaseAdmin
+    const { data: byRegRows } = await supabaseAdmin
       .from('callout_tenders')
       .select('id, lead_id, prospect_id, winner_status')
       .eq('contract_reg_num', contractReestr)
-      .limit(1)
-      .maybeSingle();
+      .order('id', { ascending: true })
+      .limit(1);
+    const byReg = byRegRows?.[0];
     if (byReg) {
+      if (byReg.lead_id && byReg.lead_id !== input.leadId) {
+        if (!byReg.prospect_id) {
+          const refreshed = await refreshTenderWinner(byReg.id);
+          return {
+            ok: true,
+            tender_id: byReg.id,
+            prospect_id: refreshed.prospect_id,
+            message: refreshed.ok
+              ? `${refreshed.message} (контракт также у лида #${byReg.lead_id})`
+              : `Контракт уже наблюдается у лида #${byReg.lead_id}`,
+          };
+        }
+        return {
+          ok: true,
+          tender_id: byReg.id,
+          prospect_id: byReg.prospect_id ?? undefined,
+          message: `Контракт уже в обзвоне у лида #${byReg.lead_id}`,
+        };
+      }
       if (!byReg.lead_id) {
         await supabaseAdmin
           .from('callout_tenders')
@@ -757,13 +832,33 @@ export async function watchLeadForCallout(input: {
   }
 
   if (purchaseNumber) {
-    const { data: byPn } = await supabaseAdmin
+    const { data: byPnRows } = await supabaseAdmin
       .from('callout_tenders')
       .select('id, lead_id, prospect_id, winner_status')
       .eq('purchase_number', purchaseNumber)
-      .limit(1)
-      .maybeSingle();
+      .order('id', { ascending: true })
+      .limit(1);
+    const byPn = byPnRows?.[0];
     if (byPn) {
+      if (byPn.lead_id && byPn.lead_id !== input.leadId) {
+        if (!byPn.prospect_id) {
+          const refreshed = await refreshTenderWinner(byPn.id);
+          return {
+            ok: true,
+            tender_id: byPn.id,
+            prospect_id: refreshed.prospect_id,
+            message: refreshed.ok
+              ? `${refreshed.message} (закупка также у лида #${byPn.lead_id})`
+              : `Закупка уже наблюдается у лида #${byPn.lead_id}`,
+          };
+        }
+        return {
+          ok: true,
+          tender_id: byPn.id,
+          prospect_id: byPn.prospect_id ?? undefined,
+          message: `Закупка уже в обзвоне у лида #${byPn.lead_id}`,
+        };
+      }
       if (!byPn.lead_id) {
         await supabaseAdmin
           .from('callout_tenders')
@@ -785,9 +880,7 @@ export async function watchLeadForCallout(input: {
         ok: true,
         tender_id: byPn.id,
         prospect_id: byPn.prospect_id ?? undefined,
-        message: byPn.prospect_id
-          ? 'Закупка уже в обзвоне с победителем'
-          : 'Закупка уже наблюдается (другой лид)',
+        message: 'Закупка уже в обзвоне с победителем',
       };
     }
   }
@@ -1114,4 +1207,219 @@ export async function enrichNamelessProspects(limit = 50): Promise<{
   }
 
   return { checked: need.length, updated, skipped };
+}
+
+function phonesEqual(a: string | null | undefined, b: string | null | undefined): boolean {
+  const da = String(a || '').replace(/\D/g, '');
+  const db = String(b || '').replace(/\D/g, '');
+  if (!da && !db) return true;
+  if (!da || !db) return false;
+  const norm = (d: string) => {
+    if (d.length === 11 && (d.startsWith('7') || d.startsWith('8'))) return `7${d.slice(1)}`;
+    if (d.length === 10) return `7${d}`;
+    return d;
+  };
+  return norm(da) === norm(db);
+}
+
+/** Удалить наблюдения обзвона по лиду + сиротские карточки без других тендеров. */
+export async function removeCalloutForLead(leadId: number): Promise<{
+  deletedTenders: number;
+  deletedProspects: number;
+}> {
+  const { data: tenders } = await supabaseAdmin
+    .from('callout_tenders')
+    .select('id, prospect_id')
+    .eq('lead_id', leadId);
+  const prospectIds = [
+    ...new Set(
+      (tenders || [])
+        .map((t) => t.prospect_id)
+        .filter((id): id is number => id != null && Number.isFinite(Number(id))),
+    ),
+  ];
+
+  const { data: deleted } = await supabaseAdmin
+    .from('callout_tenders')
+    .delete()
+    .eq('lead_id', leadId)
+    .select('id');
+
+  let deletedProspects = 0;
+  for (const pid of prospectIds) {
+    const { count } = await supabaseAdmin
+      .from('callout_tenders')
+      .select('id', { count: 'exact', head: true })
+      .eq('prospect_id', pid);
+    if ((count ?? 0) > 0) continue;
+    const { error } = await supabaseAdmin
+      .from('callout_prospects')
+      .delete()
+      .eq('id', pid);
+    if (!error) deletedProspects += 1;
+  }
+
+  return { deletedTenders: (deleted || []).length, deletedProspects };
+}
+
+/**
+ * Обновить телефон/почту/адрес из ЕИС по связанным закупкам/контрактам
+ * (результаты торгов → реестр контракта → «Информация о поставщиках»).
+ *
+ * force=true (по кнопке): данные из ЕИС перезаписывают старые в карточке.
+ * Городские номера (4832 и т.п.) — норма для ЕИС, если так указано у поставщика.
+ */
+export async function enrichProspectContactsFromEis(
+  limit = 30,
+  opts?: { force?: boolean; preferProspectId?: number | null },
+): Promise<{
+  checked: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}> {
+  const force = opts?.force !== false;
+  const preferId = opts?.preferProspectId ?? null;
+
+  const { data: rows } = await supabaseAdmin
+    .from('callout_prospects')
+    .select('id, inn, organization_name, phone, email, address')
+    .order('updated_at', { ascending: false })
+    .limit(400);
+
+  // Сначала без контактов, потом остальные (чтобы force обновил и «старые» номера)
+  const sorted = [...(rows || [])].sort((a, b) => {
+    if (preferId != null) {
+      if (a.id === preferId) return -1;
+      if (b.id === preferId) return 1;
+    }
+    const aGap =
+      (!String(a.phone || '').trim() ? 2 : 0) + (!String(a.email || '').trim() ? 1 : 0);
+    const bGap =
+      (!String(b.phone || '').trim() ? 2 : 0) + (!String(b.email || '').trim() ? 1 : 0);
+    return bGap - aGap;
+  });
+
+  let updated = 0;
+  let skipped = 0;
+  let checked = 0;
+  const errors: string[] = [];
+
+  for (const row of sorted) {
+    if (checked >= limit) break;
+
+    const { data: tenders } = await supabaseAdmin
+      .from('callout_tenders')
+      .select(
+        'id, purchase_number, purchase_url, contract_reg_num, law, winner_status',
+      )
+      .eq('prospect_id', row.id)
+      .order('updated_at', { ascending: false })
+      .limit(3);
+
+    const linkable = (tenders || []).filter(
+      (t) =>
+        String(t.contract_reg_num || '').replace(/\D/g, '').length >= 11 ||
+        String(t.purchase_number || '').replace(/\D/g, '').length >= 11 ||
+        String(t.purchase_url || '').trim(),
+    );
+    if (!linkable.length) {
+      skipped += 1;
+      continue;
+    }
+
+    checked += 1;
+    let winner = null as Awaited<ReturnType<typeof resolveWinnerFromEis>>;
+    for (const t of linkable) {
+      try {
+        winner = await resolveWinnerFromEis({
+          purchaseNumber: t.purchase_number,
+          purchaseUrl: t.purchase_url,
+          contractReestrNumber: t.contract_reg_num,
+          law:
+            /223/i.test(String(t.law || '')) ||
+            /notice223/i.test(String(t.purchase_url || ''))
+              ? 'fz223'
+              : 'fz44',
+          enrichDetail: true,
+        });
+        if (winner && (winner.phone || winner.email || winner.organization_name)) {
+          break;
+        }
+      } catch (e) {
+        errors.push(
+          `#${row.id}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    if (!winner) {
+      skipped += 1;
+      continue;
+    }
+
+    // force: ЕИС перекрывает старые поля; иначе только дырки
+    const phone = force
+      ? winner.phone || row.phone || null
+      : String(row.phone || '').trim() || winner.phone || null;
+    const email = force
+      ? winner.email || row.email || null
+      : String(row.email || '').trim() || winner.email || null;
+    const address = force
+      ? winner.address || row.address || null
+      : String(row.address || '').trim() || winner.address || null;
+    const organization_name = force
+      ? winner.organization_name || row.organization_name
+      : (!isWeakOrgName(row.organization_name, row.inn) && row.organization_name) ||
+        winner.organization_name ||
+        row.organization_name;
+    const inn = force
+      ? winner.inn || normalizeInn(row.inn) || null
+      : normalizeInn(row.inn) || winner.inn || null;
+
+    const changed =
+      !phonesEqual(phone, row.phone) ||
+      String(email || '').trim().toLowerCase() !==
+        String(row.email || '').trim().toLowerCase() ||
+      String(address || '').trim() !== String(row.address || '').trim() ||
+      String(organization_name || '').trim() !==
+        String(row.organization_name || '').trim() ||
+      String(inn || '') !== String(row.inn || '');
+
+    if (!changed) {
+      skipped += 1;
+      continue;
+    }
+
+    await supabaseAdmin
+      .from('callout_prospects')
+      .update({
+        phone,
+        email,
+        address,
+        organization_name,
+        inn,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', row.id);
+
+    if (winner.contract_reg_num && linkable[0]) {
+      await supabaseAdmin
+        .from('callout_tenders')
+        .update({
+          contract_reg_num: winner.contract_reg_num,
+          ...(winner.contract_price != null
+            ? { contract_price: winner.contract_price }
+            : {}),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', linkable[0].id);
+    }
+
+    updated += 1;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  return { checked, updated, skipped, errors };
 }

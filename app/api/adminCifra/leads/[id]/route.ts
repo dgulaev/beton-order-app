@@ -641,6 +641,10 @@ export async function PATCH(request: NextRequest, context: Ctx) {
             });
           } catch (e) {
             console.error('[leads PATCH] callout watch', e);
+            calloutWatch = {
+              ok: false,
+              message: e instanceof Error ? e.message : 'Ошибка постановки в обзвон',
+            };
           }
         }
       }
@@ -732,11 +736,24 @@ export async function DELETE(request: NextRequest, context: Ctx) {
     console.error('[leads DELETE storage]', e);
   }
 
+  let calloutCleanup: { deletedTenders: number; deletedProspects: number } | null =
+    null;
+  try {
+    const { removeCalloutForLead } = await import('@/lib/callout/calloutService');
+    calloutCleanup = await removeCalloutForLead(id);
+  } catch (e) {
+    console.error('[leads DELETE callout]', e);
+  }
+
   const { error: delError } = await supabaseAdmin.from('leads').delete().eq('id', id);
   if (delError) {
     console.error('[leads DELETE]', delError);
     return NextResponse.json({ success: false, error: delError.message }, { status: 500 });
   }
 
-  return NextResponse.json({ success: true, id });
+  return NextResponse.json({
+    success: true,
+    id,
+    ...(calloutCleanup ? { calloutCleanup } : {}),
+  });
 }

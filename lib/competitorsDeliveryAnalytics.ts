@@ -11,7 +11,7 @@ export const OWN_PLANT_ID = 'own';
 export const OWN_PLANT_NAME = 'ТрейдКом';
 
 /** Средняя скорость для оценки времени (км/ч), как в travel-time. */
-const AVG_SPEED_KMH = 50;
+const AVG_SPEED_KMH = 55;
 const MIN_TRAVEL_MIN = 10;
 
 export type PlantRef = {

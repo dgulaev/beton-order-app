@@ -146,8 +146,24 @@ export async function DELETE(request: NextRequest, context: Ctx) {
     return NextResponse.json({ success: false, error: 'Некорректный id' }, { status: 400 });
   }
 
-  // Удалить закупки карточки, комментарии — cascade
-  await supabaseAdmin.from('callout_tenders').delete().eq('prospect_id', id);
+  // Закупки с живым лидом — отвязать (оставить на наблюдении), остальные удалить
+  await supabaseAdmin
+    .from('callout_tenders')
+    .update({
+      prospect_id: null,
+      winner_status: 'pending',
+      winner_poll_after: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('prospect_id', id)
+    .not('lead_id', 'is', null);
+
+  await supabaseAdmin
+    .from('callout_tenders')
+    .delete()
+    .eq('prospect_id', id)
+    .is('lead_id', null);
+
   const { error } = await supabaseAdmin.from('callout_prospects').delete().eq('id', id);
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
@@ -199,6 +215,18 @@ export async function POST(request: NextRequest, context: Ctx) {
     const tenderId = Number(body.tender_id);
     if (!Number.isFinite(tenderId)) {
       return NextResponse.json({ success: false, error: 'tender_id обязателен' }, { status: 400 });
+    }
+    const { data: owned } = await supabaseAdmin
+      .from('callout_tenders')
+      .select('id')
+      .eq('id', tenderId)
+      .eq('prospect_id', id)
+      .maybeSingle();
+    if (!owned) {
+      return NextResponse.json(
+        { success: false, error: 'Закупка не принадлежит этой карточке' },
+        { status: 403 },
+      );
     }
     const result = await refreshTenderWinner(tenderId);
     return NextResponse.json({ success: result.ok, ...result });

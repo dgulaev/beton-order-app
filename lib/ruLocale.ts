@@ -35,6 +35,28 @@ export function pluralConcreteCubes(n: number): string {
   return pluralRu(n, 'куб', 'куба', 'кубов');
 }
 
+/**
+ * Миксер в творительном падеже (после «с»): 1 миксером, 2 миксерами, 5 миксерами.
+ */
+export function pluralMixersInstrumental(n: number): string {
+  return pluralRu(n, 'миксером', 'миксерами', 'миксерами');
+}
+
+/**
+ * Фраза «С выбранным 1 миксером» / «С выбранными 9 миксерами».
+ * Для баннера планирования — чтобы логист не видел «9 миксеров» после «с».
+ */
+export function withSelectedMixersPhrase(n: number): string {
+  const abs = Math.abs(Math.trunc(Number(n) || 0));
+  const word = pluralMixersInstrumental(abs);
+  const mod100 = abs % 100;
+  const mod10 = abs % 10;
+  const singular = mod10 === 1 && (mod100 < 10 || mod100 > 20);
+  return singular
+    ? `С выбранным ${abs} ${word}`
+    : `С выбранными ${abs} ${word}`;
+}
+
 /** Кубики добавок на складе: 1 кубик, 2 кубика, 5 кубиков. */
 export function pluralAdditiveCubes(n: number): string {
   return pluralRu(n, 'кубик', 'кубика', 'кубиков');

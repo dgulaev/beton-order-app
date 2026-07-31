@@ -36,11 +36,22 @@ export async function requireAdminCifraStaff(
     };
   }
 
-  const { data: user } = await supabase
+  const { data: user, error: userErr } = await supabase
     .from('users')
     .select('user_id, role, full_name, force_logout_version, can_process_tenders')
     .eq('user_id', userId)
     .maybeSingle();
+
+  // Таймаут/сеть Supabase ≠ «нет прав» — иначе маскируем 403 и ломаем heartbeat/план.
+  if (userErr) {
+    console.error('[adminCifraAuth] users lookup failed:', userErr.message || userErr);
+    return {
+      error: NextResponse.json(
+        { error: 'Сервис временно недоступен', code: 'auth_upstream' },
+        { status: 503 },
+      ),
+    };
+  }
 
   const role = (user?.role || '').toLowerCase();
   // Любая ненулевая версия = сессия принудительно завершена (логин сбрасывает в 0)
@@ -67,6 +78,15 @@ export async function requireAdminCifraStaff(
 
 export const ADMIN_MUTATION_ROLES = ['admin', 'manager'] as const;
 
+/** Добавление / правка / удаление единиц парка (Техника). Без guest. */
+export const FLEET_MUTATION_ROLES = [
+  'admin',
+  'manager',
+  'dispatcher',
+  'operator',
+  'laborant',
+] as const;
+
 /** Мутации склада / заявок: без guest и laborant. */
 export const WAREHOUSE_MUTATION_ROLES = [
   'admin',
@@ -76,6 +96,9 @@ export const WAREHOUSE_MUTATION_ROLES = [
 ] as const;
 
 export const ORDER_MUTATION_ROLES = WAREHOUSE_MUTATION_ROLES;
+
+/** Публикация / сброс общего плана интеллекта (Фаза 6). Оператор только читает. */
+export const PLANNER_EDIT_ROLES = ['admin', 'manager', 'dispatcher'] as const;
 
 /** Реэкспорт для API-роутов (источник — клиентский модуль без server deps). */
 export {

@@ -4,14 +4,24 @@ import { runCalloutWinnerPoll } from '@/lib/callout/calloutService';
 
 export const maxDuration = 300;
 
-/** Ежедневный опрос реестра контрактов ЕИС (победители под обзвон). */
+/**
+ * Опрос реестра контрактов ЕИС для pending-закупок обзвона.
+ * Расписание: vercel.json → /api/cron/callout-winners (несколько раз в сутки).
+ *
+ * Логика:
+ * 1) вернуть в очередь часть missing/failed (реже 7 дней);
+ * 2) взять N pending с winner_poll_after <= now;
+ * 3) для каждой — refreshTenderWinner (ЕИС HTML → контракт → поставщик);
+ * 4) если победителя нет — winner_poll_after += 3 дня, attempts++;
+ *    после ~12 попыток → missing.
+ */
 export async function GET(req: NextRequest) {
   const denied = requireCronAuth(req);
   if (denied) return denied;
 
   try {
-    // Небольшой batch: ГосПлан медленный, иначе serverless не успевает
-    const result = await runCalloutWinnerPoll(12);
+    // Малый batch: HTML ЕИС + ГосПлан, иначе serverless не успевает за 300с
+    const result = await runCalloutWinnerPoll(5);
     return NextResponse.json({
       success: result.errors.length === 0,
       ...result,

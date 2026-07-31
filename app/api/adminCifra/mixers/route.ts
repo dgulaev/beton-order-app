@@ -1,7 +1,7 @@
 // app/api/adminCifra/mixers/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { FLEET_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import {
   isVehicleKind,
   syncVolumeIntoSpecs,
@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
 
 // POST — добавление / обновление единицы техники
 export async function POST(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ['admin']);
+  const auth = await requireAdminCifraStaff(request, FLEET_MUTATION_ROLES);
   if (auth.error) return auth.error;
 
   try {
@@ -264,7 +264,7 @@ export async function POST(request: NextRequest) {
 
 // DELETE — удаление (?id=)
 export async function DELETE(request: NextRequest) {
-  const auth = await requireAdminCifraStaff(request, ['admin']);
+  const auth = await requireAdminCifraStaff(request, FLEET_MUTATION_ROLES);
   if (auth.error) return auth.error;
 
   try {

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, FlaskConical, Truck, Package, Users, UserCog, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown, Cable, MapPin, PanelLeftOpen, PanelLeftClose, Settings, X, CircleHelp } from 'lucide-react';
+import { Home, FlaskConical, Truck, Package, Users, UserCog, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown, Cable, MapPin, PanelLeftOpen, PanelLeftClose, Settings, X, CircleHelp, Brain } from 'lucide-react';
 import { useEffect, useState, useRef, useLayoutEffect, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import Image from 'next/image';
@@ -1305,7 +1305,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const scale = getGlobalScale();
   // Страницы-"каркасы": без скролла страницы целиком, со своим внутренним
   // скроллом по зонам (как дашборд) — сейчас это дашборд, заявки, оператор БСУ и миксеры.
-  const isFrameLayout = pathname === '/adminCifra/dashboard' || pathname === '/adminCifra/zayavki' || pathname === '/adminCifra/operator' || pathname === '/adminCifra/mixers' || pathname === '/adminCifra/technika' || pathname === '/adminCifra/tasks' || pathname === '/adminCifra/clients' || pathname === '/adminCifra/recipes' || pathname === '/adminCifra/loading-points' || pathname === '/adminCifra/competitors' || pathname === '/adminCifra/settings';
+  const isFrameLayout = pathname === '/adminCifra/dashboard' || pathname === '/adminCifra/planning' || pathname === '/adminCifra/zayavki' || pathname === '/adminCifra/leads' || pathname === '/adminCifra/operator' || pathname === '/adminCifra/mixers' || pathname === '/adminCifra/technika' || pathname === '/adminCifra/tasks' || pathname === '/adminCifra/clients' || pathname === '/adminCifra/recipes' || pathname === '/adminCifra/loading-points' || pathname === '/adminCifra/competitors' || pathname === '/adminCifra/settings';
   const showStaffBanner =
     !bannerDismissed && isBannerActive(systemSettings.interface.banner);
   const isDashboard = isFrameLayout;
@@ -1490,6 +1490,13 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             <Link href="/adminCifra/dashboard" style={navLinkStyle(isActive('/adminCifra/dashboard'), isCollapsed)}>
               <Home size={22} />
               <span style={navTextStyle(isCollapsed)}>Диспетчерская</span>
+            </Link>
+            )}
+
+            {navOk('planning') && (
+            <Link href="/adminCifra/planning" style={navLinkStyle(isActive('/adminCifra/planning'), isCollapsed)}>
+              <Brain size={22} />
+              <span style={navTextStyle(isCollapsed)}>Планирование</span>
             </Link>
             )}
 

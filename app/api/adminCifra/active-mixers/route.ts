@@ -37,7 +37,8 @@ export async function GET(request: NextRequest) {
           full_name,
           client_name,
           grade,
-          volume
+          volume,
+          address
         )
       `)
       .in('status', ['Загрузка', 'В пути', 'На объекте', 'Проблема'])
@@ -75,7 +76,9 @@ export async function GET(request: NextRequest) {
       // сразу и понятно отказать, если заявку уже закрыли (диспетчер/менеджер
       // руками поставили "Выполнена"/"Отменена"), не отправляя запрос на
       // сервер и не создавая мусорных записей в production_logs.
-      order_status: item.orders?.status ?? null
+      order_status: item.orders?.status ?? null,
+      // Адрес заявки — самовывоз после «Загружен» сразу → «Разгружен».
+      address: item.orders?.address ?? null,
     }));
 
    // console.log(`✅ Загружено ${formatted.length} активных миксеров (withOrders=${withOrders})`);

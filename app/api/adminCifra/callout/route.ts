@@ -6,15 +6,29 @@ import {
   importCalloutRows,
   deleteImportBatch,
   enrichNamelessProspects,
+  enrichProspectContactsFromEis,
   type ImportRow,
 } from '@/lib/callout/calloutService';
+
+/** Долгий прогон ЕИС (force enrich) — иначе Vercel рвёт на ~60с. */
+export const maxDuration = 300;
+
+function escapePostgrestOrValue(raw: string): string {
+  return raw
+    .replace(/\\/g, '')
+    .replace(/[%_]/g, '')
+    .replace(/[,.()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
 
 export async function GET(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
   const status = request.nextUrl.searchParams.get('status');
-  const q = (request.nextUrl.searchParams.get('q') || '').trim();
+  const q = escapePostgrestOrValue(request.nextUrl.searchParams.get('q') || '');
   const limit = Math.min(Math.max(Number(request.nextUrl.searchParams.get('limit') || 50), 1), 100);
   const page = Math.max(Number(request.nextUrl.searchParams.get('page') || 1), 1);
   const offset = (page - 1) * limit;
@@ -34,7 +48,6 @@ export async function GET(request: NextRequest) {
     countQuery = countQuery.eq('status', status);
   }
   if (q) {
-    // Простой поиск: inn или название
     const orFilter = `inn.ilike.%${q}%,organization_name.ilike.%${q}%,phone.ilike.%${q}%`;
     query = query.or(orFilter);
     countQuery = countQuery.or(orFilter);
@@ -189,6 +202,23 @@ export async function POST(request: NextRequest) {
 
     if (action === 'enrich_names') {
       const result = await enrichNamelessProspects(40);
+      return NextResponse.json({ success: true, ...result });
+    }
+
+    if (action === 'enrich_contacts_eis') {
+      const limitRaw = Number(body.limit);
+      // Маленький batch: каждая карточка = несколько запросов к ЕИС
+      const limit =
+        Number.isFinite(limitRaw) && limitRaw > 0
+          ? Math.min(Math.floor(limitRaw), 12)
+          : 8;
+      const preferRaw = Number(body.prospect_id);
+      const preferProspectId =
+        Number.isFinite(preferRaw) && preferRaw > 0 ? preferRaw : null;
+      const result = await enrichProspectContactsFromEis(limit, {
+        force: body.force !== false,
+        preferProspectId,
+      });
       return NextResponse.json({ success: true, ...result });
     }
 

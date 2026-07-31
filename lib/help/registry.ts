@@ -4,8 +4,8 @@ import type { HelpArticle, HelpRole } from './types';
 const ONBOARDING_BY_ROLE: Partial<Record<HelpRole, string[]>> = {
   laborant: ['laborant-intro', 'recipes'],
   operator: ['operator-intro', 'operator'],
-  dispatcher: ['ops-intro', 'dashboard', 'zayavki', 'sales', 'mixers'],
-  manager: ['ops-intro', 'dashboard', 'zayavki', 'sales', 'mixers'],
+  dispatcher: ['ops-intro', 'dashboard', 'zayavki', 'planning', 'sales', 'mixers'],
+  manager: ['ops-intro', 'dashboard', 'zayavki', 'planning', 'sales', 'mixers'],
   driver: ['driver-intro', 'driver'],
 };
 

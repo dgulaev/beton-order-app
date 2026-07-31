@@ -10,8 +10,8 @@ export function normalizeInn(raw: string | null | undefined): string | null {
 export function extractInnFromText(text: string | null | undefined): string | null {
   if (!text) return null;
   const m =
-    String(text).match(/ИНН\s*[\/:]?\s*КПП\s*[\/:]?\s*(\d{10}|\d{12})/i) ||
-    String(text).match(/ИНН\s*[\/:]?\s*(\d{10}|\d{12})/i) ||
+    String(text).match(/ИНН\s*[\/:]?\s*КПП\s*[\/:]?\s*(\d{12}|\d{10})/i) ||
+    String(text).match(/ИНН\s*[\/:]?\s*(\d{12}|\d{10})/i) ||
     String(text).match(/\b(\d{12}|\d{10})\b/);
   return m ? normalizeInn(m[1]) : null;
 }

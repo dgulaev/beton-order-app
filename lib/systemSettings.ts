@@ -14,6 +14,7 @@ import {
 
 export const NAV_SECTIONS = [
   'dashboard',
+  'planning',
   'zayavki',
   'sales',
   'recipes',
@@ -31,6 +32,7 @@ export type NavSection = (typeof NAV_SECTIONS)[number];
 
 export const NAV_SECTION_LABELS: Record<NavSection, string> = {
   dashboard: 'Диспетчерская',
+  planning: 'Планирование',
   zayavki: 'Заявки',
   sales: 'Продажи',
   recipes: 'Лаборатория',
@@ -57,6 +59,7 @@ export type StaffRoleKey = (typeof STAFF_ROLES_FOR_ACCESS)[number];
 /** Роли × разделы — как сейчас в layout (до появления страницы Настройки). */
 export const DEFAULT_ROLE_ACCESS: Record<NavSection, StaffRoleKey[]> = {
   dashboard: ['admin', 'manager', 'dispatcher'],
+  planning: ['admin', 'manager', 'dispatcher', 'operator'],
   zayavki: ['admin', 'manager', 'dispatcher'],
   sales: ['admin', 'manager', 'dispatcher'],
   recipes: ['admin', 'manager', 'dispatcher', 'laborant'],
@@ -305,6 +308,7 @@ export function pathnameToNavSection(pathname: string | null | undefined): NavSe
   if (!pathname) return null;
   if (pathname.startsWith('/adminCifra/settings')) return 'settings';
   if (pathname.startsWith('/adminCifra/dashboard')) return 'dashboard';
+  if (pathname.startsWith('/adminCifra/planning')) return 'planning';
   if (pathname.startsWith('/adminCifra/zayavki')) return 'zayavki';
   if (
     pathname.startsWith('/adminCifra/leads') ||

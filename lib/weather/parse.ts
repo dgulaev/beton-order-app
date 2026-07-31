@@ -166,3 +166,20 @@ export function parseOpenMeteoForecast(raw: OpenMeteoResponse): WeatherForecastP
     days,
   };
 }
+
+/** Слияние дней: при одинаковой дате побеждает `preferred` (обычно forecast поверх archive). */
+export function mergeWeatherPayloads(
+  preferred: WeatherForecastPayload,
+  extra: WeatherForecastPayload,
+): WeatherForecastPayload {
+  const byDate = new Map<string, WeatherDay>();
+  for (const d of extra.days) byDate.set(d.date, d);
+  for (const d of preferred.days) byDate.set(d.date, d);
+  const days = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    locationLabel: preferred.locationLabel || extra.locationLabel,
+    yandexUrl: preferred.yandexUrl || extra.yandexUrl,
+    fetchedAt: preferred.fetchedAt || extra.fetchedAt,
+    days,
+  };
+}

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   ExternalLink,
+  Loader2,
   Megaphone,
   Phone,
   RefreshCw,
@@ -130,6 +131,8 @@ export default function CalloutPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [messageOk, setMessageOk] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [enrichingEis, setEnrichingEis] = useState(false);
+  const enrichNamesOnceRef = useRef(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [selectedPendingId, setSelectedPendingId] = useState<number | null>(null);
   const [detail, setDetail] = useState<{
@@ -177,8 +180,9 @@ export default function CalloutPage() {
         const noPhone = !String(p.phone || '').trim();
         return weak || (noPhone && (p.inn || p.address));
       });
-      if (needEnrich.length > 0) {
-        // Тихо дозаполним названия по ИНН (DaData) для уже созданных «Без названия»
+      // DaData — один раз за сессию страницы, не на каждый фильтр/страницу
+      if (needEnrich.length > 0 && !enrichNamesOnceRef.current) {
+        enrichNamesOnceRef.current = true;
         void fetch('/api/adminCifra/callout', {
           method: 'POST',
           headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
@@ -187,7 +191,6 @@ export default function CalloutPage() {
           .then((r) => r.json())
           .then((en) => {
             if (en?.success && en.updated > 0) {
-              // перезагрузить список с именами
               return fetch(`/api/adminCifra/callout?${qs}`, {
                 headers: adminCifraAuthHeaders(),
               }).then((r) => r.json());
@@ -681,8 +684,96 @@ export default function CalloutPage() {
           <button type="button" disabled={busy || loading} onClick={() => void load()} style={btnGhost}>
             <RefreshCw size={16} /> Обновить
           </button>
+          <button
+            type="button"
+            disabled={busy || loading || enrichingEis}
+            title="Обновить телефон и почту из ЕИС (перезапишет старые данные в карточке)"
+            onClick={() => {
+              void (async () => {
+                setBusy(true);
+                setEnrichingEis(true);
+                showBanner(
+                  'Обновляем контакты из ЕИС (перезапишем устаревшие телефон/почту)… 1–2 минуты.',
+                  true,
+                );
+                try {
+                  const res = await fetch('/api/adminCifra/callout', {
+                    method: 'POST',
+                    headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({
+                      action: 'enrich_contacts_eis',
+                      limit: 8,
+                      force: true,
+                      prospect_id: selectedId,
+                    }),
+                  });
+                  const json = await res.json().catch(() => ({}));
+                  if (!res.ok || !json.success) {
+                    showBanner(
+                      json.error || `Не удалось обновить контакты из ЕИС (${res.status})`,
+                      false,
+                    );
+                    return;
+                  }
+                  const errN = Array.isArray(json.errors) ? json.errors.length : 0;
+                  showBanner(
+                    `ЕИС обновил карточки: проверено ${json.checked ?? 0}, изменено ${json.updated ?? 0}, без изменений ${json.skipped ?? 0}${
+                      errN ? ` · ошибок ${errN}` : ''
+                    }. Городские номера из ЕИС — норма, если так указано у поставщика.`,
+                    true,
+                  );
+                  await load();
+                  if (selectedId) await loadDetail(selectedId, detail?.prospect);
+                } catch {
+                  showBanner('Ошибка сети при запросе к ЕИС', false);
+                } finally {
+                  setEnrichingEis(false);
+                  setBusy(false);
+                }
+              })();
+            }}
+            style={{
+              ...btnGhost,
+              border: enrichingEis ? '1px solid #FACC15' : btnGhost.border,
+              color: enrichingEis ? '#FDE68A' : btnGhost.color,
+              minWidth: 168,
+            }}
+          >
+            {enrichingEis ? (
+              <>
+                <Loader2 size={16} className={styles.spin} /> Дотягиваем…
+              </>
+            ) : (
+              <>Контакты из ЕИС</>
+            )}
+          </button>
         </div>
       </header>
+
+      {enrichingEis && (
+        <div
+          style={volumeCardSoftStyle({
+            padding: '12px 14px',
+            marginBottom: 12,
+            color: '#FDE68A',
+            border: '1px solid #CA8A04',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          })}
+          role="status"
+          aria-live="polite"
+        >
+          <Loader2 size={18} className={styles.spin} style={{ flexShrink: 0 }} />
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Запрос к ЕИС…</div>
+            <div style={{ fontSize: 12, color: '#FDE68A', opacity: 0.9, marginTop: 2 }}>
+              Результаты торгов → контракт → поставщик. Новые данные из ЕИС перезапишут старые
+              телефон/почту. Не закрывай вкладку.
+            </div>
+          </div>
+        </div>
+      )}
 
       {message && (
         <div
@@ -692,6 +783,8 @@ export default function CalloutPage() {
             color: messageOk ? '#bbf7d0' : '#fecaca',
             border: `1px solid ${messageOk ? '#166534' : '#7f1d1d'}`,
           })}
+          role="status"
+          aria-live="polite"
         >
           {message}
           <button

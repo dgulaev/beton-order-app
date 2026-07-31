@@ -392,6 +392,7 @@ function TariffsTab() {
 export default function MobileMixersPage() {
   const { isAdmin, user } = useUserRole();
   const role = (user?.role || '').toLowerCase();
+  const canEditFleet = ['admin', 'manager', 'dispatcher', 'operator', 'laborant'].includes(role);
   const canEditCouples = role === 'admin' || role === 'manager' || role === 'dispatcher';
 
   const [tab, setTab] = useState<PageTab>('mixer');
@@ -512,7 +513,7 @@ export default function MobileMixersPage() {
   const openCard = (unit: FleetUnit) => {
     setSelected(unit);
     setConfirmDelete(false);
-    if (isAdmin) {
+    if (canEditFleet) {
       const kind = isVehicleKind(unit.vehicle_kind) ? unit.vehicle_kind : vehicleKind;
       setForm({
         number: unit.number || '',
@@ -1065,7 +1066,7 @@ export default function MobileMixersPage() {
       )}
 
       {/* FAB */}
-      {isAdmin && tab !== 'tariffs' && !sheet && (
+      {canEditFleet && tab !== 'tariffs' && !sheet && (
         <button
           type="button"
           onClick={openAdd}

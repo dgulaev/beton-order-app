@@ -511,6 +511,7 @@ export function formatOrderMixer(record: any, orders?: any[]) {
     organization_name: order?.organization_name ?? record.organization_name ?? null,
     client_name: order?.client_name ?? order?.full_name ?? record.client_name ?? null,
     concrete_grade: order?.grade ?? record.concrete_grade ?? record.grade ?? null,
+    address: order?.address ?? record.address ?? null,
     client:
       order?.organization_name ||
       order?.full_name ||

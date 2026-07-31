@@ -3,6 +3,9 @@
 // Алгоритм: геокодирование DaData → расстояние по Хаверсину → оценка
 // времени с учётом коэффициента дороги и средней городской скорости.
 // Результат сохраняется в orders.road_time_min (кэш в БД).
+//
+// Формула v2 (31.07.2026): кривизна 1.3, скорость 55 км/ч.
+// После смены формулы кэш сбрасывают через force: true или batch+force.
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
@@ -11,22 +14,20 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+/** Версия формулы — при росте сбрасывать кэш через force. */
+export const TRAVEL_FORMULA_VERSION = 2;
+
 // Координаты завода — Брянск, Орловский тупик, 6
 const PLANT_LAT = 53.25347;
 const PLANT_LON = 34.416444;
 
-// Коэффициент дороги: реальное расстояние по дорогам ≈ прямолинейное × 1.35
-const ROUTING_FACTOR = 1.35;
+// Коэффициент дороги: как в deliveryPricing (1.3).
+const ROUTING_FACTOR = 1.3;
 // Средняя скорость с учётом выезда из города + трасса (км/ч).
-// Яндекс показывает 87км/95мин для маршрута где Хаверсин даёт ~62км — 
-// это ~55км/ч реально. Берём 50км/ч как консервативный буфер.
-const AVG_SPEED_KMH = 50;
-// Минимальное время в пути (даже для близких объектов — погрузка/выезд с завода)
+const AVG_SPEED_KMH = 55;
 const MIN_TRAVEL_MIN = 10;
-// Если адрес не геокодируется — используем среднее для района Брянска
 const FALLBACK_TRAVEL_MIN = 30;
 
-/** Формула Хаверсина: расстояние между двумя точками на сфере (в км). */
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
@@ -38,26 +39,18 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/**
- * Пытается извлечь координаты прямо из текста адреса —
- * диспетчеры иногда вставляют "52.735700, 34.774616" в поле адреса.
- * Это точнее любого геокодирования.
- */
 function extractCoordsFromText(address: string): { lat: number; lon: number } | null {
   const match = address.match(/(\d{2,3}\.\d{3,})[,\s]+(\d{2,3}\.\d{3,})/);
   if (!match) return null;
   const lat = parseFloat(match[1]);
   const lon = parseFloat(match[2]);
-  // Санитарная проверка: координаты должны быть в разумном диапазоне для России
   if (lat >= 41 && lat <= 82 && lon >= 19 && lon <= 170) {
     return { lat, lon };
   }
   return null;
 }
 
-/** Геокодирует адрес: сначала ищет координаты в тексте, затем DaData. */
 async function geocode(address: string): Promise<{ lat: number; lon: number } | null> {
-  // Приоритет: координаты, встроенные в текст адреса
   const fromText = extractCoordsFromText(address);
   if (fromText) return fromText;
 
@@ -79,57 +72,99 @@ async function geocode(address: string): Promise<{ lat: number; lon: number } | 
   }
 }
 
+async function computeRoadMinutes(
+  address: string | null | undefined,
+): Promise<{ road_time_min: number; source: 'calculated' | 'fallback' }> {
+  let road_time_min = FALLBACK_TRAVEL_MIN;
+  let source: 'calculated' | 'fallback' = 'fallback';
+  if (address && String(address).trim()) {
+    const coords = await geocode(String(address).trim());
+    if (coords) {
+      const straightKm = haversineKm(PLANT_LAT, PLANT_LON, coords.lat, coords.lon);
+      const roadKm = straightKm * ROUTING_FACTOR;
+      const estimatedMin = Math.round((roadKm / AVG_SPEED_KMH) * 60);
+      road_time_min = Math.max(MIN_TRAVEL_MIN, estimatedMin);
+      source = 'calculated';
+    }
+  }
+  return { road_time_min, source };
+}
+
+async function resolveOne(
+  orderId: number,
+  address: string | null | undefined,
+  force: boolean,
+): Promise<{
+  orderId: number;
+  road_time_min: number;
+  source: 'calculated' | 'cached' | 'fallback';
+}> {
+  if (!force) {
+    const { data: existing } = await supabase
+      .from('orders')
+      .select('road_time_min')
+      .eq('id', orderId)
+      .single();
+
+    if (existing?.road_time_min !== null && existing?.road_time_min !== undefined) {
+      return {
+        orderId,
+        road_time_min: existing.road_time_min,
+        source: 'cached',
+      };
+    }
+  }
+
+  const { road_time_min, source } = await computeRoadMinutes(address);
+  await supabase.from('orders').update({ road_time_min }).eq('id', orderId);
+  return { orderId, road_time_min, source };
+}
+
 /**
  * POST /api/adminCifra/travel-time
- * Body: { orderId: number, address: string }
- * Returns: { road_time_min: number, source: 'calculated' | 'cached' | 'fallback' }
+ *
+ * Один: { orderId, address, force? }
+ * Пакет (сброс кэша дня): { batch: [{ orderId, address }], force: true }
  */
 export async function POST(req: NextRequest) {
   try {
-    const { orderId, address, force } = await req.json();
+    const body = await req.json();
+    const force = Boolean(body.force);
 
-    if (!orderId) {
+    if (Array.isArray(body.batch)) {
+      const batch = body.batch as Array<{ orderId?: number; address?: string }>;
+      if (!batch.length) {
+        return NextResponse.json({ error: 'batch пуст' }, { status: 400 });
+      }
+      const times: Record<string, number> = {};
+      const sources: Record<string, string> = {};
+      // Последовательно — не долбим DaData параллельно.
+      for (const item of batch) {
+        const orderId = Number(item.orderId);
+        if (!Number.isFinite(orderId)) continue;
+        const row = await resolveOne(orderId, item.address, force);
+        times[String(orderId)] = row.road_time_min;
+        sources[String(orderId)] = row.source;
+      }
+      return NextResponse.json({
+        times,
+        sources,
+        formulaVersion: TRAVEL_FORMULA_VERSION,
+        forced: force,
+      });
+    }
+
+    const orderId = Number(body.orderId);
+    if (!Number.isFinite(orderId)) {
       return NextResponse.json({ error: 'orderId обязателен' }, { status: 400 });
     }
 
-    // Проверяем кэш в БД (пропускаем если force=true — принудительный пересчёт)
-    if (!force) {
-      const { data: existing } = await supabase
-        .from('orders')
-        .select('road_time_min')
-        .eq('id', orderId)
-        .single();
-
-      if (existing?.road_time_min !== null && existing?.road_time_min !== undefined) {
-        return NextResponse.json({
-          road_time_min: existing.road_time_min,
-          source: 'cached',
-        });
-      }
-    }
-
-    // Нет кэша — считаем
-    let road_time_min = FALLBACK_TRAVEL_MIN;
-    let source: 'calculated' | 'fallback' = 'fallback';
-
-    if (address && address.trim()) {
-      const coords = await geocode(address.trim());
-      if (coords) {
-        const straightKm = haversineKm(PLANT_LAT, PLANT_LON, coords.lat, coords.lon);
-        const roadKm = straightKm * ROUTING_FACTOR;
-        const estimatedMin = Math.round((roadKm / AVG_SPEED_KMH) * 60);
-        road_time_min = Math.max(MIN_TRAVEL_MIN, estimatedMin);
-        source = 'calculated';
-      }
-    }
-
-    // Сохраняем в БД
-    await supabase
-      .from('orders')
-      .update({ road_time_min })
-      .eq('id', orderId);
-
-    return NextResponse.json({ road_time_min, source });
+    const row = await resolveOne(orderId, body.address, force);
+    return NextResponse.json({
+      road_time_min: row.road_time_min,
+      source: row.source,
+      formulaVersion: TRAVEL_FORMULA_VERSION,
+    });
   } catch (err: any) {
     console.error('travel-time error:', err);
     return NextResponse.json({ error: err.message }, { status: 500 });
@@ -138,7 +173,6 @@ export async function POST(req: NextRequest) {
 
 /**
  * GET /api/adminCifra/travel-time?orderId=123
- * Возвращает только сохранённое значение (без пересчёта).
  */
 export async function GET(req: NextRequest) {
   const orderId = req.nextUrl.searchParams.get('orderId');
@@ -147,7 +181,7 @@ export async function GET(req: NextRequest) {
   const { data } = await supabase
     .from('orders')
     .select('road_time_min')
-    .eq('id', parseInt(orderId))
+    .eq('id', parseInt(orderId, 10))
     .single();
 
   return NextResponse.json({ road_time_min: data?.road_time_min ?? null });

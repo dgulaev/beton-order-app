@@ -64,12 +64,28 @@ export async function POST(request: NextRequest) {
     // обновлении роли), и такой лог только шумит в терминале без пользы.
     if (error) {
       console.error('❌ [Role API] Query error:', error);
+      // Не маскируем outage ролью client — клиент иначе думает, что сессия «гость».
+      return NextResponse.json(
+        {
+          success: false,
+          message: error.message || 'Ошибка проверки роли',
+          code: 'auth_upstream',
+        },
+        { status: 503 },
+      );
     }
 
-    const role = data?.role || 'client';
-    const full_name = data?.full_name || data?.username || 'Сотрудник';
-    const forceLogoutVersion = data?.force_logout_version || 0;
-    const can_process_tenders = data?.can_process_tenders === true;
+    if (!data) {
+      return NextResponse.json(
+        { success: false, message: 'Пользователь не найден', role: 'client' },
+        { status: 404 },
+      );
+    }
+
+    const role = data.role || 'client';
+    const full_name = data.full_name || data.username || 'Сотрудник';
+    const forceLogoutVersion = data.force_logout_version || 0;
+    const can_process_tenders = data.can_process_tenders === true;
 
     const lastLog = lastLoggedByUser.get(parsedUserId);
     const changed = !lastLog || lastLog.role !== role || lastLog.full_name !== full_name;

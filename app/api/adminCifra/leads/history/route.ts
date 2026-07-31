@@ -7,6 +7,15 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin';
 /** Лок на процесс — React Strict Mode / два параллельных GET не сидят seed дважды. */
 let seedInFlight: Promise<void> | null = null;
 
+const HISTORY_KINDS = [
+  'status',
+  'assign',
+  'processing',
+  'contract',
+  'order',
+] as const;
+type HistoryKind = (typeof HISTORY_KINDS)[number];
+
 function historyDedupeKey(row: {
   lead_id: number;
   action: string;
@@ -55,11 +64,12 @@ async function dedupeLeadHistoryRows(): Promise<void> {
  * Идемпотентно: повторный вызов не плодит дубли.
  */
 async function seedMissingLeadHistory(): Promise<void> {
+  // Берём свежие лиды — иначе при >300 старых новые никогда не получат seed
   const { data: leads, error } = await supabaseAdmin
     .from('leads')
     .select('id, source, status, created_at, raw_payload')
-    .order('created_at', { ascending: true })
-    .limit(300);
+    .order('created_at', { ascending: false })
+    .limit(200);
   if (error || !leads?.length) return;
 
   const leadIds = leads.map((l) => l.id);
@@ -70,7 +80,7 @@ async function seedMissingLeadHistory(): Promise<void> {
   if (existingError) return;
 
   const hasHistory = new Set((existing ?? []).map((r) => r.lead_id));
-  const missing = leads.filter((l) => !hasHistory.has(l.id));
+  const missing = leads.filter((l) => !hasHistory.has(l.id)).slice(0, 80);
   if (missing.length === 0) return;
 
   const rows = missing.map((lead) => {
@@ -113,22 +123,54 @@ async function ensureLeadHistoryReady(): Promise<void> {
   await seedInFlight;
 }
 
-/** GET — лента истории лидов (все или по leadId). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyHistoryKindFilter(query: any, kind: HistoryKind | null) {
+  if (!kind) return query;
+  switch (kind) {
+    case 'status':
+      return query.eq('field_name', 'status').not('new_value', 'like', 'converted:%');
+    case 'assign':
+      return query.in('field_name', ['assigned_to', 'co_assignees']);
+    case 'processing':
+      return query.in('field_name', ['processing', 'send_to_work']);
+    case 'contract':
+      return query.eq('field_name', 'contract');
+    case 'order':
+      return query.or(
+        'and(field_name.eq.status,new_value.like.converted:%),action.ilike.%заказ%',
+      );
+    default:
+      return query;
+  }
+}
+
+/** GET — лента истории лидов (пагинация + фильтры). */
 export async function GET(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request, SALES_ROLES);
   if (auth.error) return auth.error;
 
-  const leadIdRaw = request.nextUrl.searchParams.get('leadId');
-  const limit = Math.min(Number(request.nextUrl.searchParams.get('limit') || 80), 200);
+  const sp = request.nextUrl.searchParams;
+  const leadIdRaw = sp.get('leadId');
+  const offset = Math.max(0, Number(sp.get('offset') || 0) || 0);
+  const limit = Math.min(Math.max(1, Number(sp.get('limit') || 40) || 40), 80);
+  const kindRaw = String(sp.get('kind') || '').trim();
+  const kind = (HISTORY_KINDS as readonly string[]).includes(kindRaw)
+    ? (kindRaw as HistoryKind)
+    : null;
+  const since = String(sp.get('since') || '').trim() || null;
+  const mine = sp.get('mine') === '1' || sp.get('mine') === 'true';
+  const actorUserId = auth.user.user_id;
 
-  await ensureLeadHistoryReady();
+  // Seed/dedupe только на первой странице без узких фильтров — иначе тормозит подгрузку
+  if (offset === 0 && !kind && !since && !mine) {
+    await ensureLeadHistoryReady();
+  }
 
   let query = supabaseAdmin
     .from('lead_history')
     .select('*')
     .order('created_at', { ascending: false })
-    .order('id', { ascending: false })
-    .limit(limit);
+    .order('id', { ascending: false });
 
   if (leadIdRaw) {
     const leadId = Number(leadIdRaw);
@@ -138,13 +180,28 @@ export async function GET(request: NextRequest) {
     query = query.eq('lead_id', leadId);
   }
 
+  query = applyHistoryKindFilter(query, kind);
+
+  if (since) {
+    const d = new Date(since);
+    if (!Number.isNaN(d.getTime())) {
+      query = query.gte('created_at', d.toISOString());
+    }
+  }
+
+  if (mine && actorUserId != null) {
+    query = query.eq('user_id', actorUserId);
+  }
+
+  // +1 чтобы понять, есть ли ещё страница
+  query = query.range(offset, offset + limit);
+
   const { data, error } = await query;
   if (error) {
     console.error('[leads/history GET]', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 
-  // Страховка на ответ: даже если в БД ещё мелькнул дубль — в UI один раз.
   const seen = new Set<string>();
   const history = [];
   for (const row of data ?? []) {
@@ -154,5 +211,16 @@ export async function GET(request: NextRequest) {
     history.push(row);
   }
 
-  return NextResponse.json({ success: true, history });
+  const hasMore = (data?.length ?? 0) > limit;
+  if (hasMore && history.length > limit) {
+    history.length = limit;
+  }
+
+  return NextResponse.json({
+    success: true,
+    history: hasMore ? history.slice(0, limit) : history,
+    hasMore,
+    offset,
+    limit,
+  });
 }

@@ -6,6 +6,10 @@ import {
   extractPurchaseNumberFromUrl,
   normalizeInn,
 } from '@/lib/callout/parseContacts';
+import {
+  fetchWinnerFromContractHtml,
+  fetchWinnerFromNoticeResultsHtml,
+} from '@/lib/callout/fetchEisWinnerHtml';
 import { formatPhoneInput } from '@/lib/phone';
 
 const DEFAULT_BASE = 'https://v2test.gosplan.info';
@@ -472,6 +476,33 @@ export async function fetchContractDetailSupplier(
   };
 }
 
+function mergeWinner(
+  primary: WinnerEnrichment | null,
+  secondary: WinnerEnrichment | null,
+): WinnerEnrichment | null {
+  if (!primary && !secondary) return null;
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  return {
+    inn: primary.inn || secondary.inn,
+    organization_name: primary.organization_name || secondary.organization_name,
+    phone: primary.phone || secondary.phone,
+    email: primary.email || secondary.email,
+    address: primary.address || secondary.address,
+    contract_reg_num: primary.contract_reg_num || secondary.contract_reg_num,
+    contract_price: primary.contract_price ?? secondary.contract_price,
+    object_info: primary.object_info || secondary.object_info,
+    purchase_number: primary.purchase_number || secondary.purchase_number,
+    law: primary.law || secondary.law,
+    raw: primary.raw ?? secondary.raw,
+  };
+}
+
+function winnerHasContacts(w: WinnerEnrichment | null): boolean {
+  if (!w) return false;
+  return Boolean(String(w.phone || '').trim() || String(w.email || '').trim());
+}
+
 /** Победитель по реестровому номеру контракта (карточка epz/contract). */
 export async function resolveWinnerFromContractReestr(
   reestrNumber: string,
@@ -480,9 +511,22 @@ export async function resolveWinnerFromContractReestr(
   const reg = String(reestrNumber || '').replace(/\D/g, '');
   if (reg.length < 11) return null;
 
+  // 1) Публичная HTML-карточка ЕИС — полный блок «Информация о поставщиках»
+  let fromHtml: WinnerEnrichment | null = null;
+  try {
+    fromHtml = await fetchWinnerFromContractHtml(reg);
+  } catch {
+    /* Gosplan ниже */
+  }
+  if (fromHtml && winnerHasContacts(fromHtml)) {
+    return fromHtml;
+  }
+
+  // 2) ГосПлан API (suppliersInfo) — дополняет / запасной путь
   const order: Array<'fz44' | 'fz223'> =
     preferredLaw === 'fz223' ? ['fz223', 'fz44'] : ['fz44', 'fz223'];
 
+  let fromApi: WinnerEnrichment | null = null;
   for (const law of order) {
     try {
       const detail = await fetchContractDetailSupplier(reg, law);
@@ -490,7 +534,7 @@ export async function resolveWinnerFromContractReestr(
       if (!detail.inn && !detail.organization_name && !detail.purchase_number) {
         continue;
       }
-      return {
+      fromApi = {
         inn: detail.inn,
         organization_name: detail.organization_name,
         phone: detail.phone,
@@ -502,11 +546,13 @@ export async function resolveWinnerFromContractReestr(
         purchase_number: detail.purchase_number,
         law,
       };
+      break;
     } catch {
       /* next law */
     }
   }
-  return null;
+
+  return mergeWinner(fromHtml, fromApi);
 }
 
 /** Итог: победитель по номеру/URL закупки или контракта. */
@@ -532,12 +578,26 @@ export async function resolveWinnerFromEis(opts: {
   const pn = String(opts.purchaseNumber || fromUrl || '').replace(/\D/g, '');
   if (pn.length < 11) return null;
 
+  const enrich = opts.enrichDetail !== false;
+
+  // HTML-путь: результаты определения поставщика → реестр контракта → контакты
+  let fromHtmlPath: WinnerEnrichment | null = null;
+  if (enrich) {
+    try {
+      fromHtmlPath = await fetchWinnerFromNoticeResultsHtml(pn, opts.law);
+    } catch {
+      /* Gosplan ниже */
+    }
+    if (fromHtmlPath && winnerHasContacts(fromHtmlPath)) {
+      return fromHtmlPath;
+    }
+  }
+
   const hits = await searchContractsByPurchaseNumber(pn, opts.law);
-  if (!hits.length) return null;
+  if (!hits.length) return fromHtmlPath;
 
   const best = hits.find((h) => h.supplier_inns.length > 0) || hits[0];
   const inn = best.supplier_inns[0] || null;
-  const enrich = opts.enrichDetail !== false;
 
   let organization_name: string | null = null;
   let phone: string | null = null;
@@ -546,28 +606,44 @@ export async function resolveWinnerFromEis(opts: {
 
   if (enrich && best.reg_num) {
     try {
-      const detail = await fetchContractDetailSupplier(best.reg_num, best.law);
-      if (detail) {
-        organization_name = detail.organization_name;
-        phone = detail.phone;
-        email = detail.email;
-        address = detail.address;
+      // Сначала HTML карточки контракта (телефон/почта), потом API
+      const htmlDetail = await fetchWinnerFromContractHtml(best.reg_num);
+      if (htmlDetail) {
+        organization_name = htmlDetail.organization_name;
+        phone = htmlDetail.phone;
+        email = htmlDetail.email;
+        address = htmlDetail.address;
       }
     } catch {
       /* ignore */
     }
+    if (!phone && !email) {
+      try {
+        const detail = await fetchContractDetailSupplier(best.reg_num, best.law);
+        if (detail) {
+          organization_name = organization_name || detail.organization_name;
+          phone = phone || detail.phone;
+          email = email || detail.email;
+          address = address || detail.address;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
-  return {
-    inn: inn || null,
-    organization_name,
-    phone,
-    email,
-    address,
-    contract_reg_num: best.reg_num,
-    contract_price: best.price,
-    object_info: best.subject,
+  const fromApi: WinnerEnrichment = {
+    inn: inn || fromHtmlPath?.inn || null,
+    organization_name: organization_name || fromHtmlPath?.organization_name || null,
+    phone: phone || fromHtmlPath?.phone || null,
+    email: email || fromHtmlPath?.email || null,
+    address: address || fromHtmlPath?.address || null,
+    contract_reg_num: best.reg_num || fromHtmlPath?.contract_reg_num || null,
+    contract_price: best.price ?? fromHtmlPath?.contract_price ?? null,
+    object_info: best.subject || fromHtmlPath?.object_info || null,
     purchase_number: best.purchase_number || pn,
     law: best.law,
   };
+
+  return mergeWinner(fromHtmlPath, fromApi) || fromApi;
 }

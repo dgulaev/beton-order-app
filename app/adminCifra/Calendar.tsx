@@ -6,6 +6,7 @@ import { Order } from './hooks/useCalendarOrders';
 import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
 import { CARD_VOLUME_SOFT, modalCloseButtonStyle, volumeCardSoftStyle, volumeModalStyle } from './cardStyles';
 import { formatRuDateWithWeekday, formatTimeHHMM, pluralRu } from '@/lib/ruLocale';
+import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
 
 interface StatusConfig {
   label: string;
@@ -395,26 +396,34 @@ export default function Calendar({ onClose, orders: externalOrders, onSelectOrde
 
         {/* Список заказов на выбранный день */}
         <div style={volumeCardSoftStyle({ width: '540px', borderRadius: 20, padding: '28px', display: 'flex', flexDirection: 'column', minHeight: 0 })}>
-          <h3 style={{ fontSize: '22px', marginBottom: '20px', color: '#fff', flexShrink: 0 }}>
+          <h3 style={{ fontSize: '22px', marginBottom: selectedDateKey ? 12 : 20, color: '#fff', flexShrink: 0 }}>
             {selectedDay
               // «на субботу, 15 июля» — винительный день недели + род. падеж месяца
               ? `Заказы на ${formatRuDateWithWeekday(new Date(year, month, selectedDay), 'accusative')} (${dayOrders.length})`
               : 'Выберите день'}
           </h3>
 
+          {selectedDateKey && (
+            <div style={{ marginBottom: 16, flexShrink: 0 }}>
+              <WeatherKpiCard dateKey={selectedDateKey} compact fillHeight={false} />
+            </div>
+          )}
+
           {loading ? (
             <p style={{ color: '#94A3B8', textAlign: 'center', margin: 'auto' }}>Загрузка...</p>
           ) : dayOrders.length > 0 ? (
-            <div className="scroll-hidden" style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            <div className="scroll-hidden" style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 0, overflowY: 'auto' }}>
               {dayOrders.map((order) => {
                 const statusStyle = getStatusConfig((order as any).status);
+                const clientName =
+                  (order as any).organization_name || (order as any).full_name || '—';
                 return (
                   <div
                     key={order.id}
                     onClick={() => onSelectOrder(order)}
                     style={volumeCardSoftStyle({
-                      padding: '18px',
-                      borderRadius: 14,
+                      padding: '8px 12px',
+                      borderRadius: 10,
                       cursor: 'pointer',
                       position: 'relative',
                       transition: 'filter 0.15s ease',
@@ -422,27 +431,42 @@ export default function Calendar({ onClose, orders: externalOrders, onSelectOrde
                     onMouseEnter={(e) => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
                     onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontWeight: '600', color: '#fff', fontSize: '18px' }}>#{order.id}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                      <span style={{ fontWeight: 700, color: '#fff', fontSize: 14, flexShrink: 0 }}>
+                        #{order.id}
+                      </span>
+                      <span
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          fontSize: 13,
+                          color: '#CBD5E1',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={clientName}
+                      >
+                        {clientName}
+                      </span>
+                      <span style={{ color: '#10B981', fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
+                        {order.volume} м³
+                      </span>
+                      <span style={{ color: '#64748B', fontSize: 12, flexShrink: 0, minWidth: 40, textAlign: 'right' }}>
+                        {formatTimeHHMM((order as any).delivery_time) || '—'}
+                      </span>
                       <span style={{
-                        padding: '4px 14px',
-                        borderRadius: '9999px',
-                        fontSize: '13px',
-                        fontWeight: '600',
+                        padding: '2px 8px',
+                        borderRadius: 9999,
+                        fontSize: 11,
+                        fontWeight: 600,
                         backgroundColor: statusStyle.bg,
                         color: statusStyle.color,
+                        flexShrink: 0,
+                        whiteSpace: 'nowrap',
                       }}>
                         {statusStyle.label}
                       </span>
-                    </div>
-
-                    <div style={{ fontSize: '15px', color: '#94A3B8', marginTop: '8px' }}>
-                      {(order as any).organization_name || (order as any).full_name || '—'}
-                    </div>
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', alignItems: 'center' }}>
-                      <span style={{ color: '#10B981', fontWeight: '600' }}>{order.volume} м³</span>
-                      <span style={{ color: '#64748B', fontSize: '13px' }}>{formatTimeHHMM((order as any).delivery_time)}</span>
                     </div>
                   </div>
                 );

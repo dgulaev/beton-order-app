@@ -1,24 +1,20 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import Calendar from '../Calendar';
 import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders, useRealtimeOrderMixers, formatOrderMixer } from '../../../hooks/useRealtimeOrders';
 import OrderDetailModal from '../components/OrderDetailModal';
 import NewOrderModal from '../components/NewOrderModal';
 import Image from 'next/image';
-import { Home, LayoutList, AlignJustify, X, User, CalendarDays, Truck, FileText } from 'lucide-react';
+import { Home, LayoutList, AlignJustify, X, User, CalendarDays, Truck, Brain } from 'lucide-react';
 import VerticalTimelinePanel from '../components/VerticalTimelinePanel';
 import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
-import {
-  buildDailyMixerReportGroups,
-  buildDailyMixerReportText,
-  formatDailyReportDateLabel,
-} from '@/lib/dailyMixerReport';
 import { formatRuDateWithWeekday, formatTimeHHMM, pluralRu, pluralWord } from '@/lib/ruLocale';
 import { CARD_BORDER, modalCloseButtonStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import ModalSelect from '../components/ModalSelect';
-import DailyMixerReportModal from '../components/DailyMixerReportModal';
+import DayPlanKpiCard from '../components/DayPlanKpiCard';
 import WeatherKpiCard from '../components/WeatherKpiCard';
 import { appAlert, appConfirm } from '../components/appDialog';
 import { CommentUnreadBadge } from '../components/OrderCommentsPanel';
@@ -35,6 +31,7 @@ import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import PageHelpButton from '../components/help/PageHelpButton';
 
 export default function AdminCifraDashboard() {
+  const router = useRouter();
 
    // ==================== 1. ВСЕ СОСТОЯНИЯ ===========================================
   const [userId, setUserId] = useState<number | null>(null);
@@ -105,7 +102,6 @@ export default function AdminCifraDashboard() {
  const [showPlanModal, setShowPlanModal] = useState(false);
  const [showOrdersModal, setShowOrdersModal] = useState(false);
  const [showDelaysModal, setShowDelaysModal] = useState(false);
- const [showDailyReportModal, setShowDailyReportModal] = useState(false);
  // Быстрое создание заявки на конкретную дату (ПКМ / долгое нажатие на день в календаре)
  const [showQuickNewOrder, setShowQuickNewOrder] = useState(false);
  const [quickNewOrderDate, setQuickNewOrderDate] = useState<string | undefined>(undefined);
@@ -328,13 +324,24 @@ useEffect(() => {
     }
   }, []);
 
+  // Месяц выбранного дня таймлайна (стрелки Пред./След. тоже меняют selectedDate).
+  // Раньше грузили только «сейчас» + листание календаря — переход 31.07 → 01.08
+  // оставлял allOrders без августа, и таймлайн был пустой при живых заявках.
+  const selectedOrdersMonthKey = `${selectedDate.getFullYear()}-${selectedDate.getMonth() + 1}`;
+
   useEffect(() => {
-    const now = new Date();
+    const [yearStr, monthStr] = selectedOrdersMonthKey.split('-');
+    const year = Number(yearStr);
+    const month = Number(monthStr);
+    let cancelled = false;
     setLoadingOrders(true);
-    fetchOrdersForMonth(now.getFullYear(), now.getMonth() + 1).finally(() =>
-      setLoadingOrders(false)
-    );
-  }, [fetchOrdersForMonth]);
+    fetchOrdersForMonth(year, month).finally(() => {
+      if (!cancelled) setLoadingOrders(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedOrdersMonthKey, fetchOrdersForMonth]);
 
   // Колбэк для Calendar — загружает данные когда пользователь листает на другой месяц
   const handleCalendarMonthChange = useCallback((year: number, month: number) => {
@@ -399,7 +406,9 @@ const selectedDateStr = `${selectedYear}-${selectedMonth}-${selectedDay}`;
       const orders = allOrdersRef.current;
       if (!orders.length) return;
       const activeOrders = orders.filter(
-        (o: any) => o.delivery_date === selectedDateStr && (o.status === 'new' || o.status === 'processing')
+        (o: any) =>
+          String(o.delivery_date || '').substring(0, 10) === selectedDateStr &&
+          (o.status === 'new' || o.status === 'processing')
       );
       for (const order of activeOrders) {
         if (controller.signal.aborted) break;
@@ -553,8 +562,8 @@ const delayedOrders = selectedDateStr !== today ? [] : todayOrders
     const [h, m] = (order.delivery_time || '00:00').split(':').map(Number);
     const plannedStart = h * 60 + m;
     const volume = Number(order.volume || 0);
-    // Время загрузки: ~2 мин/м³ (≈20 мин на миксер 10 м³)
-    const loadingTime = volume * 2;
+    // Завод: подъезд + заливка + промывка ≈ 15 мин на рейс (было volume×2 ≈ 20)
+    const loadingTime = 15;
     // Время в пути: из кэша road_time_min, иначе fallback 30 мин
     const travelTime = roadTimes[String(order.id)] ?? (order as any).road_time_min ?? 30;
     const travelTimeIsEstimate = !(String(order.id) in roadTimes) && !(order as any).road_time_min;
@@ -684,26 +693,6 @@ const dayMixerTrips = useMemo(
     todayOrderIds.has(String(m.orderId ?? m.order_id))
   ),
   [mixerAssignments, todayOrderIds]
-);
-
-/** Планирование отгрузки: все заявки + все рейсы назначений (не только «на линии»). */
-const dailyReportGroups = useMemo(
-  () =>
-    buildDailyMixerReportGroups({
-      orders: todayOrders,
-      mixers: dayMixerTrips,
-    }),
-  [todayOrders, dayMixerTrips]
-);
-
-const dailyReportAutoText = useMemo(
-  () =>
-    buildDailyMixerReportText({
-      dateLabel: formatDailyReportDateLabel(selectedDate),
-      groups: dailyReportGroups,
-      onLineCount: activeMixersToday.length,
-    }),
-  [selectedDate, dailyReportGroups, activeMixersToday.length]
 );
 
 const volumeByStatus = useMemo(() => {
@@ -1563,57 +1552,15 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
   )}
 </div>
 
-   {/* 4. Миксеры в работе — за выбранный день */}
-<div 
-  onClick={() => window.location.href = '/adminCifra/mixers'}
-  style={volumeCardStyle({ 
-    borderRadius: 18, 
-    padding: '16px 14px', 
-    minWidth: 0,
-    overflow: 'hidden',
-    cursor: 'pointer',
-    transition: 'filter 0.2s',
-  })}
-  onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(1.08)'; }}
-  onMouseLeave={e => { e.currentTarget.style.filter = 'none'; }}
->
-  <div style={{ color: '#94A3B8', fontSize: '12px', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fleetInWorkLabel(fleetTab)}</div>
-  
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '2px', whiteSpace: 'nowrap' }}>
-    <span style={{ fontSize: '52px', fontWeight: '700', color: '#60A5FA', lineHeight: 1 }}>
-      {activeMixersToday.length}
-    </span>
-    <span style={{ fontSize: '13px', color: '#64748B', flexShrink: 0 }}>
-      {selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
-    </span>
-  </div>
-
-  <div style={{ height: '1px', background: '#334155', margin: '10px 0' }} />
-
-  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', minWidth: 0 }}>
-    {([
-      { status: 'Загрузка', label: '🟡 Загрузка', color: '#FACC15', showCount: false },
-      { status: 'В пути', label: '→ В пути', color: '#60A5FA', showCount: false },
-      { status: 'На объекте', label: '📍 На объекте', color: '#34D399', showCount: false },
-      { status: 'Разгружен', label: '✓ Разгружено', color: '#10B981', showCount: true },
-    ] as const).map((row) => {
-      const trips = dayMixerTrips.filter((m: any) => m.status === row.status);
-      const vol = trips.reduce((s: number, m: any) => s + Number(m.volume || 0), 0);
-      const cnt = trips.length;
-      if (vol <= 0 && cnt <= 0) return null;
-      return (
-        <div key={row.status} style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', whiteSpace: 'nowrap', minWidth: 0 }}>
-          <span style={{ color: '#94A3B8', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{row.label}</span>
-          <strong style={{ color: row.color, whiteSpace: 'nowrap', flexShrink: 0 }}>
-            {row.showCount
-              ? `${cnt} · ${fmtM3(vol)} м³`
-              : `${fmtM3(vol)} м³`}
-          </strong>
-        </div>
-      );
-    })}
-  </div>
-</div>
+   {/* 4. План дня (live) — вместо «Миксеры в работе»; бейдж → /mixers */}
+<DayPlanKpiCard
+  dateKey={selectedDateStr}
+  activeMixersCount={activeMixersToday.length}
+  dayTrips={dayMixerTrips}
+  onOpenPlan={() => {
+    router.push(`/adminCifra/planning?date=${encodeURIComponent(selectedDateStr)}`);
+  }}
+/>
 
    {/* 5. Погода на выбранный день */}
    <WeatherKpiCard dateKey={selectedDateStr} />
@@ -1641,14 +1588,58 @@ const handleMixerDrop = (e: React.DragEvent, orderId: number | string) => {
     gap: '20px',
     marginBottom: '16px'
   }}>
-    <h2 style={{ 
-      fontSize: '26px', 
-      fontWeight: '700',
-      margin: 0,
-      color: '#F1F5F9'
-    }}>
-      График отгрузок на {formatRuDateWithWeekday(selectedDate, 'accusative')}
-    </h2>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '12px',
+        minWidth: 0,
+      }}
+    >
+      <h2 style={{ 
+        fontSize: '26px', 
+        fontWeight: '700',
+        margin: 0,
+        color: '#F1F5F9'
+      }}>
+        График отгрузок на {formatRuDateWithWeekday(selectedDate, 'accusative')}
+      </h2>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          router.push(`/adminCifra/planning?date=${encodeURIComponent(selectedDateStr)}`);
+        }}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '8px 14px',
+          background: 'rgba(96, 165, 250, 0.12)',
+          color: '#93C5FD',
+          border: '1px solid rgba(96, 165, 250, 0.4)',
+          borderRadius: '12px',
+          fontSize: '13px',
+          fontWeight: 700,
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          flexShrink: 0,
+          transition: 'background 0.2s, border-color 0.2s',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = 'rgba(96, 165, 250, 0.22)';
+          e.currentTarget.style.borderColor = 'rgba(147, 197, 253, 0.55)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = 'rgba(96, 165, 250, 0.12)';
+          e.currentTarget.style.borderColor = 'rgba(96, 165, 250, 0.4)';
+        }}
+      >
+        <Brain size={16} color="#6EE7B7" />
+        Интеллектуальное планирование
+      </button>
+    </div>
 
     {/* Кнопки переключения дней */}
     <div style={{ 
@@ -2444,60 +2435,8 @@ const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVo
 
   </div>
 
-{/* ==================== 47. ПЛАНИРОВАНИЕ ОТГРУЗКИ ==================== */}
-<button
-  type="button"
-  onClick={async () => {
-    if (dailyReportGroups.length === 0) {
-      await appAlert('На выбранный день нет заявок', {
-        title: 'Планирование отгрузки',
-        variant: 'info',
-      });
-      return;
-    }
-    setShowDailyReportModal(true);
-  }}
-  style={{
-    marginTop: '16px',
-    width: '100%',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '8px',
-    padding: '11px 16px',
-    background: 'rgba(96, 165, 250, 0.12)',
-    color: '#93C5FD',
-    border: '1px solid rgba(96, 165, 250, 0.4)',
-    borderRadius: '12px',
-    fontSize: '14px',
-    fontWeight: 700,
-    cursor: 'pointer',
-    transition: 'background 0.2s, border-color 0.2s',
-    boxSizing: 'border-box',
-  }}
-  onMouseEnter={(e) => {
-    e.currentTarget.style.background = 'rgba(96, 165, 250, 0.22)';
-    e.currentTarget.style.borderColor = 'rgba(147, 197, 253, 0.55)';
-  }}
-  onMouseLeave={(e) => {
-    e.currentTarget.style.background = 'rgba(96, 165, 250, 0.12)';
-    e.currentTarget.style.borderColor = 'rgba(96, 165, 250, 0.4)';
-  }}
->
-  <FileText size={16} />
-  Планирование отгрузки
-</button>
-
 </div>
 </div>
-
-      <DailyMixerReportModal
-        open={showDailyReportModal}
-        onClose={() => setShowDailyReportModal(false)}
-        dateKey={selectedDateStr}
-        dateLabel={formatRuDateWithWeekday(selectedDate, 'nominative')}
-        autoReport={dailyReportAutoText}
-      />
 
      {/* ==================== 48. МОДАЛЬНОЕ ОКНО ЗАКАЗА ==================== */}
 {selectedOrder && (

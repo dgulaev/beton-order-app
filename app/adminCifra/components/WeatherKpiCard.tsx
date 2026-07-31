@@ -1,11 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { volumeCardStyle } from '../cardStyles';
 import WeatherIcon from './WeatherIcon';
 import WeatherForecastModal from './WeatherForecastModal';
 import type { WeatherForecastPayload } from '@/lib/weather/types';
 import { formatDaylightDuration } from '@/lib/weather/format';
+import {
+  getCachedWeatherDay,
+  getCachedWeatherPayload,
+  putCachedWeatherPayload,
+} from '@/lib/weather/browserCache';
 
 type Props = {
   /** YYYY-MM-DD — выбранный день страницы */
@@ -14,6 +19,8 @@ type Props = {
   compact?: boolean;
   /** Адаптация под смартфон: горизонтальная карточка + мобильная модалка */
   mobile?: boolean;
+  /** Растягивать карточку по высоте родителя (KPI-ряд). В боковой панели календаря — false. */
+  fillHeight?: boolean;
 };
 
 function toDateKey(d: Date): string {
@@ -23,26 +30,56 @@ function toDateKey(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-export default function WeatherKpiCard({ dateKey, compact = false, mobile = false }: Props) {
-  const [forecast, setForecast] = useState<WeatherForecastPayload | null>(null);
-  const [loading, setLoading] = useState(true);
+function mergeDays(
+  base: WeatherForecastPayload,
+  extra: WeatherForecastPayload,
+): WeatherForecastPayload {
+  const byDate = new Map(base.days.map((d) => [d.date, d]));
+  for (const d of extra.days || []) {
+    if (!byDate.has(d.date)) byDate.set(d.date, d);
+  }
+  return {
+    ...base,
+    days: Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
+export default function WeatherKpiCard({
+  dateKey,
+  compact = false,
+  mobile = false,
+  fillHeight = true,
+}: Props) {
+  const [forecast, setForecast] = useState<WeatherForecastPayload | null>(() =>
+    getCachedWeatherPayload(),
+  );
+  const [loading, setLoading] = useState(() => !getCachedWeatherDay(dateKey));
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  /** Чтобы не долбить archive по одной и той же дате в цикле. */
+  const archiveTriedRef = useRef<Set<string>>(new Set());
 
+  // Базовый прогноз (past_days + вперёд) — один раз; сразу пишем в localStorage.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setLoading(true);
+      const hadDay = !!getCachedWeatherDay(dateKey);
+      if (!hadDay) setLoading(true);
       setError(null);
       try {
         const res = await fetch('/api/weather', { cache: 'no-store' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as WeatherForecastPayload;
-        if (!cancelled) setForecast(data);
+        putCachedWeatherPayload(data);
+        if (!cancelled) {
+          setForecast((prev) => (prev ? mergeDays(data, prev) : data));
+        }
       } catch {
         if (!cancelled) {
-          setError('Нет связи');
-          setForecast(null);
+          if (!getCachedWeatherPayload()) {
+            setError('Нет связи');
+            setForecast(null);
+          }
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -51,7 +88,53 @@ export default function WeatherKpiCard({ dateKey, compact = false, mobile = fals
     return () => {
       cancelled = true;
     };
+    // dateKey только для начального loading — повторный fetch базы не нужен
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Дни старше окна forecast (~92 суток): сначала localStorage, иначе archive API.
+  useEffect(() => {
+    if (!dateKey || loading) return;
+    if (forecast?.days.some((d) => d.date === dateKey)) return;
+
+    const cached = getCachedWeatherDay(dateKey);
+    if (cached) {
+      setForecast((prev) =>
+        prev
+          ? mergeDays(prev, { ...prev, days: [cached] })
+          : {
+              locationLabel: 'Брянск, завод',
+              yandexUrl: 'https://yandex.ru/pogoda/bryansk',
+              fetchedAt: new Date().toISOString(),
+              days: [cached],
+            },
+      );
+      return;
+    }
+
+    if (archiveTriedRef.current.has(dateKey)) return;
+    archiveTriedRef.current.add(dateKey);
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/weather?from=${encodeURIComponent(dateKey)}&to=${encodeURIComponent(dateKey)}`,
+          { cache: 'no-store' },
+        );
+        if (!res.ok) return;
+        const extra = (await res.json()) as WeatherForecastPayload;
+        if (cancelled || !extra?.days?.length) return;
+        putCachedWeatherPayload(extra);
+        setForecast((prev) => (prev ? mergeDays(prev, extra) : extra));
+      } catch {
+        /* оставляем «Нет данных» */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dateKey, forecast, loading]);
 
   const day = useMemo(() => {
     if (!forecast?.days?.length) return null;
@@ -95,11 +178,11 @@ export default function WeatherKpiCard({ dateKey, compact = false, mobile = fals
           cursor: 'pointer',
           transition: 'filter 0.2s',
           minWidth: 0,
-          width: mobile ? '100%' : undefined,
+          width: mobile || !fillHeight ? '100%' : undefined,
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
-          height: mobile ? 'auto' : '100%',
+          height: mobile || !fillHeight ? 'auto' : '100%',
           WebkitTapHighlightColor: 'transparent',
           touchAction: 'manipulation',
         })}
@@ -142,10 +225,10 @@ export default function WeatherKpiCard({ dateKey, compact = false, mobile = fals
           <div style={{ color: '#F87171', fontSize: 13 }}>{error}</div>
         ) : !day ? (
           <div style={{ color: '#94A3B8', fontSize: 13, lineHeight: 1.35 }}>
-            {isPast
-              ? 'Прогноз только вперёд'
-              : isBeyond
-                ? 'Нет прогноза на этот день'
+            {isBeyond
+              ? 'Нет прогноза на этот день'
+              : isPast
+                ? 'Нет данных за этот день'
                 : 'Нет данных'}
           </div>
         ) : mobile ? (

@@ -25,6 +25,7 @@ import {
 } from '@/lib/cementSegments';
 import { maybeRetrySkippedMekaCompensation } from '@/lib/mekaCementCompensate';
 import { getFreshActiveSiloId } from '@/lib/operatorShiftSilo';
+import { isPickupOrder } from '@/lib/logisticsPlanner';
 
 const FINAL_ORDER_STATUSES = ['completed', 'cancelled'];
 const STATUS_LABELS_RU: Record<string, string> = {
@@ -36,6 +37,12 @@ const STATUS_LABELS_RU: Record<string, string> = {
 
 // Небольшой допуск на погрешность округления объёма.
 const VOLUME_EPSILON = 0.01;
+
+/**
+ * Самовывоз: после выдачи бетона сразу «Разгружен» (не цикл «В пути» → объект).
+ * В факт простоя пишем фиксированные 5 мин (выдача / отъезд клиента).
+ */
+export const PICKUP_STATUS_DELAY_MIN = 5;
 
 /** Число без лишних нулей после запятой (7 вместо 7.00, 7.5 вместо 7.50). */
 function formatVolume(value: number): string {
@@ -145,7 +152,7 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
 
   const { data: mixer, error: fetchError } = await supabase
     .from('order_mixers')
-    .select(`*, orders!inner(id, status, volume, grade)`)
+    .select(`*, orders!inner(id, status, volume, grade, address)`)
     .eq('id', id)
     .single();
 
@@ -158,8 +165,15 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   const orderVolume = Number(mixer.orders?.volume || 0);
   const rawStatus: string | null = mixer.status ?? null;
   const oldStatus = rawStatus || 'Загрузка';
+  const isPickup = isPickupOrder((mixer.orders as { address?: string | null } | null)?.address);
 
-  if (status && FINAL_ORDER_STATUSES.includes(orderStatus)) {
+  // Самовывоз: «В пути» не используем — бетон отдан клиенту → сразу «Разгружен».
+  let effectiveStatus = status;
+  if (isPickup && effectiveStatus === 'В пути') {
+    effectiveStatus = 'Разгружен';
+  }
+
+  if (effectiveStatus && FINAL_ORDER_STATUSES.includes(orderStatus)) {
     return {
       httpStatus: 400,
       body: {
@@ -181,15 +195,23 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   // должна фиксироваться без каких-либо ограничений). Без этого правила
   // ручная смена статуса диспетчером тихо "перепрыгивала" через оператора и
   // приводила к гонке (см. разбор race condition — 18.07.2026).
-  const LOADING_LOCK_EXEMPT_STATUSES = new Set(['В пути', 'Проблема']);
+  // Самовывоз: после «Загружен» сразу «Разгружен» — тоже exempt.
+  const LOADING_LOCK_EXEMPT_STATUSES = new Set(
+    isPickup ? ['В пути', 'Разгружен', 'Проблема'] : ['В пути', 'Проблема'],
+  );
   const isActivelyLoading = oldStatus === 'Загрузка' && !!mixer.loading_started_at;
 
-  if (isActivelyLoading && status && status !== 'Загрузка' && !LOADING_LOCK_EXEMPT_STATUSES.has(status)) {
+  if (
+    isActivelyLoading
+    && effectiveStatus
+    && effectiveStatus !== 'Загрузка'
+    && !LOADING_LOCK_EXEMPT_STATUSES.has(effectiveStatus)
+  ) {
     return {
       httpStatus: 400,
       body: {
         success: false,
-        message: `Миксер сейчас грузится оператором БСУ (таймер запущен) — статус "${status}" поставить нельзя, пока рейс не перейдёт в "В пути". Доступно только "В пути" или "Проблема" (авария).`,
+        message: `Миксер сейчас грузится оператором БСУ (таймер запущен) — статус "${effectiveStatus}" поставить нельзя, пока рейс не перейдёт в "В пути". Доступно только "В пути" или "Проблема" (авария).`,
       },
     };
   }
@@ -219,8 +241,8 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
 
   const CEMENT_LOADED_STATUSES_GUARD = new Set(['В пути', 'На объекте', 'Разгружен', 'Возврат']);
   if (
-    status
-    && CEMENT_LOADED_STATUSES_GUARD.has(status)
+    effectiveStatus
+    && CEMENT_LOADED_STATUSES_GUARD.has(effectiveStatus)
     && oldStatus === 'Загрузка'
   ) {
     const segsBeforeLeave = await listCementSegments(id);
@@ -280,8 +302,8 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
     ? timestampOverride
     : new Date().toISOString();
 
-  if (status) updateData.status = status;
-  if (status === 'Загрузка' && loading_started_at) {
+  if (effectiveStatus) updateData.status = effectiveStatus;
+  if (effectiveStatus === 'Загрузка' && loading_started_at) {
     updateData.loading_started_at = loading_started_at;
   }
   if (podvizhnost !== undefined && podvizhnost !== null) {
@@ -292,22 +314,32 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   // "На объекте" — начало простоя. "Разгружен" — конец простоя, отсюда считаем downtime.
   let downtimeMinutes: number | null = mixer.downtime_minutes ?? null;
 
-  if (status === 'На объекте' && !mixer.on_site_at) {
+  if (effectiveStatus === 'На объекте' && !mixer.on_site_at) {
     updateData.on_site_at = now;
   }
 
-  if (status === 'Разгружен') {
-    if (!mixer.unloaded_at) {
-      updateData.unloaded_at = now;
-    }
-    const onSiteAt = mixer.on_site_at || updateData.on_site_at || null;
-    const unloadedAt = updateData.unloaded_at || mixer.unloaded_at || now;
+  if (effectiveStatus === 'Разгружен') {
+    if (isPickup && !mixer.on_site_at && !mixer.unloaded_at) {
+      // Самовывоз: фиксируем выдачу с задержкой статуса 5 мин (on_site → unloaded).
+      const unloadedMs = Date.parse(now);
+      const onSiteMs = unloadedMs - PICKUP_STATUS_DELAY_MIN * 60 * 1000;
+      updateData.on_site_at = new Date(onSiteMs).toISOString();
+      updateData.unloaded_at = new Date(unloadedMs).toISOString();
+      downtimeMinutes = 0;
+      updateData.downtime_minutes = 0;
+    } else {
+      if (!mixer.unloaded_at) {
+        updateData.unloaded_at = now;
+      }
+      const onSiteAt = mixer.on_site_at || updateData.on_site_at || null;
+      const unloadedAt = updateData.unloaded_at || mixer.unloaded_at || now;
 
-    if (onSiteAt) {
-      const allowance = await resolveUnloadAllowanceMinutes(mixer.mixer_name);
-      downtimeMinutes = calculateDowntimeMinutes(onSiteAt, unloadedAt, allowance);
-      if (downtimeMinutes !== null) {
-        updateData.downtime_minutes = downtimeMinutes;
+      if (onSiteAt) {
+        const allowance = await resolveUnloadAllowanceMinutes(mixer.mixer_name);
+        downtimeMinutes = calculateDowntimeMinutes(onSiteAt, unloadedAt, allowance);
+        if (downtimeMinutes !== null) {
+          updateData.downtime_minutes = downtimeMinutes;
+        }
       }
     }
   }
@@ -362,7 +394,7 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   // по (возможно, уже изменившемуся) рецепту заново.
   const additivePatch: any = {};
 
-  if (status === 'Разгружен' && oldStatus !== 'Разгружен' && mixer.additive_write_off_liters == null) {
+  if (effectiveStatus === 'Разгружен' && oldStatus !== 'Разгружен' && mixer.additive_write_off_liters == null) {
     try {
       const { data: recipes } = await supabase
         .from('recipes')
@@ -404,8 +436,8 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
       console.error('Ошибка расчёта реального списания добавки:', err);
     }
   } else if (
-    status &&
-    status !== 'Разгружен' &&
+    effectiveStatus &&
+    effectiveStatus !== 'Разгружен' &&
     oldStatus === 'Разгружен' &&
     mixer.additive_write_off_liters != null
   ) {
@@ -450,15 +482,15 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   // — mid_load уже есть → списываем только остаток (если > 0);
   // — сегментов нет → как раньше: только если cement_write_off_kg ещё null.
   const enteringLoadedForCement =
-    !!status
-    && CEMENT_LOADED_STATUSES.has(status)
+    !!effectiveStatus
+    && CEMENT_LOADED_STATUSES.has(effectiveStatus)
     && !cementAlreadyFinal
     && (
       (cementSegmentsForTrip.length > 0 && cementRemainingM3 > VOLUME_EPSILON)
       || (cementSegmentsForTrip.length === 0 && mixer.cement_write_off_kg == null)
     );
   const rollingBackToLoading =
-    !!status && status === 'Загрузка' && oldStatus !== 'Загрузка'
+    !!effectiveStatus && effectiveStatus === 'Загрузка' && oldStatus !== 'Загрузка'
     && (
       cementSegmentsForTrip.length > 0
       || (mixer.cement_write_off_kg != null && mixer.cement_write_off_silo_id != null)
@@ -613,20 +645,26 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   // ==================== ИСТОРИЯ: СМЕНА СТАТУСА МИКСЕРА ====================
   const historyEntries: any[] = [];
 
-  if (status && status !== oldStatus) {
+  if (effectiveStatus && effectiveStatus !== oldStatus) {
     const mixerName = mixer.mixer_name || `Миксер #${id}`;
+    const pickupNote =
+      isPickup && effectiveStatus === 'Разгружен'
+        ? ` — самовывоз, сразу Разгружен (задержка ${PICKUP_STATUS_DELAY_MIN} мин)`
+        : '';
     historyEntries.push({
       order_id: orderId,
-      action: `Изменил статус миксера ${mixerName} с "${oldStatus}" на "${status}"${
-        status === 'Разгружен' && downtimeMinutes !== null ? ` — простой на объекте: ${downtimeMinutes} мин` : ''
-      }`,
+      action: `Изменил статус миксера ${mixerName} с "${oldStatus}" на "${effectiveStatus}"${
+        effectiveStatus === 'Разгружен' && downtimeMinutes !== null && !isPickup
+          ? ` — простой на объекте: ${downtimeMinutes} мин`
+          : ''
+      }${pickupNote}`,
       user_name: userName || (userRole === 'driver' ? 'Водитель' : 'Диспетчер'),
       user_role: userRole || null,
     });
   }
 
   // ==================== ПРАВИЛО: авто-завершение заявки при полной разгрузке ====================
-  if (status === 'Разгружен' && !FINAL_ORDER_STATUSES.includes(orderStatus)) {
+  if (effectiveStatus === 'Разгружен' && !FINAL_ORDER_STATUSES.includes(orderStatus)) {
     const { data: allMixersData } = await supabase.from('order_mixers').select('volume, status').eq('order_id', orderId);
     const allMixers = allMixersData || [];
 
@@ -655,7 +693,7 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   }
 
   // Лид: авто «Исполнен», если суммарная отгрузка по всем заявкам ≥ плана лида
-  if (status && status !== oldStatus && orderId) {
+  if (effectiveStatus && effectiveStatus !== oldStatus && orderId) {
     try {
       const { maybeAutoFulfillLeadByOrderId } = await import('@/lib/leadShipments');
       await maybeAutoFulfillLeadByOrderId(Number(orderId));
@@ -673,10 +711,10 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
     httpStatus: 200,
     body: {
       success: true,
-      message: `Статус миксера обновлён на "${status || '—'}"`,
+      message: `Статус миксера обновлён на "${effectiveStatus || '—'}"`,
       data: {
         mixerId: id,
-        status,
+        status: effectiveStatus,
         orderId,
         onSiteAt: updateData.on_site_at ?? mixer.on_site_at ?? null,
         unloadedAt: updateData.unloaded_at ?? mixer.unloaded_at ?? null,
