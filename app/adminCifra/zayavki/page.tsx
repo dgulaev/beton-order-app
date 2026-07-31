@@ -13,6 +13,7 @@ import {
   findRecipeByGrade,
   getAdditiveDosage,
   ADDITIVE_NAMES,
+  calculateCementUsageKg,
   densitiesFromLabSettings,
   type AdditiveDensities,
 } from '@/lib/recipeAdditives';
@@ -33,6 +34,7 @@ import ModalTimeInput from '@/app/adminCifra/components/ModalTimeInput';
 import { appConfirm, appPrompt } from '@/app/adminCifra/components/appDialog';
 import ModalSelect from '@/app/adminCifra/components/ModalSelect';
 import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
+import CementKpiModal from '@/app/adminCifra/components/CementKpiModal';
 import { InstantFieldHint, VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatRuDateWithWeekday, formatTimeHHMM, pluralWord } from '@/lib/ruLocale';
@@ -740,8 +742,11 @@ export default function ZayavkiPage() {
   const [recipes, setRecipes] = useState<any[]>([]);
   // Остатки добавок на складе (литры), подгружаются один раз
   const [warehouseAdditives, setWarehouseAdditives] = useState<{ pfm: number; linomix: number } | null>(null);
+  /** Суммарный остаток цемента по силосам (т), live со склада */
+  const [warehouseCementTons, setWarehouseCementTons] = useState<number | null>(null);
   const [additiveDensities, setAdditiveDensities] = useState<AdditiveDensities>({});
   const [showAdditivePopup, setShowAdditivePopup] = useState(false);
+  const [showCementModal, setShowCementModal] = useState(false);
 
   // ==================== ПОИСК КЛИЕНТА В МОДАЛКЕ РЕДАКТИРОВАНИЯ ====================
   const [allClients, setAllClients] = useState<any[]>([]);
@@ -1598,6 +1603,12 @@ ${order.customer_type?.includes('Юридическое')
           const pfm = Number(adds.find((a: any) => Number(a.additive_id) === 1)?.current ?? 0);
           const linomix = Number(adds.find((a: any) => Number(a.additive_id) === 2)?.current ?? 0);
           setWarehouseAdditives({ pfm, linomix });
+          const silos: any[] = data.silos || [];
+          const cementTons = silos.reduce(
+            (sum: number, s: any) => sum + Number(s?.current || 0),
+            0,
+          );
+          setWarehouseCementTons(Math.round(cementTons * 10) / 10);
         }
         if (labRes.ok) {
           setAdditiveDensities(densitiesFromLabSettings(await labRes.json()));
@@ -1793,6 +1804,48 @@ ${order.customer_type?.includes('Юридическое')
     };
   }, [allOrders, selectedDate, recipes, warehouseAdditives, additiveDensities]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Прогноз цемента на 7 дней (для бейджа на карточке; детальный разбор — в модалке)
+  const weekCementForecast = useMemo(() => {
+    if (!recipes.length) return null;
+    const forecastDates: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(selectedDate);
+      d.setDate(d.getDate() + i);
+      forecastDates.push(getLocalDateString(d));
+    }
+    const forecastDateSet = new Set(forecastDates);
+    let neededKg = 0;
+    let orderCount = 0;
+    for (const order of allOrders as any[]) {
+      if (order.status === 'cancelled' || !order.delivery_date) continue;
+      const ds =
+        typeof order.delivery_date === 'string'
+          ? order.delivery_date.substring(0, 10)
+          : getLocalDateString(new Date(order.delivery_date));
+      if (!forecastDateSet.has(ds)) continue;
+      const volume = Number(order.volume || 0);
+      if (volume <= 0) continue;
+      const recipe = findRecipeByGrade(recipes, order.grade);
+      const kg = calculateCementUsageKg(recipe, volume);
+      if (!(kg > 0)) continue;
+      neededKg += kg;
+      orderCount += 1;
+    }
+    const neededTons = Math.round((neededKg / 1000) * 10) / 10;
+    const stock = warehouseCementTons;
+    const bringTons =
+      stock != null ? Math.max(0, Math.round((neededTons - stock) * 10) / 10) : null;
+    return {
+      neededTons,
+      stockTons: stock,
+      bringTons,
+      shortage: stock != null && bringTons != null && bringTons > 0,
+      orderCount,
+      dateFrom: forecastDates[0],
+      dateTo: forecastDates[6],
+    };
+  }, [allOrders, selectedDate, recipes, warehouseCementTons]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div style={{ 
       color: '#fff',
@@ -1889,9 +1942,56 @@ ${order.customer_type?.includes('Юридическое')
           )}
         </div>
 
-        {/* Цемент */}
-        <div style={volumeCardStyle({ borderRadius: 18, padding: '14px 16px', minWidth: 0 })}>
-          <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em', marginBottom: '6px' }}>Цемент</div>
+        {/* Цемент — клик открывает обзор силосов и прогноз */}
+        <div
+          role="button"
+          tabIndex={0}
+          title="Открыть обзор цемента по силосам"
+          onClick={() => setShowCementModal(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setShowCementModal(true);
+            }
+          }}
+          style={volumeCardStyle({
+            borderRadius: 18,
+            padding: '14px 16px',
+            minWidth: 0,
+            cursor: 'pointer',
+            transition: 'filter 0.15s ease, transform 0.15s ease',
+            border: weekCementForecast?.shortage
+              ? '1px solid rgba(248,113,113,0.45)'
+              : undefined,
+          })}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.filter = 'brightness(1.08)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.filter = 'none';
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: 6,
+              marginBottom: 6,
+            }}
+          >
+            <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em' }}>
+              Цемент
+              {weekCementForecast?.shortage ? (
+                <span style={{ marginLeft: 6, fontSize: 11, color: '#F87171', fontWeight: 700 }}>
+                  нехватка
+                </span>
+              ) : null}
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#64748B', flexShrink: 0 }}>
+              подробнее
+            </div>
+          </div>
           <div style={{ fontSize: '22px', fontWeight: 700, color: '#60A5FA', lineHeight: 1.1, marginBottom: '8px', whiteSpace: 'nowrap' }}>
             {cementCompletedMemo}
             <span style={{ color: '#94A3B8', fontSize: '22px', fontWeight: 700 }}>
@@ -1907,7 +2007,55 @@ ${order.customer_type?.includes('Юридическое')
               transition: 'width 0.4s ease',
             }} />
           </div>
-          <div style={{ fontSize: '12px', color: '#94A3B8', fontWeight: 500 }}>от разгруженного объёма</div>
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              alignItems: 'center',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            <span style={{ color: '#94A3B8' }}>от разгруженного</span>
+            {warehouseCementTons != null ? (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '2px 8px',
+                  borderRadius: 9999,
+                  background: 'rgba(96,165,250,0.15)',
+                  border: '1px solid rgba(96,165,250,0.35)',
+                  color: '#93C5FD',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                склад {warehouseCementTons % 1 === 0 ? warehouseCementTons : warehouseCementTons.toFixed(1)} т
+              </span>
+            ) : null}
+            {weekCementForecast?.shortage && weekCementForecast.bringTons != null ? (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '2px 8px',
+                  borderRadius: 9999,
+                  background: 'rgba(239,68,68,0.15)',
+                  border: '1px solid rgba(248,113,113,0.4)',
+                  color: '#FCA5A5',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                +{weekCementForecast.bringTons % 1 === 0
+                  ? weekCementForecast.bringTons
+                  : weekCementForecast.bringTons.toFixed(1)}{' '}
+                т на неделю
+              </span>
+            ) : null}
+          </div>
         </div>
 
         {/* ПФМ */}
@@ -3296,6 +3444,12 @@ ${order.customer_type?.includes('Юридическое')
     currentUserName={userFullName || 'Сотрудник'}   // ← Реальное имя
   />
 )}
+
+      <CementKpiModal
+        open={showCementModal}
+        onClose={() => setShowCementModal(false)}
+        dateKey={selectedDateStr}
+      />
 
       {/* ==================== ПОПАП: ПРОГНОЗ ДОБАВОК ==================== */}
       {showAdditivePopup && weekAdditiveForecast && (
