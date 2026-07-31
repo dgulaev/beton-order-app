@@ -33,6 +33,12 @@ alter table public.daily_logistics_plans
 alter table public.daily_logistics_plans
   add column if not exists editing_at timestamptz;
 
+-- V2: утренний снимок (не затирается этапами) — полный скрипт: plan-fact-metrics-schema.sql
+alter table public.daily_logistics_plans
+  add column if not exists morning_payload jsonb;
+alter table public.daily_logistics_plans
+  add column if not exists morning_captured_at timestamptz;
+
 alter table public.daily_logistics_plans enable row level security;
 
 do $$

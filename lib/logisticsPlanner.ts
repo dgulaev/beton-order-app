@@ -7,6 +7,36 @@
  */
 
 import { formatTimeHHMM, pluralRu } from '@/lib/ruLocale';
+import {
+  applyRoadCalibrationFactor,
+  resolveJoinBufferMinutes,
+  resolveLoadMinutes,
+  resolveUnloadMinutes,
+  type PlannerCalibration,
+} from '@/lib/plannerCalibration';
+
+/**
+ * Активная калибровка на время planLogistics / связанных хелперов.
+ * Снаружи файла — null → дефолтные нормы V1.
+ */
+let activePlannerCalibration: PlannerCalibration | null = null;
+
+function withPlannerCalibration<T>(
+  calib: PlannerCalibration | null | undefined,
+  fn: () => T,
+): T {
+  const prev = activePlannerCalibration;
+  activePlannerCalibration = calib ?? null;
+  try {
+    return fn();
+  } finally {
+    activePlannerCalibration = prev;
+  }
+}
+
+function joinBufferMinutes(): number {
+  return resolveJoinBufferMinutes(activePlannerCalibration);
+}
 
 /**
  * Занятие соски на БСУ: подъезд + заливка + промывка, мин на рейс.
@@ -165,15 +195,22 @@ export function trafficMultiplierAt(absMin: number): number {
   return TRAFFIC_HOUR_MULTIPLIERS[hour] ?? 1;
 }
 
-/** Базовая дорога × пробки (если включены). Минимум 5 мин. */
+/** Базовая дорога × пробки (если включены). Минимум 5 мин. + V2 calib. */
 export function roadWithTraffic(
   baseRoadMin: number,
   atAbsMin: number,
   useTraffic: boolean,
 ): number {
   const base = Math.max(5, Number(baseRoadMin) || 30);
-  if (!useTraffic) return base;
-  return Math.max(5, Math.round(base * trafficMultiplierAt(atAbsMin)));
+  const withTraffic = useTraffic
+    ? Math.max(5, Math.round(base * trafficMultiplierAt(atAbsMin)))
+    : base;
+  const mult = useTraffic ? trafficMultiplierAt(atAbsMin) : 1;
+  return applyRoadCalibrationFactor(
+    withTraffic,
+    mult > 1.05,
+    activePlannerCalibration,
+  );
 }
 
 /** Окно истории частоты рейсов, дней. */
@@ -289,6 +326,14 @@ export type PlannerWave = {
   delayFactMin?: number;
   tripIds: string[];
   summary?: string;
+  /** V2: какие нормы использовались при расчёте волны */
+  calibrationSource?: {
+    days: number;
+    samples: number;
+    loadP50: number | null;
+    unloadP50: number | null;
+    active: boolean;
+  };
 };
 
 export type PlannerWarning = {
@@ -338,6 +383,8 @@ export type PlanLogisticsInput = {
    * на этапе, чтобы хвост не строился в «оптимистичное» прошлое.
    */
   factDelayMin?: number;
+  /** V2: нормы из истории план↔факт (load/road/unload/join). */
+  calibration?: PlannerCalibration | null;
 };
 
 export type PlanLogisticsResult = {
@@ -460,20 +507,20 @@ function tripLoadSortKey(t: PlannedTrip): number {
   return parseHhMm(t.loadTime) ?? 0;
 }
 
-/** Время на соске: фиксированно PLANT_LOAD_SLOT_MIN (15), слабо зависит от объёма. */
+/**
+ * Время на соске: дефолт ~12–18 мин; при активной V2-калибровке — из истории.
+ */
 export function loadMinutesForVolume(volumeM3: number): number {
-  const v = Math.max(0, Number(volumeM3) || 0);
-  if (v <= 0) return PLANT_LOAD_SLOT_MIN;
-  // 6 м³ → 13, 8 → 14, 10 → 15, 12 → 16 (центр — 15 мин)
-  return Math.max(12, Math.min(18, Math.round(10 + v * 0.5)));
+  return resolveLoadMinutes(volumeM3, activePlannerCalibration);
 }
 
 /**
  * Разгрузка для планирования рейса.
  * Не используем unload_allowance (норма простоя для штрафов) — она 50+ мин и ломает день.
+ * V2: при калибровке — P50 факта (20–45).
  */
 export function unloadMinutesForMixer(_m: PlannerMixer): number {
-  return PLANNER_UNLOAD_MIN;
+  return resolveUnloadMinutes(activePlannerCalibration);
 }
 
 /** Ранг парка: свои → история → объём бочки. */
@@ -954,6 +1001,10 @@ function pushNoOverlap(
 }
 
 export function planLogistics(input: PlanLogisticsInput): PlanLogisticsResult {
+  return withPlannerCalibration(input.calibration, () => planLogisticsInner(input));
+}
+
+function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
   const locked = [...(input.lockedTrips || [])];
   const doneSet = new Set((input.doneOrderIds || []).map(String));
   const warnings: PlannerWarning[] = [];
@@ -1199,7 +1250,7 @@ export function planLogistics(input: PlanLogisticsInput): PlanLogisticsResult {
         });
         left = Math.round((left - volume) * 10) / 10;
         // Следующий кусок — сразу после готовности предыдущего (клиент на БСУ).
-        nextReady = readyAt + TRIP_JOIN_BUFFER_MIN;
+        nextReady = readyAt + joinBufferMinutes();
         firstChunk = false;
       }
       continue;
@@ -1346,7 +1397,7 @@ export function planLogistics(input: PlanLogisticsInput): PlanLogisticsResult {
         left = Math.round((left - volume) * 10) / 10;
         // Следующий рейс — к концу заливки объёма, не к возврату/полному простою.
         const pourMin = Math.max(15, Math.round(volume * POUR_RATE_MIN_PER_M3));
-        nextArrive = unloadStart + pourMin + TRIP_JOIN_BUFFER_MIN;
+        nextArrive = unloadStart + pourMin + joinBufferMinutes();
         firstTrip = false;
         placed = true;
         break;
@@ -2349,6 +2400,7 @@ export function makePlannerWave(opts: {
   delayFactMin?: number;
   createdByName?: string | null;
   summary?: string;
+  calibrationSource?: PlannerWave['calibrationSource'];
 }): PlannerWave {
   const label =
     opts.mode === 'full_day' || opts.index === 0
@@ -2370,6 +2422,7 @@ export function makePlannerWave(opts: {
     delayFactMin: opts.delayFactMin || undefined,
     tripIds: newIds,
     summary: opts.summary,
+    calibrationSource: opts.calibrationSource,
   };
 }
 
@@ -2476,6 +2529,7 @@ type ReplanTailInput = {
   factDelayMin?: number;
   dayTrips?: LiveTripFact[];
   nowMinutes?: number | null;
+  calibration?: PlannerCalibration | null;
 };
 
 function replanTailAfterTripMutate(input: ReplanTailInput): {
@@ -2498,6 +2552,7 @@ function replanTailAfterTripMutate(input: ReplanTailInput): {
         allowNight: input.allowNight,
         useTraffic: input.useTraffic,
         factDelayMin: input.factDelayMin,
+        calibration: input.calibration,
       }),
       locked: [],
       shifted: null,
@@ -2530,6 +2585,7 @@ function replanTailAfterTripMutate(input: ReplanTailInput): {
     allowNight: input.allowNight,
     useTraffic: input.useTraffic,
     factDelayMin: input.factDelayMin,
+    calibration: input.calibration,
   });
 
   return { result, locked, shifted };
@@ -2550,6 +2606,7 @@ export function replanAfterManualTripShift(input: {
   factDelayMin?: number;
   dayTrips?: LiveTripFact[];
   nowMinutes?: number | null;
+  calibration?: PlannerCalibration | null;
 }): {
   result: PlanLogisticsResult;
   locked: PlannedTrip[];
@@ -2576,6 +2633,7 @@ export function replanAfterTripDelay(input: {
   factDelayMin?: number;
   dayTrips?: LiveTripFact[];
   nowMinutes?: number | null;
+  calibration?: PlannerCalibration | null;
 }): {
   result: PlanLogisticsResult;
   locked: PlannedTrip[];

@@ -41,10 +41,19 @@ export type DailyLogisticsPlanRow = {
   editing_by_name?: string | null;
   editing_by_user_id?: number | null;
   editing_at?: string | null;
+  /** V2: утренний снимок (первый full_day) */
+  morning_payload?: DailyLogisticsPlanPayload | null;
+  morning_captured_at?: string | null;
 };
 
-/** Heartbeat «сейчас правит» считается живым N мс. */
-export const PLAN_EDITING_FRESH_MS = 90_000;
+/** Heartbeat «сейчас правит» считается живым N мс (для коллег). */
+export const PLAN_EDITING_FRESH_MS = 120_000;
+
+/**
+ * Не писать в БД soft-lock чаще этого окна — иначе realtime шлёт весь payload.
+ * Клиент бьёт ~50 с; коллеги видят lock до PLAN_EDITING_FRESH_MS.
+ */
+export const PLAN_EDITING_TOUCH_MIN_MS = 55_000;
 
 export function isPlanEditingFresh(
   editingAt: string | null | undefined,
@@ -54,6 +63,17 @@ export function isPlanEditingFresh(
   const t = new Date(editingAt).getTime();
   if (Number.isNaN(t)) return false;
   return nowMs - t < PLAN_EDITING_FRESH_MS;
+}
+
+/** Редактор тот же и editing_at трогали недавно — PATCH можно skip. */
+export function isPlanEditingRecentlyTouched(
+  editingAt: string | null | undefined,
+  nowMs = Date.now(),
+): boolean {
+  if (!editingAt) return false;
+  const t = new Date(editingAt).getTime();
+  if (Number.isNaN(t)) return false;
+  return nowMs - t < PLAN_EDITING_TOUCH_MIN_MS;
 }
 
 /** YYYY-M-D / YYYY-MM-DD → YYYY-MM-DD */

@@ -21,6 +21,9 @@ export type FactDayTrip = {
   time?: string | null;
   loading_started_at?: string | null;
   loadingStartedAt?: string | null;
+  /** V2: факт на объекте / разгружен */
+  on_site_at?: string | null;
+  unloaded_at?: string | null;
 };
 
 export type FactProductionLog = {

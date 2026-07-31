@@ -5,6 +5,7 @@ import {
 } from '@/lib/adminCifraAuth';
 import {
   isPlanEditingFresh,
+  isPlanEditingRecentlyTouched,
   normalizePlanDateKey,
 } from '@/lib/dailyLogisticsPlan';
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
@@ -14,6 +15,9 @@ const TABLE_HINT =
   'Таблица daily_logistics_plans не найдена. Выполни scripts/daily-logistics-plans-schema.sql в Supabase.';
 
 const SELECT_COLS =
+  'delivery_date, payload, max_text, revision, updated_at, updated_by_name, updated_by_role, updated_by_user_id, editing_by_name, editing_by_user_id, editing_at, morning_payload, morning_captured_at';
+
+const SELECT_COLS_NO_MORNING =
   'delivery_date, payload, max_text, revision, updated_at, updated_by_name, updated_by_role, updated_by_user_id, editing_by_name, editing_by_user_id, editing_at';
 
 function tableMissingResponse(errorMessage: string) {
@@ -46,7 +50,31 @@ function mapRow(row: Record<string, unknown>) {
         ? Number(row.editing_by_user_id)
         : null,
     editing_at: row.editing_at ? String(row.editing_at) : null,
+    morning_payload:
+      row.morning_payload && typeof row.morning_payload === 'object'
+        ? (row.morning_payload as Record<string, unknown>)
+        : null,
+    morning_captured_at: row.morning_captured_at
+      ? String(row.morning_captured_at)
+      : null,
   };
+}
+
+function shouldCaptureMorning(
+  existingMorning: unknown,
+  payload: Record<string, unknown>,
+  captureMorningFlag: boolean | undefined,
+): boolean {
+  if (existingMorning && typeof existingMorning === 'object') return false;
+  if (captureMorningFlag === true) return true;
+  const trips = Array.isArray(payload.trips) ? payload.trips : [];
+  if (trips.length === 0) return false;
+  const waves = Array.isArray(payload.waves) ? payload.waves : [];
+  const hasFullDay = waves.some(
+    (w: any) => w && (w.mode === 'full_day' || Number(w.index) === 0),
+  );
+  // Первый снимок с рейсами без morning — фиксируем (в т.ч. full_day)
+  return hasFullDay || waves.length === 0;
 }
 
 /** GET ?date=YYYY-MM-DD — общий план дня (staff). */
@@ -61,14 +89,30 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Укажи date=YYYY-MM-DD' }, { status: 400 });
   }
 
-  const { data, error } = await supabase
-    .from('daily_logistics_plans')
-    .select(SELECT_COLS)
-    .eq('delivery_date', date)
-    .maybeSingle();
+  let data: Record<string, unknown> | null = null;
+  let error: { message?: string } | null = null;
+  {
+    const first = await supabase
+      .from('daily_logistics_plans')
+      .select(SELECT_COLS)
+      .eq('delivery_date', date)
+      .maybeSingle();
+    data = (first.data as Record<string, unknown> | null) ?? null;
+    error = first.error;
+  }
+
+  if (error && /morning_/i.test(error.message || '')) {
+    const retry = await supabase
+      .from('daily_logistics_plans')
+      .select(SELECT_COLS_NO_MORNING)
+      .eq('delivery_date', date)
+      .maybeSingle();
+    data = (retry.data as Record<string, unknown> | null) ?? null;
+    error = retry.error;
+  }
 
   if (error) {
-    const missing = tableMissingResponse(error.message);
+    const missing = tableMissingResponse(error.message || '');
     if (missing) return missing;
     // Старая схема без editing_* — повторим без этих колонок
     if (/editing_/i.test(error.message || '')) {
@@ -109,6 +153,8 @@ export async function PUT(request: NextRequest) {
     payload?: Record<string, unknown>;
     maxText?: string | null;
     expectedRevision?: number | null;
+    /** V2: явно зафиксировать утренний снимок (full_day) */
+    captureMorning?: boolean;
   };
   try {
     body = await request.json();
@@ -124,14 +170,32 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: 'Нужен payload объекта черновика' }, { status: 400 });
   }
 
-  const { data: existing, error: existErr } = await supabase
-    .from('daily_logistics_plans')
-    .select(SELECT_COLS)
-    .eq('delivery_date', date)
-    .maybeSingle();
+  let selectCols = SELECT_COLS;
+  let existing: Record<string, unknown> | null = null;
+  let existErr: { message?: string } | null = null;
+  {
+    const first = await supabase
+      .from('daily_logistics_plans')
+      .select(selectCols)
+      .eq('delivery_date', date)
+      .maybeSingle();
+    existing = (first.data as Record<string, unknown> | null) ?? null;
+    existErr = first.error;
+  }
+
+  if (existErr && /morning_/i.test(existErr.message || '')) {
+    selectCols = SELECT_COLS_NO_MORNING;
+    const retry = await supabase
+      .from('daily_logistics_plans')
+      .select(selectCols)
+      .eq('delivery_date', date)
+      .maybeSingle();
+    existing = (retry.data as Record<string, unknown> | null) ?? null;
+    existErr = retry.error;
+  }
 
   if (existErr) {
-    const missing = tableMissingResponse(existErr.message);
+    const missing = tableMissingResponse(existErr.message || '');
     if (missing) return missing;
     return NextResponse.json({ error: existErr.message }, { status: 503 });
   }
@@ -166,7 +230,13 @@ export async function PUT(request: NextRequest) {
         ? String(existing.max_text)
         : null;
 
-  const row = {
+  const captureMorning = shouldCaptureMorning(
+    (existing as any)?.morning_payload,
+    body.payload,
+    body.captureMorning,
+  );
+
+  const row: Record<string, unknown> = {
     delivery_date: date,
     payload: body.payload,
     max_text: maxText,
@@ -179,6 +249,10 @@ export async function PUT(request: NextRequest) {
     editing_by_user_id: auth.user.user_id,
     editing_at: new Date().toISOString(),
   };
+  if (captureMorning) {
+    row.morning_payload = body.payload;
+    row.morning_captured_at = new Date().toISOString();
+  }
 
   // Conditional update по revision — меньше гонок, чем SELECT+upsert.
   if (existing && hasExpected && currentRev > 0) {
@@ -192,12 +266,24 @@ export async function PUT(request: NextRequest) {
     if (updErr) {
       const missing = tableMissingResponse(updErr.message);
       if (missing) return missing;
+      let retryRow = row;
+      if (/morning_/i.test(updErr.message || '')) {
+        const {
+          morning_payload: _mp,
+          morning_captured_at: _mc,
+          ...withoutMorning
+        } = retryRow;
+        retryRow = withoutMorning;
+      }
       if (/editing_/i.test(updErr.message || '')) {
         const { editing_by_name: _n, editing_by_user_id: _u, editing_at: _a, ...legacy } =
-          row;
+          retryRow;
+        retryRow = legacy;
+      }
+      if (retryRow !== row) {
         const retry = await supabase
           .from('daily_logistics_plans')
-          .update(legacy)
+          .update(retryRow)
           .eq('delivery_date', date)
           .eq('revision', currentRev)
           .select(
@@ -243,12 +329,25 @@ export async function PUT(request: NextRequest) {
   if (error) {
     const missing = tableMissingResponse(error.message);
     if (missing) return missing;
-    // Fallback без editing_* колонок
+    // Fallback без morning_* / editing_* если колонок ещё нет в БД
+    let retryRow = row;
+    if (/morning_/i.test(error.message || '')) {
+      const {
+        morning_payload: _mp,
+        morning_captured_at: _mc,
+        ...withoutMorning
+      } = retryRow;
+      retryRow = withoutMorning;
+    }
     if (/editing_/i.test(error.message || '')) {
-      const { editing_by_name: _n, editing_by_user_id: _u, editing_at: _a, ...legacy } = row;
+      const { editing_by_name: _n, editing_by_user_id: _u, editing_at: _a, ...legacy } =
+        retryRow;
+      retryRow = legacy;
+    }
+    if (retryRow !== row) {
       const retry = await supabase
         .from('daily_logistics_plans')
-        .upsert(legacy, { onConflict: 'delivery_date' })
+        .upsert(retryRow, { onConflict: 'delivery_date' })
         .select(
           'delivery_date, payload, max_text, revision, updated_at, updated_by_name, updated_by_role, updated_by_user_id',
         )
@@ -306,20 +405,21 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ ok: true, plan: null, skipped: 'no_plan' });
   }
 
+  const selfId = Number(auth.user.user_id);
   const otherEditorId =
     existing.editing_by_user_id != null
       ? Number(existing.editing_by_user_id)
       : null;
+  const editingAtIso =
+    existing.editing_at != null ? String(existing.editing_at) : null;
   const otherFresh =
     otherEditorId != null &&
-    otherEditorId !== Number(auth.user.user_id) &&
-    isPlanEditingFresh(
-      existing.editing_at != null ? String(existing.editing_at) : null,
-    );
+    otherEditorId !== selfId &&
+    isPlanEditingFresh(editingAtIso);
 
   // При снятии — не затираем чужой heartbeat
   if (!editing) {
-    if (otherEditorId != null && otherEditorId !== Number(auth.user.user_id)) {
+    if (otherEditorId != null && otherEditorId !== selfId) {
       return NextResponse.json({ ok: true, skipped: 'other_editor' });
     }
   } else if (otherFresh && !forceTakeover) {
@@ -331,6 +431,21 @@ export async function PATCH(request: NextRequest) {
         existing.editing_by_name != null
           ? String(existing.editing_by_name)
           : 'коллега',
+      plan: mapRow(existing as Record<string, unknown>),
+    });
+  }
+
+  // Ты уже редактор и editing_at трогали недавно — не UPDATE (иначе realtime
+  // шлёт весь payload плана всем подписчикам → «тупит» broadcast).
+  if (
+    editing &&
+    !forceTakeover &&
+    otherEditorId === selfId &&
+    isPlanEditingRecentlyTouched(editingAtIso)
+  ) {
+    return NextResponse.json({
+      ok: true,
+      skipped: 'still_fresh',
       plan: mapRow(existing as Record<string, unknown>),
     });
   }

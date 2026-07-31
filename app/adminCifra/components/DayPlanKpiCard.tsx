@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { volumeCardStyle } from '../cardStyles';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import {
@@ -99,10 +99,13 @@ export default function DayPlanKpiCard({
     if (row) setLocalPayload(null);
   }, []);
 
+  const revisionRef = useRef(0);
+
   useEffect(() => {
     let cancelled = false;
     const apiDate = normalizePlanDateKey(dateKey) || dateKey;
     setLoading(true);
+    revisionRef.current = 0;
     (async () => {
       const local = loadLocalLogisticsPlanDraft(dateKey);
       if (!cancelled && local?.trips?.length) setLocalPayload(local);
@@ -120,6 +123,7 @@ export default function DayPlanKpiCard({
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         const shared = (data?.plan as DailyLogisticsPlanRow | null) || null;
+        if (shared) revisionRef.current = Number(shared.revision) || 0;
         applyRecord(shared);
 
         // Старый расчёт только в браузере — один раз публикуем в общий план.
@@ -156,8 +160,13 @@ export default function DayPlanKpiCard({
     (record) => {
       if (!record.payload || !record.revision) {
         setPlan(null);
+        revisionRef.current = 0;
         return;
       }
+      const rev = Number(record.revision) || 0;
+      // Heartbeat soft-lock не меняет revision — не перерисовываем KPI зря
+      if (rev > 0 && rev === revisionRef.current) return;
+      revisionRef.current = rev;
       applyRecord({
         delivery_date: String(record.delivery_date || '').substring(0, 10),
         payload: parsePayload(record.payload) || {
@@ -167,7 +176,7 @@ export default function DayPlanKpiCard({
           trips: [],
         },
         max_text: record.max_text ?? null,
-        revision: Number(record.revision) || 0,
+        revision: rev,
         updated_at: record.updated_at || '',
         updated_by_name: record.updated_by_name ?? null,
         updated_by_role: record.updated_by_role ?? null,

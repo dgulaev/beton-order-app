@@ -60,16 +60,27 @@ export async function GET(request: NextRequest) {
       return NextResponse.json([], { status: 500 });
     }
 
-    // Добавляем podvizhnost в корень объекта
-    const formatted = (data || []).map((log: any) => ({
-      ...log,
-      podvizhnost: log.order_mixers?.podvizhnost || log.podvizhnost || 'П3',
-      // Общий плановый объём заявки — для расчёта колонки "Прогресс" на
-      // странице оператора (см. active-mixers/route.ts для того же поля).
-      order_volume: log.orders?.volume ?? null,
-      // День заявки на корне — клиентский фильтр не должен смотреть на UTC created_at
-      delivery_date: normalizeDateStr(log.orders?.delivery_date),
-    }));
+    // Добавляем podvizhnost в корень объекта.
+    // Дедуп по order_mixer_id (оставляем последний id) — страховка на чтение,
+    // пока в БД ещё могут жить старые дубли до применения unique-индекса.
+    const seenMixerIds = new Set<string>();
+    const formatted = (data || [])
+      .map((log: any) => ({
+        ...log,
+        podvizhnost: log.order_mixers?.podvizhnost || log.podvizhnost || 'П3',
+        // Общий плановый объём заявки — для расчёта колонки "Прогресс" на
+        // странице оператора (см. active-mixers/route.ts для того же поля).
+        order_volume: log.orders?.volume ?? null,
+        // День заявки на корне — клиентский фильтр не должен смотреть на UTC created_at
+        delivery_date: normalizeDateStr(log.orders?.delivery_date),
+      }))
+      .filter((log: any) => {
+        if (log.order_mixer_id == null) return true;
+        const key = String(log.order_mixer_id);
+        if (seenMixerIds.has(key)) return false;
+        seenMixerIds.add(key);
+        return true;
+      });
 
     // ==================== "ОСИРОТЕВШИЕ" РЕЙСЫ ====================
     // production_logs пишется ТОЛЬКО кнопкой оператора "Загружен" (см.
@@ -335,26 +346,23 @@ export async function POST(request: NextRequest) {
 
     const concreteGradeFinal = gradeFromOrder || (typeof concrete_grade === 'string' ? concrete_grade.trim() : '') || null;
 
-    // ⚠️ Защита от задвоения на сервере (доп. страховка к клиентской защите
-    // от повторного клика): если для этого же миксера рейс уже был записан
-    // за последнюю минуту — это повтор одного и того же запроса (двойной
-    // клик/повторный fetch), а не новый рейс. Возвращаем уже существующую
-    // запись вместо создания дубликата.
+    // ⚠️ Один лог на один рейс (order_mixer_id). Раньше дедуп был только
+    // за 1 минуту — оператор после сбоя статуса «В пути» возвращал строку
+    // в очередь и жал «Загружен» снова через 1.5–7 мин → второй insert
+    // с тем же start_time и другой длительностью (#705, 31.07.2026).
     if (order_mixer_id) {
-      const oneMinuteAgo = new Date(Date.now() - 60000).toISOString();
-      const { data: recent } = await supabase
+      const { data: existing } = await supabase
         .from('production_logs')
         .select('*')
         .eq('order_mixer_id', order_mixer_id)
-        .gte('created_at', oneMinuteAgo)
-        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
         .limit(1)
         .maybeSingle();
 
-      if (recent) {
+      if (existing) {
         return NextResponse.json({
           success: true,
-          data: recent,
+          data: existing,
           deduplicated: true,
         });
       }
@@ -379,7 +387,31 @@ export async function POST(request: NextRequest) {
       .select()
       .single();
 
-    if (error) throw error;
+    // Гонка двух параллельных POST: unique index → вернуть уже созданную строку
+    if (error) {
+      const msg = String(error.message || '');
+      if (
+        order_mixer_id &&
+        (/duplicate key|unique constraint|production_logs_order_mixer_id/i.test(msg) ||
+          error.code === '23505')
+      ) {
+        const { data: existing } = await supabase
+          .from('production_logs')
+          .select('*')
+          .eq('order_mixer_id', order_mixer_id)
+          .order('id', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (existing) {
+          return NextResponse.json({
+            success: true,
+            data: existing,
+            deduplicated: true,
+          });
+        }
+      }
+      throw error;
+    }
 
     return NextResponse.json({ success: true, data });
   } catch (error: any) {

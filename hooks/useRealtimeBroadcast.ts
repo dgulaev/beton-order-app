@@ -85,8 +85,9 @@ const ERROR_DEBOUNCE_MS = 6_000;
 const HARD_RESET_AFTER_MS = 15_000;
 const GLOBAL_KEEPALIVE_MS = 20_000;
 const STORM_HARD_RESET_DEBOUNCE_MS = 600;
-/** Сколько «больных» каналов считаем массовым падением сокета. */
-const STORM_SICK_THRESHOLD = 2;
+/** Сколько «больных» каналов считаем массовым падением сокета.
+ * Было 2 — с топиком daily_logistics_plans ложные hard-reset стали чаще. */
+const STORM_SICK_THRESHOLD = 3;
 const SOCKET_BLIP_LOG_WINDOW_MS = 20_000;
 
 // Момент первого не восстановившегося сбоя (по любому каналу). null = всё здорово.

@@ -255,12 +255,26 @@ export default function OperatorBSUPage() {
   // оператора. Как только сам realtime подтвердит новый статус, id убирается
   // из этого набора (см. эффект ниже).
   const [optimisticallyRemovedIds, setOptimisticallyRemovedIds] = useState<Set<string>>(new Set());
+  // Объявлен здесь (до queueTrips): скрываем из очереди рейсы, уже лежащие в «Отгружено».
+  const [completedTrips, setCompletedTrips] = useState<any[]>([]);
+
+  // Рейсы, уже попавшие в «Отгружено» — никогда не показываем снова в очереди
+  // (даже если статус в БД ещё «Загрузка», а optimistic-set сбросился).
+  const completedMixerIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const t of completedTrips) {
+      if (t?.order_mixer_id != null) ids.add(String(t.order_mixer_id));
+    }
+    return ids;
+  }, [completedTrips]);
 
   const queueTrips = useMemo(() => {
     return rawMixers
       .filter((trip: any) => {
         if (!trip || trip.status !== 'Загрузка') return false;
-        if (optimisticallyRemovedIds.has(String(trip.id))) return false;
+        const idStr = String(trip.id);
+        if (optimisticallyRemovedIds.has(idStr)) return false;
+        if (completedMixerIds.has(idStr)) return false;
 
         let tripDateStr = '';
 
@@ -286,11 +300,15 @@ export default function OperatorBSUPage() {
         const timeB = b.time || '00:00';
         return timeA.localeCompare(timeB);
       });
-  }, [rawMixers, selectedDate, optimisticallyRemovedIds]);
+  }, [rawMixers, selectedDate, optimisticallyRemovedIds, completedMixerIds]);
 
-  // Как только rawMixers по realtime подтвердит, что миксер и правда больше
-  // не "Загрузка" — снимаем принудительное скрытие (оно уже не нужно, а
-  // держать id вечно в Set смысла нет).
+  // Снимаем принудительное скрытие ТОЛЬКО когда realtime явно показал новый
+  // статус (миксер есть и уже не «Загрузка»).
+  //
+  // Раньше снимали и при `!mixer` — при кратком пустом rawMixers (сбой
+  // рефетча / пробуждение вкладки) id выпадал из Set, а миксер возвращался
+  // ещё со статусом «Загрузка» → строка снова в очереди с таймером, хотя уже
+  // в «Отгружено» (#705, 31.07.2026).
   useEffect(() => {
     if (optimisticallyRemovedIds.size === 0) return;
 
@@ -300,8 +318,7 @@ export default function OperatorBSUPage() {
 
       prev.forEach(id => {
         const mixer = rawMixers.find((m: any) => String(m.id) === id);
-        // Миксер пропал из rawMixers или сменил статус — realtime подтвердил.
-        if (!mixer || mixer.status !== 'Загрузка') {
+        if (mixer && mixer.status !== 'Загрузка') {
           next.delete(id);
           changed = true;
         }
@@ -486,13 +503,25 @@ export default function OperatorBSUPage() {
       const next = { ...prev };
       let changed = false;
       rawMixers.forEach((m: any) => {
+        const idStr = String(m.id);
         const startTime = m.loading_started_at || m.loadingStartedAt;
-        if (m.status === 'Загрузка' && startTime && !next[m.id]) {
-          // Миксер начал загрузку — добавляем таймер
+        // Не восстанавливаем таймер для уже отгруженных / скрытых — иначе
+        // «призрак» в очереди снова показывает «В работе • N мин».
+        if (
+          m.status === 'Загрузка' &&
+          startTime &&
+          !next[m.id] &&
+          !optimisticallyRemovedIds.has(idStr) &&
+          !completedMixerIds.has(idStr)
+        ) {
           next[m.id] = true;
           changed = true;
-        } else if (m.status !== 'Загрузка' && next[m.id] !== undefined) {
-          // Миксер ушёл из «Загрузки» — убираем таймер
+        } else if (
+          (m.status !== 'Загрузка' ||
+            optimisticallyRemovedIds.has(idStr) ||
+            completedMixerIds.has(idStr)) &&
+          next[m.id] !== undefined
+        ) {
           delete next[m.id];
           changed = true;
         }
@@ -504,11 +533,23 @@ export default function OperatorBSUPage() {
       const next = { ...prev };
       let changed = false;
       rawMixers.forEach((m: any) => {
+        const idStr = String(m.id);
         const startTime = m.loading_started_at || m.loadingStartedAt;
-        if (m.status === 'Загрузка' && startTime && !next[m.id]) {
+        if (
+          m.status === 'Загрузка' &&
+          startTime &&
+          !next[m.id] &&
+          !optimisticallyRemovedIds.has(idStr) &&
+          !completedMixerIds.has(idStr)
+        ) {
           next[m.id] = startTime;
           changed = true;
-        } else if (m.status !== 'Загрузка' && next[m.id] !== undefined) {
+        } else if (
+          (m.status !== 'Загрузка' ||
+            optimisticallyRemovedIds.has(idStr) ||
+            completedMixerIds.has(idStr)) &&
+          next[m.id] !== undefined
+        ) {
           delete next[m.id];
           changed = true;
         }
@@ -516,7 +557,7 @@ export default function OperatorBSUPage() {
       return changed ? next : prev;
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawMixers]);
+  }, [rawMixers, optimisticallyRemovedIds, completedMixerIds]);
 
     // ==================== 1.1 НАЧАТЬ ЗАГРУЗКУ ====================
   // Заявки в финальном статусе (диспетчер/менеджер уже закрыли или отменили)
@@ -597,7 +638,7 @@ export default function OperatorBSUPage() {
   };
 
         // ==================== 1.2 ОТГРУЖЕНО СЕГОДНЯ (загрузка из базы) ====================
-  const [completedTrips, setCompletedTrips] = useState<any[]>([]);
+  // completedTrips state — выше, рядом с queueTrips (см. 0.2).
 
   // Загрузка отгруженных рейсов из базы — перезагружается при смене даты.
   // Всегда ?date=YYYY-MM-DD по orders.delivery_date (день заявки), без
@@ -610,7 +651,31 @@ export default function OperatorBSUPage() {
         const res = await fetch(`/api/adminCifra/production-log?date=${selStr}`);
         if (res.ok && !cancelled) {
           const data = await res.json();
-          setCompletedTrips(Array.isArray(data) ? data : []);
+          const incoming = Array.isArray(data) ? data : [];
+          // Merge: не затираем in-flight optimistic (_pending / temp id)
+          setCompletedTrips((prev) => {
+            const byOm = new Map<string, any>();
+            for (const row of incoming) {
+              if (row?.order_mixer_id != null) {
+                byOm.set(String(row.order_mixer_id), row);
+              }
+            }
+            for (const row of prev) {
+              const key =
+                row?.order_mixer_id != null ? String(row.order_mixer_id) : null;
+              if (!key) continue;
+              const isTemp =
+                row._pending ||
+                (typeof row.id === 'number' && row.id < 0) ||
+                String(row.id).startsWith('-');
+              if (isTemp && !byOm.has(key)) byOm.set(key, row);
+            }
+            return [...byOm.values()].sort(
+              (a, b) =>
+                new Date(b.created_at || b.end_time || 0).getTime() -
+                new Date(a.created_at || a.end_time || 0).getTime(),
+            );
+          });
         }
       } catch (err) {
         console.error('Ошибка загрузки отгруженных рейсов:', err);
@@ -800,6 +865,23 @@ export default function OperatorBSUPage() {
       return;
     }
 
+    // Уже есть лог по этому рейсу (в т.ч. после сбоя «В пути») — не плодим вторую строку.
+    // orphan-* — синтетика без production_logs, не считаем «настоящим» логом.
+    const alreadyLogged = completedTrips.some(
+      (l) =>
+        String(l.order_mixer_id) === String(trip.id) &&
+        !String(l.id).startsWith('-') &&
+        !String(l.id).startsWith('orphan-') &&
+        !l.no_operator_record,
+    );
+    if (alreadyLogged || optimisticallyRemovedIds.has(String(trip.id))) {
+      // Если строка снова в очереди, а лог уже есть — только дожимаем статус
+      void persistCompletion(trip, 0, tripStartTimes[trip.id] || trip.loading_started_at || new Date().toISOString(), String(trip.id), {
+        skipLogInsert: true,
+      });
+      return;
+    }
+
     const startTime = tripStartTimes[trip.id] || trip.loading_started_at;
     if (!startTime) {
       alert('❗ Сначала нажмите кнопку "Начать"');
@@ -861,8 +943,8 @@ export default function OperatorBSUPage() {
   // Отдельный таймаут на каждую попытку (не ждём "вечно" зависший запрос к
   // Supabase — именно так выглядела сегодняшняя задержка с heartbeat) плюс
   // растущая пауза между попытками. Обе ручки ниже безопасны для повтора:
-  // у production-log есть сервер-side дедуп по order_mixer_id за последнюю
-  // минуту, а order-mixers/status просто перезапишет тот же статус повторно
+  // у production-log есть сервер-side дедуп по order_mixer_id (один лог на
+  // рейс), а order-mixers/status просто перезапишет тот же статус повторно
   // без лишней записи в историю (см. lib/orderMixers.ts — история пишется
   // только если статус реально меняется).
   //
@@ -904,36 +986,68 @@ export default function OperatorBSUPage() {
     throw lastError;
   };
 
-  const persistCompletion = async (trip: any, tempId: number, startTime: string, tripIdStr: string) => {
-    // Шаг 1: запись рейса в production_logs
-    try {
-      const res = await fetchWithRetry('/api/adminCifra/production-log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          order_id: trip.order_id || trip.orderId,
-          order_mixer_id: trip.id,
-          mixer_name: trip.mixer_name || trip.number,
-          concrete_grade: trip.concrete_grade,
-          volume: parseFloat(trip.volume || 0),
-          podvizhnost: trip.podvizhnost || 'П3',
-          start_time: startTime,
-          // Кто из операторов смены реально оформил рейс — для статистики
-          // в карточке "Оператор" (Клиенты → Стафф). Не путать с userName в
-          // соседнем вызове order-mixers/status — то уходит в order_history,
-          // это отдельно в саму запись рейса (нужно для агрегации объёма/м³).
-          operator_name: operatorName,
-        })
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok || json?.success === false) {
-        // Постоянная бизнес-ошибка (заявка уже финальная и т.п.) — рейс НЕ
-        // записан на сервере, хотя оптимистично уже показан в "Отгружено
-        // сегодня". Раньше это тонуло в console.error и выглядело как успех —
-        // теперь явно сообщаем оператору, чтобы запись не считалась "мусорной".
-        console.error(`❌ [Оператор] Рейс миксера ${trip.mixer_name || trip.number || trip.id} НЕ записан на сервере: ${json?.message || `HTTP ${res.status}`}`);
-        alert(`⚠️ Рейс миксера ${trip.mixer_name || trip.number || trip.id} не удалось записать: ${json?.message || 'ошибка сервера'}. Обратитесь к диспетчеру.`);
-      } else {
+  const persistCompletion = async (
+    trip: any,
+    tempId: number,
+    startTime: string,
+    tripIdStr: string,
+    opts?: { skipLogInsert?: boolean },
+  ) => {
+    let logPersisted = Boolean(opts?.skipLogInsert);
+
+    // Шаг 1: запись рейса в production_logs (пропуск, если лог уже есть)
+    if (!opts?.skipLogInsert) {
+      try {
+        const res = await fetchWithRetry('/api/adminCifra/production-log', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            order_id: trip.order_id || trip.orderId,
+            order_mixer_id: trip.id,
+            mixer_name: trip.mixer_name || trip.number,
+            concrete_grade: trip.concrete_grade,
+            volume: parseFloat(trip.volume || 0),
+            podvizhnost: trip.podvizhnost || 'П3',
+            start_time: startTime,
+            // Кто из операторов смены реально оформил рейс — для статистики
+            // в карточке "Оператор" (Клиенты → Стафф). Не путать с userName в
+            // соседнем вызове order-mixers/status — то уходит в order_history,
+            // это отдельно в саму запись рейса (нужно для агрегации объёма/м³).
+            operator_name: operatorName,
+          })
+        });
+        const json = await res.json().catch(() => null);
+        if (!res.ok || json?.success === false) {
+          // Постоянная бизнес-ошибка (заявка уже финальная и т.п.) — рейс НЕ
+          // записан на сервере, хотя оптимистично уже показан в "Отгружено
+          // сегодня". Раньше это тонуло в console.error и выглядело как успех —
+          // теперь явно сообщаем оператору, чтобы запись не считалась "мусорной".
+          console.error(`❌ [Оператор] Рейс миксера ${trip.mixer_name || trip.number || trip.id} НЕ записан на сервере: ${json?.message || `HTTP ${res.status}`}`);
+          alert(`⚠️ Рейс миксера ${trip.mixer_name || trip.number || trip.id} не удалось записать: ${json?.message || 'ошибка сервера'}. Обратитесь к диспетчеру.`);
+          // Откат optimistic — иначе completedMixerIds прячет рейс из очереди навсегда
+          setCompletedTrips((prev) =>
+            prev.filter(
+              (l) =>
+                !(
+                  l.id === tempId ||
+                  (l._pending && String(l.order_mixer_id) === String(trip.id))
+                ),
+            ),
+          );
+          setOptimisticallyRemovedIds((prev) => {
+            if (!prev.has(tripIdStr)) return prev;
+            const next = new Set(prev);
+            next.delete(tripIdStr);
+            return next;
+          });
+          setCompletingTripIds((prev) => {
+            const next = new Set(prev);
+            next.delete(trip.id);
+            return next;
+          });
+          return;
+        }
+        logPersisted = true;
         const realId = json?.data?.id;
         const gradeFromServer = json?.data?.concrete_grade;
         if (realId || gradeFromServer) {
@@ -952,9 +1066,34 @@ export default function OperatorBSUPage() {
             )
           );
         }
+      } catch (err) {
+        console.error(`❌ [Оператор] Не удалось записать отгрузку миксера ${trip.mixer_name || trip.number || trip.id} после всех попыток:`, err);
+        setCompletedTrips((prev) =>
+          prev.filter(
+            (l) =>
+              !(
+                l.id === tempId ||
+                (l._pending && String(l.order_mixer_id) === String(trip.id))
+              ),
+          ),
+        );
+        setOptimisticallyRemovedIds((prev) => {
+          if (!prev.has(tripIdStr)) return prev;
+          const next = new Set(prev);
+          next.delete(tripIdStr);
+          return next;
+        });
+        setCompletingTripIds((prev) => {
+          const next = new Set(prev);
+          next.delete(trip.id);
+          return next;
+        });
+        return;
       }
-    } catch (err) {
-      console.error(`❌ [Оператор] Не удалось записать отгрузку миксера ${trip.mixer_name || trip.number || trip.id} после всех попыток:`, err);
+    } else {
+      // Повтор после уже записанного лога — держим строку вне очереди
+      setOptimisticallyRemovedIds((prev) => new Set(prev).add(tripIdStr));
+      setCompletingTripIds((prev) => new Set(prev).add(trip.id));
     }
 
     // Шаг 2: смена статуса — обычный рейс «В пути»; самовывоз сразу «Разгружен»
@@ -963,21 +1102,23 @@ export default function OperatorBSUPage() {
       const nextStatus = isPickupOrder(trip.address || trip.order_address)
         ? 'Разгружен'
         : 'В пути';
+      // Если лог уже есть, а статус мог уйти с «Загрузка» (частичный успех) —
+      // не требуем expectedStatus, иначе 409 и снова возврат в очередь.
+      const statusBody: Record<string, unknown> = {
+        id: trip.id,
+        status: nextStatus,
+        userName: operatorName,
+        userRole: operatorRole,
+      };
+      if (!logPersisted) {
+        statusBody.expectedStatus = 'Загрузка';
+      }
       const res = await fetchWithRetry(
         '/api/adminCifra/order-mixers/status',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: trip.id,
-            status: nextStatus,
-            userName: operatorName,
-            userRole: operatorRole,
-            // Мы стартовали загрузку от статуса "Загрузка" — если к моменту
-            // завершения он в БД уже другой (диспетчер вручную вмешался в
-            // процессе), это конфликт, а не обычная перезапись (см. lib/orderMixers.ts).
-            expectedStatus: 'Загрузка',
-          })
+          body: JSON.stringify(statusBody),
         },
         { attempts: 6, timeoutMs: 8000, baseDelayMs: 2000 }
       );
@@ -991,6 +1132,31 @@ export default function OperatorBSUPage() {
           // нечего: это не должно тихо перезаписывать чужое решение.
           console.error(`⚠️ [Оператор] Конфликт статуса миксера ${trip.mixer_name || trip.number || trip.id}: ${json?.message}`);
           alert(`⚠️ Статус миксера ${trip.mixer_name || trip.number || trip.id} уже изменил диспетчер/менеджер. Ваше "Завершить загрузку" не применено — уточните у диспетчера актуальный статус рейса.`);
+          if (!logPersisted) {
+            setCompletedTrips((prev) =>
+              prev.filter(
+                (l) =>
+                  !(
+                    l._pending && String(l.order_mixer_id) === String(trip.id)
+                  ),
+              ),
+            );
+            setOptimisticallyRemovedIds((prev) => {
+              if (!prev.has(tripIdStr)) return prev;
+              const next = new Set(prev);
+              next.delete(tripIdStr);
+              return next;
+            });
+          } else {
+            // Лог есть — оставляем в Отгружено, снимаем только красную точку
+            setCompletedTrips((prev) =>
+              prev.map((l) =>
+                String(l.order_mixer_id) === String(trip.id)
+                  ? { ...l, _pending: false }
+                  : l,
+              ),
+            );
+          }
         } else {
           throw new Error(json?.message || `HTTP ${res.status}`);
         }
@@ -1003,16 +1169,26 @@ export default function OperatorBSUPage() {
     } catch (err) {
       console.error(`🔴 [Оператор] Статус миксера ${trip.mixer_name || trip.number || trip.id} НЕ подтверждён после всех попыток — нужна ручная проверка:`, err);
 
-      // Все повторы исчерпаны — это уже не гонка, а настоящий сигнал "нужно
-      // вмешательство". Возвращаем строку в очередь, чтобы её было видно и
-      // можно было провести заново, но красная точка в "Отгружено сегодня"
-      // остаётся — рейс не потерян, просто не подтверждён.
-      setOptimisticallyRemovedIds(prev => {
-        if (!prev.has(tripIdStr)) return prev;
-        const next = new Set(prev);
-        next.delete(tripIdStr);
-        return next;
-      });
+      // Лог уже в БД — НЕ возвращаем в очередь (иначе повторный «Загружен»
+      // плодил дубли с другой длительностью). Красная точка остаётся.
+      if (!logPersisted) {
+        setCompletedTrips((prev) =>
+          prev.filter(
+            (l) =>
+              !(l._pending && String(l.order_mixer_id) === String(trip.id)),
+          ),
+        );
+        setOptimisticallyRemovedIds(prev => {
+          if (!prev.has(tripIdStr)) return prev;
+          const next = new Set(prev);
+          next.delete(tripIdStr);
+          return next;
+        });
+      } else {
+        alert(
+          `⚠️ Рейс миксера ${trip.mixer_name || trip.number || trip.id} уже в «Отгружено», но статус «В пути» не подтвердился. Не нажимай «Загружен» снова — скажи диспетчеру проверить статус.`,
+        );
+      }
     } finally {
       setCompletingTripIds(prev => {
         const next = new Set(prev);
@@ -1041,6 +1217,33 @@ export default function OperatorBSUPage() {
       return changed ? next : prev;
     });
   }, [rawMixers]);
+
+  // Auto-heal: лог в «Отгружено» есть, а статус в БД всё ещё «Загрузка»
+  // (после F5 / сбоя status) — один раз дожимаем «В пути» без второго INSERT.
+  const statusHealRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const log of completedTrips) {
+      if (log?.order_mixer_id == null || log.no_operator_record) continue;
+      if (String(log.id).startsWith('-') || String(log.id).startsWith('orphan-')) {
+        continue;
+      }
+      if (typeof log.id === 'number' && log.id < 0) continue;
+      const key = String(log.order_mixer_id);
+      if (statusHealRef.current.has(key)) continue;
+      const mixer = rawMixers.find((m: any) => String(m.id) === key);
+      if (!mixer || mixer.status !== 'Загрузка') continue;
+      statusHealRef.current.add(key);
+      void persistCompletion(
+        mixer,
+        0,
+        mixer.loading_started_at || log.start_time || new Date().toISOString(),
+        key,
+        { skipLogInsert: true },
+      );
+    }
+  // persistCompletion стабилен по смыслу на каждый рендер — только данные
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawMixers, completedTrips]);
 
     // ==================== 1.3 ЛОКАЛЬНЫЕ ИЗМЕНЕНИЯ ПОДВИЖНОСТИ ====================
  const [podvizhnostOverrides, setPodvizhnostOverrides] = useState<Record<number, string>>({});
@@ -1072,7 +1275,9 @@ export default function OperatorBSUPage() {
   // ==================== ФИЛЬТР ЛЕНТЫ ПО ДНЮ ЗАЯВКИ ====================
   // День учёта = orders.delivery_date. Не используем UTC-префикс created_at:
   // загрузка в 01:01 МСК (= 22:01 UTC «вчера») иначе уезжала в чужой день.
-  const filteredCompletedTrips = completedTrips
+  const filteredCompletedTrips = (() => {
+    const seenOm = new Set<string>();
+    return completedTrips
     .filter((trip: any) => {
       if (!trip) return false;
 
@@ -1093,6 +1298,14 @@ export default function OperatorBSUPage() {
       // сверяем с выбранным днём.
       if (!tripDateStr) return true;
       return tripDateStr === selectedDateStr;
+    })
+    // Один рейс = одна строка (старые дубли в БД до unique-индекса)
+    .filter((trip: any) => {
+      if (trip.order_mixer_id == null) return true;
+      const key = String(trip.order_mixer_id);
+      if (seenOm.has(key)) return false;
+      seenOm.add(key);
+      return true;
     })
     .map((trip: any) => ({
       ...trip,
@@ -1118,6 +1331,7 @@ export default function OperatorBSUPage() {
       // ✅ БЕРЁМ ПОДВИЖНОСТЬ ИЗ order_mixers (приоритет)
       podvizhnost: trip.podvizhnost || 'П3'
     }));
+  })();
 
   // ==================== 1.3 ПРОГРЕСС ПО ЗАЯВКЕ (для колонки "Прогресс") ====================
   // N/M, где N — сколько рейсов по заявке УЖЕ отгружено сегодня (есть запись

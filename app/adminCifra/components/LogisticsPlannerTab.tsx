@@ -15,8 +15,14 @@ import ModalActionButton from './ModalActionButton';
 import PlannerTripFactRow from './PlannerTripFactRow';
 import PlannerOperatorView from './PlannerOperatorView';
 import OrderPlanProgressBar from './OrderPlanProgressBar';
+import PlannerInsightsPanel from './PlannerInsightsPanel';
 import { appAlert, appConfirm } from './appDialog';
 import { useUserRole } from '@/app/providers/UserRoleProvider';
+import {
+  parseCalibrationPayload,
+  toCalibrationSourceMeta,
+  type PlannerCalibration,
+} from '@/lib/plannerCalibration';
 import {
   buildFleetHint,
   buildPlannerScenarios,
@@ -310,6 +316,9 @@ export default function LogisticsPlannerTab({
   /** Фаза 6: мета общего плана дня. */
   const [sharedMeta, setSharedMeta] = useState<SharedPlanMeta | null>(null);
   const [canEditPlan, setCanEditPlan] = useState(true);
+  /** V2: калибровка норм из истории */
+  const [calibration, setCalibration] = useState<PlannerCalibration | null>(null);
+  const calibrationRef = useRef<PlannerCalibration | null>(null);
   const dayOrderIdSet = useMemo(
     () => new Set(orders.map((o) => String(o.id))),
     [orders],
@@ -336,6 +345,32 @@ export default function LogisticsPlannerTab({
   useEffect(() => {
     setCanEditPlan(canEditDailyLogisticsPlan(userRole));
   }, [userRole]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/adminCifra/logistics-plan/insights?date=${encodeURIComponent(toApiDateKey(dateKey))}`,
+          { headers: adminCifraAuthHeaders(), cache: 'no-store' },
+        );
+        if (!res.ok || cancelled) return;
+        const data = await res.json().catch(() => ({}));
+        const calib = parseCalibrationPayload(
+          data?.calibrationFull || data?.calibration || null,
+        );
+        if (!cancelled) {
+          calibrationRef.current = calib;
+          setCalibration(calib);
+        }
+      } catch {
+        /* offline */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dateKey]);
 
   useRealtimeProductionLogs(setProductionLogs, { enabled: true });
 
@@ -514,7 +549,9 @@ export default function LogisticsPlannerTab({
     };
 
     void beat(true);
-    const id = window.setInterval(() => void beat(true), 25000);
+    // 50 с: сервер всё равно skip'ает UPDATE, пока editing_at свежий (~90 с).
+    // Раньше 25 с × полный payload в broadcast перегружали realtime.
+    const id = window.setInterval(() => void beat(true), 50000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -1137,6 +1174,8 @@ export default function LogisticsPlannerTab({
       draft?: DraftState;
       /** true — без expectedRevision (первая миграция / force) */
       force?: boolean;
+      /** V2: зафиксировать утренний снимок */
+      captureMorning?: boolean;
     }): Promise<boolean> => {
       if (!canMutatePlan) return false;
       const draft =
@@ -1161,6 +1200,7 @@ export default function LogisticsPlannerTab({
           payload: payloadFromDraft(draft, draft.warnings || warningsRef.current),
         };
         if (opts?.maxText !== undefined) body.maxText = opts.maxText;
+        if (opts?.captureMorning) body.captureMorning = true;
         if (!opts?.force && localRevisionRef.current > 0) {
           body.expectedRevision = localRevisionRef.current;
         }
@@ -1232,7 +1272,13 @@ export default function LogisticsPlannerTab({
 
   /** Явная публикация (кнопка). Расчёт/этап тоже публикуют сразу. */
   const schedulePublish = useCallback(
-    (opts?: { maxText?: string; draft?: DraftState; immediate?: boolean }) => {
+    (opts?: {
+      maxText?: string;
+      draft?: DraftState;
+      immediate?: boolean;
+      captureMorning?: boolean;
+      force?: boolean;
+    }) => {
       if (!canEditPlan || suppressPublishRef.current) return;
       if (publishTimerRef.current) clearTimeout(publishTimerRef.current);
       const run = () => {
@@ -1332,6 +1378,7 @@ export default function LogisticsPlannerTab({
       (mode === 'full_day'
         ? nextTrips.map((t) => t.id)
         : nextTrips.filter((t) => !nextLocked.some((l) => l.id === t.id)).map((t) => t.id));
+    const calibMeta = toCalibrationSourceMeta(calibrationRef.current || calibration);
     const wave = makePlannerWave({
       index: mode === 'shift' ? Math.max(0, nextWaveStageIndex(wavesRef.current) - 1) : index,
       mode,
@@ -1340,6 +1387,13 @@ export default function LogisticsPlannerTab({
       delayFactMin: opts?.delayFactMin,
       createdByName: actorDisplayName(),
       summary: opts?.summary,
+      calibrationSource: {
+        days: calibMeta.days,
+        samples: calibMeta.samples,
+        loadP50: calibMeta.loadP50,
+        unloadP50: calibMeta.unloadP50,
+        active: calibMeta.active,
+      },
     });
     const stamped = nextTrips.map((t) =>
       newIds.includes(t.id) ? { ...t, waveId: wave.id } : t,
@@ -1381,6 +1435,7 @@ export default function LogisticsPlannerTab({
         waves: nextWaves,
       },
       immediate: true,
+      captureMorning: mode === 'full_day',
     });
     setTimeout(() => {
       suppressPublishRef.current = false;
@@ -1519,6 +1574,7 @@ export default function LogisticsPlannerTab({
         allowNight,
         useTraffic,
         factDelayMin: delayFactMin || undefined,
+        calibration: calibrationRef.current || calibration,
       };
 
       const grown = ensureFleetForWindow(baseInput, rankedAll);
@@ -1621,6 +1677,7 @@ export default function LogisticsPlannerTab({
         factDelayMin: delayFactMin || undefined,
         dayTrips,
         nowMinutes: nowMin,
+        calibration: calibrationRef.current || calibration,
       });
       if (!shifted) {
         await appAlert('Рейс не найден в плане', { title: 'Сдвиг', variant: 'danger' });
@@ -1684,6 +1741,7 @@ export default function LogisticsPlannerTab({
         factDelayMin: delayFactMin || undefined,
         dayTrips,
         nowMinutes: nowMin,
+        calibration: calibrationRef.current || calibration,
       });
       if (!shifted) {
         await appAlert('Рейс не найден в плане', {
@@ -2717,6 +2775,14 @@ export default function LogisticsPlannerTab({
           gap: sp(12),
         }}
       >
+        <PlannerInsightsPanel
+          dateKey={toApiDateKey(dateKey)}
+          uiScale={uiScale}
+          canEdit={canMutatePlan}
+          recalculateBusy={busy}
+          onRecalculate={() => void runPlan('full_day')}
+        />
+
         {(sharedMeta?.updatedByName ||
           editingOther ||
           publishDirty ||

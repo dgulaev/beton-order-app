@@ -665,16 +665,22 @@ export function useRealtimeProductionLogs(
       setLogs((prev) => {
         if (prev.some((l) => String(l.id) === String(newRecord.id))) return prev;
 
-        // Если уже есть строка (в т.ч. оптимистичный плейсхолдер с временным
-        // отрицательным id) для того же рейса order_mixer_id — не добавляем
-        // вторую. Актуально для оператора БСУ: строка "Загружен" переносится
-        // в ленту мгновенно на клиенте, а это INSERT по realtime — то же
-        // самое событие, просто с настоящим id.
-        if (
-          newRecord.order_mixer_id != null &&
-          prev.some((l) => String(l.order_mixer_id) === String(newRecord.order_mixer_id))
-        ) {
-          return prev;
+        // Оптимистичный плейсхолдер (temp id) → подменяем реальным INSERT,
+        // не плодим вторую строку и не оставляем _pending навсегда.
+        if (newRecord.order_mixer_id != null) {
+          const om = String(newRecord.order_mixer_id);
+          const idx = prev.findIndex((l) => String(l.order_mixer_id) === om);
+          if (idx >= 0) {
+            const next = [...prev];
+            const prevPending = Boolean(next[idx]._pending);
+            next[idx] = {
+              ...next[idx],
+              ...newRecord,
+              // статус «В пути» ещё может быть в полёте — pending сохраняем
+              _pending: prevPending,
+            };
+            return next;
+          }
         }
 
         return [newRecord, ...prev];
