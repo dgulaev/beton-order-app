@@ -24,6 +24,34 @@ function normalizeDateStr(value: unknown): string {
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
+
+    // Лёгкий probe: есть ли уже лог по рейсу (после таймаута POST у оператора).
+    const orderMixerIdRaw = searchParams.get('orderMixerId');
+    if (orderMixerIdRaw) {
+      const orderMixerId = Number(orderMixerIdRaw);
+      if (!Number.isFinite(orderMixerId) || orderMixerId <= 0) {
+        return NextResponse.json(
+          { success: false, error: 'Некорректный orderMixerId' },
+          { status: 400 },
+        );
+      }
+      const { data, error } = await supabase
+        .from('production_logs')
+        .select('id, order_id, order_mixer_id, concrete_grade, volume, created_at')
+        .eq('order_mixer_id', orderMixerId)
+        .order('id', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) {
+        console.error('production-log probe:', error);
+        return NextResponse.json(
+          { success: false, error: error.message },
+          { status: 500 },
+        );
+      }
+      return NextResponse.json({ success: true, data: data || null });
+    }
+
     const todayOnly = searchParams.get('today') === 'true';
     // ?date=YYYY-MM-DD — фильтр по конкретной дате (используется оператором
     // при переключении на прошлые дни). Если не передан — поведение прежнее.

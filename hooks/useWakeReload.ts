@@ -29,7 +29,8 @@ const HEARTBEAT_MS = 30_000;
 // приложениями на несколько минут — тоже (порог заведомо выше троттлинга
 // скрытой вкладки ~1 тик/мин), поэтому менеджеров при коротких переключениях
 // это не трогает.
-const FROZEN_GAP_MS = 10 * 60_000;
+/** Долгий фон (≥10 мин): вкладка часто «зомби» — на mobile делаем controlled reload. */
+export const FROZEN_GAP_MS = 10 * 60_000;
 /** После такого простоя сокет почти всегда мёртв — нужен hard-reset, не «мягкий» reconnect. */
 export const SOCKET_STALE_GAP_MS = 2 * 60_000;
 // Не перезагружаемся повторно чаще, чем раз в минуту (защита от циклов).
@@ -72,6 +73,34 @@ export function getWakeGapMs(): number {
 
 export function touchWakeBeat(now = Date.now()) {
   writeTs(WAKE_LAST_BEAT_KEY, now);
+}
+
+/**
+ * Перезагрузка для mobile после долгого фона.
+ * Сначала рвём realtime (иначе Samsung/Android может зависнуть на «Страница не отвечает»),
+ * затем location.replace — чуть мягче голого reload на части WebView.
+ */
+export function controlledMobileReload(reason: string) {
+  if (typeof window === 'undefined') return;
+  if (document.visibilityState !== 'visible') return;
+  const t = readTs(RELOAD_GUARD_KEY);
+  if (t != null && Date.now() - t < RELOAD_GUARD_MS) return;
+  writeTs(RELOAD_GUARD_KEY, Date.now());
+  touchWakeBeat();
+  clearTs(WAKE_HIDDEN_AT_KEY);
+  console.warn(`♻️ [MobileWake] Controlled reload: ${reason}`);
+  try {
+    supabase.realtime.disconnect();
+  } catch {
+    /* ignore */
+  }
+  window.setTimeout(() => {
+    try {
+      window.location.replace(window.location.href);
+    } catch {
+      window.location.reload();
+    }
+  }, 150);
 }
 
 export function useWakeReload(enabled = true) {
@@ -182,11 +211,9 @@ export function useWakeReload(enabled = true) {
   }, [enabled]);
 }
 
-// useWakeRefresh — мягкое восстановление при пробуждении вкладки БЕЗ перезагрузки.
-// Для мобильных (водитель, мобильная админка): принудительный reload на Android
-// (особенно Samsung Internet) сам подвисает на белом экране, поэтому вместо него
-// при возврате на передний план просто переподключаем соединение и обновляем
-// данные на месте. Страница остаётся отрисованной.
+// useWakeRefresh — мягкое восстановление при пробуждении вкладки БЕЗ перезагрузки
+// (короткий app-switch / сон до FROZEN_GAP). На mobile layout при gap ≥ FROZEN_GAP
+// сам вызывает controlledMobileReload — иначе «зомби» с зелёным индикатором.
 //
 // Пишет wake-beat в sessionStorage (как useWakeReload), чтобы broadcast видел
 // реальный gap после сна и мог делать stale hard-reset.
@@ -194,8 +221,8 @@ export function useWakeReload(enabled = true) {
 // Триггеры:
 //   visibilitychange → visible
 //   pageshow (persisted / visible)
-//   resume
-//   focus / online — сеть вернулась или окно снова в фокусе без visibility
+//   resume / focus / online
+//   interval gap-check — если Samsung не прислал visibility после часа в фоне
 export function useWakeRefresh(onWake: () => void, enabled = true) {
   const cbRef = useRef(onWake);
   cbRef.current = onWake;
@@ -225,9 +252,30 @@ export function useWakeRefresh(onWake: () => void, enabled = true) {
 
     // Пульс, пока вкладка видима — иначе getWakeGapMs() на mobile ≈ 0
     // и broadcast не отличает короткий app-switch от долгого сна.
-    if (document.visibilityState === 'visible') touchWakeBeat();
+    // ВАЖНО: сначала проверяем gap, иначе «холостой» touch съедает evidence сна.
+    if (document.visibilityState === 'visible') {
+      const gap = getWakeGapMs();
+      const hiddenAt = readTs(WAKE_HIDDEN_AT_KEY);
+      const hiddenGap = hiddenAt ? Date.now() - hiddenAt : 0;
+      if (gap >= SOCKET_STALE_GAP_MS || hiddenGap >= SOCKET_STALE_GAP_MS) {
+        fire();
+      } else {
+        touchWakeBeat();
+      }
+    }
+
     const beat = window.setInterval(() => {
-      if (document.visibilityState === 'visible') touchWakeBeat();
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      const prev = readTs(WAKE_LAST_BEAT_KEY) ?? now;
+      const gap = now - prev;
+      const hiddenAt = readTs(WAKE_HIDDEN_AT_KEY);
+      const hiddenGap = hiddenAt ? now - hiddenAt : 0;
+      if (gap >= SOCKET_STALE_GAP_MS || hiddenGap >= SOCKET_STALE_GAP_MS) {
+        fire();
+        return;
+      }
+      touchWakeBeat(now);
     }, HEARTBEAT_MS);
 
     const onVisibility = () => {

@@ -96,11 +96,21 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        // AbortController на Samsung Internet иногда не рвёт зависший fetch
+        // (полоска «загрузки» 60–70 с). Promise.race гарантирует выход через 12 с.
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), ROLE_FETCH_TIMEOUT_MS);
+        let timedOut = false;
+        const timeoutId = setTimeout(() => {
+          timedOut = true;
+          try {
+            controller.abort();
+          } catch {
+            /* ignore */
+          }
+        }, ROLE_FETCH_TIMEOUT_MS);
 
         lastFetchAtRef.current = Date.now();
-        const res = await fetch('/api/user/role', {
+        const fetchPromise = fetch('/api/user/role', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -109,8 +119,21 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({}),
           cache: 'no-store',
           signal: controller.signal,
-        }).finally(() => clearTimeout(timeoutId));
+        });
+        // Поздний abort после race не должен давать UnhandledRejection.
+        void fetchPromise.catch(() => {});
 
+        const res = await Promise.race([
+          fetchPromise,
+          new Promise<Response>((_, reject) => {
+            window.setTimeout(() => {
+              timedOut = true;
+              reject(new DOMException('Role fetch timeout', 'AbortError'));
+            }, ROLE_FETCH_TIMEOUT_MS);
+          }),
+        ]).finally(() => clearTimeout(timeoutId));
+
+        if (timedOut) throw new DOMException('Role fetch timeout', 'AbortError');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const data = await res.json();

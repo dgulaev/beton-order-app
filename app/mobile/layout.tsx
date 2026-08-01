@@ -23,7 +23,13 @@ import {
 } from './driver/driverClient';
 import DriverDashboard from './driver/components/DriverDashboard';
 import HelpProvider from '@/app/adminCifra/components/help/HelpProvider';
-import { getWakeGapMs, SOCKET_STALE_GAP_MS, useWakeRefresh } from '@/hooks/useWakeReload';
+import {
+  controlledMobileReload,
+  FROZEN_GAP_MS,
+  getWakeGapMs,
+  SOCKET_STALE_GAP_MS,
+  useWakeRefresh,
+} from '@/hooks/useWakeReload';
 import { useStaffHeartbeat } from '@/hooks/useStaffHeartbeat';
 import './globals.css';
 import { hardResetBroadcastSocket, useGlobalBroadcastStatus, reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
@@ -140,6 +146,8 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
     const cachedMixer = getStoredDriverMixerCache();
     if (cachedMixer) setDriverMixer(cachedMixer);
 
+    // Staff с userId — driver-check не блокирует UI (см. гейт ниже).
+    // Если есть только driver-сессия — проверяем в фоне с жёстким таймаутом.
     const session = getStoredDriverSession();
     if (!session) {
       setCheckingDriverSession(false);
@@ -147,16 +155,38 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), DRIVER_AUTH_TIMEOUT_MS);
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      setCheckingDriverSession(false);
+    };
+    const timeoutId = window.setTimeout(() => {
+      try {
+        controller.abort();
+      } catch {
+        /* ignore */
+      }
+      finish();
+    }, DRIVER_AUTH_TIMEOUT_MS);
 
     (async () => {
       try {
-        const res = await fetch('/api/driver/auth', {
+        const fetchPromise = fetch('/api/driver/auth', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(session),
           signal: controller.signal,
         });
+        const res = await Promise.race([
+          fetchPromise,
+          new Promise<Response>((_, reject) => {
+            window.setTimeout(
+              () => reject(new DOMException('Driver auth timeout', 'AbortError')),
+              DRIVER_AUTH_TIMEOUT_MS,
+            );
+          }),
+        ]);
         const data = await res.json();
         if (data.success && data.mixer) {
           setDriverMixer(data.mixer);
@@ -170,17 +200,24 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
         }
       } catch (err) {
         // Сетевой сбой/таймаут — не разлогиниваем водителя "в слепую", просто
-        // остаёмся с тем, что уже показали из кэша (см. useState выше).
-        console.error('Driver session check error:', err);
+        // остаёмся с тем, что уже показали из кэша.
+        if (!(err instanceof DOMException && err.name === 'AbortError')) {
+          console.warn('Driver session check error:', err);
+        }
       } finally {
-        clearTimeout(timeoutId);
-        setCheckingDriverSession(false);
+        window.clearTimeout(timeoutId);
+        finish();
       }
     })();
 
     return () => {
-      clearTimeout(timeoutId);
-      controller.abort();
+      window.clearTimeout(timeoutId);
+      try {
+        controller.abort();
+      } catch {
+        /* ignore */
+      }
+      finish();
     };
   }, []);
 
@@ -281,6 +318,10 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
       if (data.success && data.userId) {
         localStorage.setItem('userId', data.userId.toString());
         localStorage.setItem('lastForceLogoutVersion', '0');
+        // Staff-сессия важнее leftover driver — иначе откроется кабина миксера.
+        clearDriverSession();
+        clearDriverMixerCache();
+        setDriverMixer(null);
         refreshRole();
         resetLoginFlow();
       } else {
@@ -369,12 +410,16 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   const broadcastStatusRef = useRef(broadcastStatus);
   broadcastStatusRef.current = broadcastStatus;
 
-  // Мягкое восстановление при пробуждении (без location.reload — на Android/Samsung
-  // reload сам даёт белый экран). После долгого сна или если сокет уже не SUBSCRIBED
-  // — hard-reset WS. Короткий app-switch при живом сокете не трогаем (нет мигания
-  // «Подключение…»). Данные догоняют страницы через свои useWakeRefresh.
+  // Пробуждение mobile:
+  // — ≥10 мин фона → controlled reload (зомби-UI / зелёный индикатор без данных);
+  // — ≥2 мин или сокет не SUBSCRIBED → hard-reset WS;
+  // — данные страниц догоняют через свои useWakeRefresh (тот же fire).
   useWakeRefresh(() => {
     const gap = getWakeGapMs();
+    if (gap >= FROZEN_GAP_MS) {
+      controlledMobileReload(`фон ${Math.round(gap / 60000)} мин`);
+      return;
+    }
     const stale = gap >= SOCKET_STALE_GAP_MS;
     const unhealthy = broadcastStatusRef.current !== 'SUBSCRIBED';
     if (stale || unhealthy) {
@@ -403,10 +448,18 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   }, []);
 
   // ==================== 10. ЗАГРУЗКА ====================
-  // Блокируем интерфейс спиннером только пока НЕТ вообще никаких данных
-  // (ни закэшированного водителя, ни закэшированной роли сотрудника) — если
-  // есть, показываем их сразу, а актуальность в фоне проверяют эффекты выше.
-  if ((checkingDriverSession && !driverMixer) || (roleLoading && !user) || isOldDriverLink) {
+  // Спиннер только если совсем нечего показать:
+  // — есть кэш роли staff → UI сразу (driver-check в фоне не ждём);
+  // — есть кэш миксера → кабина сразу;
+  // — иначе ждём role/driver, но не дольше их Promise.race (12 с).
+  const hasStaffUi = !!user;
+  const hasDriverUi = !!driverMixer;
+  const stillBootstrapping =
+    !hasStaffUi &&
+    !hasDriverUi &&
+    (roleLoading || checkingDriverSession);
+
+  if (stillBootstrapping || isOldDriverLink) {
     return (
       <>
         <AppDialogHost />
@@ -430,7 +483,8 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   }
 
   // ==================== 11. ДАШБОРД ВОДИТЕЛЯ ====================
-  if (driverMixer) {
+  // Staff с живой ролью важнее leftover driver-кэша на том же телефоне.
+  if (driverMixer && !isStaffLoggedIn) {
     const driverSession = getStoredDriverSession();
     const driverStorageKey = driverSession
       ? `driver:${driverSession.phone}:${driverSession.number}`

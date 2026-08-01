@@ -17,6 +17,7 @@ import SiloSwitchVolumeModal, {
   type SiloSwitchTrip,
 } from '../components/SiloSwitchVolumeModal';
 import { appAlert, appConfirm } from '../components/appDialog';
+import DarkHoverTip from '../components/DarkHoverTip';
 import { useHelp } from '../components/help/HelpProvider';
 import { siloNameById } from '@/lib/siloConfig';
 import { formatRuDateWithWeekday, pluralRu } from '@/lib/ruLocale';
@@ -1042,6 +1043,72 @@ export default function OperatorBSUPage() {
     throw lastError;
   };
 
+  const rollbackOptimisticCompletion = (trip: any, tempId: number, tripIdStr: string) => {
+    setCompletedTrips((prev) =>
+      prev.filter(
+        (l) =>
+          !(
+            l.id === tempId ||
+            (l._pending && String(l.order_mixer_id) === String(trip.id))
+          ),
+      ),
+    );
+    setOptimisticallyRemovedIds((prev) => {
+      if (!prev.has(tripIdStr)) return prev;
+      const next = new Set(prev);
+      next.delete(tripIdStr);
+      return next;
+    });
+  };
+
+  const applyServerLogToOptimistic = (
+    trip: any,
+    tempId: number,
+    log: { id?: number | string; concrete_grade?: string | null } | null | undefined,
+  ) => {
+    const realId = log?.id;
+    const gradeFromServer = log?.concrete_grade;
+    if (realId == null && (gradeFromServer == null || gradeFromServer === '')) return;
+    setCompletedTrips((prev) =>
+      prev.map((l) =>
+        l.id === tempId ||
+        (l._pending && String(l.order_mixer_id) === String(trip.id))
+          ? {
+              ...l,
+              ...(realId != null ? { id: realId } : {}),
+              ...(gradeFromServer != null && gradeFromServer !== ''
+                ? { concrete_grade: gradeFromServer }
+                : {}),
+            }
+          : l,
+      ),
+    );
+  };
+
+  /** После таймаута/обрыва POST — проверить, успел ли сервер всё же записать лог. */
+  const probeProductionLogByMixer = async (
+    mixerId: string | number,
+  ): Promise<{ id: number; concrete_grade?: string | null } | null> => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+      const res = await fetch(
+        `/api/adminCifra/production-log?orderMixerId=${encodeURIComponent(String(mixerId))}`,
+        { cache: 'no-store', signal: controller.signal },
+      ).finally(() => window.clearTimeout(timeoutId));
+      if (!res.ok) return null;
+      const json = await res.json().catch(() => null);
+      const row = json?.data;
+      if (!row?.id) return null;
+      return {
+        id: Number(row.id),
+        concrete_grade: row.concrete_grade ?? null,
+      };
+    } catch {
+      return null;
+    }
+  };
+
   /** @returns true — статус целевой подтверждён (или уже был). */
   const persistCompletion = async (
     trip: any,
@@ -1056,88 +1123,87 @@ export default function OperatorBSUPage() {
     const nextStatus = isPickupOrder(trip.address || trip.order_address)
       ? 'Разгружен'
       : 'В пути';
+    const mixerLabel = trip.mixer_name || trip.number || trip.id;
 
     try {
       // Шаг 1: запись рейса в production_logs (пропуск, если лог уже есть)
       if (!opts?.skipLogInsert) {
         try {
-          const res = await fetchWithRetry('/api/adminCifra/production-log', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              order_id: trip.order_id || trip.orderId,
-              order_mixer_id: trip.id,
-              mixer_name: trip.mixer_name || trip.number,
-              concrete_grade: trip.concrete_grade,
-              volume: parseFloat(trip.volume || 0),
-              podvizhnost: trip.podvizhnost || 'П3',
-              start_time: startTime,
-              // Кто из операторов смены реально оформил рейс — для статистики
-              // в карточке "Оператор" (Клиенты → Стафф). Не путать с userName в
-              // соседнем вызове order-mixers/status — то уходит в order_history,
-              // это отдельно в саму запись рейса (нужно для агрегации объёма/м³).
-              operator_name: operatorName,
-            }),
-          });
+          // 18 с × 3 — меньше «ложных фейлов» при медленном Supabase; дедуп на сервере.
+          const res = await fetchWithRetry(
+            '/api/adminCifra/production-log',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                order_id: trip.order_id || trip.orderId,
+                order_mixer_id: trip.id,
+                mixer_name: trip.mixer_name || trip.number,
+                concrete_grade: trip.concrete_grade,
+                volume: parseFloat(trip.volume || 0),
+                podvizhnost: trip.podvizhnost || 'П3',
+                start_time: startTime,
+                // Кто из операторов смены реально оформил рейс — для статистики
+                // в карточке "Оператор" (Клиенты → Стафф). Не путать с userName в
+                // соседнем вызове order-mixers/status — то уходит в order_history,
+                // это отдельно в саму запись рейса (нужно для агрегации объёма/м³).
+                operator_name: operatorName,
+              }),
+            },
+            { attempts: 3, timeoutMs: 18000, baseDelayMs: 2000 },
+          );
           const json = await res.json().catch(() => null);
           if (!res.ok || json?.success === false) {
-            console.error(`❌ [Оператор] Рейс миксера ${trip.mixer_name || trip.number || trip.id} НЕ записан на сервере: ${json?.message || `HTTP ${res.status}`}`);
-            if (!silent) {
-              alert(`⚠️ Рейс миксера ${trip.mixer_name || trip.number || trip.id} не удалось записать: ${json?.message || 'ошибка сервера'}. Обратитесь к диспетчеру.`);
+            // Бизнес-отказ (400 и т.п.) — не маскируем. 5xx/пустой ответ — probe.
+            const hardFail = res.status >= 400 && res.status < 500 && res.status !== 408;
+            if (!hardFail) {
+              const probed = await probeProductionLogByMixer(trip.id);
+              if (probed) {
+                console.warn(
+                  `⚠️ [Оператор] POST production-log ответил ошибкой, но лог #${probed.id} уже есть — продолжаем`,
+                );
+                logPersisted = true;
+                applyServerLogToOptimistic(trip, tempId, probed);
+              }
             }
-            setCompletedTrips((prev) =>
-              prev.filter(
-                (l) =>
-                  !(
-                    l.id === tempId ||
-                    (l._pending && String(l.order_mixer_id) === String(trip.id))
-                  ),
-              ),
-            );
-            setOptimisticallyRemovedIds((prev) => {
-              if (!prev.has(tripIdStr)) return prev;
-              const next = new Set(prev);
-              next.delete(tripIdStr);
-              return next;
-            });
-            return false;
-          }
-          logPersisted = true;
-          const realId = json?.data?.id;
-          const gradeFromServer = json?.data?.concrete_grade;
-          if (realId || gradeFromServer) {
-            setCompletedTrips((prev) =>
-              prev.map((l) =>
-                l.id === tempId
-                  ? {
-                      ...l,
-                      ...(realId ? { id: realId } : {}),
-                      ...(gradeFromServer != null && gradeFromServer !== ''
-                        ? { concrete_grade: gradeFromServer }
-                        : {}),
-                    }
-                  : l,
-              ),
-            );
+            if (!logPersisted) {
+              console.error(
+                `❌ [Оператор] Рейс миксера ${mixerLabel} НЕ записан на сервере: ${json?.message || `HTTP ${res.status}`}`,
+              );
+              if (!silent) {
+                alert(
+                  `⚠️ Рейс миксера ${mixerLabel} не удалось записать: ${json?.message || 'ошибка сервера'}. Обратитесь к диспетчеру.`,
+                );
+              }
+              rollbackOptimisticCompletion(trip, tempId, tripIdStr);
+              return false;
+            }
+          } else {
+            logPersisted = true;
+            applyServerLogToOptimistic(trip, tempId, json?.data);
           }
         } catch (err) {
-          console.error(`❌ [Оператор] Не удалось записать отгрузку миксера ${trip.mixer_name || trip.number || trip.id} после всех попыток:`, err);
-          setCompletedTrips((prev) =>
-            prev.filter(
-              (l) =>
-                !(
-                  l.id === tempId ||
-                  (l._pending && String(l.order_mixer_id) === String(trip.id))
-                ),
-            ),
-          );
-          setOptimisticallyRemovedIds((prev) => {
-            if (!prev.has(tripIdStr)) return prev;
-            const next = new Set(prev);
-            next.delete(tripIdStr);
-            return next;
-          });
-          return false;
+          // Таймаут/сеть: сервер мог успеть INSERT — сначала probe, потом откат.
+          const probed = await probeProductionLogByMixer(trip.id);
+          if (probed) {
+            console.warn(
+              `⚠️ [Оператор] Таймаут/сеть на production-log, но лог #${probed.id} уже есть — продолжаем («${mixerLabel}»)`,
+            );
+            logPersisted = true;
+            applyServerLogToOptimistic(trip, tempId, probed);
+          } else {
+            console.error(
+              `❌ [Оператор] Не удалось записать отгрузку миксера ${mixerLabel} после всех попыток:`,
+              err,
+            );
+            if (!silent) {
+              alert(
+                `⚠️ Рейс миксера ${mixerLabel} не удалось записать (сеть/таймаут). Если строка снова в очереди — подожди и нажми «Загружен» ещё раз или скажи диспетчеру.`,
+              );
+            }
+            rollbackOptimisticCompletion(trip, tempId, tripIdStr);
+            return false;
+          }
         }
       } else {
         setOptimisticallyRemovedIds((prev) => new Set(prev).add(tripIdStr));
@@ -1755,10 +1821,10 @@ export default function OperatorBSUPage() {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
         {helpEnabled && (
+          <DarkHoverTip tip="Инструкция оператора БСУ">
           <button
             type="button"
             onClick={openPageHelp}
-            title="Инструкция оператора БСУ"
             aria-label="Инструкция"
             style={{
               ...volumeCardSoftStyle({
@@ -1777,6 +1843,7 @@ export default function OperatorBSUPage() {
             <CircleHelp size={18} />
             Справка
           </button>
+          </DarkHoverTip>
         )}
         {/* ==================== ПЕРЕКЛЮЧАТЕЛЬ "КТО НА СМЕНЕ" ==================== */}
         {/* Общая учётка на двоих (Семён/Максим) — выбор здесь не меняет логин,
@@ -1890,11 +1957,12 @@ export default function OperatorBSUPage() {
               right: 0,
               zIndex: 90,
               width: 260,
-              padding: '10px 12px',
-              borderRadius: 12,
-              background: 'linear-gradient(165deg, #1E2937 0%, #0F172A 100%)',
-              border: '1px solid rgba(52, 211, 153, 0.35)',
-              boxShadow: '0 10px 28px rgba(2, 6, 23, 0.55), 0 0 20px rgba(16, 185, 129, 0.12)',
+              padding: '8px 12px',
+              borderRadius: 10,
+              background:
+                'linear-gradient(180deg, rgba(30,41,59,0.98) 0%, rgba(15,23,42,0.98) 100%)',
+              border: '1px solid rgba(71,85,105,0.95)',
+              boxShadow: '0 10px 28px rgba(0,0,0,0.5)',
               color: '#E2E8F0',
               fontSize: 12.5,
               lineHeight: 1.4,
@@ -2130,8 +2198,12 @@ export default function OperatorBSUPage() {
                     }}>
                       {stat.label}
                     </div>
+                    <DarkHoverTip
+                      tip={stat.unit ? `${valueText} ${stat.unit}` : valueText}
+                      display="inline-flex"
+                      style={{ maxWidth: '100%', minWidth: 0 }}
+                    >
                     <div
-                      title={stat.unit ? `${valueText} ${stat.unit}` : valueText}
                       style={{
                         display: 'inline-flex',
                         alignItems: 'baseline',
@@ -2165,6 +2237,7 @@ export default function OperatorBSUPage() {
                         </span>
                       ) : null}
                     </div>
+                    </DarkHoverTip>
                   </div>
                 );
               })}
@@ -2195,12 +2268,10 @@ export default function OperatorBSUPage() {
         {/* ==================== 4. ОСНОВНОЙ КОНТЕНТ ==================== */}
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {activeTab === 'zayavki' && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 660px', gap: '20px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-            {/* Правая колонка зафиксирована в 600px (её строкам этого достаточно, см.
-                ниже) — левая забирает всё оставшееся место. minmax(0, 1fr) вместо
-                просто 1fr обязателен: без него grid-колонка не может стать уже
-                контента внутри (умалчиваемый min-width: auto), из-за чего левая
-                панель раньше "выталкивалась" за пределы экрана на 1920 и ниже. */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 700px', gap: '20px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            {/* Правая колонка 700px: статус «✓ Загружен • NNN мин» и «100%» в прогрессе
+                не влезали в 660px. Левая — minmax(0,1fr), иначе grid min-width:auto
+                выталкивал панель за экран на 1920 и ниже. */}
                                                 {/* ==================== 4.1 ОЧЕРЕДЬ НА ЗАГРУЗКУ ==================== */}
             <div style={volumeCardStyle({
               borderRadius: 22,
@@ -2256,7 +2327,9 @@ export default function OperatorBSUPage() {
                 <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'center' }}>Объём</div>
                 <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'center' }}>Подвижность</div>
                 <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'center' }}>Прогресс</div>
-                <div title="Клиент / Организация" style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'left' }}>Клиент</div>
+                <DarkHoverTip tip="Клиент / Организация" display="block" style={{ minWidth: 0 }}>
+                  <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'left' }}>Клиент</div>
+                </DarkHoverTip>
                 <div></div>
               </div>
 
@@ -2305,10 +2378,10 @@ export default function OperatorBSUPage() {
                       <div style={{ fontWeight: '700', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         {trip.mixer_name || trip.number || '—'}
                       </div>
-                      {/* Марка может быть длинным текстом (например, "Ц/П смесь М100"),
-                          а не только "M400" — title показывает полный текст при
-                          наведении, даже если он обрезан "…" из-за нехватки места. */}
-                      <div title={trip.concrete_grade || ''} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>{trip.concrete_grade || '—'}</div>
+                      {/* Марка может быть длинным текстом — тёмная подсказка с полным названием. */}
+                      <DarkHoverTip tip={trip.concrete_grade || null} display="block" style={{ minWidth: 0, overflow: 'hidden' }}>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }}>{trip.concrete_grade || '—'}</div>
+                      </DarkHoverTip>
                       <div style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'center' }}>{trip.volume} м³</div>
 
                       <div
@@ -2367,38 +2440,42 @@ export default function OperatorBSUPage() {
                         const dispatched = progress?.dispatched ?? 0;
                         const total = progress?.total ?? 1;
                         return (
-                          <div
-                            title={`Отгружено ${dispatched} из ~${total} ${pluralRu(total, 'рейса', 'рейсов', 'рейсов')} по заявке #${orderId} (оценка по объёму, на текущий момент)`}
-                            style={{
-                              fontSize: '13.5px',
-                              fontWeight: '600',
-                              color: dispatched > 0 ? '#34D399' : '#64748B',
-                              textAlign: 'center',
-                              overflow: 'hidden',
-                              whiteSpace: 'nowrap',
-                              textOverflow: 'ellipsis'
-                            }}
+                          <DarkHoverTip
+                            tip={`Отгружено ${dispatched} из ~${total} ${pluralRu(total, 'рейса', 'рейсов', 'рейсов')} по заявке #${orderId} (оценка по объёму, на текущий момент)`}
+                            display="block"
+                            style={{ minWidth: 0 }}
+                            maxWidth={320}
                           >
-                            {dispatched}/{total}
-                          </div>
+                            <div
+                              style={{
+                                fontSize: '13.5px',
+                                fontWeight: '600',
+                                color: dispatched > 0 ? '#34D399' : '#64748B',
+                                textAlign: 'center',
+                                overflow: 'hidden',
+                                whiteSpace: 'nowrap',
+                                textOverflow: 'ellipsis'
+                              }}
+                            >
+                              {dispatched}/{total}
+                            </div>
+                          </DarkHoverTip>
                         );
                       })()}
 
-                      {/* Названия организаций у нас реально доходят до 30-35 символов
-                          ("АО «БРЯНСКАВТОДОР» Брянский ДРСУч" и т.п.) — колонка
-                          физически не может показать такие целиком при любой разумной
-                          ширине, поэтому обрезка "…" здесь неизбежна в любом случае;
-                          title — обязательная подсказка с полным названием. */}
-                      <div title={client} style={{ 
-                        fontSize: '14.5px', 
-                        color: '#E2E8F0',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        textAlign: 'left'
-                      }}>
-                        {client}
-                      </div>
+                      {/* Длинные названия организаций — тёмная подсказка с полным текстом. */}
+                      <DarkHoverTip tip={client !== '—' ? client : null} display="block" style={{ minWidth: 0, overflow: 'hidden' }} maxWidth={340}>
+                        <div style={{ 
+                          fontSize: '14.5px', 
+                          color: '#E2E8F0',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          textAlign: 'left'
+                        }}>
+                          {client}
+                        </div>
+                      </DarkHoverTip>
 
                       <div style={{ display: 'flex', gap: '5px', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'nowrap', overflow: 'hidden' }}>
                         <button 
@@ -2483,8 +2560,9 @@ export default function OperatorBSUPage() {
                   шапку с той же сеткой колонок, что и у строк ниже. */}
               <div style={{
                 display: 'grid',
-                // Объём 56px: «6.5 м³» не влезало в 40px и обрезалось до «6.5…»
-                gridTemplateColumns: '48px 40px 88px 96px 56px 154px 1fr',
+                // Статус 196px — «✓ Загружен • 173 мин»; прогресс 76px — «100%»+полоска.
+                // Марка — 1fr с ellipsis (длинные названия ок, как просили).
+                gridTemplateColumns: '48px 40px 84px minmax(72px, 1fr) 56px 196px 76px',
                 gap: '8px',
                 padding: '0 16px 8px',
                 color: '#94A3B8',
@@ -2500,34 +2578,29 @@ export default function OperatorBSUPage() {
                 <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>Марка</div>
                 <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>Объём</div>
                 <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', borderRight: '1px solid #334155', paddingRight: '10px' }}>Статус</div>
-                <div style={{ overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', textAlign: 'right' }}>Прогресс</div>
+                <div style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>Прогресс</div>
               </div>
 
               <div className="scroll-hidden" style={{ display: 'flex', flexDirection: 'column', gap: '9px', flex: 1, minHeight: 0, overflowY: 'auto' }}>
-                {filteredCompletedTrips.length > 0 ? filteredCompletedTrips.map((trip) => (
+                {filteredCompletedTrips.length > 0 ? filteredCompletedTrips.map((trip) => {
+                  const orphanTip = trip.no_operator_record
+                    ? `Статус выставлен ${
+                        trip.actor_name
+                          ? `«${trip.actor_name}»${trip.actor_role ? ` (${ORPHAN_ACTOR_ROLE_LABELS[trip.actor_role] || trip.actor_role})` : ''}`
+                          : 'диспетчером/менеджером/водителем'
+                      } напрямую, минуя кнопку "Загружен" у оператора БСУ — точного времени загрузки нет`
+                    : null;
+                  return (
                   <div 
                     key={trip.id}
-                    title={trip.no_operator_record
-                      ? `Статус выставлен ${
-                          trip.actor_name
-                            ? `«${trip.actor_name}»${trip.actor_role ? ` (${ORPHAN_ACTOR_ROLE_LABELS[trip.actor_role] || trip.actor_role})` : ''}`
-                            : 'диспетчером/менеджером/водителем'
-                        } напрямую, минуя кнопку "Загружен" у оператора БСУ — точного времени загрузки нет`
-                      : undefined}
                     style={volumeCardSoftStyle({
                       borderRadius: 12,
                       // Компактный вертикальный padding — раньше 12px + двухстрочный
                       // прогресс давали «провал» текста вниз относительно карточки.
                       padding: '7px 14px',
                       display: 'grid',
-                      // Фиксированные колонки вместо flex+space-between — иначе на
-                      // широких экранах (4K) панель просто "растягивала" пустое
-                      // место между блоком данных и статусом справа, визуально
-                      // выглядя чрезмерно широкой. Ширины подобраны так, чтобы
-                      // всё гарантированно помещалось в одну строку без переноса
-                      // при фиксированной ширине самой панели (660px, см. grid
-                      // родителя выше).
-                      gridTemplateColumns: '48px 40px 88px 96px 56px 154px 1fr',
+                      // Колонки как в шапке: статус и % не режем; марка — ellipsis.
+                      gridTemplateColumns: '48px 40px 84px minmax(72px, 1fr) 56px 196px 76px',
                       gap: '8px',
                       alignItems: 'center',
                       fontSize: '13.5px',
@@ -2548,88 +2621,81 @@ export default function OperatorBSUPage() {
                       </div>
                       <div style={{ fontWeight: '700', display: 'flex', alignItems: 'center', gap: '5px', overflow: 'hidden' }}>
                         {trip._pending && (
-                          <span
-                            title="Статус миксера пока не подтверждён сервером — рейс не потерян, идёт сохранение"
-                            style={{
-                              width: '8px',
-                              height: '8px',
-                              borderRadius: '50%',
-                              backgroundColor: '#EF4444',
-                              display: 'inline-block',
-                              flexShrink: 0,
-                              animation: 'pulse 1.4s ease-in-out infinite'
-                            }}
-                          />
+                          <DarkHoverTip tip="Статус миксера пока не подтверждён сервером — рейс не потерян, идёт сохранение" maxWidth={300}>
+                            <span
+                              style={{
+                                width: '8px',
+                                height: '8px',
+                                borderRadius: '50%',
+                                backgroundColor: '#EF4444',
+                                display: 'inline-block',
+                                flexShrink: 0,
+                                animation: 'pulse 1.4s ease-in-out infinite'
+                              }}
+                            />
+                          </DarkHoverTip>
                         )}
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {trip.mixer_name || trip.number || '—'}
                         </span>
                       </div>
                       
-                      {/* ==================== ОТОБРАЖЕНИЕ ПОДВИЖНОСТИ ==================== */}
-                      {/* Марка может быть длинным текстом ("Ц/П смесь М100" и т.п.) —
-                          title показывает полный текст при наведении, даже если
-                          он обрезан "…" из-за нехватки места в колонке. */}
-                      <div title={trip.concrete_grade || ''} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                        {trip.concrete_grade || '—'} 
-                        <span style={{ 
-                          color: '#10B981', 
-                          fontWeight: '600', 
-                          marginLeft: '6px' 
-                        }}>
-                          {podvizhnostOverrides[trip.id] || trip.podvizhnost || 'П3'}
-                        </span>
-                      </div>
-                      {/* ======================================================== */}
+                      {/* Марка — длинный текст ок обрезать; полная строка в тёмной подсказке. */}
+                      <DarkHoverTip tip={trip.concrete_grade || null} display="block" style={{ minWidth: 0, overflow: 'hidden' }}>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
+                          {trip.concrete_grade || '—'} 
+                          <span style={{ 
+                            color: '#10B981', 
+                            fontWeight: '600', 
+                            marginLeft: '6px' 
+                          }}>
+                            {podvizhnostOverrides[trip.id] || trip.podvizhnost || 'П3'}
+                          </span>
+                        </div>
+                      </DarkHoverTip>
 
                       <div style={{ fontWeight: '600', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
                         {trip.volume} м³
                       </div>
-                      {/* alignSelf: 'stretch' — растягиваем ячейку на всю высоту строки
-                          (у самой строки alignItems: 'center', из-за чего ячейки по
-                          умолчанию только по размеру контента), иначе тонкая серая
-                          линия-разделитель перед колонкой "Прогресс" была бы всего в
-                          пару пикселей высотой вместо всей строки. */}
                       <div style={{
                         display: 'flex',
                         alignItems: 'center',
                         alignSelf: 'stretch',
                         borderRight: '1px solid #334155',
                         paddingRight: '10px',
-                        overflow: 'hidden'
+                        minWidth: 0,
                       }}>
                         {trip._pending ? (
-                          <div style={{ color: '#F59E0B', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title="Сохраняется, статус миксера подтверждается">
-                            ⏳ Сохранение…
-                          </div>
+                          <DarkHoverTip tip="Сохраняется, статус миксера подтверждается" display="block" style={{ minWidth: 0, overflow: 'hidden' }}>
+                            <div style={{ color: '#F59E0B', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              ⏳ Сохранение…
+                            </div>
+                          </DarkHoverTip>
                         ) : trip.no_operator_record ? (
-                          <div
-                            style={{ color: '#F59E0B', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                            title={trip.actor_name || (trip.actor_role && ORPHAN_ACTOR_ROLE_LABELS[trip.actor_role]) || undefined}
+                          <DarkHoverTip
+                            tip={orphanTip}
+                            display="block"
+                            style={{ minWidth: 0, overflow: 'hidden' }}
+                            maxWidth={360}
                           >
-                            🖊️ {trip.actor_name || (trip.actor_role && ORPHAN_ACTOR_ROLE_LABELS[trip.actor_role]) || 'Диспетчер'}
-                          </div>
+                            <div style={{ color: '#F59E0B', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              🖊️ {trip.actor_name || (trip.actor_role && ORPHAN_ACTOR_ROLE_LABELS[trip.actor_role]) || 'Диспетчер'}
+                            </div>
+                          </DarkHoverTip>
                         ) : (
-                          <div style={{ color: '#10B981', fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            ✓ Загружен • {trip.loadedTime || '—'}
-                          </div>
+                          <DarkHoverTip tip={`Загружен • ${trip.loadedTime || '—'}`} display="block">
+                            <div style={{ color: '#10B981', fontWeight: '600', whiteSpace: 'nowrap' }}>
+                              ✓ Загружен • {trip.loadedTime || '—'}
+                            </div>
+                          </DarkHoverTip>
                         )}
                       </div>
-                    {/* Последняя колонка узкая (~58-90px в зависимости от разрешения) —
-                        расширять саму панель ради неё нельзя, это отъедает место у
-                        левой панели (см. общий grid родителя). Раньше тут всегда был
-                        статичный текст "В пути" — он одинаков для КАЖДОЙ строки этого
-                        списка (это данные из production_logs, статус после отгрузки
-                        уже не отслеживается), т.е. не нёс никакой информации. Ставим
-                        на его место более полезный прогресс по объёму заявки, а "В
-                        пути" оставляем как запасной вариант, если объём заявки
-                        неизвестен (чтобы ячейка не была пустой). */}
                     {(() => {
                       const orderId = String(trip.order_id ?? trip.orderId ?? '');
                       const progress = orderProgressMap.get(orderId);
                       if (!progress || progress.orderVolume == null || progress.orderVolume <= 0) {
                         return (
-                          <div style={{ color: '#64748B', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>В пути</div>
+                          <div style={{ color: '#64748B', textAlign: 'right', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>В пути</div>
                         );
                       }
 
@@ -2638,45 +2704,52 @@ export default function OperatorBSUPage() {
                       const isComplete = delivered >= total;
                       const percent = Math.min(100, Math.round((delivered / total) * 100));
 
-                      // Компактный прогресс в одну линию (% + полоска) — не раздувает
-                      // высоту строки и не «толкает» остальной текст вниз.
                       return (
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', overflow: 'hidden' }}>
-                          <div
-                            title={`По заявке #${orderId} отгружено ${delivered} из ${total} м³ (${percent}%)`}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              padding: '2px 7px',
-                              borderRadius: '9999px',
-                              background: isComplete ? 'rgba(16, 185, 129, 0.16)' : 'rgba(148, 163, 184, 0.14)',
-                              maxWidth: '100%',
-                            }}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                          <DarkHoverTip
+                            tip={`По заявке #${orderId} отгружено ${delivered} из ${total} м³ (${percent}%)`}
+                            maxWidth={300}
                           >
-                            <span style={{
-                              fontSize: '11px',
-                              fontWeight: '600',
-                              color: isComplete ? '#34D399' : '#94A3B8',
-                              whiteSpace: 'nowrap',
-                              lineHeight: 1,
-                            }}>
-                              {percent}%
-                            </span>
-                            <div style={{ width: '28px', height: '3px', borderRadius: '2px', background: 'rgba(148, 163, 184, 0.25)', overflow: 'hidden', flexShrink: 0 }}>
-                              <div style={{
-                                width: `${percent}%`,
-                                height: '100%',
-                                background: isComplete ? '#10B981' : '#3B82F6',
-                                borderRadius: '2px'
-                              }} />
+                            <div
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px',
+                                padding: '2px 6px',
+                                borderRadius: '9999px',
+                                background: isComplete ? 'rgba(16, 185, 129, 0.16)' : 'rgba(148, 163, 184, 0.14)',
+                                flexShrink: 0,
+                              }}
+                            >
+                              <span style={{
+                                fontSize: '11px',
+                                fontWeight: '600',
+                                color: isComplete ? '#34D399' : '#94A3B8',
+                                whiteSpace: 'nowrap',
+                                lineHeight: 1,
+                                fontVariantNumeric: 'tabular-nums',
+                                minWidth: '2.75em',
+                                textAlign: 'right',
+                                flexShrink: 0,
+                              }}>
+                                {percent}%
+                              </span>
+                              <div style={{ width: '26px', height: '3px', borderRadius: '2px', background: 'rgba(148, 163, 184, 0.25)', overflow: 'hidden', flexShrink: 0 }}>
+                                <div style={{
+                                  width: `${percent}%`,
+                                  height: '100%',
+                                  background: isComplete ? '#10B981' : '#3B82F6',
+                                  borderRadius: '2px'
+                                }} />
+                              </div>
                             </div>
-                          </div>
+                          </DarkHoverTip>
                         </div>
                       );
                     })()}
                   </div>
-                )) : (
+                  );
+                }) : (
                   <div style={{ 
                     textAlign: 'center', 
                     padding: '70px 20px', 
@@ -2757,14 +2830,16 @@ export default function OperatorBSUPage() {
               <h2 style={{ fontSize: '28px', fontWeight: '700', margin: 0 }}>
                 Рейс #{selectedTrip.id || selectedTrip.orderId}
               </h2>
-              <button
-                type="button"
-                onClick={() => setSelectedTrip(null)}
-                title="Закрыть"
-                style={modalCloseButtonStyle()}
-              >
-                ×
-              </button>
+              <DarkHoverTip tip="Закрыть">
+                <button
+                  type="button"
+                  onClick={() => setSelectedTrip(null)}
+                  aria-label="Закрыть"
+                  style={modalCloseButtonStyle()}
+                >
+                  ×
+                </button>
+              </DarkHoverTip>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '28px' }}>

@@ -1086,6 +1086,30 @@ function pushNoOverlap(
   return { start, end: fallback.end, shifted: true };
 }
 
+/** Если в массиве уже есть одинаковые id — переименовать хвост, не теряя рейсы. */
+export function uniquifyPlannedTripIds(trips: PlannedTrip[]): PlannedTrip[] {
+  const seen = new Set<string>();
+  let n = 0;
+  let changed = false;
+  const next = trips.map((t) => {
+    const base = t.id || `plan-anon`;
+    if (!seen.has(base)) {
+      seen.add(base);
+      return t.id ? t : { ...t, id: base };
+    }
+    changed = true;
+    n += 1;
+    let id = `${base}-dup${n}`;
+    while (seen.has(id)) {
+      n += 1;
+      id = `${base}-dup${n}`;
+    }
+    seen.add(id);
+    return { ...t, id };
+  });
+  return changed ? next : trips;
+}
+
 export function planLogistics(input: PlanLogisticsInput): PlanLogisticsResult {
   return withPlannerCalibration(input.calibration, () => planLogisticsInner(input));
 }
@@ -1212,6 +1236,24 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
   const mixerBusy = new Map<string, number>();
   const tripCounts = new Map<string, number>();
   const nozzle: BusyInterval[] = [];
+  // id новых рейсов: plan-{order}-{mixer}-{seq}. seq сбрасывается на каждый
+  // вызов planLogistics, а locked сохраняют старые id → без учёта занятых
+  // ключей появляются дубли (React: same key).
+  const usedTripIds = new Set<string>();
+  for (const t of locked) {
+    if (t.id) usedTripIds.add(t.id);
+  }
+  let seq = 0;
+  const allocTripId = (orderId: string | number, mixerKey: string): string => {
+    seq += 1;
+    let id = `plan-${orderId}-${mixerKey}-${seq}`;
+    while (usedTripIds.has(id)) {
+      seq += 1;
+      id = `plan-${orderId}-${mixerKey}-${seq}`;
+    }
+    usedTripIds.add(id);
+    return id;
+  };
   for (const t of locked) {
     const loadStart = t.loadAtMin ?? parseHhMm(t.loadTime);
     const ret = t.returnAtMin ?? parseHhMm(t.returnTime);
@@ -1235,7 +1277,6 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
   nozzle.sort((a, b) => a.start - b.start);
 
   const newTrips: PlannedTrip[] = [];
-  let seq = 0;
 
   /** Кусок на соске для самовывоза — по макс. бочке выбранного парка. */
   const pickupChunkCap = Math.max(
@@ -1312,9 +1353,8 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
               `позже цели ${goalLabel} — очередь на соске.`,
           });
         }
-        seq += 1;
         newTrips.push({
-          id: `plan-${order.id}-pickup-${seq}`,
+          id: allocTripId(order.id, 'pickup'),
           orderId: order.id,
           client: order.client,
           mixerNumber: PICKUP_MIXER_NUMBER,
@@ -1476,9 +1516,8 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
           });
         }
 
-        seq += 1;
         newTrips.push({
-          id: `plan-${order.id}-${mixer.number}-${seq}`,
+          id: allocTripId(order.id, mixer.number),
           orderId: order.id,
           client: order.client,
           mixerNumber: mixer.number,
@@ -1579,9 +1618,8 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
             if (idx >= 0) nozzle.splice(idx, 1);
             continue;
           }
-          seq += 1;
           newTrips.push({
-            id: `plan-${order.id}-${mixer.number}-${seq}`,
+            id: allocTripId(order.id, mixer.number),
             orderId: order.id,
             client: order.client,
             mixerNumber: mixer.number,
@@ -1633,7 +1671,7 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
     rebalanceOrderVolumesToMixerCaps(newTrips, order.id, selectedMixers);
   }
 
-  const trips = [...locked, ...newTrips].sort(
+  const trips = uniquifyPlannedTripIds([...locked, ...newTrips]).sort(
     (a, b) => tripLoadSortKey(a) - tripLoadSortKey(b),
   );
   uncoveredVolume = Math.round(uncoveredVolume * 10) / 10;
@@ -2468,21 +2506,90 @@ export function orderProgressStatus(
   const oid = String(order.id);
   const planVol = Number(order.volume) || 0;
   const shipped = liveShippedVolumeForOrder(oid, assignedTrips);
-  // Самовывоз после пульса оператора часто остаётся «В пути» без «Разгружен».
-  if (planVol > 0 && shipped >= planVol - 0.05) return 'done';
-
   const live = assignedTrips.filter(
     (t) => String(t.orderId ?? t.order_id) === oid,
   );
   const active = live.some((t) =>
     ['Загрузка', 'В пути', 'На объекте', 'Проблема'].includes(String(t.status || '')),
   );
-  if (active) return 'in_work';
+
+  // Сначала live-активность: «В пути» на доставке ≠ отработана, даже если кубы
+  // уже ушли с БСУ (раньше volume-check ставил done и прятал рейс из плана).
+  // Самовывоз: после загрузки часто остаётся «В пути» без «Разгружен» — тогда
+  // закрываем по объёму.
+  if (active) {
+    if (
+      isPickupOrder(order.address) &&
+      planVol > 0 &&
+      shipped >= planVol - 0.05
+    ) {
+      return 'done';
+    }
+    return 'in_work';
+  }
+
+  if (planVol > 0 && shipped >= planVol - 0.05) return 'done';
   if (shipped > 0.05) return 'in_work';
 
   const plannedDone = plannedTrips.some((t) => String(t.orderId) === oid && t.done);
   if (plannedDone) return 'done';
   return 'planned';
+}
+
+/**
+ * Live order_mixers, которых нет среди слотов плана (диспетчер завёл вручную).
+ * Показываем в UI как read-only строки «из заявки».
+ */
+export function orphanLiveTripsAsPlanned(
+  order: PlannerOrder,
+  dayTrips: Array<
+    LiveTripFact & {
+      id?: number | string;
+      number?: string | null;
+      mixer_name?: string | null;
+      time?: string | null;
+    }
+  >,
+  plannedForOrder: PlannedTrip[],
+): PlannedTrip[] {
+  const linked = new Set<string>();
+  for (const t of plannedForOrder) {
+    if (t.orderMixerId != null) linked.add(String(t.orderMixerId));
+  }
+  const oid = String(order.id);
+  const out: PlannedTrip[] = [];
+  for (const d of dayTrips) {
+    if (String(d.orderId ?? d.order_id) !== oid) continue;
+    if (d.id == null) continue;
+    const id = String(d.id);
+    if (linked.has(id)) continue;
+    const st = String(d.status || '');
+    const mixer = String(d.number || d.mixer_name || '—').trim() || '—';
+    const timeRaw = String(d.time || '').trim();
+    const loadHhMm = timeRaw.slice(0, 5) || '—';
+    const loadAt = parseHhMm(loadHhMm);
+    const vol = Math.round((Number(d.volume) || 0) * 10) / 10;
+    out.push({
+      id: `live-orphan-${id}`,
+      orderId: order.id,
+      client: order.client,
+      mixerNumber: mixer,
+      mixerId: `live-${id}`,
+      volume: vol > 0 ? vol : 0.1,
+      loadTime: loadHhMm,
+      arriveTime: '—',
+      unloadDoneTime: '—',
+      returnTime: '—',
+      loadAtMin: loadAt ?? undefined,
+      roadMin: Number(order.roadMin) || 0,
+      loadMin: 0,
+      unloadMin: 0,
+      locked: true,
+      done: st === 'Разгружен' || st === 'Возврат',
+      orderMixerId: Number.isFinite(Number(d.id)) ? Number(d.id) : null,
+    });
+  }
+  return out;
 }
 
 // ——— Фаза 4: волны, сдвиг рейса, агрегат опоздания ———

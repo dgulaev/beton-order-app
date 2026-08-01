@@ -2,6 +2,7 @@
 
 import { useRef, useState, type CSSProperties } from 'react';
 import { FileSpreadsheet, Loader2, Upload } from 'lucide-react';
+import { parseMekaDateToIso } from '@/lib/mekaReportDate';
 import { CARD_BORDER, volumeCardSoftStyle } from '../cardStyles';
 import { appAlert } from './appDialog';
 
@@ -73,10 +74,13 @@ export default function OperatorMekaUploadCard({ style, onUploaded }: Props) {
       const totalVolume = processed.reduce((sum, r) => sum + r.qty, 0);
       const totalCement = processed.reduce((sum, r) => sum + r.cement, 0);
 
-      let reportDate = processed[0]?.date || '';
-      if (reportDate.includes('.')) {
-        const [day, month, year] = reportDate.split('.');
-        reportDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+      const reportDate = parseMekaDateToIso(processed[0]?.date) || '';
+      if (!reportDate) {
+        await appAlert(
+          'Не удалось разобрать дату отчёта из Excel (ожидается ДД.ММ.ГГГГ).',
+          { title: 'Отчёт MEKA', variant: 'danger' },
+        );
+        return;
       }
 
       const res = await fetch('/api/adminCifra/meka-report', {

@@ -46,6 +46,8 @@ export type PlanTripFact = {
   /** Плановое время загрузки live-рейса (order_mixers.time), HH:MM */
   factPlanTime: string | null;
   factVolume: number | null;
+  /** Госномер из order_mixers (live), может отличаться от плана */
+  factMixerNumber: string | null;
   deltaLoadMin: number | null;
   deltaReleaseMin: number | null;
   noOperatorRecord: boolean;
@@ -70,13 +72,19 @@ const PLATE_LOOKALIKES: Record<string, string> = {
   Х: 'X',
 };
 
-function normalizeMixerKey(raw: string): string {
+export function normalizeMixerKey(raw: string): string {
   return String(raw || '')
     .trim()
     .toUpperCase()
     .replace(/ё/g, 'Е')
     .replace(/[\s\-_.]/g, '')
     .replace(/[АВЕКМНОРСТУХ]/g, (ch) => PLATE_LOOKALIKES[ch] || ch);
+}
+
+export function mixerPlatesEqual(a: string | null | undefined, b: string | null | undefined): boolean {
+  const ka = normalizeMixerKey(String(a || ''));
+  const kb = normalizeMixerKey(String(b || ''));
+  return Boolean(ka) && ka === kb;
 }
 
 function scoreCandidate(
@@ -183,6 +191,7 @@ const emptyFact = (): PlanTripFact => ({
   factRelease: null,
   factPlanTime: null,
   factVolume: null,
+  factMixerNumber: null,
   deltaLoadMin: null,
   deltaReleaseMin: null,
   noOperatorRecord: false,
@@ -207,6 +216,8 @@ function buildFactFromTrip(
     null;
   const release = isoToHhMm(log?.end_time) || null;
   const factPlanTime = formatTimeHHMM(String(best.time || '')) || null;
+  const factMixer =
+    String(best.number || best.mixer_name || '').trim() || null;
 
   return {
     matchedTripId: Number.isFinite(tripId) && tripId > 0 ? tripId : null,
@@ -215,6 +226,7 @@ function buildFactFromTrip(
     factRelease: release,
     factPlanTime,
     factVolume: Number(best.volume) || null,
+    factMixerNumber: factMixer,
     deltaLoadMin: deltaMinutes(planned.loadTime, loadStart),
     deltaReleaseMin: deltaMinutes(planned.loadTime, release),
     noOperatorRecord: Boolean(log?.no_operator_record),
@@ -309,17 +321,10 @@ export function matchPlanTripToFact(
           (scored[0].timeDiff <= 5 && gap >= 1);
         if (unambiguous) best = scored[0].t;
       }
-    } else {
-      // Без совпадения номера — только если ровно один кандидат близко по объёму/времени
-      const close = candidates.filter((t) => {
-        const volDiff = Math.abs((Number(t.volume) || 0) - (Number(planned.volume) || 0));
-        if (volDiff > 0.15) return false;
-        if (planLoadMin == null) return true;
-        const tMin = parseClockMinutes(String(t.time || ''));
-        return timeDiffAcrossDays(planLoadMin, tMin) <= 20;
-      });
-      if (close.length === 1) best = close[0];
     }
+    // Без совпадения номера — НЕ матчим по «близкому времени».
+    // Иначе слот плана P330AX получает «Загрузку» от O264HP, а в UI висят чужие номера.
+    // Связь без номера — только sticky (orderMixerId) после «Применить в заявки».
   }
 
   if (!best || best.id == null) return emptyFact();

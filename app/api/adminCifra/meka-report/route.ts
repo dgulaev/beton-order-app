@@ -4,6 +4,7 @@ import {
   compensateMekaCementDelta,
   rollbackMekaCementCompensation,
 } from '@/lib/mekaCementCompensate';
+import { getMekaReportDateIso, parseMekaDateToIso } from '@/lib/mekaReportDate';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -22,11 +23,22 @@ export async function POST(request: NextRequest) {
     const { report_date, file_name, total_volume, total_cement, total_sand, 
             total_gravel, total_water, total_additive, raw_data } = body;
 
+    // Excel (raw_data) важнее поля клиента — иначе ДД.ММ путается с MM.DD.
+    const reportDateIso =
+      getMekaReportDateIso({ report_date, raw_data }) ||
+      parseMekaDateToIso(report_date);
+    if (!reportDateIso) {
+      return NextResponse.json(
+        { error: 'Некорректная дата отчёта (нужен ДД.ММ.ГГГГ в Excel)' },
+        { status: 400 },
+      );
+    }
+
     // Проверка дубликата
     const { data: existing } = await supabase
       .from('meka_reports')
       .select('id')
-      .eq('report_date', report_date)
+      .eq('report_date', reportDateIso)
       .eq('file_name', file_name)
       .single();
 
@@ -37,7 +49,7 @@ export async function POST(request: NextRequest) {
     const { data: inserted, error } = await supabase
       .from('meka_reports')
       .insert({
-        report_date,
+        report_date: reportDateIso,
         file_name,
         total_volume: Number(total_volume || 0),
         total_cement: Number(total_cement || 0),
@@ -55,7 +67,7 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
-    const reportDate = String(inserted?.report_date || report_date).substring(0, 10);
+    const reportDate = String(inserted?.report_date || reportDateIso).substring(0, 10);
     const compensation = await compensateMekaCementDelta({
       reportDate,
       mekaReportId: inserted?.id != null ? Number(inserted.id) : null,

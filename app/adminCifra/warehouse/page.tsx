@@ -28,13 +28,14 @@ import {
 } from '../cardStyles';
 import { appAlert, appConfirm, appPrompt } from '../components/appDialog';
 import { useLowRateAlerts } from '../components/useLowRateAlerts';
-import { FileText, GripVertical, Plus, ScrollText, Trash2, X } from 'lucide-react';
+import { FileText, GripVertical, Plus, Scale, ScrollText, Trash2, X } from 'lucide-react';
 import type { LowRateAlertInfo } from '@/lib/siloConfig';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { pluralAdditiveCubes } from '@/lib/ruLocale';
 import FbsPassportModal from './FbsPassportModal';
 import SiloJournalModal from './SiloJournalModal';
 import CementSavingsModal from './CementSavingsModal';
+import CementUnderdoseModal from './CementUnderdoseModal';
 
 /** Служебная строка в fbs_blocks: в code хранится JSON-массив имён (порядок карточки). */
 const FBS_ORDER_META_NAME = '__fbs_display_order__';
@@ -86,6 +87,7 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
   });
   const [siloJournalOpen, setSiloJournalOpen] = useState(false);
   const [cementSavingsOpen, setCementSavingsOpen] = useState(false);
+  const [cementUnderdoseOpen, setCementUnderdoseOpen] = useState(false);
   const [lowRateAlerts, setLowRateAlerts] = useState<LowRateAlertInfo[]>([]);
   useLowRateAlerts(lowRateAlerts);
   /** Рабочий силос смены оператора (operator_shift_settings.active_silo_id). */
@@ -1895,6 +1897,27 @@ const removeLastCube = async (index: number) => {
                 ) : null}
                 <button
                   type="button"
+                  onClick={() => setCementUnderdoseOpen(true)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '7px 12px',
+                    borderRadius: 10,
+                    border: '1px solid rgba(248, 113, 113, 0.4)',
+                    background: 'rgba(248, 113, 113, 0.12)',
+                    color: '#FCA5A5',
+                    fontSize: '12.5px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <Scale size={14} />
+                  Недосып
+                </button>
+                <button
+                  type="button"
                   onClick={() => setSiloJournalOpen(true)}
                   style={{
                     display: 'inline-flex',
@@ -3004,6 +3027,12 @@ const removeLastCube = async (index: number) => {
       )}
       {cementSavingsOpen && isAdmin ? (
         <CementSavingsModal onClose={() => setCementSavingsOpen(false)} />
+      ) : null}
+      {cementUnderdoseOpen ? (
+        <CementUnderdoseModal
+          onClose={() => setCementUnderdoseOpen(false)}
+          initialSiloId={activeSiloId}
+        />
       ) : null}
 
       {fbsPassportModal.open && (

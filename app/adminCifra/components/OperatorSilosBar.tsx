@@ -5,6 +5,7 @@ import { useUserRole } from '@/app/providers/UserRoleProvider';
 import { SILO_SPEC, type LowRateAlertInfo } from '@/lib/siloConfig';
 import { CARD_BORDER, volumeCardSoftStyle } from '../cardStyles';
 import { appAlert, appConfirm, appPrompt } from './appDialog';
+import DarkHoverTip from './DarkHoverTip';
 import CementTransferModal from './CementTransferModal';
 import { useLowRateAlerts } from './useLowRateAlerts';
 import { pluralWord } from '@/lib/ruLocale';
@@ -445,15 +446,21 @@ export default function OperatorSilosBar({
             width: 72,
             minWidth: 72,
           }}>
+            <DarkHoverTip
+              tip={activeSiloId == null
+                ? 'Сначала выбери активный силос'
+                : 'Списать цемент по сегодняшним рейсам без списания'}
+              display="flex"
+              style={{ flex: 1, minHeight: 0 }}
+              maxWidth={260}
+            >
             <button
               type="button"
               onClick={() => { void handleCementBackfill(); }}
               disabled={backfillBusy || activeSiloId == null || busyId != null}
-              title={activeSiloId == null
-                ? 'Сначала выбери активный силос'
-                : 'Списать цемент по сегодняшним рейсам без списания'}
               style={{
                 flex: 1,
+                width: '100%',
                 minHeight: 0,
                 padding: '6px 4px',
                 borderRadius: 10,
@@ -472,13 +479,20 @@ export default function OperatorSilosBar({
             >
               {backfillBusy ? '…' : 'Списать'}
             </button>
+            </DarkHoverTip>
+            <DarkHoverTip
+              tip="Перенести ошибочное списание цемента на другой силос"
+              display="flex"
+              style={{ flex: 1, minHeight: 0 }}
+              maxWidth={280}
+            >
             <button
               type="button"
               onClick={() => setTransferOpen(true)}
               disabled={backfillBusy || busyId != null}
-              title="Перенести ошибочное списание цемента на другой силос"
               style={{
                 flex: 1,
+                width: '100%',
                 minHeight: 0,
                 padding: '6px 4px',
                 borderRadius: 10,
@@ -494,6 +508,7 @@ export default function OperatorSilosBar({
             >
               Исправить
             </button>
+            </DarkHoverTip>
           </div>
         ) : null}
       </div>

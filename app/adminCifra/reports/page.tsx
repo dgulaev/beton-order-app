@@ -11,6 +11,10 @@ import {
   isMekaServiceGrade,
   resolveMekaToRecipeCode,
 } from '@/lib/mekaGradeMap';
+import {
+  getMekaReportDateIso,
+  parseMekaDateToIso,
+} from '@/lib/mekaReportDate';
 import { CARD_BORDER, modalCloseButtonStyle, modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import ModalDateInput from '../components/ModalDateInput';
 import { appConfirm } from '../components/appDialog';
@@ -53,17 +57,9 @@ async function loadRecipesForReconcile(): Promise<RecipeLike[]> {
   return _recipesCache;
 }
 
-/** Дата отчёта в YYYY-MM-DD — из report_date или первой строки raw_data (ДД.ММ.ГГГГ). */
+/** Дата отчёта в YYYY-MM-DD — сначала Excel (raw_data), потом report_date. */
 function getReportDateIso(report: any): string | null {
-  const raw = report?.report_date || report?.raw_data?.[0]?.date || '';
-  if (!raw) return null;
-  if (raw.includes('.')) {
-    const [day, month, year] = String(raw).split('.');
-    if (!day || !month || !year) return null;
-    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-  }
-  // Уже YYYY-MM-DD (или ISO с временем)
-  return String(raw).substring(0, 10);
+  return getMekaReportDateIso(report);
 }
 
 function pad2(n: number): string {
@@ -1795,11 +1791,11 @@ export default function ReportsPage() {
                     const totalAdditive1 = processed.reduce((sum: number, r: any) => sum + (r.additive || 0), 0);
                     const totalAdditive2 = processed.reduce((sum: number, r: any) => sum + (r.additive2 || 0), 0);
 
-                    // === ИСПРАВЛЕНИЕ ДАТЫ ===
-                    let reportDate = processed[0]?.date || '';
-                    if (reportDate.includes('.')) {
-                      const [day, month, year] = reportDate.split('.');
-                      reportDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+                    // Дата: строго ДД.ММ.ГГ(ГГ) → YYYY-MM-DD (не Date.parse — там MM.DD)
+                    const reportDate = parseMekaDateToIso(processed[0]?.date) || '';
+                    if (!reportDate) {
+                      alert('Не удалось разобрать дату отчёта из Excel (ожидается ДД.ММ.ГГГГ).');
+                      return;
                     }
 
                     const res = await fetch('/api/adminCifra/meka-report', {

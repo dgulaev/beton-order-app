@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, Brain, Calculator, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Brain, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
 import { volumeCardSoftStyle, volumeCardStyle } from '../cardStyles';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import ModalActionButton from './ModalActionButton';
@@ -42,8 +42,6 @@ type Props = {
   dateKey: string;
   uiScale?: number;
   canEdit: boolean;
-  onRecalculate: () => void;
-  recalculateBusy?: boolean;
 };
 
 function fmt(n: number | null | undefined, suffix = ''): string {
@@ -57,8 +55,6 @@ export default function PlannerInsightsPanel({
   dateKey,
   uiScale = 1,
   canEdit,
-  onRecalculate,
-  recalculateBusy,
 }: Props) {
   const [data, setData] = useState<InsightsPayload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -261,15 +257,19 @@ export default function PlannerInsightsPanel({
         </div>
       ) : null}
 
+      <div
+        style={{
+          color: '#64748B',
+          fontSize: fs(12),
+          fontWeight: 600,
+          marginBottom: sp(10),
+          lineHeight: 1.35,
+        }}
+      >
+        Нормы V2 подхватываются сами при «Рассчитать весь день» / «Этап», когда
+        калибровка наберёт достаточно рейсов. Здесь только обучение на истории.
+      </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: sp(8) }}>
-        <ModalActionButton
-          color="#34D399"
-          icon={<Calculator size={16} />}
-          label={recalculateBusy ? 'Считаю…' : 'Пересчитать с нормами V2'}
-          size="lg"
-          onClick={onRecalculate}
-          disabled={!canEdit || Boolean(recalculateBusy)}
-        />
         <ModalActionButton
           color="#60A5FA"
           icon={<RefreshCw size={16} />}

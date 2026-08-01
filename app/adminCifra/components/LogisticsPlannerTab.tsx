@@ -36,10 +36,12 @@ import {
   formatOwnRented,
   getPlanDayBounds,
   applyLiveFactToOrders,
+  applyManualLoadShiftToTrip,
   isPickupOrder,
   liveShippedVolumeForOrder,
   nowMinutesIfDateKeyIsToday,
   orderProgressStatus,
+  orphanLiveTripsAsPlanned,
   PICKUP_MIXER_NUMBER,
   PLANNER_FACT_SHIPPED_STATUSES,
   makePlannerWave,
@@ -54,6 +56,7 @@ import {
   replanAfterTripVolumeChange,
   replanAfterTripVolumesChange,
   resolvePlantOpenMinutes,
+  uniquifyPlannedTripIds,
   type PlannedTrip,
   type PlannerMixer,
   type PlannerOrder,
@@ -65,6 +68,7 @@ import {
 import {
   liveTripHasReleaseFact,
   matchAllPlanTripsToFact,
+  mixerPlatesEqual,
   type FactProductionLog,
 } from '@/lib/plannerFactMatch';
 import {
@@ -307,6 +311,7 @@ export default function LogisticsPlannerTab({
   const [manualDone, setManualDone] = useState<Set<string>>(new Set());
   const [warnings, setWarnings] = useState<PlannerWarning[]>([]);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [publishDirty, setPublishDirty] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [staleConflict, setStaleConflict] = useState<{
@@ -350,6 +355,8 @@ export default function LogisticsPlannerTab({
   const mixerVolumeOverridesRef = useRef<Record<string, number>>({});
   /** DnD рейсов в окне интеллекта */
   const [dragTripId, setDragTripId] = useState<string | null>(null);
+  /** Синхронный id — state на drop может ещё быть null (React не успел отрисовать). */
+  const dragTripIdRef = useRef<string | null>(null);
   const [dragOverTripId, setDragOverTripId] = useState<string | null>(null);
   const [dragOverOrderId, setDragOverOrderId] = useState<string | null>(null);
   const dayOrderIdSet = useMemo(
@@ -373,6 +380,14 @@ export default function LogisticsPlannerTab({
   const lastAutoStageDelayRef = useRef(0);
   const autoStageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoStageReadyAtRef = useRef(0);
+  /** Авто-этап при «Загрузка» диспетчера: не крутить один и тот же беспорядок. */
+  const autoLoadingStageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const lastLoadingStageKeyRef = useRef('');
+  /** Ключ уже запланированного автоэтапа — таймер НЕ сбрасываем на каждый realtime-тик. */
+  const pendingLoadingStageKeyRef = useRef<string | null>(null);
+  const autoLoadingStageReadyAtRef = useRef(0);
   const stickySyncRef = useRef(false);
   /** Снимок volume по order_mixers.id — чтобы ловить ручные add/правку диспетчера. */
   const factVolSnapshotRef = useRef<Map<string, number>>(new Map());
@@ -451,38 +466,44 @@ export default function LogisticsPlannerTab({
     });
   }, [productionLogs, dayOrderIdSet, dateKey]);
 
-  const planFactByTripId = useMemo(
-    () => matchAllPlanTripsToFact(trips, dayTrips, dayProductionLogs),
-    [trips, dayTrips, dayProductionLogs],
-  );
-
-  // Sticky 1:1: закрепить matchedTripId → orderMixerId на плановом рейсе
-  useEffect(() => {
-    if (stickySyncRef.current || !trips.length) return;
-    let changed = false;
-    const next = trips.map((t) => {
-      const fact = planFactByTripId.get(t.id);
-      if (!fact?.hasMatch || fact.matchedTripId == null) return t;
-      if (t.orderMixerId === fact.matchedTripId) return t;
-      changed = true;
-      return { ...t, orderMixerId: fact.matchedTripId };
-    });
-    if (!changed) return;
-    stickySyncRef.current = true;
-    suppressPublishRef.current = true;
-    setTrips(next);
-    setLockedTrips((prev) =>
-      prev.map((t) => {
-        const fact = planFactByTripId.get(t.id);
-        if (!fact?.matchedTripId || t.orderMixerId === fact.matchedTripId) return t;
-        return { ...t, orderMixerId: fact.matchedTripId };
-      }),
+  const planFactByTripId = useMemo(() => {
+    // Сначала матч обычных слотов плана, затем orphan-live (ручные рейсы заявки
+    // без слота) — чтобы «В пути» не терялся, когда плана по заявке нет.
+    const base = matchAllPlanTripsToFact(trips, dayTrips, dayProductionLogs);
+    const usedOm = new Set(
+      [...base.values()]
+        .map((f) => f.matchedTripId)
+        .filter((id): id is number => id != null && id > 0)
+        .map(String),
     );
-    queueMicrotask(() => {
-      stickySyncRef.current = false;
-      suppressPublishRef.current = false;
-    });
-  }, [planFactByTripId, trips]);
+    const withOrphans = [...trips];
+    // plannerOrders объявлен ниже — берём заявки дня из props.orders.
+    for (const raw of orders) {
+      if (String(raw.status || '').toLowerCase() === 'cancelled') continue;
+      const o = {
+        id: raw.id,
+        client: String(raw.organization_name || raw.full_name || '—').trim() || '—',
+        deliveryTime: String(raw.delivery_time || '').slice(0, 5) || '00:00',
+        volume: Number(raw.volume) || 0,
+        address: String(raw.address || '').trim(),
+        grade: String(raw.grade || ''),
+        status: String(raw.status || ''),
+        roadMin:
+          localRoadTimes[String(raw.id)] ??
+          roadTimes[String(raw.id)] ??
+          (raw.road_time_min != null ? Number(raw.road_time_min) : 30),
+      };
+      const planned = trips.filter((t) => String(t.orderId) === String(o.id));
+      for (const orphan of orphanLiveTripsAsPlanned(o, dayTrips, planned)) {
+        const om = orphan.orderMixerId != null ? String(orphan.orderMixerId) : '';
+        if (om && usedOm.has(om)) continue;
+        withOrphans.push(orphan);
+        if (om) usedOm.add(om);
+      }
+    }
+    if (withOrphans.length === trips.length) return base;
+    return matchAllPlanTripsToFact(withOrphans, dayTrips, dayProductionLogs);
+  }, [trips, dayTrips, dayProductionLogs, orders, localRoadTimes, roadTimes]);
 
   const myUserId = useMemo(() => {
     if (typeof window === 'undefined') return null;
@@ -503,11 +524,144 @@ export default function LogisticsPlannerTab({
   /** Роль + нет чужой живой блокировки */
   const canMutatePlan = canEditPlan && !editingOther;
 
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
   // Closed-loop: авто-этап при росте опоздания факта (без ручного «Рассчитать этап»)
   useEffect(() => {
     autoStageReadyAtRef.current = Date.now() + 45_000;
+    autoLoadingStageReadyAtRef.current = Date.now() + 8_000;
     lastAutoStageDelayRef.current = 0;
+    lastLoadingStageKeyRef.current = '';
+    pendingLoadingStageKeyRef.current = null;
+    if (autoLoadingStageTimerRef.current) {
+      clearTimeout(autoLoadingStageTimerRef.current);
+      autoLoadingStageTimerRef.current = null;
+    }
   }, [dateKey]);
+
+  const isLiveActivePlanFact = useCallback((tripId: string) => {
+    const f = planFactByTripId.get(tripId);
+    if (!f?.hasMatch) return false;
+    const st = String(f.factStatus || '');
+    if (st === 'Загрузка' || st === 'Проблема') return true;
+    if ((PLANNER_FACT_SHIPPED_STATUSES as readonly string[]).includes(st)) {
+      return true;
+    }
+    return Boolean(f.factRelease);
+  }, [planFactByTripId]);
+
+  // WATCHPOINT 01.08.2026 — автоэтап по «Загрузке» (live-очередь).
+  // Каждый срабатывание = commitWavePlan → publish shared plan (как ручной «Этап»).
+  // Важно: таймер НЕ чистим в cleanup эффекта — иначе realtime (dayTrips/факт)
+  // каждые ~1с сбрасывал debounce и этап никогда не стартовал.
+  // Если broadcast/UI начнёт тормозить — debounce↑ / без immediate / coalesce.
+  useEffect(() => {
+    if (!canMutatePlan || loadingFleet || isOperatorView) return;
+    if (!trips.length) return;
+    if (nowMinutesIfDateKeyIsToday(dateKey) == null) return;
+    if (Date.now() < autoLoadingStageReadyAtRef.current) return;
+
+    const byOrder = new Map<string, PlannedTrip[]>();
+    for (const t of trips) {
+      if (t.done) continue;
+      const oid = String(t.orderId);
+      const list = byOrder.get(oid) || [];
+      list.push(t);
+      byOrder.set(oid, list);
+    }
+
+    const disorderParts: string[] = [];
+    for (const [oid, list] of byOrder) {
+      list.sort((a, b) => {
+        const ka = a.loadAtMin ?? parsePlanHhMm(String(a.loadTime)) ?? 0;
+        const kb = b.loadAtMin ?? parsePlanHhMm(String(b.loadTime)) ?? 0;
+        return ka - kb || String(a.id).localeCompare(String(b.id));
+      });
+      for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        if (!isLiveActivePlanFact(t.id)) continue;
+        const fact = planFactByTripId.get(t.id);
+        const st = String(fact?.factStatus || '');
+        if (
+          st !== 'Загрузка' &&
+          !(PLANNER_FACT_SHIPPED_STATUSES as readonly string[]).includes(st)
+        ) {
+          continue;
+        }
+        const ghostsBefore = list
+          .slice(0, i)
+          .filter((prev) => !isLiveActivePlanFact(prev.id));
+        if (ghostsBefore.length === 0) continue;
+        // Ключ без статуса: Загрузка→В пути не должен сбрасывать ожидание.
+        disorderParts.push(
+          `${oid}:${t.id}:${fact?.matchedTripId || ''}:` +
+            ghostsBefore.map((g) => g.id).join(','),
+        );
+      }
+    }
+
+    if (disorderParts.length === 0) {
+      pendingLoadingStageKeyRef.current = null;
+      if (autoLoadingStageTimerRef.current) {
+        clearTimeout(autoLoadingStageTimerRef.current);
+        autoLoadingStageTimerRef.current = null;
+      }
+      return;
+    }
+
+    const disorderKey = disorderParts.sort().join('|');
+    if (disorderKey === lastLoadingStageKeyRef.current) return;
+    // Уже ждём этот же беспорядок — не трогаем таймер (realtime-тики).
+    if (pendingLoadingStageKeyRef.current === disorderKey) return;
+
+    if (autoLoadingStageTimerRef.current) {
+      clearTimeout(autoLoadingStageTimerRef.current);
+    }
+    pendingLoadingStageKeyRef.current = disorderKey;
+
+    const tryRun = (attempt: number) => {
+      autoLoadingStageTimerRef.current = null;
+      if (pendingLoadingStageKeyRef.current !== disorderKey) return;
+      // stickySync не ждём — иначе live-синк времени вечно откладывал этап.
+      if (busyRef.current || factVolSyncingRef.current) {
+        if (attempt < 16) {
+          autoLoadingStageTimerRef.current = setTimeout(
+            () => tryRun(attempt + 1),
+            400,
+          );
+          return;
+        }
+        pendingLoadingStageKeyRef.current = null;
+        return;
+      }
+      pendingLoadingStageKeyRef.current = null;
+      setAutoStageNote(
+        'Автоэтап: миксеры в «Загрузке» поднимаю вверх, хвост пересчитываю…',
+      );
+      void runPlanRef.current('stage').finally(() => {
+        // Если фантомы остались — не блокируем повтор тем же fingerprint.
+        lastLoadingStageKeyRef.current = disorderKey;
+        window.setTimeout(() => {
+          lastLoadingStageKeyRef.current = '';
+        }, 4000);
+        setAutoStageNote('Автоэтап: очередь подтянута по факту загрузки');
+        window.setTimeout(() => setAutoStageNote(''), 8000);
+      });
+    };
+
+    autoLoadingStageTimerRef.current = setTimeout(() => tryRun(0), 2000);
+    // cleanup намеренно нет — иначе realtime сбрасывает debounce.
+  }, [
+    planFactByTripId,
+    trips,
+    canMutatePlan,
+    loadingFleet,
+    isOperatorView,
+    dateKey,
+    isLiveActivePlanFact,
+  ]);
 
   useEffect(() => {
     if (!canMutatePlan || busy || loadingFleet || isOperatorView) return;
@@ -773,8 +927,8 @@ export default function LogisticsPlannerTab({
             new Set(rows.filter((r) => r.type === 'own').map((r) => String(r.id))),
           );
         }
-        setLockedTrips(onlyToday(draft?.lockedTrips));
-        setTrips(onlyToday(draft?.trips));
+        setLockedTrips(uniquifyPlannedTripIds(onlyToday(draft?.lockedTrips)));
+        setTrips(uniquifyPlannedTripIds(onlyToday(draft?.trips)));
         setWarnings(
           Array.isArray(draft?.warnings)
             ? (draft!.warnings as PlannerWarning[])
@@ -860,12 +1014,20 @@ export default function LogisticsPlannerTab({
     if (!orders.length) return;
     const dayOrderIds = new Set(orders.map((o) => String(o.id)));
     setTrips((prev) => {
-      const next = prev.filter((t) => dayOrderIds.has(String(t.orderId)));
-      return next.length === prev.length ? prev : next;
+      const filtered = prev.filter((t) => dayOrderIds.has(String(t.orderId)));
+      if (filtered.length !== prev.length) {
+        return uniquifyPlannedTripIds(filtered);
+      }
+      const next = uniquifyPlannedTripIds(prev);
+      return next === prev ? prev : next;
     });
     setLockedTrips((prev) => {
-      const next = prev.filter((t) => dayOrderIds.has(String(t.orderId)));
-      return next.length === prev.length ? prev : next;
+      const filtered = prev.filter((t) => dayOrderIds.has(String(t.orderId)));
+      if (filtered.length !== prev.length) {
+        return uniquifyPlannedTripIds(filtered);
+      }
+      const next = uniquifyPlannedTripIds(prev);
+      return next === prev ? prev : next;
     });
   }, [orders, dateKey]);
 
@@ -1262,8 +1424,8 @@ export default function LogisticsPlannerTab({
       if (payload.selectedMixerIds.length) {
         setSelectedIds(new Set(payload.selectedMixerIds));
       }
-      setLockedTrips(onlyToday(payload.lockedTrips));
-      setTrips(onlyToday(payload.trips));
+      setLockedTrips(uniquifyPlannedTripIds(onlyToday(payload.lockedTrips)));
+      setTrips(uniquifyPlannedTripIds(onlyToday(payload.trips)));
       setWarnings(payload.warnings || []);
       setManualDone(
         new Set(
@@ -1416,10 +1578,90 @@ export default function LogisticsPlannerTab({
     [canEditPlan, publishSharedPlan],
   );
 
+  // Live-синк матча: orderMixerId + номер миксера + время загрузки из заявки.
+  // Иначе план показывает P330AX, а у оператора на том же слоте уже O264HP «Загрузка».
+  useEffect(() => {
+    if (
+      stickySyncRef.current ||
+      !trips.length ||
+      isOperatorView ||
+      !canMutatePlan
+    ) {
+      return;
+    }
+    let changed = false;
+    const next = trips.map((t) => {
+      const fact = planFactByTripId.get(t.id);
+      if (!fact?.hasMatch || fact.matchedTripId == null) return t;
+      let updated = t;
+      if (t.orderMixerId !== fact.matchedTripId) {
+        changed = true;
+        updated = { ...updated, orderMixerId: fact.matchedTripId };
+      }
+      if (
+        fact.factMixerNumber &&
+        !mixerPlatesEqual(updated.mixerNumber, fact.factMixerNumber)
+      ) {
+        const fleetHit = fleet.find((f) =>
+          mixerPlatesEqual(f.number, fact.factMixerNumber),
+        );
+        changed = true;
+        updated = {
+          ...updated,
+          mixerNumber: fact.factMixerNumber,
+          mixerId: fleetHit?.id ?? updated.mixerId,
+        };
+      }
+      if (
+        !updated.done &&
+        fact.factStatus !== 'Разгружен' &&
+        fact.factPlanTime
+      ) {
+        const factMin = parsePlanHhMm(fact.factPlanTime);
+        const planMin =
+          updated.loadAtMin ?? parsePlanHhMm(String(updated.loadTime));
+        if (
+          factMin != null &&
+          (planMin == null || Math.abs(factMin - planMin) >= 1)
+        ) {
+          changed = true;
+          updated = applyManualLoadShiftToTrip(updated, factMin);
+        }
+      }
+      return updated;
+    });
+    if (!changed) return;
+    stickySyncRef.current = true;
+    suppressPublishRef.current = true;
+    const nextLocked = lockedTrips.map((t) => {
+      const hit = next.find((x) => x.id === t.id);
+      return hit ? { ...hit, locked: true } : t;
+    });
+    setTrips(next);
+    setLockedTrips(nextLocked);
+    persist({ trips: next, lockedTrips: nextLocked });
+    queueMicrotask(() => {
+      stickySyncRef.current = false;
+      suppressPublishRef.current = false;
+      setPublishDirty(true);
+    });
+  }, [
+    planFactByTripId,
+    trips,
+    lockedTrips,
+    fleet,
+    isOperatorView,
+    canMutatePlan,
+    persist,
+  ]);
+
   useEffect(() => {
     return () => {
       if (publishTimerRef.current) clearTimeout(publishTimerRef.current);
       if (autoStageTimerRef.current) clearTimeout(autoStageTimerRef.current);
+      if (autoLoadingStageTimerRef.current) {
+        clearTimeout(autoLoadingStageTimerRef.current);
+      }
     };
   }, []);
 
@@ -1520,8 +1762,10 @@ export default function LogisticsPlannerTab({
         active: calibMeta.active,
       },
     });
-    const stamped = nextTrips.map((t) =>
-      newIds.includes(t.id) ? { ...t, waveId: wave.id } : t,
+    const stamped = uniquifyPlannedTripIds(
+      nextTrips.map((t) =>
+        newIds.includes(t.id) ? { ...t, waveId: wave.id } : t,
+      ),
     );
     const nextWaves =
       mode === 'full_day' ? [wave] : [...wavesRef.current, wave];
@@ -1641,43 +1885,68 @@ export default function LogisticsPlannerTab({
             )
           : 0;
 
-      // Этап: не перетирать done/locked и рейсы с фактом выпуска оператора.
+      // Этап: якорим done + live (Загрузка / уехавшие).
+      // Фантомы «нет в заявке» с фиксом НЕ якорим, если в заявке уже есть live —
+      // иначе они навсегда висят над реальной очередью (11:46 выше «Загрузка»).
       let locked: PlannedTrip[] = [];
       if (mode === 'stage') {
-        const factLocked = trips
-          .filter((t) => {
-            if (t.locked || t.done) return true;
-            const fact = planFactByTripId.get(t.id);
-            if (fact?.factRelease || fact?.noOperatorRecord) return true;
-            if (
-              fact?.matchedTripId != null &&
-              (PLANNER_FACT_SHIPPED_STATUSES as readonly string[]).includes(
-                String(fact.factStatus || ''),
-              )
-            ) {
-              return true;
-            }
-            return dayTrips.some(
-              (d) =>
-                String(d.orderId ?? d.order_id) === String(t.orderId) &&
-                liveTripHasReleaseFact(d, dayProductionLogs) &&
-                (t.pickup ||
-                  t.mixerNumber === PICKUP_MIXER_NUMBER ||
-                  String(d.number || d.mixer_name || '') === t.mixerNumber),
-            );
-          })
-          .map((t) => {
-            const fact = planFactByTripId.get(t.id);
-            return {
-              ...t,
-              locked: true,
-              done: t.done || Boolean(fact?.factRelease),
-              // Чтобы planLogistics не вычел объём повторно после applyLiveFact
-              orderMixerId:
-                t.orderMixerId ?? fact?.matchedTripId ?? null,
-            };
-          });
-        locked = [...lockedTrips, ...factLocked].filter(
+        const liveActiveOrderIds = new Set<string>();
+        for (const t of trips) {
+          if (t.done) continue;
+          const fact = planFactByTripId.get(t.id);
+          const st = String(fact?.factStatus || '');
+          const live =
+            Boolean(fact?.matchedTripId) &&
+            (st === 'Загрузка' ||
+              st === 'Проблема' ||
+              Boolean(fact?.factRelease) ||
+              (PLANNER_FACT_SHIPPED_STATUSES as readonly string[]).includes(st));
+          if (live) liveActiveOrderIds.add(String(t.orderId));
+        }
+
+        const shouldAnchor = (t: PlannedTrip): boolean => {
+          if (t.done) return true;
+          const fact = planFactByTripId.get(t.id);
+          if (fact?.factRelease || fact?.noOperatorRecord) return true;
+          const st = String(fact?.factStatus || '');
+          const isLive =
+            Boolean(fact?.matchedTripId) &&
+            (st === 'Загрузка' ||
+              st === 'Проблема' ||
+              (PLANNER_FACT_SHIPPED_STATUSES as readonly string[]).includes(st));
+          if (isLive) return true;
+          // Есть live в этой заявке — старый фикс без факта отпускаем в хвост.
+          if (
+            liveActiveOrderIds.has(String(t.orderId)) &&
+            (!fact?.hasMatch || !isLive)
+          ) {
+            return false;
+          }
+          if (t.locked) return true;
+          return dayTrips.some(
+            (d) =>
+              String(d.orderId ?? d.order_id) === String(t.orderId) &&
+              liveTripHasReleaseFact(d, dayProductionLogs) &&
+              (t.pickup ||
+                t.mixerNumber === PICKUP_MIXER_NUMBER ||
+                String(d.number || d.mixer_name || '') === t.mixerNumber),
+          );
+        };
+
+        const factLocked = trips.filter(shouldAnchor).map((t) => {
+          const fact = planFactByTripId.get(t.id);
+          return {
+            ...t,
+            locked: true,
+            done: t.done || Boolean(fact?.factRelease),
+            orderMixerId: t.orderMixerId ?? fact?.matchedTripId ?? null,
+          };
+        });
+        // lockedTrips из state тоже чистим от фантомов, если в заявке уже live
+        const lockedFromState = lockedTrips
+          .filter((t) => shouldAnchor(t))
+          .map((t) => ({ ...t, locked: true }));
+        locked = [...lockedFromState, ...factLocked].filter(
           (t, i, arr) => arr.findIndex((x) => x.id === t.id) === i,
         );
       }
@@ -1972,15 +2241,18 @@ export default function LogisticsPlannerTab({
   const reorderTrip = async (
     tripId: string,
     targetOrderId: string,
-    beforeTripId: string | null,
+    /** Drop на рейс: в той же заявке = встать ПОСЛЕ него; в другой = перед ним. null = в конец заявки */
+    dropOnTripId: string | null,
   ) => {
     if (!canMutatePlan) return;
     const target = trips.find((t) => t.id === tripId);
     if (!target) return;
-    if (beforeTripId && beforeTripId === tripId) return;
+    if (dropOnTripId && dropOnTripId === tripId) return;
 
     const sameOrder = String(target.orderId) === String(targetOrderId);
-    if (sameOrder && beforeTripId) {
+    let beforeTripId: string | null = dropOnTripId;
+
+    if (sameOrder && dropOnTripId) {
       const orderTrips = trips
         .filter((t) => String(t.orderId) === String(targetOrderId))
         .sort(
@@ -1989,10 +2261,16 @@ export default function LogisticsPlannerTab({
             String(a.id).localeCompare(String(b.id)),
         );
       const from = orderTrips.findIndex((t) => t.id === tripId);
-      const to = orderTrips.findIndex((t) => t.id === beforeTripId);
-      if (from >= 0 && to >= 0 && (to === from || to === from + 1)) return;
-    }
-    if (sameOrder && !beforeTripId) {
+      const to = orderTrips.findIndex((t) => t.id === dropOnTripId);
+      if (from < 0 || to < 0) return;
+      // Уже сразу после цели — нечего двигать.
+      if (to === from - 1) return;
+      // Drop на строку = встать после неё (раньше «перед соседней» было no-op).
+      beforeTripId = orderTrips[to + 1]?.id ?? null;
+      if (beforeTripId === tripId) {
+        beforeTripId = orderTrips[to + 2]?.id ?? null;
+      }
+    } else if (sameOrder && !dropOnTripId) {
       const orderTrips = trips
         .filter((t) => String(t.orderId) === String(targetOrderId))
         .sort(
@@ -2046,8 +2324,8 @@ export default function LogisticsPlannerTab({
       }
       setScenarios([]);
       setActiveScenarioId(null);
-      const where = beforeTripId
-        ? `перед рейсом в «${orderLabel}»`
+      const where = dropOnTripId
+        ? `после рейса в «${orderLabel}»`
         : `в конец «${orderLabel}»`;
       commitWavePlan('shift', result.trips, locked, result.warnings, {
         newTripIds: [shifted.id, ...result.newTrips.map((t) => t.id)],
@@ -2055,6 +2333,7 @@ export default function LogisticsPlannerTab({
       });
     } finally {
       setBusy(false);
+      dragTripIdRef.current = null;
       setDragTripId(null);
       setDragOverTripId(null);
       setDragOverOrderId(null);
@@ -2062,6 +2341,7 @@ export default function LogisticsPlannerTab({
   };
 
   const clearTripDrag = () => {
+    dragTripIdRef.current = null;
     setDragTripId(null);
     setDragOverTripId(null);
     setDragOverOrderId(null);
@@ -2077,8 +2357,38 @@ export default function LogisticsPlannerTab({
     });
   };
 
+  /** Снять фикс с одного рейса — снова участвует в этапе/хвосте. */
+  const unlockTrip = (tripId: string) => {
+    if (!canMutatePlan || !tripId) return;
+    const nextTrips = trips.map((t) =>
+      t.id === tripId ? { ...t, locked: false } : t,
+    );
+    const nextLocked = lockedTrips.filter((t) => t.id !== tripId);
+    setTrips(nextTrips);
+    setLockedTrips(nextLocked);
+    persist({ trips: nextTrips, lockedTrips: nextLocked });
+    schedulePublish({
+      draft: {
+        selectedMixerIds: [...selectedIds],
+        lockedTrips: nextLocked,
+        manualDoneOrderIds: [...manualDone],
+        trips: nextTrips,
+        allowNight,
+        useTraffic,
+        orderShifts,
+        warnings: warningsRef.current,
+        waves: wavesRef.current,
+        mixerVolumeOverrides: mixerVolumeOverridesRef.current,
+      },
+    });
+  };
+
   const toggleOrderDone = (orderId: string) => {
     if (!canMutatePlan) return;
+    const order = plannerOrders.find((o) => String(o.id) === String(orderId));
+    const dbSt = String(order?.status || '').toLowerCase();
+    // Выполнена / отменена — финальные статусы заявки, не «ручная отработана».
+    if (dbSt === 'completed' || dbSt === 'cancelled') return;
     setManualDone((prev) => {
       const next = new Set(prev);
       if (next.has(orderId)) next.delete(orderId);
@@ -2716,22 +3026,83 @@ export default function LogisticsPlannerTab({
 
   const tripsByOrder = useMemo(() => {
     const map = new Map<string, PlannedTrip[]>();
-    for (const t of trips) {
+    // Защита от уже сохранённых дублей id (React same key на списке рейсов).
+    const unique = uniquifyPlannedTripIds(trips);
+    for (const t of unique) {
       const key = String(t.orderId);
       const list = map.get(key) || [];
       list.push(t);
       map.set(key, list);
     }
+    // Live из заявки, которых нет в плане (ручная постановка диспетчера).
+    for (const o of plannerOrders) {
+      const oid = String(o.id);
+      const planned = map.get(oid) || [];
+      const orphans = orphanLiveTripsAsPlanned(o, dayTrips, planned);
+      if (orphans.length === 0) continue;
+      map.set(oid, uniquifyPlannedTripIds([...planned, ...orphans]));
+    }
+    /** 0 разгружен → 1 в работе (Загрузка/В пути/…) → 2 фантом «нет в заявке».
+     *  Нельзя смотреть на factRelease (выпуск с БСУ) — он есть уже у «В пути». */
+    const liveRank = (t: PlannedTrip): number => {
+      if (t.done) return 0;
+      const f = planFactByTripId.get(t.id);
+      // orphan со sticky orderMixerId может ещё не быть в map — смотрим dayTrips
+      if (!f?.hasMatch && String(t.id).startsWith('live-orphan-')) {
+        const omId = String(t.orderMixerId ?? '');
+        const live = dayTrips.find((d) => String(d.id) === omId);
+        const st = String(live?.status || '');
+        if (st === 'Разгружен' || st === 'Возврат') return 0;
+        if (
+          st === 'Загрузка' ||
+          st === 'В пути' ||
+          st === 'На объекте' ||
+          st === 'Проблема'
+        ) {
+          return 1;
+        }
+        return 1;
+      }
+      if (!f?.hasMatch) return 2;
+      const st = String(f.factStatus || '');
+      if (st === 'Разгружен' || st === 'Возврат') return 0;
+      if (
+        st === 'Загрузка' ||
+        st === 'В пути' ||
+        st === 'На объекте' ||
+        st === 'Проблема'
+      ) {
+        return 1;
+      }
+      return 2;
+    };
     for (const list of map.values()) {
       list.sort((a, b) => {
-        const ka = a.loadAtMin ?? 0;
-        const kb = b.loadAtMin ?? 0;
-        if (ka || kb) return ka - kb;
-        return String(a.loadTime).localeCompare(String(b.loadTime));
+        const ra = liveRank(a);
+        const rb = liveRank(b);
+        if (ra !== rb) return ra - rb;
+        const fa = planFactByTripId.get(a.id);
+        const fb = planFactByTripId.get(b.id);
+        const ka =
+          (ra === 1 && fa?.factPlanTime
+            ? parsePlanHhMm(fa.factPlanTime)
+            : null) ??
+          a.loadAtMin ??
+          parsePlanHhMm(String(a.loadTime)) ??
+          0;
+        const kb =
+          (rb === 1 && fb?.factPlanTime
+            ? parsePlanHhMm(fb.factPlanTime)
+            : null) ??
+          b.loadAtMin ??
+          parsePlanHhMm(String(b.loadTime)) ??
+          0;
+        if (ka !== kb) return ka - kb;
+        return String(a.id).localeCompare(String(b.id));
       });
     }
     return map;
-  }, [trips]);
+  }, [trips, planFactByTripId, plannerOrders, dayTrips]);
 
   if (isOperatorView) {
     return (
@@ -3113,14 +3484,18 @@ export default function LogisticsPlannerTab({
           }}
         >
           <DarkHoverTip
-            tip="Если включено — во списке заявок появляется второй переключатель (фиолетовый): применить план только к отмеченным. Иначе — ко всем заявкам с рейсами."
+            tip="Выкл — «Применить в заявки» пишет во все заявки с рейсами. Вкл — только в отмеченные фиолетовым переключателем в списке."
             maxWidth={340}
           >
             <PlannerSwitch
               checked={applyOnlySelected}
               disabled={!canMutatePlan}
               accent="violet"
-              label="Только выбранные заявки"
+              label={
+                applyOnlySelected
+                  ? 'Только выбранные заявки'
+                  : 'Применяется ко всем заявкам'
+              }
               onChange={setApplyOnlySelected}
               suffix={
                 applyOnlySelected && applyableOrderIds.size > 0 ? (
@@ -3212,8 +3587,6 @@ export default function LogisticsPlannerTab({
           dateKey={toApiDateKey(dateKey)}
           uiScale={uiScale}
           canEdit={canMutatePlan}
-          recalculateBusy={busy}
-          onRecalculate={() => void runPlan('full_day')}
         />
 
         {(sharedMeta?.updatedByName ||
@@ -3380,10 +3753,17 @@ export default function LogisticsPlannerTab({
               const canApply = applyableOrderIds.has(oid);
               const selectedForApply = applyOrderIds.has(oid);
               return (
-                <div key={oid} style={{ display: 'flex', flexDirection: 'column', gap: sp(5) }}>
+                <div key={oid} style={{ display: 'flex', flexDirection: 'column', gap: sp(2) }}>
                   <div
                     onDragOver={(e) => {
-                      if (!canMutatePlan || !dragTripId || pickup || st === 'done') return;
+                      if (
+                        !canMutatePlan ||
+                        !dragTripIdRef.current ||
+                        pickup ||
+                        st === 'done'
+                      ) {
+                        return;
+                      }
                       e.preventDefault();
                       e.dataTransfer.dropEffect = 'move';
                       setDragOverOrderId(oid);
@@ -3391,9 +3771,11 @@ export default function LogisticsPlannerTab({
                     }}
                     onDrop={(e) => {
                       e.preventDefault();
-                      if (!canMutatePlan || !dragTripId || pickup || st === 'done') return;
-                      const id = e.dataTransfer.getData('text/plain') || dragTripId;
-                      void reorderTrip(id, oid, null);
+                      const moving =
+                        e.dataTransfer.getData('text/plain') ||
+                        dragTripIdRef.current;
+                      if (!canMutatePlan || !moving || pickup || st === 'done') return;
+                      void reorderTrip(moving, oid, null);
                     }}
                     onDragLeave={() => {
                       setDragOverOrderId((prev) => (prev === oid ? null : prev));
@@ -3437,14 +3819,57 @@ export default function LogisticsPlannerTab({
                           : undefined,
                     }}
                   >
-                    <PlannerSwitch
-                      size="sm"
-                      accent="emerald"
-                      checked={manualDone.has(oid) || st === 'done'}
-                      disabled={!canMutatePlan}
-                      title="Пометить отработанной"
-                      onChange={() => toggleOrderDone(oid)}
-                    />
+                    {(() => {
+                      const dbSt = String(o.status || '').toLowerCase();
+                      if (dbSt === 'completed' || dbSt === 'cancelled') {
+                        return (
+                          <DarkHoverTip
+                            tip={
+                              dbSt === 'cancelled'
+                                ? 'Заявка отменена — статус здесь не меняется'
+                                : 'Заявка выполнена — статус здесь не меняется'
+                            }
+                            maxWidth={280}
+                          >
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                height: sp(18),
+                                padding: `0 ${sp(8)}px`,
+                                borderRadius: 999,
+                                fontSize: fs(11),
+                                fontWeight: 700,
+                                whiteSpace: 'nowrap',
+                                color: dbSt === 'cancelled' ? '#FECACA' : '#A7F3D0',
+                                background:
+                                  dbSt === 'cancelled'
+                                    ? 'rgba(248,113,113,0.2)'
+                                    : 'rgba(16,185,129,0.2)',
+                                border:
+                                  dbSt === 'cancelled'
+                                    ? '1px solid rgba(248,113,113,0.45)'
+                                    : '1px solid rgba(52,211,153,0.4)',
+                                flexShrink: 0,
+                              }}
+                            >
+                              {dbSt === 'cancelled' ? 'Отменена' : 'Выполнена'}
+                            </span>
+                          </DarkHoverTip>
+                        );
+                      }
+                      return (
+                        <PlannerSwitch
+                          size="sm"
+                          accent="emerald"
+                          checked={manualDone.has(oid) || st === 'done'}
+                          disabled={!canMutatePlan}
+                          title="Пометить отработанной"
+                          onChange={() => toggleOrderDone(oid)}
+                        />
+                      );
+                    })()}
                     {applyOnlySelected && canApply && canEditPlan ? (
                       <PlannerSwitch
                         size="sm"
@@ -3515,6 +3940,7 @@ export default function LogisticsPlannerTab({
                       waves.some(
                         (w) => w.id === activeWaveId && w.tripIds.includes(t.id),
                       );
+                    const isLiveOrphan = String(t.id).startsWith('live-orphan-');
                     return (
                       <div
                         key={t.id}
@@ -3532,6 +3958,7 @@ export default function LogisticsPlannerTab({
                               factRelease: null,
                               factPlanTime: null,
                               factVolume: null,
+                              factMixerNumber: null,
                               deltaLoadMin: null,
                               deltaReleaseMin: null,
                               noOperatorRecord: false,
@@ -3541,25 +3968,30 @@ export default function LogisticsPlannerTab({
                           fs={fs}
                           sp={sp}
                           busy={busy || applying}
-                          canShiftPlan={canMutatePlan}
+                          canShiftPlan={canMutatePlan && !isLiveOrphan}
                           onShiftLoadTime={(id, hhmm) => void shiftTripLoad(id, hhmm)}
                           onTripDelayMin={(id, mins) => void applyTripDelay(id, mins)}
                           onPlanVolumeChange={(id, vol) => void applyTripPlanVolume(id, vol)}
-                          canDrag={canMutatePlan}
+                          onUnlockTrip={
+                            canMutatePlan && !isLiveOrphan ? unlockTrip : undefined
+                          }
+                          canDrag={canMutatePlan && !isLiveOrphan}
                           dragOver={dragOverTripId === t.id}
                           waveHighlight={waveHighlight}
                           onDragStartTrip={(id) => {
+                            dragTripIdRef.current = id;
                             setDragTripId(id);
                             setDragOverTripId(null);
                             setDragOverOrderId(null);
                           }}
                           onDragOverTrip={(id) => {
-                            if (!dragTripId || id === dragTripId) return;
+                            const moving = dragTripIdRef.current;
+                            if (!moving || id === moving) return;
                             setDragOverTripId(id);
                             setDragOverOrderId(null);
                           }}
                           onDropOnTrip={(id) => {
-                            const moving = dragTripId;
+                            const moving = dragTripIdRef.current;
                             if (!moving || moving === id) {
                               clearTripDrag();
                               return;
@@ -3887,10 +4319,17 @@ export default function LogisticsPlannerTab({
               const canApply = applyableOrderIds.has(oid);
               const selectedForApply = applyOrderIds.has(oid);
               return (
-                <div key={oid} style={{ display: 'flex', flexDirection: 'column', gap: sp(5) }}>
+                <div key={oid} style={{ display: 'flex', flexDirection: 'column', gap: sp(2) }}>
                   <div
                     onDragOver={(e) => {
-                      if (!canMutatePlan || !dragTripId || pickup || st === 'done') return;
+                      if (
+                        !canMutatePlan ||
+                        !dragTripIdRef.current ||
+                        pickup ||
+                        st === 'done'
+                      ) {
+                        return;
+                      }
                       e.preventDefault();
                       e.dataTransfer.dropEffect = 'move';
                       setDragOverOrderId(oid);
@@ -3898,9 +4337,11 @@ export default function LogisticsPlannerTab({
                     }}
                     onDrop={(e) => {
                       e.preventDefault();
-                      if (!canMutatePlan || !dragTripId || pickup || st === 'done') return;
-                      const id = e.dataTransfer.getData('text/plain') || dragTripId;
-                      void reorderTrip(id, oid, null);
+                      const moving =
+                        e.dataTransfer.getData('text/plain') ||
+                        dragTripIdRef.current;
+                      if (!canMutatePlan || !moving || pickup || st === 'done') return;
+                      void reorderTrip(moving, oid, null);
                     }}
                     onDragLeave={() => {
                       setDragOverOrderId((prev) => (prev === oid ? null : prev));
@@ -3944,14 +4385,57 @@ export default function LogisticsPlannerTab({
                           : undefined,
                     }}
                   >
-                    <PlannerSwitch
-                      size="sm"
-                      accent="emerald"
-                      checked={manualDone.has(oid) || st === 'done'}
-                      disabled={!canMutatePlan}
-                      title="Пометить отработанной"
-                      onChange={() => toggleOrderDone(oid)}
-                    />
+                    {(() => {
+                      const dbSt = String(o.status || '').toLowerCase();
+                      if (dbSt === 'completed' || dbSt === 'cancelled') {
+                        return (
+                          <DarkHoverTip
+                            tip={
+                              dbSt === 'cancelled'
+                                ? 'Заявка отменена — статус здесь не меняется'
+                                : 'Заявка выполнена — статус здесь не меняется'
+                            }
+                            maxWidth={280}
+                          >
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                height: sp(18),
+                                padding: `0 ${sp(8)}px`,
+                                borderRadius: 999,
+                                fontSize: fs(11),
+                                fontWeight: 700,
+                                whiteSpace: 'nowrap',
+                                color: dbSt === 'cancelled' ? '#FECACA' : '#A7F3D0',
+                                background:
+                                  dbSt === 'cancelled'
+                                    ? 'rgba(248,113,113,0.2)'
+                                    : 'rgba(16,185,129,0.2)',
+                                border:
+                                  dbSt === 'cancelled'
+                                    ? '1px solid rgba(248,113,113,0.45)'
+                                    : '1px solid rgba(52,211,153,0.4)',
+                                flexShrink: 0,
+                              }}
+                            >
+                              {dbSt === 'cancelled' ? 'Отменена' : 'Выполнена'}
+                            </span>
+                          </DarkHoverTip>
+                        );
+                      }
+                      return (
+                        <PlannerSwitch
+                          size="sm"
+                          accent="emerald"
+                          checked={manualDone.has(oid) || st === 'done'}
+                          disabled={!canMutatePlan}
+                          title="Пометить отработанной"
+                          onChange={() => toggleOrderDone(oid)}
+                        />
+                      );
+                    })()}
                     {applyOnlySelected && canApply && canEditPlan ? (
                       <PlannerSwitch
                         size="sm"
@@ -4022,6 +4506,7 @@ export default function LogisticsPlannerTab({
                       waves.some(
                         (w) => w.id === activeWaveId && w.tripIds.includes(t.id),
                       );
+                    const isLiveOrphan = String(t.id).startsWith('live-orphan-');
                     return (
                       <div
                         key={t.id}
@@ -4039,6 +4524,7 @@ export default function LogisticsPlannerTab({
                               factRelease: null,
                               factPlanTime: null,
                               factVolume: null,
+                              factMixerNumber: null,
                               deltaLoadMin: null,
                               deltaReleaseMin: null,
                               noOperatorRecord: false,
@@ -4048,25 +4534,30 @@ export default function LogisticsPlannerTab({
                           fs={fs}
                           sp={sp}
                           busy={busy || applying}
-                          canShiftPlan={canMutatePlan}
+                          canShiftPlan={canMutatePlan && !isLiveOrphan}
                           onShiftLoadTime={(id, hhmm) => void shiftTripLoad(id, hhmm)}
                           onTripDelayMin={(id, mins) => void applyTripDelay(id, mins)}
                           onPlanVolumeChange={(id, vol) => void applyTripPlanVolume(id, vol)}
-                          canDrag={canMutatePlan}
+                          onUnlockTrip={
+                            canMutatePlan && !isLiveOrphan ? unlockTrip : undefined
+                          }
+                          canDrag={canMutatePlan && !isLiveOrphan}
                           dragOver={dragOverTripId === t.id}
                           waveHighlight={waveHighlight}
                           onDragStartTrip={(id) => {
+                            dragTripIdRef.current = id;
                             setDragTripId(id);
                             setDragOverTripId(null);
                             setDragOverOrderId(null);
                           }}
                           onDragOverTrip={(id) => {
-                            if (!dragTripId || id === dragTripId) return;
+                            const moving = dragTripIdRef.current;
+                            if (!moving || id === moving) return;
                             setDragOverTripId(id);
                             setDragOverOrderId(null);
                           }}
                           onDropOnTrip={(id) => {
-                            const moving = dragTripId;
+                            const moving = dragTripIdRef.current;
                             if (!moving || moving === id) {
                               clearTripDrag();
                               return;
@@ -4369,14 +4860,18 @@ export default function LogisticsPlannerTab({
           }}
         >
           <DarkHoverTip
-            tip="Если включено — во списке заявок появляется второй переключатель (фиолетовый): применить план только к отмеченным. Иначе — ко всем заявкам с рейсами."
+            tip="Выкл — «Применить в заявки» пишет во все заявки с рейсами. Вкл — только в отмеченные фиолетовым переключателем в списке."
             maxWidth={340}
           >
             <PlannerSwitch
               checked={applyOnlySelected}
               disabled={!canMutatePlan}
               accent="violet"
-              label="Только выбранные заявки"
+              label={
+                applyOnlySelected
+                  ? 'Только выбранные заявки'
+                  : 'Применяется ко всем заявкам'
+              }
               onChange={setApplyOnlySelected}
               suffix={
                 applyOnlySelected && applyableOrderIds.size > 0 ? (
