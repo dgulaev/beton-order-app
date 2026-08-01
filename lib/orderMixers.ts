@@ -173,6 +173,26 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
     effectiveStatus = 'Разгружен';
   }
 
+  // Идемпотентность: повтор «В пути»/тот же статус (двойной клик, auto-heal,
+  // retry после таймаута) — успех, не 409 «конфликт с диспетчером».
+  if (effectiveStatus && oldStatus === effectiveStatus) {
+    return {
+      httpStatus: 200,
+      body: {
+        success: true,
+        message: `Статус уже «${effectiveStatus}»`,
+        data: {
+          mixerId: id,
+          status: effectiveStatus,
+          orderId,
+          onSiteAt: mixer.on_site_at ?? null,
+          unloadedAt: mixer.unloaded_at ?? null,
+          downtimeMinutes: mixer.downtime_minutes ?? null,
+        },
+      },
+    };
+  }
+
   if (effectiveStatus && FINAL_ORDER_STATUSES.includes(orderStatus)) {
     return {
       httpStatus: 400,
@@ -361,15 +381,37 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   if (updateError) throw updateError;
 
   if (!updatedMixer) {
-    const { data: freshMixer } = await supabase.from('order_mixers').select('status').eq('id', id).maybeSingle();
+    const { data: freshMixer } = await supabase
+      .from('order_mixers')
+      .select('status, on_site_at, unloaded_at, downtime_minutes')
+      .eq('id', id)
+      .maybeSingle();
+    const freshStatus = freshMixer?.status || '—';
+    // Параллельный запрос (оператор + auto-heal / retry) уже поставил нужный
+    // статус — для вызывающего это успех, не конфликт с диспетчером.
+    if (effectiveStatus && freshStatus === effectiveStatus) {
+      return {
+        httpStatus: 200,
+        body: {
+          success: true,
+          message: `Статус уже «${effectiveStatus}»`,
+          data: {
+            mixerId: id,
+            status: effectiveStatus,
+            orderId,
+            onSiteAt: freshMixer?.on_site_at ?? null,
+            unloadedAt: freshMixer?.unloaded_at ?? null,
+            downtimeMinutes: freshMixer?.downtime_minutes ?? null,
+          },
+        },
+      };
+    }
     return {
       httpStatus: 409,
       body: {
         success: false,
         conflict: true,
-        message: `Не удалось обновить статус — миксер уже изменён кем-то другим (сейчас: "${
-          freshMixer?.status || '—'
-        }"). Обновите страницу и попробуйте снова.`,
+        message: `Не удалось обновить статус — миксер уже изменён кем-то другим (сейчас: "${freshStatus}"). Обновите страницу и попробуйте снова.`,
       },
     };
   }

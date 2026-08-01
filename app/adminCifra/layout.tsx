@@ -642,7 +642,12 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     const closeNotification = () => {
       notif.remove();
       deletePersistedNotif(id);
-      setNewOrdersCount(prev => Math.max(0, prev - 1));
+      // Счётчики сайдбара — раздельно: заявки / лиды. Комментарии бейдж не крутят.
+      if (isLead) {
+        setNewLeadsCount((prev) => Math.max(0, prev - 1));
+      } else if (!isComment) {
+        setNewOrdersCount((prev) => Math.max(0, prev - 1));
+      }
     };
 
     if (closeBtn) {
@@ -659,7 +664,14 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       }
     });
 
-    getNotificationContainer().prepend(notif);
+    const container = getNotificationContainer();
+    // Уже висит такой же тост (reconnect / двойной restore) — не дублируем
+    const alreadyShown = Array.from(container.children).some(
+      (el) => (el as HTMLElement).dataset.notifId === id,
+    );
+    if (alreadyShown) return;
+    // Новые — всегда в начало стека (верх экрана). Старые сдвигаются вниз.
+    container.insertBefore(notif, container.firstChild);
     // После вставки в DOM измеряем реальную ширину и подгоняем шрифт
     requestAnimationFrame(fitToastText);
   };
@@ -673,7 +685,17 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     if (saved.length === 0) return;
     const timer = setTimeout(() => {
       if (systemSettingsRef.current.notifications.muteToasts) return;
-      saved.forEach(n => {
+
+      // createToast вставляет через insertBefore(firstChild) — сверху оказывается
+      // ПОСЛЕДНИЙ вставленный. Поэтому восстанавливаем от старого к новому:
+      // иначе стек переворачивался (новый оказывался ниже старого).
+      const chronological = [...saved].sort(
+        (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
+      );
+
+      let orderCount = 0;
+      let leadCount = 0;
+      chronological.forEach((n) => {
         const tone =
           n.tone ||
           (n.id.startsWith('lead-') || n.id.startsWith('demand-')
@@ -689,8 +711,11 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
           n.href,
           tone,
         );
+        if (tone === 'lead') leadCount += 1;
+        else if (tone === 'order') orderCount += 1;
       });
-      setNewOrdersCount(prev => prev + saved.length);
+      if (orderCount) setNewOrdersCount((prev) => prev + orderCount);
+      if (leadCount) setNewLeadsCount((prev) => prev + leadCount);
     }, 300);
     return () => clearTimeout(timer);
   }, [settingsHydrated]);

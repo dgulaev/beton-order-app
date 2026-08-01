@@ -40,6 +40,7 @@ import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatRuDateWithWeekday, formatTimeHHMM, pluralWord } from '@/lib/ruLocale';
 import { todayMoscowYmd } from '@/lib/leads';
 import PageHelpButton from '@/app/adminCifra/components/help/PageHelpButton';
+import QuestionableToggle from '@/app/adminCifra/components/QuestionableToggle';
 import OrderCommentsPanel, { CommentUnreadBadge, orderModalTabStyle } from '@/app/adminCifra/components/OrderCommentsPanel';
 import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts';
 import FleetOpsTabs, { OPS_TABS } from '@/app/adminCifra/components/FleetOpsTabs';
@@ -2849,78 +2850,54 @@ ${order.customer_type?.includes('Юридическое')
               {selectedOrder.status === 'cancelled' && '🔴 Отменена'}
             </div>
 
-            {/* Чекбокс "Под вопросом" — тот же элегантный стиль, лёгкая подсветка фона когда отмечен.
-                Без htmlFor: input внутри label — htmlFor давал двойную активацию в части браузеров. */}
+            {/* Переключатель «Под вопросом» — явный вкл/выкл, без мелкого checkbox */}
             {hasManagerPermissions(currentRole) && (
-              <label
-                style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '6px', 
-                  padding: '8px 14px', 
-                  borderRadius: '10px',
-                  border: '1px solid rgba(239, 68, 68, 0.3)',
-                  background: selectedOrder?.is_questionable ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
-                  fontSize: '13px',
-                  cursor: questionableSaving ? 'wait' : 'pointer',
-                  userSelect: 'none',
-                  opacity: questionableSaving ? 0.7 : 1,
-                }}
-              >
-                <input 
-                  type="checkbox" 
-                  checked={!!selectedOrder?.is_questionable}
-                  disabled={questionableSaving}
-                  onChange={async (e) => {
-                    if (questionableSavingRef.current || !selectedOrder?.id) return;
-                    questionableSavingRef.current = true;
-                    setQuestionableSaving(true);
+              <QuestionableToggle
+                checked={!!selectedOrder?.is_questionable}
+                saving={questionableSaving}
+                onChange={async (newValue) => {
+                  if (questionableSavingRef.current || !selectedOrder?.id) return;
+                  questionableSavingRef.current = true;
+                  setQuestionableSaving(true);
 
-                    const newValue = e.target.checked;
-                    const prevValue = !!selectedOrder.is_questionable;
+                  const prevValue = !!selectedOrder.is_questionable;
 
-                    // Оптимистично сразу — иначе controlled checkbox «отскакивает» и ловит повторные onChange
-                    setSelectedOrder((prev: any) => ({ ...prev, is_questionable: newValue }));
-                    setAllOrders((prev: any[]) => prev.map((o: any) =>
-                      o.id === selectedOrder.id ? { ...o, is_questionable: newValue } : o
-                    ));
+                  setSelectedOrder((prev: any) => ({ ...prev, is_questionable: newValue }));
+                  setAllOrders((prev: any[]) => prev.map((o: any) =>
+                    o.id === selectedOrder.id ? { ...o, is_questionable: newValue } : o
+                  ));
 
-                    try {
-                      const res = await fetch('/api/adminCifra/orders/update', {
-                        method: 'PUT',
-                        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
-                        body: JSON.stringify({
-                          id: selectedOrder.id,
-                          is_questionable: newValue,
-                          userRole: currentRole || 'admin',
-                          userName: userFullName || 'Сотрудник',
-                        })
-                      });
+                  try {
+                    const res = await fetch('/api/adminCifra/orders/update', {
+                      method: 'PUT',
+                      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+                      body: JSON.stringify({
+                        id: selectedOrder.id,
+                        is_questionable: newValue,
+                        userRole: currentRole || 'admin',
+                        userName: userFullName || 'Сотрудник',
+                      })
+                    });
 
-                      if (!res.ok) {
-                        setSelectedOrder((prev: any) => ({ ...prev, is_questionable: prevValue }));
-                        setAllOrders((prev: any[]) => prev.map((o: any) =>
-                          o.id === selectedOrder.id ? { ...o, is_questionable: prevValue } : o
-                        ));
-                      } else if (typeof loadOrderHistory === 'function') {
-                        loadOrderHistory(selectedOrder.id);
-                      }
-                    } catch {
+                    if (!res.ok) {
                       setSelectedOrder((prev: any) => ({ ...prev, is_questionable: prevValue }));
                       setAllOrders((prev: any[]) => prev.map((o: any) =>
                         o.id === selectedOrder.id ? { ...o, is_questionable: prevValue } : o
                       ));
-                    } finally {
-                      questionableSavingRef.current = false;
-                      setQuestionableSaving(false);
+                    } else if (typeof loadOrderHistory === 'function') {
+                      loadOrderHistory(selectedOrder.id);
                     }
-                  }}
-                  style={{ width: '14px', height: '14px', accentColor: '#EF4444' }}
-                />
-                <span style={{ color: '#F87171', fontWeight: '600' }}>
-                  Под вопросом
-                </span>
-              </label>
+                  } catch {
+                    setSelectedOrder((prev: any) => ({ ...prev, is_questionable: prevValue }));
+                    setAllOrders((prev: any[]) => prev.map((o: any) =>
+                      o.id === selectedOrder.id ? { ...o, is_questionable: prevValue } : o
+                    ));
+                  } finally {
+                    questionableSavingRef.current = false;
+                    setQuestionableSaving(false);
+                  }
+                }}
+              />
             )}
           </div>
           

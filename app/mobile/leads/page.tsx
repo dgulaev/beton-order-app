@@ -1,8 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import Link from 'next/link';
-import { ExternalLink, Phone, Plus, Radar, RefreshCw, X } from 'lucide-react';
+import { ChevronRight, ExternalLink, Phone, Plus, Radar, RefreshCw, X } from 'lucide-react';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { canProcessTenders } from '@/lib/demandProcessAccess';
 import { canActOnAssignedLeadWork, parseIdList } from '@/lib/leadAssigneeIds';
@@ -75,41 +83,62 @@ const selectStyle: CSSProperties = {
   fontSize: 13,
 };
 
-const btnBase: CSSProperties = {
-  flex: '1 1 0',
+/** Основная кнопка в сетке 2 колонки — не сжимается до каши. */
+const btnPrimary: CSSProperties = {
+  width: '100%',
   minWidth: 0,
-  padding: '10px 4px',
-  borderRadius: 8,
-  fontWeight: 600,
-  fontSize: 10,
-  lineHeight: 1.15,
+  padding: '11px 10px',
+  borderRadius: 10,
+  fontWeight: 700,
+  fontSize: 13,
+  lineHeight: 1.2,
   textAlign: 'center',
   boxSizing: 'border-box',
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  gap: 3,
+  gap: 5,
   textDecoration: 'none',
   border: 'none',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
 };
 
-const btnAmber: CSSProperties = { ...btnBase, background: '#CA8A04', color: '#1F2937' };
-const btnProcess: CSSProperties = { ...btnBase, background: '#D97706', color: '#FFF7ED' };
-const btnBlue: CSSProperties = { ...btnBase, background: '#2563EB', color: '#fff' };
-const btnDanger: CSSProperties = {
-  ...btnBase,
+/** Вторичные действия — чипы в ряд с переносом. */
+const btnChip: CSSProperties = {
+  flex: '0 0 auto',
+  padding: '8px 11px',
+  borderRadius: 9,
+  fontWeight: 600,
+  fontSize: 12,
+  lineHeight: 1.2,
+  textAlign: 'center',
+  boxSizing: 'border-box',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 4,
+  textDecoration: 'none',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
   background: 'transparent',
+  border: '1px solid #334155',
+  color: '#CBD5E1',
+};
+
+const btnAmber: CSSProperties = { ...btnPrimary, background: '#CA8A04', color: '#1F2937' };
+const btnProcess: CSSProperties = {
+  ...btnPrimary,
+  background: 'linear-gradient(135deg, #B45309, #D97706)',
+  color: '#FFF7ED',
+};
+const btnBlue: CSSProperties = { ...btnPrimary, background: '#2563EB', color: '#fff' };
+const btnDangerChip: CSSProperties = {
+  ...btnChip,
   border: '1px solid #7F1D1D',
   color: '#FCA5A5',
 };
-const btnGhost: CSSProperties = {
-  ...btnBase,
-  background: 'transparent',
-  border: '1px solid #334155',
-  color: '#94A3B8',
-};
+const btnGhostChip: CSSProperties = { ...btnChip };
 
 const EMPTY_FORM = {
   name: '',
@@ -137,12 +166,23 @@ export default function MobileLeadsPage() {
   const [createForm, setCreateForm] = useState(EMPTY_FORM);
   const [creating, setCreating] = useState(false);
   const [processLead, setProcessLead] = useState<Lead | null>(null);
+  const [detailLeadId, setDetailLeadId] = useState<number | null>(null);
   const [sendingWorkId, setSendingWorkId] = useState<number | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>('new');
   const [mineOnly, setMineOnly] = useState(() => !allowTenderProcess && !isAdmin);
   const [shipmentsByLead, setShipmentsByLead] = useState<Record<number, LeadShipmentsInfo>>({});
   const loadSeqRef = useRef(0);
+
+  const detailLead = useMemo(
+    () =>
+      detailLeadId != null ? leads.find((l) => l.id === detailLeadId) ?? null : null,
+    [detailLeadId, leads],
+  );
+
+  useEffect(() => {
+    if (detailLeadId != null && !detailLead) setDetailLeadId(null);
+  }, [detailLeadId, detailLead]);
 
   useEffect(() => {
     const raw = localStorage.getItem('userId');
@@ -297,6 +337,7 @@ export default function MobileLeadsPage() {
     setLeads((prev) => prev.filter((l) => l.id !== lead.id));
     if (activeLeadId === lead.id) setActiveLeadId(null);
     if (processLead?.id === lead.id) setProcessLead(null);
+    if (detailLeadId === lead.id) setDetailLeadId(null);
   };
 
   const openConvert = async (lead: Lead) => {
@@ -420,6 +461,222 @@ export default function MobileLeadsPage() {
     }
   };
 
+  const buildLeadActions = (lead: Lead) => {
+    const payload =
+      lead.raw_payload && typeof lead.raw_payload === 'object'
+        ? (lead.raw_payload as Record<string, unknown>)
+        : null;
+    const etpUrl = String(payload?.etp_url ?? lead.chat_url ?? '').trim();
+    const docsUrl = String(payload?.docs_url ?? '').trim();
+    const tenderLike = !isLeadWorkOpenToAll(lead.source);
+    const canWork =
+      allowTenderProcess || canActOnAssignedLeadWork(lead, currentUserId);
+    const canReject =
+      allowTenderProcess || canManagerRejectOrSpamLead(lead.source);
+    const canCreateOrder =
+      canWork &&
+      lead.status !== 'spam' &&
+      lead.status !== 'rejected' &&
+      lead.status !== 'fulfilled';
+    const canMarkFulfilled =
+      canWork &&
+      (lead.status === 'converted' ||
+        (lead.status === 'in_progress' && lead.order_id != null));
+
+    const primaryActions: ReactNode[] = [];
+    const secondaryActions: ReactNode[] = [];
+
+    if (allowTenderProcess && lead.status !== 'fulfilled') {
+      primaryActions.push(
+        <button
+          key="process"
+          type="button"
+          onClick={() => setProcessLead(lead)}
+          style={btnProcess}
+        >
+          Обработать
+        </button>,
+      );
+    }
+    if (allowTenderProcess && tenderLike && lead.status === 'new') {
+      primaryActions.push(
+        <button
+          key="send"
+          type="button"
+          disabled={sendingWorkId === lead.id}
+          onClick={() => void sendLeadToWork(lead)}
+          style={{
+            ...btnAmber,
+            opacity: sendingWorkId === lead.id ? 0.7 : 1,
+          }}
+        >
+          {sendingWorkId === lead.id ? '…' : 'В работу'}
+        </button>,
+      );
+    }
+    if (
+      lead.status === 'new' &&
+      !(allowTenderProcess && tenderLike) &&
+      canWork
+    ) {
+      primaryActions.push(
+        <button
+          key="take"
+          type="button"
+          onClick={() => void patchStatus(lead.id, 'in_progress')}
+          style={btnAmber}
+        >
+          В работу
+        </button>,
+      );
+    }
+    if (canCreateOrder) {
+      primaryActions.push(
+        <button
+          key="order"
+          type="button"
+          onClick={() => void openConvert(lead)}
+          style={btnBlue}
+        >
+          {lead.status === 'converted' || lead.order_id != null
+            ? 'Ещё заявка'
+            : 'Создать заказ'}
+        </button>,
+      );
+    }
+    if (canMarkFulfilled) {
+      primaryActions.push(
+        <button
+          key="done"
+          type="button"
+          onClick={() => void patchStatus(lead.id, 'fulfilled')}
+          style={{ ...btnPrimary, background: '#16A34A', color: '#fff' }}
+        >
+          Исполнен
+        </button>,
+      );
+    }
+    if (allowTenderProcess && (lead.status === 'rejected' || lead.status === 'spam')) {
+      primaryActions.push(
+        <button
+          key="to-new"
+          type="button"
+          onClick={() => void patchStatus(lead.id, 'new')}
+          style={{
+            ...btnPrimary,
+            background: 'rgba(234,179,8,0.25)',
+            color: '#FEF08A',
+            border: '1px solid #FACC15',
+          }}
+        >
+          В новые
+        </button>,
+      );
+      primaryActions.push(
+        <button
+          key="to-work"
+          type="button"
+          onClick={() => void patchStatus(lead.id, 'in_progress')}
+          style={{
+            ...btnPrimary,
+            background: 'rgba(37,99,235,0.25)',
+            color: '#BFDBFE',
+            border: '1px solid #3B82F6',
+          }}
+        >
+          В работу
+        </button>,
+      );
+    }
+    if (allowTenderProcess && lead.status === 'fulfilled') {
+      primaryActions.push(
+        <button
+          key="to-ship"
+          type="button"
+          onClick={() => void patchStatus(lead.id, 'converted')}
+          style={{
+            ...btnPrimary,
+            background: 'rgba(37,99,235,0.25)',
+            color: '#BFDBFE',
+            border: '1px solid #3B82F6',
+          }}
+        >
+          В отгрузку
+        </button>,
+      );
+    }
+
+    if (etpUrl || lead.chat_url) {
+      secondaryActions.push(
+        <a
+          key="etp"
+          href={etpUrl || lead.chat_url || '#'}
+          target="_blank"
+          rel="noreferrer"
+          style={btnGhostChip}
+        >
+          <ExternalLink size={12} /> ЭТП
+        </a>,
+      );
+    }
+    if (docsUrl) {
+      secondaryActions.push(
+        <a key="docs" href={docsUrl} target="_blank" rel="noreferrer" style={btnGhostChip}>
+          Документы
+        </a>,
+      );
+    }
+    if (
+      canReject &&
+      lead.status !== 'rejected' &&
+      lead.status !== 'converted' &&
+      lead.status !== 'fulfilled' &&
+      lead.status !== 'spam'
+    ) {
+      secondaryActions.push(
+        <button
+          key="reject"
+          type="button"
+          onClick={() => void patchStatus(lead.id, 'rejected')}
+          style={btnDangerChip}
+        >
+          Отказ
+        </button>,
+      );
+    }
+    if (
+      canReject &&
+      lead.status !== 'spam' &&
+      lead.status !== 'converted' &&
+      lead.status !== 'fulfilled'
+    ) {
+      secondaryActions.push(
+        <button
+          key="spam"
+          type="button"
+          onClick={() => void patchStatus(lead.id, 'spam')}
+          style={btnGhostChip}
+        >
+          Спам
+        </button>,
+      );
+    }
+    if (allowTenderProcess) {
+      secondaryActions.push(
+        <button
+          key="del"
+          type="button"
+          onClick={() => void deleteLead(lead)}
+          style={btnDangerChip}
+        >
+          Удалить
+        </button>,
+      );
+    }
+
+    return { primaryActions, secondaryActions };
+  };
+
   return (
     <div style={{ padding: '16px 14px 100px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 8 }}>
@@ -494,192 +751,451 @@ export default function MobileLeadsPage() {
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {leads.map((lead) => {
           const payload =
             lead.raw_payload && typeof lead.raw_payload === 'object'
               ? (lead.raw_payload as Record<string, unknown>)
               : null;
-          const etpUrl = String(payload?.etp_url ?? lead.chat_url ?? '').trim();
-          const docsUrl = String(payload?.docs_url ?? '').trim();
-          const tenderLike = !isLeadWorkOpenToAll(lead.source);
-          const canWork =
-            allowTenderProcess || canActOnAssignedLeadWork(lead, currentUserId);
-          const canReject =
-            allowTenderProcess || canManagerRejectOrSpamLead(lead.source);
-          const coIds = parseIdList(payload?.co_assignees).filter(
-            (id) => id !== lead.assigned_to,
-          );
+          const assigneeName = String(payload?.assigned_to_name ?? '').trim();
           const dateHints = getLeadDateHints(lead);
           const shipments = shipmentsByLead[lead.id];
-          const canCreateOrder =
-            canWork &&
-            lead.status !== 'spam' &&
-            lead.status !== 'rejected' &&
-            lead.status !== 'fulfilled';
-          const canMarkFulfilled =
-            canWork &&
-            (lead.status === 'converted' ||
-              (lead.status === 'in_progress' && lead.order_id != null));
+          const preview = (lead.raw_text || '—').replace(/\s+/g, ' ').trim();
 
           return (
-          <div
-            key={lead.id}
-            style={volumeCardSoftStyle({
-              padding: 12,
-              overflow: 'hidden',
-              minWidth: 0,
-            })}
-          >
-            <div style={{ color: '#F8FAFC', fontWeight: 700, marginBottom: 6, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', minWidth: 0 }}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
-                #{lead.id} · {LEAD_SOURCE_LABEL[lead.source] || lead.source}
-              </span>
-              <span style={{
-                fontSize: 10,
-                fontWeight: 600,
-                color: '#93C5FD',
-                background: '#1E3A5F',
-                padding: '2px 7px',
-                borderRadius: 6,
-                flexShrink: 0,
-              }}>
-                {LEAD_STATUS_LABEL[lead.status] || lead.status}
-              </span>
-            </div>
             <div
-              style={{
-                color: '#CBD5E1',
-                fontSize: 13,
-                whiteSpace: 'pre-wrap',
-                marginBottom: 8,
-                overflowWrap: 'anywhere',
-                wordBreak: 'break-word',
-                maxHeight: 168,
-                minHeight: 72,
-                overflowY: 'auto',
-                lineHeight: 1.4,
-                padding: '6px 8px',
-                borderRadius: 8,
-                background: 'rgba(15, 23, 42, 0.45)',
-                border: '1px solid #1E293B',
+              key={lead.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => setDetailLeadId(lead.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setDetailLeadId(lead.id);
+                }
               }}
+              style={volumeCardSoftStyle({
+                padding: '10px 12px',
+                overflow: 'hidden',
+                minWidth: 0,
+                width: '100%',
+                textAlign: 'left',
+                cursor: 'pointer',
+                border: '1px solid #1E293B',
+              })}
             >
-              {lead.raw_text || '—'}
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8, fontSize: 12, color: '#94A3B8', minWidth: 0 }}>
-              {lead.name && (
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
-                  {lead.name}
-                </span>
-              )}
-              {lead.phone && (
-                <a href={`tel:${lead.phone}`} style={{ color: '#93C5FD', display: 'inline-flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-                  <Phone size={12} /> {lead.phone}
-                </a>
-              )}
-              {lead.volume_m3 != null && <span>{lead.volume_m3} м³</span>}
-              {dateHints.submissionDeadline && (
-                <span style={{ color: '#94A3B8', fontWeight: 500 }}>
-                  Подача до: {formatLeadDateRu(dateHints.submissionDeadline)}
-                </span>
-              )}
-              {dateHints.deliveryDate && (
-                <span style={{ color: dateHints.deliveryOverdue ? '#FCA5A5' : '#FDE68A', fontWeight: dateHints.deliveryOverdue ? 700 : 500 }}>
-                  Поставка: {formatLeadDateRu(dateHints.deliveryDate)}
-                  {dateHints.deliveryOverdue ? ' · просрочена' : ''}
-                </span>
-              )}
-            </div>
-
-            {shipments && (shipments.orders.length > 0 || shipments.plan_m3 != null) && (
               <div
                 style={{
-                  marginBottom: 8,
-                  padding: 8,
-                  borderRadius: 8,
-                  background: 'rgba(15, 23, 42, 0.7)',
-                  border: '1px solid #334155',
-                  fontSize: 12,
-                  color: '#CBD5E1',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  marginBottom: 6,
+                  minWidth: 0,
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span>
-                    Отгрузка: {shipments.shipped_m3}
-                    {shipments.plan_m3 != null ? ` / ${shipments.plan_m3}` : ''} м³
-                    {shipments.plan_m3 != null
-                      ? ` · в заявках ${shipments.ordered_m3 ?? 0}`
-                      : ''}
-                    {shipments.remaining_m3 != null
-                      ? ` · остаток ${shipments.remaining_m3}`
-                      : ''}
-                  </span>
-                  {shipments.percent != null && (
-                    <span style={{ color: '#86EFAC' }}>{shipments.percent}%</span>
-                  )}
-                </div>
-                <div style={{ height: 6, borderRadius: 999, background: '#1E293B', overflow: 'hidden' }}>
-                  <div
+                <span
+                  style={{
+                    color: '#F8FAFC',
+                    fontWeight: 700,
+                    fontSize: 14,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    flex: '1 1 auto',
+                    minWidth: 0,
+                  }}
+                >
+                  #{lead.id} · {LEAD_SOURCE_LABEL[lead.source] || lead.source}
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: '#93C5FD',
+                    background: '#1E3A5F',
+                    padding: '2px 7px',
+                    borderRadius: 7,
+                    flexShrink: 0,
+                  }}
+                >
+                  {LEAD_STATUS_LABEL[lead.status] || lead.status}
+                </span>
+                <ChevronRight size={16} color="#64748B" style={{ flexShrink: 0 }} />
+              </div>
+
+              <div
+                style={{
+                  color: '#94A3B8',
+                  fontSize: 12,
+                  lineHeight: 1.35,
+                  marginBottom: 6,
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }}
+              >
+                {preview}
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '4px 10px',
+                  flexWrap: 'wrap',
+                  fontSize: 12,
+                  color: '#64748B',
+                  alignItems: 'center',
+                }}
+              >
+                {lead.name && (
+                  <span
                     style={{
-                      height: '100%',
-                      width: `${Math.min(100, shipments.percent ?? 0)}%`,
-                      background: (shipments.percent ?? 0) >= 100 ? '#22C55E' : '#2563EB',
+                      color: '#E2E8F0',
+                      fontWeight: 600,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      maxWidth: '100%',
                     }}
-                  />
-                </div>
-                {shipments.orders.length > 0 && (
-                  <div style={{ marginTop: 6, color: '#94A3B8' }}>
-                    {shipments.orders.map((o) => (
-                      <Link
-                        key={o.order_id}
-                        href={`/adminCifra/zayavki?orderId=${o.order_id}`}
-                        style={{
-                          display: 'block',
-                          color: '#93C5FD',
-                          textDecoration: 'none',
-                          fontWeight: 600,
-                          padding: '2px 0',
-                        }}
-                      >
-                        #{o.order_id}: {o.shipped_m3}
-                        {o.volume != null ? ` / ${o.volume}` : ''} м³ →
-                      </Link>
-                    ))}
-                  </div>
+                  >
+                    {lead.name}
+                  </span>
+                )}
+                {lead.phone && (
+                  <a
+                    href={`tel:${lead.phone}`}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      color: '#93C5FD',
+                      display: 'inline-flex',
+                      gap: 3,
+                      alignItems: 'center',
+                      textDecoration: 'none',
+                    }}
+                  >
+                    <Phone size={12} /> {lead.phone}
+                  </a>
+                )}
+                {lead.volume_m3 != null && <span>{lead.volume_m3} м³</span>}
+                {dateHints.deliveryDate && (
+                  <span
+                    style={{
+                      color: dateHints.deliveryOverdue ? '#FCA5A5' : '#FDE68A',
+                      fontWeight: dateHints.deliveryOverdue ? 700 : 500,
+                    }}
+                  >
+                    {formatLeadDateRu(dateHints.deliveryDate)}
+                    {dateHints.deliveryOverdue ? ' · просрочена' : ''}
+                  </span>
+                )}
+                {shipments?.percent != null && (
+                  <span style={{ color: '#86EFAC' }}>отгр. {shipments.percent}%</span>
+                )}
+                {!lead.name && !assigneeName && lead.assigned_to && (
+                  <span style={{ color: '#FDE68A' }}>#{lead.assigned_to}</span>
+                )}
+                {(assigneeName || (!lead.assigned_to && allowTenderProcess)) && (
+                  <span style={{ color: '#FDE68A' }}>
+                    {assigneeName || 'не назначен'}
+                  </span>
                 )}
               </div>
-            )}
-            {(() => {
-              const assigneeName = String(payload?.assigned_to_name ?? '').trim();
-              const coNames = Array.isArray(payload?.co_assignee_names)
-                ? (payload.co_assignee_names as unknown[])
-                    .map((n) => String(n || '').trim())
-                    .filter(Boolean)
-                : [];
-              const takenBy = String(payload?.taken_by_name ?? '').trim();
-              const takenAtRaw = String(payload?.taken_at ?? '').trim();
-              const takenAt = takenAtRaw
-                ? new Date(takenAtRaw).toLocaleString('ru-RU', {
-                    day: '2-digit',
-                    month: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })
-                : '';
-              return (
+            </div>
+          );
+        })}
+      </div>
+
+      {detailLead && (() => {
+        const lead = detailLead;
+        const payload =
+          lead.raw_payload && typeof lead.raw_payload === 'object'
+            ? (lead.raw_payload as Record<string, unknown>)
+            : null;
+        const coIds = parseIdList(payload?.co_assignees).filter(
+          (id) => id !== lead.assigned_to,
+        );
+        const dateHints = getLeadDateHints(lead);
+        const shipments = shipmentsByLead[lead.id];
+        const { primaryActions, secondaryActions } = buildLeadActions(lead);
+        const assigneeName = String(payload?.assigned_to_name ?? '').trim();
+        const coNames = Array.isArray(payload?.co_assignee_names)
+          ? (payload.co_assignee_names as unknown[])
+              .map((n) => String(n || '').trim())
+              .filter(Boolean)
+          : [];
+        const takenBy = String(payload?.taken_by_name ?? '').trim();
+        const takenAtRaw = String(payload?.taken_at ?? '').trim();
+        const takenAt = takenAtRaw
+          ? new Date(takenAtRaw).toLocaleString('ru-RU', {
+              day: '2-digit',
+              month: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          : '';
+
+        return (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.78)',
+              zIndex: 10000,
+              display: 'flex',
+              alignItems: 'flex-end',
+              justifyContent: 'center',
+            }}
+            onClick={() => setDetailLeadId(null)}
+          >
+            <div
+              style={volumeModalStyle({
+                width: '100%',
+                maxHeight: '88dvh',
+                overflow: 'auto',
+                padding: '12px 14px 20px',
+                borderRadius: '16px 16px 0 0',
+                color: '#E2E8F0',
+                WebkitOverflowScrolling: 'touch',
+              })}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                style={{
+                  width: 36,
+                  height: 4,
+                  borderRadius: 999,
+                  background: '#334155',
+                  margin: '0 auto 12px',
+                }}
+              />
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  marginBottom: 10,
+                }}
+              >
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: 6,
+                      alignItems: 'center',
+                      marginBottom: 4,
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: '#F8FAFC',
+                        fontWeight: 700,
+                        fontSize: 16,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        maxWidth: '100%',
+                      }}
+                    >
+                      #{lead.id} · {LEAD_SOURCE_LABEL[lead.source] || lead.source}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: '#93C5FD',
+                        background: '#1E3A5F',
+                        padding: '3px 8px',
+                        borderRadius: 8,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {LEAD_STATUS_LABEL[lead.status] || lead.status}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#64748B' }}>
+                    {new Date(lead.created_at).toLocaleString('ru-RU')}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  style={modalCloseButtonStyle()}
+                  onClick={() => setDetailLeadId(null)}
+                  aria-label="Закрыть"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div
+                style={{
+                  color: '#CBD5E1',
+                  fontSize: 13,
+                  whiteSpace: 'pre-wrap',
+                  marginBottom: 12,
+                  overflowWrap: 'anywhere',
+                  wordBreak: 'break-word',
+                  maxHeight: '32dvh',
+                  overflowY: 'auto',
+                  lineHeight: 1.4,
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  background: 'rgba(15, 23, 42, 0.45)',
+                  border: '1px solid #1E293B',
+                  WebkitOverflowScrolling: 'touch',
+                }}
+              >
+                {lead.raw_text || '—'}
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '6px 10px',
+                  flexWrap: 'wrap',
+                  marginBottom: 12,
+                  fontSize: 13,
+                  color: '#94A3B8',
+                  minWidth: 0,
+                }}
+              >
+                {lead.name && (
+                  <span style={{ color: '#E2E8F0', fontWeight: 600 }}>{lead.name}</span>
+                )}
+                {lead.phone && (
+                  <a
+                    href={`tel:${lead.phone}`}
+                    style={{
+                      color: '#93C5FD',
+                      display: 'inline-flex',
+                      gap: 4,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Phone size={14} /> {lead.phone}
+                  </a>
+                )}
+                {lead.grade && <span>{lead.grade}</span>}
+                {lead.volume_m3 != null && <span>{lead.volume_m3} м³</span>}
+                {lead.city && <span>{lead.city}</span>}
+                {dateHints.submissionDeadline && (
+                  <span>
+                    Подача до: {formatLeadDateRu(dateHints.submissionDeadline)}
+                  </span>
+                )}
+                {dateHints.deliveryDate && (
+                  <span
+                    style={{
+                      color: dateHints.deliveryOverdue ? '#FCA5A5' : '#FDE68A',
+                      fontWeight: dateHints.deliveryOverdue ? 700 : 500,
+                    }}
+                  >
+                    Поставка: {formatLeadDateRu(dateHints.deliveryDate)}
+                    {dateHints.deliveryOverdue ? ' · просрочена' : ''}
+                  </span>
+                )}
+              </div>
+
+              {shipments && (shipments.orders.length > 0 || shipments.plan_m3 != null) && (
+                <div
+                  style={{
+                    marginBottom: 12,
+                    padding: 10,
+                    borderRadius: 10,
+                    background: 'rgba(15, 23, 42, 0.7)',
+                    border: '1px solid #334155',
+                    fontSize: 12,
+                    color: '#CBD5E1',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      marginBottom: 4,
+                      gap: 8,
+                    }}
+                  >
+                    <span>
+                      Отгрузка: {shipments.shipped_m3}
+                      {shipments.plan_m3 != null ? ` / ${shipments.plan_m3}` : ''} м³
+                      {shipments.plan_m3 != null
+                        ? ` · в заявках ${shipments.ordered_m3 ?? 0}`
+                        : ''}
+                      {shipments.remaining_m3 != null
+                        ? ` · остаток ${shipments.remaining_m3}`
+                        : ''}
+                    </span>
+                    {shipments.percent != null && (
+                      <span style={{ color: '#86EFAC' }}>{shipments.percent}%</span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      height: 6,
+                      borderRadius: 999,
+                      background: '#1E293B',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div
+                      style={{
+                        height: '100%',
+                        width: `${Math.min(100, shipments.percent ?? 0)}%`,
+                        background:
+                          (shipments.percent ?? 0) >= 100 ? '#22C55E' : '#2563EB',
+                      }}
+                    />
+                  </div>
+                  {shipments.orders.length > 0 && (
+                    <div style={{ marginTop: 6, color: '#94A3B8' }}>
+                      {shipments.orders.map((o) => (
+                        <Link
+                          key={o.order_id}
+                          href={`/adminCifra/zayavki?orderId=${o.order_id}`}
+                          style={{
+                            display: 'block',
+                            color: '#93C5FD',
+                            textDecoration: 'none',
+                            fontWeight: 600,
+                            padding: '2px 0',
+                          }}
+                        >
+                          #{o.order_id}: {o.shipped_m3}
+                          {o.volume != null ? ` / ${o.volume}` : ''} м³ →
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {(!allowTenderProcess ||
+                (lead.status !== 'new' && (takenBy || takenAt))) && (
                 <div
                   style={{
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 4,
-                    marginBottom: 8,
+                    marginBottom: 12,
                     fontSize: 12,
                     color: '#FDE68A',
                   }}
                 >
-                  <span>Исполнитель: {assigneeName || (lead.assigned_to ? `#${lead.assigned_to}` : 'не назначен')}</span>
-                  <span>Соисполнители: {coNames.length ? coNames.join(', ') : 'нет'}</span>
+                  {!allowTenderProcess && (
+                    <>
+                      <span>
+                        Исполнитель:{' '}
+                        {assigneeName ||
+                          (lead.assigned_to ? `#${lead.assigned_to}` : 'не назначен')}
+                      </span>
+                      <span>
+                        Соисполнители: {coNames.length ? coNames.join(', ') : 'нет'}
+                      </span>
+                    </>
+                  )}
                   {lead.status !== 'new' && (takenBy || takenAt) && (
                     <span style={{ color: '#86EFAC' }}>
                       Взял в работу: {takenBy || '—'}
@@ -687,255 +1203,158 @@ export default function MobileLeadsPage() {
                     </span>
                   )}
                 </div>
-              );
-            })()}
+              )}
 
-            {allowTenderProcess && (
-              <div style={{ marginBottom: 10 }}>
+              {allowTenderProcess && (
                 <div
                   style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: 6,
-                    alignItems: 'end',
+                    marginBottom: 14,
+                    paddingTop: 12,
+                    borderTop: '1px solid #1E293B',
                   }}
                 >
-                  <label style={{ display: 'block', minWidth: 0 }}>
-                    <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 3 }}>Исполнитель</div>
-                    <select
-                      value={lead.assigned_to ? String(lead.assigned_to) : ''}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        void assignLead(lead.id, {
-                          assigned_to: v,
-                          co_assignees: coIds.filter((id) => String(id) !== v),
-                        });
-                      }}
-                      style={selectStyle}
-                    >
-                      <option value="">Не назначен</option>
-                      {employees.map((emp) => (
-                        <option key={emp.user_id} value={emp.user_id}>
-                          {empLabel(emp)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label style={{ display: 'block', minWidth: 0 }}>
-                    <div style={{ fontSize: 10, color: '#94A3B8', marginBottom: 3 }}>Соисполнители</div>
-                    <select
-                      value=""
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (!v) return;
-                        void assignLead(lead.id, {
-                          co_assignees: Array.from(new Set([...coIds, Number(v)])),
-                        });
-                      }}
-                      style={selectStyle}
-                    >
-                      <option value="">Добавить…</option>
-                      {employees
-                        .filter(
-                          (emp) =>
-                            emp.user_id !== lead.assigned_to && !coIds.includes(emp.user_id),
-                        )
-                        .map((emp) => (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr',
+                      gap: 8,
+                    }}
+                  >
+                    <label style={{ display: 'block', minWidth: 0 }}>
+                      <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 4 }}>
+                        Исполнитель
+                      </div>
+                      <select
+                        value={lead.assigned_to ? String(lead.assigned_to) : ''}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          void assignLead(lead.id, {
+                            assigned_to: v,
+                            co_assignees: coIds.filter((id) => String(id) !== v),
+                          });
+                        }}
+                        style={selectStyle}
+                      >
+                        <option value="">Не назначен</option>
+                        {employees.map((emp) => (
                           <option key={emp.user_id} value={emp.user_id}>
                             {empLabel(emp)}
                           </option>
                         ))}
-                    </select>
-                  </label>
-                </div>
-                {coIds.length > 0 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
-                    {coIds.map((uid) => {
-                      const emp = employees.find((e) => e.user_id === uid);
-                      return (
-                        <span
-                          key={uid}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                            fontSize: 11,
-                            color: '#E2E8F0',
-                            background: '#1E293B',
-                            border: '1px solid #334155',
-                            borderRadius: 999,
-                            padding: '3px 8px',
-                          }}
-                        >
-                          {emp ? empLabel(emp) : `#${uid}`}
-                          <button
-                            type="button"
-                            aria-label="Убрать"
-                            onClick={() =>
-                              void assignLead(lead.id, {
-                                co_assignees: coIds.filter((x) => x !== uid),
-                              })
-                            }
+                      </select>
+                    </label>
+                    <label style={{ display: 'block', minWidth: 0 }}>
+                      <div style={{ fontSize: 11, color: '#94A3B8', marginBottom: 4 }}>
+                        Соисполнители
+                      </div>
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (!v) return;
+                          void assignLead(lead.id, {
+                            co_assignees: Array.from(new Set([...coIds, Number(v)])),
+                          });
+                        }}
+                        style={selectStyle}
+                      >
+                        <option value="">Добавить…</option>
+                        {employees
+                          .filter(
+                            (emp) =>
+                              emp.user_id !== lead.assigned_to &&
+                              !coIds.includes(emp.user_id),
+                          )
+                          .map((emp) => (
+                            <option key={emp.user_id} value={emp.user_id}>
+                              {empLabel(emp)}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                  </div>
+                  {coIds.length > 0 && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 5,
+                        marginTop: 8,
+                      }}
+                    >
+                      {coIds.map((uid) => {
+                        const emp = employees.find((e) => e.user_id === uid);
+                        return (
+                          <span
+                            key={uid}
                             style={{
-                              border: 'none',
-                              background: 'none',
-                              color: '#FCA5A5',
-                              fontSize: 13,
-                              padding: 0,
-                              lineHeight: 1,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              fontSize: 11,
+                              color: '#E2E8F0',
+                              background: '#1E293B',
+                              border: '1px solid #334155',
+                              borderRadius: 999,
+                              padding: '3px 8px',
                             }}
                           >
-                            ×
-                          </button>
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'nowrap',
-                gap: 4,
-                alignItems: 'stretch',
-              }}
-            >
-              {allowTenderProcess && lead.status !== 'fulfilled' && (
-                <button
-                  type="button"
-                  onClick={() => setProcessLead(lead)}
-                  style={btnProcess}
-                >
-                  Обработать
-                </button>
+                            {emp ? empLabel(emp) : `#${uid}`}
+                            <button
+                              type="button"
+                              aria-label="Убрать"
+                              onClick={() =>
+                                void assignLead(lead.id, {
+                                  co_assignees: coIds.filter((x) => x !== uid),
+                                })
+                              }
+                              style={{
+                                border: 'none',
+                                background: 'none',
+                                color: '#FCA5A5',
+                                fontSize: 13,
+                                padding: 0,
+                                lineHeight: 1,
+                              }}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               )}
-              {allowTenderProcess && tenderLike && lead.status === 'new' && (
-                <button
-                  type="button"
-                  disabled={sendingWorkId === lead.id}
-                  onClick={() => void sendLeadToWork(lead)}
+
+              {primaryActions.length > 0 && (
+                <div
                   style={{
-                    ...btnAmber,
-                    opacity: sendingWorkId === lead.id ? 0.7 : 1,
+                    display: 'grid',
+                    gridTemplateColumns:
+                      primaryActions.length === 1 ? '1fr' : '1fr 1fr',
+                    gap: 8,
+                    marginBottom: secondaryActions.length > 0 ? 8 : 0,
                   }}
                 >
-                  {sendingWorkId === lead.id ? '…' : 'В работу'}
-                </button>
+                  {primaryActions}
+                </div>
               )}
-              {lead.status === 'new' &&
-                !(allowTenderProcess && tenderLike) &&
-                canWork && (
-                  <button
-                    type="button"
-                    onClick={() => void patchStatus(lead.id, 'in_progress')}
-                    style={btnAmber}
-                  >
-                    В работу
-                  </button>
-                )}
-              {canCreateOrder && (
-                <button
-                  type="button"
-                  onClick={() => void openConvert(lead)}
-                  style={btnBlue}
+              {secondaryActions.length > 0 && (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 6,
+                  }}
                 >
-                  {lead.status === 'converted' || lead.order_id != null ? 'Ещё' : 'Заказ'}
-                </button>
-              )}
-              {canMarkFulfilled && (
-                <button
-                  type="button"
-                  onClick={() => void patchStatus(lead.id, 'fulfilled')}
-                  style={{ ...btnBase, background: '#16A34A', color: '#fff' }}
-                >
-                  Исполнен
-                </button>
-              )}
-              {(etpUrl || lead.chat_url) && (
-                <a
-                  href={etpUrl || lead.chat_url || '#'}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={btnGhost}
-                >
-                  <ExternalLink size={11} /> ЭТП
-                </a>
-              )}
-              {docsUrl && (
-                <a href={docsUrl} target="_blank" rel="noreferrer" style={btnGhost}>
-                  Доки
-                </a>
-              )}
-              {canReject &&
-                lead.status !== 'rejected' &&
-                lead.status !== 'converted' &&
-                lead.status !== 'fulfilled' &&
-                lead.status !== 'spam' && (
-                  <button
-                    type="button"
-                    onClick={() => void patchStatus(lead.id, 'rejected')}
-                    style={btnDanger}
-                  >
-                    Отказ
-                  </button>
-                )}
-              {canReject &&
-                lead.status !== 'spam' &&
-                lead.status !== 'converted' &&
-                lead.status !== 'fulfilled' && (
-                <button
-                  type="button"
-                  onClick={() => void patchStatus(lead.id, 'spam')}
-                  style={btnGhost}
-                >
-                  Спам
-                </button>
-              )}
-              {allowTenderProcess &&
-                (lead.status === 'rejected' || lead.status === 'spam') && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void patchStatus(lead.id, 'new')}
-                    style={{ ...btnBase, background: 'rgba(234,179,8,0.25)', color: '#FEF08A', border: '1px solid #FACC15' }}
-                  >
-                    В новые
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void patchStatus(lead.id, 'in_progress')}
-                    style={{ ...btnBase, background: 'rgba(37,99,235,0.25)', color: '#BFDBFE', border: '1px solid #3B82F6' }}
-                  >
-                    В работу
-                  </button>
-                </>
-              )}
-              {allowTenderProcess && lead.status === 'fulfilled' && (
-                <button
-                  type="button"
-                  onClick={() => void patchStatus(lead.id, 'converted')}
-                  style={{ ...btnBase, background: 'rgba(37,99,235,0.25)', color: '#BFDBFE', border: '1px solid #3B82F6' }}
-                >
-                  В отгрузку
-                </button>
-              )}
-              {allowTenderProcess && (
-                <button
-                  type="button"
-                  onClick={() => void deleteLead(lead)}
-                  style={btnDanger}
-                >
-                  Удалить
-                </button>
+                  {secondaryActions}
+                </div>
               )}
             </div>
           </div>
-          );
-        })}
-      </div>
+        );
+      })()}
 
       <ProcessLeadModal
         open={Boolean(processLead)}

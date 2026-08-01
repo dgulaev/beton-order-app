@@ -15,6 +15,7 @@ import { formatTimeHHMM } from '@/lib/ruLocale';
 import OrderCommentsPanel, { CommentUnreadBadge, orderModalTabStyle } from './OrderCommentsPanel';
 import { bulkVolumeUnitLabel } from '@/lib/orderLogistics';
 import BulkShipmentBlock from './BulkShipmentBlock';
+import QuestionableToggle from './QuestionableToggle';
 
 interface OrderDetailModalProps {
   order: Order | null;
@@ -627,78 +628,57 @@ const formatVolume = (value: number | string) => {
                 />
               )}
 
-              {/* Метка «Под вопросом» — тот же toggle, что в модалке Заявок; CAS на сервере + lock здесь */}
+              {/* Метка «Под вопросом» — заметный switch; CAS на сервере + lock здесь */}
               {['admin', 'manager', 'dispatcher', 'logist'].includes(getCurrentRole()) && (
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '7px 14px',
-                    borderRadius: '9999px',
-                    border: '1px solid rgba(239, 68, 68, 0.35)',
-                    background: (localOrder as any).is_questionable ? 'rgba(239, 68, 68, 0.15)' : 'transparent',
-                    fontSize: '13px',
-                    cursor: questionableSaving ? 'wait' : 'pointer',
-                    userSelect: 'none',
-                    opacity: questionableSaving ? 0.7 : 1,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={!!(localOrder as any).is_questionable}
-                    disabled={questionableSaving}
-                    onChange={async (e) => {
-                      if (questionableSavingRef.current) return;
-                      questionableSavingRef.current = true;
-                      setQuestionableSaving(true);
+                <QuestionableToggle
+                  checked={!!(localOrder as any).is_questionable}
+                  saving={questionableSaving}
+                  onChange={async (newValue) => {
+                    if (questionableSavingRef.current) return;
+                    questionableSavingRef.current = true;
+                    setQuestionableSaving(true);
 
-                      const newValue = e.target.checked;
-                      const prevValue = !!(localOrder as any).is_questionable;
+                    const prevValue = !!(localOrder as any).is_questionable;
 
-                      setLocalOrder(prev => ({ ...prev, is_questionable: newValue } as any));
-                      setAllOrders(prev => prev.map(o =>
-                        o.id === order.id ? { ...o, is_questionable: newValue } as any : o
-                      ));
-                      if (typeof setSelectedOrder === 'function') {
-                        setSelectedOrder(prev => prev ? ({ ...prev, is_questionable: newValue } as any) : prev);
-                      }
+                    setLocalOrder(prev => ({ ...prev, is_questionable: newValue } as any));
+                    setAllOrders(prev => prev.map(o =>
+                      o.id === order.id ? { ...o, is_questionable: newValue } as any : o
+                    ));
+                    if (typeof setSelectedOrder === 'function') {
+                      setSelectedOrder(prev => prev ? ({ ...prev, is_questionable: newValue } as any) : prev);
+                    }
 
-                      try {
-                        const res = await fetch('/api/adminCifra/orders/update', {
-                          method: 'PUT',
-                          headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
-                          body: JSON.stringify({
-                            id: order.id,
-                            is_questionable: newValue,
-                            userName: getCurrentUserName(),
-                            userRole: getCurrentRole(),
-                          }),
-                        });
-                        if (!res.ok) {
-                          setLocalOrder(prev => ({ ...prev, is_questionable: prevValue } as any));
-                          setAllOrders(prev => prev.map(o =>
-                            o.id === order.id ? { ...o, is_questionable: prevValue } as any : o
-                          ));
-                        } else if (typeof setHistory === 'function') {
-                          const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
-                          if (histRes.ok) setHistory(await histRes.json());
-                        }
-                      } catch {
+                    try {
+                      const res = await fetch('/api/adminCifra/orders/update', {
+                        method: 'PUT',
+                        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify({
+                          id: order.id,
+                          is_questionable: newValue,
+                          userName: getCurrentUserName(),
+                          userRole: getCurrentRole(),
+                        }),
+                      });
+                      if (!res.ok) {
                         setLocalOrder(prev => ({ ...prev, is_questionable: prevValue } as any));
                         setAllOrders(prev => prev.map(o =>
                           o.id === order.id ? { ...o, is_questionable: prevValue } as any : o
                         ));
-                      } finally {
-                        questionableSavingRef.current = false;
-                        setQuestionableSaving(false);
+                      } else if (typeof setHistory === 'function') {
+                        const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
+                        if (histRes.ok) setHistory(await histRes.json());
                       }
-                    }}
-                    style={{ width: '14px', height: '14px', accentColor: '#EF4444' }}
-                  />
-                  <span style={{ color: '#F87171', fontWeight: 600 }}>Под вопросом</span>
-                </label>
+                    } catch {
+                      setLocalOrder(prev => ({ ...prev, is_questionable: prevValue } as any));
+                      setAllOrders(prev => prev.map(o =>
+                        o.id === order.id ? { ...o, is_questionable: prevValue } as any : o
+                      ));
+                    } finally {
+                      questionableSavingRef.current = false;
+                      setQuestionableSaving(false);
+                    }
+                  }}
+                />
               )}
             </div>
 

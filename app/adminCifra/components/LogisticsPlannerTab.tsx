@@ -18,6 +18,7 @@ import OrderPlanProgressBar from './OrderPlanProgressBar';
 import PlannerInsightsPanel from './PlannerInsightsPanel';
 import PlannerFleetMixerChip from './PlannerFleetMixerChip';
 import DarkHoverTip from './DarkHoverTip';
+import PlannerSwitch from './PlannerSwitch';
 import { appAlert, appConfirm } from './appDialog';
 import { useUserRole } from '@/app/providers/UserRoleProvider';
 import {
@@ -51,6 +52,7 @@ import {
   replanAfterTripDelay,
   replanAfterTripReorder,
   replanAfterTripVolumeChange,
+  replanAfterTripVolumesChange,
   resolvePlantOpenMinutes,
   type PlannedTrip,
   type PlannerMixer,
@@ -372,10 +374,24 @@ export default function LogisticsPlannerTab({
   const autoStageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoStageReadyAtRef = useRef(0);
   const stickySyncRef = useRef(false);
+  /** Снимок volume по order_mixers.id — чтобы ловить ручные add/правку диспетчера. */
+  const factVolSnapshotRef = useRef<Map<string, number>>(new Map());
+  const factVolSeededRef = useRef(false);
+  const pendingFactVolSyncRef = useRef<Set<string>>(new Set());
+  const pendingSeedVolCatchUpRef = useRef(false);
+  const factVolSyncingRef = useRef(false);
 
   useEffect(() => {
     setCanEditPlan(canEditDailyLogisticsPlan(userRole));
   }, [userRole]);
+
+  useEffect(() => {
+    factVolSnapshotRef.current = new Map();
+    factVolSeededRef.current = false;
+    pendingFactVolSyncRef.current = new Set();
+    pendingSeedVolCatchUpRef.current = false;
+    factVolSyncingRef.current = false;
+  }, [dateKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1884,9 +1900,9 @@ export default function LogisticsPlannerTab({
     if (Math.abs(nextVol - prevVol) < 0.05) return;
 
     const ok = await appConfirm(
-      `Изменить объём рейса ${target.mixerNumber} с ${prevVol} на ${nextVol} м³?\n\nВместимость миксера на день станет ${nextVol} м³, время загрузки/разгрузки и хвост дня пересчитаются.`,
+      `Изменить объём рейса ${target.mixerNumber} с ${prevVol} на ${nextVol} м³?\n\nПересчитаются план и хвост дня. В заявку объём уйдёт только после «Применить в заявки». Если потом диспетчер поправит объём в заявке вручную — план снова подтянет его.`,
       {
-        title: 'Объём рейса',
+        title: 'Объём в плане',
         okLabel: 'Пересчитать',
         variant: 'warning',
       },
@@ -2252,6 +2268,179 @@ export default function LogisticsPlannerTab({
   useEffect(() => {
     setApplyOrderIds(new Set(applyableOrderIds));
   }, [tripsApplyKey, applyableOrderIds]);
+
+  /**
+   * Closed-loop объёмов: ручной add/правка volume в order_mixers → план + хвост.
+   * Обратно: правка в плане → в заявку только через «Применить в заявки».
+   * Не затираем локальную правку плана (override = plan ≠ fact), пока факт не изменился.
+   */
+  useEffect(() => {
+    const nextMap = new Map<string, number>();
+    for (const t of dayTrips) {
+      if (t.id == null) continue;
+      const id = String(t.id);
+      const vol = Math.round((Number(t.volume) || 0) * 10) / 10;
+      nextMap.set(id, vol);
+    }
+
+    const prev = factVolSnapshotRef.current;
+    const isSeed = !factVolSeededRef.current;
+    if (isSeed) {
+      factVolSeededRef.current = true;
+      pendingSeedVolCatchUpRef.current = true;
+    } else {
+      for (const [id, vol] of nextMap) {
+        const p = prev.get(id);
+        if (p === undefined || Math.abs(p - vol) >= 0.05) {
+          pendingFactVolSyncRef.current.add(id);
+        }
+      }
+    }
+    factVolSnapshotRef.current = nextMap;
+
+    if (
+      !canMutatePlan ||
+      busy ||
+      isOperatorView ||
+      loadingFleet ||
+      !trips.length ||
+      factVolSyncingRef.current
+    ) {
+      return;
+    }
+
+    const seedCatchUp = pendingSeedVolCatchUpRef.current;
+    const pendingIds = pendingFactVolSyncRef.current;
+    if (!seedCatchUp && pendingIds.size === 0) return;
+
+    const overrides = mixerVolumeOverridesRef.current;
+    const toSync: Array<{ tripId: string; volume: number; mixerNumber: string }> =
+      [];
+
+    for (const t of trips) {
+      if (t.done) continue;
+      const fact = planFactByTripId.get(t.id);
+      if (!fact?.hasMatch || fact.matchedTripId == null || fact.factVolume == null) {
+        continue;
+      }
+      const factVol = Math.round(Number(fact.factVolume) * 10) / 10;
+      if (factVol <= 0) continue;
+      const planVol = Number(t.volume) || 0;
+      if (Math.abs(planVol - factVol) < 0.05) continue;
+
+      const fid = String(fact.matchedTripId);
+      const factChanged = pendingIds.has(fid);
+
+      if (seedCatchUp && !factChanged) {
+        const ov = overrides[String(t.mixerNumber)];
+        // Локальная правка плана ждёт «Применить» — факт пока старый.
+        if (
+          ov != null &&
+          Math.abs(ov - planVol) < 0.05 &&
+          Math.abs(ov - factVol) >= 0.05
+        ) {
+          continue;
+        }
+        toSync.push({
+          tripId: t.id,
+          volume: factVol,
+          mixerNumber: String(t.mixerNumber),
+        });
+      } else if (factChanged) {
+        toSync.push({
+          tripId: t.id,
+          volume: factVol,
+          mixerNumber: String(t.mixerNumber),
+        });
+      }
+    }
+
+    pendingFactVolSyncRef.current = new Set();
+    pendingSeedVolCatchUpRef.current = false;
+
+    if (toSync.length === 0) return;
+
+    factVolSyncingRef.current = true;
+    setBusy(true);
+
+    void (async () => {
+      try {
+        const nextOverrides = { ...mixerVolumeOverridesRef.current };
+        for (const c of toSync) {
+          nextOverrides[c.mixerNumber] = c.volume;
+        }
+        setMixerVolumeOverrides(nextOverrides);
+        mixerVolumeOverridesRef.current = nextOverrides;
+
+        const mixersForPlan = plannerMixers.map((m) => {
+          const ov = nextOverrides[String(m.number)];
+          return ov != null && ov > 0 ? { ...m, volume: ov } : m;
+        });
+
+        const nowMin = nowMinutesIfDateKeyIsToday(dateKey);
+        const delayFactMin = medianFactDelayMin(
+          [...planFactByTripId.values()].map(
+            (f) => f.deltaLoadMin ?? f.deltaReleaseMin,
+          ),
+        );
+        const doneOrderIds = plannerOrders
+          .filter((o) => {
+            if (manualDone.has(String(o.id))) return true;
+            return orderProgressStatus(o, dayTrips, trips, false) === 'done';
+          })
+          .map((o) => o.id);
+
+        const { result, locked, shifted } = replanAfterTripVolumesChange({
+          allTrips: trips,
+          changes: toSync.map((c) => ({ tripId: c.tripId, volume: c.volume })),
+          orders: plannerOrders.filter((o) => !manualDone.has(String(o.id))),
+          mixers: mixersForPlan,
+          doneOrderIds,
+          allowNight,
+          useTraffic,
+          factDelayMin: delayFactMin || undefined,
+          dayTrips,
+          nowMinutes: nowMin,
+          calibration: calibrationRef.current || calibration,
+        });
+        if (!shifted) return;
+
+        const summary =
+          toSync.length === 1
+            ? `${toSync[0].mixerNumber} · объём из заявки → ${toSync[0].volume} м³`
+            : `объёмы из заявок (${toSync.length} рейс.)`;
+
+        setScenarios([]);
+        setActiveScenarioId(null);
+        persist({ mixerVolumeOverrides: nextOverrides });
+        commitWavePlan('shift', result.trips, locked, result.warnings, {
+          newTripIds: [shifted.id, ...result.newTrips.map((t) => t.id)],
+          summary,
+        });
+        setAutoStageNote(`План подтянул объём из заявки: ${summary}`);
+        window.setTimeout(() => setAutoStageNote(''), 8000);
+      } finally {
+        factVolSyncingRef.current = false;
+        setBusy(false);
+      }
+    })();
+  }, [
+    dayTrips,
+    planFactByTripId,
+    trips,
+    canMutatePlan,
+    busy,
+    isOperatorView,
+    loadingFleet,
+    dateKey,
+    plannerMixers,
+    plannerOrders,
+    manualDone,
+    allowNight,
+    useTraffic,
+    calibration,
+    persist,
+  ]);
 
   const toggleApplyOrder = (orderId: string) => {
     setApplyOrderIds((prev) => {
@@ -2872,63 +3061,33 @@ export default function LogisticsPlannerTab({
           maxWidth={340}
           style={{ marginLeft: 'auto' }}
         >
-          <label
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: sp(8),
-              color: '#CBD5E1',
-              fontSize: fs(14),
-              fontWeight: 600,
-              cursor: canEditPlan ? 'pointer' : 'default',
-              userSelect: 'none',
-              opacity: canEditPlan ? 1 : 0.55,
+          <PlannerSwitch
+            checked={useTraffic}
+            disabled={!canMutatePlan}
+            accent="sky"
+            label="Учитывать пробки"
+            onChange={(next) => {
+              setUseTraffic(next);
+              setScenarios([]);
+              setActiveScenarioId(null);
             }}
-          >
-            <input
-              type="checkbox"
-              checked={useTraffic}
-              disabled={!canMutatePlan}
-              onChange={(e) => {
-                setUseTraffic(e.target.checked);
-                setScenarios([]);
-                setActiveScenarioId(null);
-              }}
-              style={{ width: fs(16), height: fs(16), accentColor: '#38BDF8' }}
-            />
-            Учитывать пробки
-          </label>
+          />
         </DarkHoverTip>
         <DarkHoverTip
-          tip="Без галочки возврат на базу ≤ 21:00. Открытие соски сдвигается раньше 06:00, если есть ранние доставки (к 06:00 и т.п.). С галочкой — рейсы после 21:00 и на следующие сутки."
+          tip="Выкл — возврат на базу ≤ 21:00. Открытие соски сдвигается раньше 06:00, если есть ранние доставки (к 06:00 и т.п.). Вкл — рейсы после 21:00 и на следующие сутки."
           maxWidth={360}
         >
-          <label
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: sp(8),
-              color: '#CBD5E1',
-              fontSize: fs(14),
-              fontWeight: 600,
-              cursor: canEditPlan ? 'pointer' : 'default',
-              userSelect: 'none',
-              opacity: canEditPlan ? 1 : 0.55,
+          <PlannerSwitch
+            checked={allowNight}
+            disabled={!canMutatePlan}
+            accent="amber"
+            label="Включая ночь"
+            onChange={(next) => {
+              setAllowNight(next);
+              setScenarios([]);
+              setActiveScenarioId(null);
             }}
-          >
-            <input
-              type="checkbox"
-              checked={allowNight}
-              disabled={!canMutatePlan}
-              onChange={(e) => {
-                setAllowNight(e.target.checked);
-                setScenarios([]);
-                setActiveScenarioId(null);
-              }}
-              style={{ width: fs(16), height: fs(16), accentColor: '#F59E0B' }}
-            />
-            Включая ночь
-          </label>
+          />
         </DarkHoverTip>
       </div>
       {/* Липкий низ */}
@@ -2954,64 +3113,36 @@ export default function LogisticsPlannerTab({
           }}
         >
           <DarkHoverTip
-            tip="Если включено — во списке заявок появляется вторая галочка (фиолетовая): применить план только к отмеченным. Иначе — ко всем заявкам с рейсами."
+            tip="Если включено — во списке заявок появляется второй переключатель (фиолетовый): применить план только к отмеченным. Иначе — ко всем заявкам с рейсами."
             maxWidth={340}
           >
-            <label
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: sp(8),
-                color: '#CBD5E1',
-                fontSize: fs(13),
-                fontWeight: 600,
-                cursor: canEditPlan ? 'pointer' : 'default',
-                userSelect: 'none',
-                opacity: canEditPlan ? 1 : 0.55,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={applyOnlySelected}
-                disabled={!canMutatePlan}
-                onChange={(e) => setApplyOnlySelected(e.target.checked)}
-                style={{ width: fs(16), height: fs(16), accentColor: '#A78BFA' }}
-              />
-              Только выбранные заявки
-              {applyOnlySelected && applyableOrderIds.size > 0 ? (
-                <span style={{ color: '#A78BFA', fontWeight: 700 }}>
-                  ({[...applyOrderIds].filter((id) => applyableOrderIds.has(id)).length}/
-                  {applyableOrderIds.size})
-                </span>
-              ) : null}
-            </label>
+            <PlannerSwitch
+              checked={applyOnlySelected}
+              disabled={!canMutatePlan}
+              accent="violet"
+              label="Только выбранные заявки"
+              onChange={setApplyOnlySelected}
+              suffix={
+                applyOnlySelected && applyableOrderIds.size > 0 ? (
+                  <span style={{ color: '#A78BFA', fontWeight: 700, fontSize: fs(13) }}>
+                    ({[...applyOrderIds].filter((id) => applyableOrderIds.has(id)).length}/
+                    {applyableOrderIds.size})
+                  </span>
+                ) : null
+              }
+            />
           </DarkHoverTip>
           <DarkHoverTip
             tip="По умолчанию выкл: заявки, где диспетчер уже поставил миксеры («Загрузка»), интеллект не трогает. Включи только если сознательно хочешь заменить ручные назначения планом."
             maxWidth={360}
           >
-            <label
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: sp(8),
-                color: overwriteManual ? '#FCA5A5' : '#CBD5E1',
-                fontSize: fs(13),
-                fontWeight: 600,
-                cursor: canEditPlan ? 'pointer' : 'default',
-                userSelect: 'none',
-                opacity: canEditPlan ? 1 : 0.55,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={overwriteManual}
-                disabled={!canMutatePlan}
-                onChange={(e) => setOverwriteManual(e.target.checked)}
-                style={{ width: fs(16), height: fs(16), accentColor: '#F87171' }}
-              />
-              Заменить ручные «Загрузка»
-            </label>
+            <PlannerSwitch
+              checked={overwriteManual}
+              disabled={!canMutatePlan}
+              accent="rose"
+              label="Заменить ручные «Загрузка»"
+              onChange={setOverwriteManual}
+            />
           </DarkHoverTip>
         </div>
         <ModalActionButton
@@ -3306,30 +3437,21 @@ export default function LogisticsPlannerTab({
                           : undefined,
                     }}
                   >
-                    <input
-                      type="checkbox"
+                    <PlannerSwitch
+                      size="sm"
+                      accent="emerald"
                       checked={manualDone.has(oid) || st === 'done'}
-                      onChange={() => toggleOrderDone(oid)}
                       disabled={!canMutatePlan}
                       title="Пометить отработанной"
-                      style={{
-                        width: fs(16),
-                        height: fs(16),
-                        cursor: canEditPlan ? 'pointer' : 'default',
-                      }}
+                      onChange={() => toggleOrderDone(oid)}
                     />
                     {applyOnlySelected && canApply && canEditPlan ? (
-                      <input
-                        type="checkbox"
+                      <PlannerSwitch
+                        size="sm"
+                        accent="violet"
                         checked={selectedForApply}
-                        onChange={() => toggleApplyOrder(oid)}
                         title="Включить в «Применить в заявки»"
-                        style={{
-                          width: fs(16),
-                          height: fs(16),
-                          accentColor: '#A78BFA',
-                          cursor: 'pointer',
-                        }}
+                        onChange={() => toggleApplyOrder(oid)}
                       />
                     ) : null}
                     <span style={{ fontWeight: 700, flexShrink: 0 }}>#{o.id}</span>
@@ -3822,30 +3944,21 @@ export default function LogisticsPlannerTab({
                           : undefined,
                     }}
                   >
-                    <input
-                      type="checkbox"
+                    <PlannerSwitch
+                      size="sm"
+                      accent="emerald"
                       checked={manualDone.has(oid) || st === 'done'}
-                      onChange={() => toggleOrderDone(oid)}
                       disabled={!canMutatePlan}
                       title="Пометить отработанной"
-                      style={{
-                        width: fs(16),
-                        height: fs(16),
-                        cursor: canEditPlan ? 'pointer' : 'default',
-                      }}
+                      onChange={() => toggleOrderDone(oid)}
                     />
                     {applyOnlySelected && canApply && canEditPlan ? (
-                      <input
-                        type="checkbox"
+                      <PlannerSwitch
+                        size="sm"
+                        accent="violet"
                         checked={selectedForApply}
-                        onChange={() => toggleApplyOrder(oid)}
                         title="Включить в «Применить в заявки»"
-                        style={{
-                          width: fs(16),
-                          height: fs(16),
-                          accentColor: '#A78BFA',
-                          cursor: 'pointer',
-                        }}
+                        onChange={() => toggleApplyOrder(oid)}
                       />
                     ) : null}
                     <span style={{ fontWeight: 700, flexShrink: 0 }}>#{o.id}</span>
@@ -4202,63 +4315,33 @@ export default function LogisticsPlannerTab({
           maxWidth={340}
           style={{ marginLeft: 'auto' }}
         >
-          <label
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: sp(8),
-              color: '#CBD5E1',
-              fontSize: fs(14),
-              fontWeight: 600,
-              cursor: canEditPlan ? 'pointer' : 'default',
-              userSelect: 'none',
-              opacity: canEditPlan ? 1 : 0.55,
+          <PlannerSwitch
+            checked={useTraffic}
+            disabled={!canMutatePlan}
+            accent="sky"
+            label="Учитывать пробки"
+            onChange={(next) => {
+              setUseTraffic(next);
+              setScenarios([]);
+              setActiveScenarioId(null);
             }}
-          >
-            <input
-              type="checkbox"
-              checked={useTraffic}
-              disabled={!canMutatePlan}
-              onChange={(e) => {
-                setUseTraffic(e.target.checked);
-                setScenarios([]);
-                setActiveScenarioId(null);
-              }}
-              style={{ width: fs(16), height: fs(16), accentColor: '#38BDF8' }}
-            />
-            Учитывать пробки
-          </label>
+          />
         </DarkHoverTip>
         <DarkHoverTip
-          tip="Без галочки возврат на базу ≤ 21:00. Открытие соски сдвигается раньше 06:00, если есть ранние доставки (к 06:00 и т.п.). С галочкой — рейсы после 21:00 и на следующие сутки."
+          tip="Выкл — возврат на базу ≤ 21:00. Открытие соски сдвигается раньше 06:00, если есть ранние доставки (к 06:00 и т.п.). Вкл — рейсы после 21:00 и на следующие сутки."
           maxWidth={360}
         >
-          <label
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: sp(8),
-              color: '#CBD5E1',
-              fontSize: fs(14),
-              fontWeight: 600,
-              cursor: canEditPlan ? 'pointer' : 'default',
-              userSelect: 'none',
-              opacity: canEditPlan ? 1 : 0.55,
+          <PlannerSwitch
+            checked={allowNight}
+            disabled={!canMutatePlan}
+            accent="amber"
+            label="Включая ночь"
+            onChange={(next) => {
+              setAllowNight(next);
+              setScenarios([]);
+              setActiveScenarioId(null);
             }}
-          >
-            <input
-              type="checkbox"
-              checked={allowNight}
-              disabled={!canMutatePlan}
-              onChange={(e) => {
-                setAllowNight(e.target.checked);
-                setScenarios([]);
-                setActiveScenarioId(null);
-              }}
-              style={{ width: fs(16), height: fs(16), accentColor: '#F59E0B' }}
-            />
-            Включая ночь
-          </label>
+          />
         </DarkHoverTip>
       </div>
 
@@ -4286,64 +4369,36 @@ export default function LogisticsPlannerTab({
           }}
         >
           <DarkHoverTip
-            tip="Если включено — во списке заявок появляется вторая галочка (фиолетовая): применить план только к отмеченным. Иначе — ко всем заявкам с рейсами."
+            tip="Если включено — во списке заявок появляется второй переключатель (фиолетовый): применить план только к отмеченным. Иначе — ко всем заявкам с рейсами."
             maxWidth={340}
           >
-            <label
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: sp(8),
-                color: '#CBD5E1',
-                fontSize: fs(13),
-                fontWeight: 600,
-                cursor: canEditPlan ? 'pointer' : 'default',
-                userSelect: 'none',
-                opacity: canEditPlan ? 1 : 0.55,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={applyOnlySelected}
-                disabled={!canMutatePlan}
-                onChange={(e) => setApplyOnlySelected(e.target.checked)}
-                style={{ width: fs(16), height: fs(16), accentColor: '#A78BFA' }}
-              />
-              Только выбранные заявки
-              {applyOnlySelected && applyableOrderIds.size > 0 ? (
-                <span style={{ color: '#A78BFA', fontWeight: 700 }}>
-                  ({[...applyOrderIds].filter((id) => applyableOrderIds.has(id)).length}/
-                  {applyableOrderIds.size})
-                </span>
-              ) : null}
-            </label>
+            <PlannerSwitch
+              checked={applyOnlySelected}
+              disabled={!canMutatePlan}
+              accent="violet"
+              label="Только выбранные заявки"
+              onChange={setApplyOnlySelected}
+              suffix={
+                applyOnlySelected && applyableOrderIds.size > 0 ? (
+                  <span style={{ color: '#A78BFA', fontWeight: 700, fontSize: fs(13) }}>
+                    ({[...applyOrderIds].filter((id) => applyableOrderIds.has(id)).length}/
+                    {applyableOrderIds.size})
+                  </span>
+                ) : null
+              }
+            />
           </DarkHoverTip>
           <DarkHoverTip
             tip="По умолчанию выкл: заявки, где диспетчер уже поставил миксеры («Загрузка»), интеллект не трогает. Включи только если сознательно хочешь заменить ручные назначения планом."
             maxWidth={360}
           >
-            <label
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: sp(8),
-                color: overwriteManual ? '#FCA5A5' : '#CBD5E1',
-                fontSize: fs(13),
-                fontWeight: 600,
-                cursor: canEditPlan ? 'pointer' : 'default',
-                userSelect: 'none',
-                opacity: canEditPlan ? 1 : 0.55,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={overwriteManual}
-                disabled={!canMutatePlan}
-                onChange={(e) => setOverwriteManual(e.target.checked)}
-                style={{ width: fs(16), height: fs(16), accentColor: '#F87171' }}
-              />
-              Заменить ручные «Загрузка»
-            </label>
+            <PlannerSwitch
+              checked={overwriteManual}
+              disabled={!canMutatePlan}
+              accent="rose"
+              label="Заменить ручные «Загрузка»"
+              onChange={setOverwriteManual}
+            />
           </DarkHoverTip>
         </div>
         <ModalActionButton

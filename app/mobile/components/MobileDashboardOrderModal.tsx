@@ -16,6 +16,7 @@ import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
 import OrderCommentsPanel from '@/app/adminCifra/components/OrderCommentsPanel';
 import ModalSelect from '@/app/adminCifra/components/ModalSelect';
+import QuestionableToggle from '@/app/adminCifra/components/QuestionableToggle';
 import { ORDER_MIXER_STATUSES } from '@/lib/mixerConfig';
 
 const MIXER_STATUS_OPTIONS = ORDER_MIXER_STATUSES.map((s) => ({
@@ -271,31 +272,13 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
               </div>
             )}
 
-            {/* Компактный бейдж — не наезжает на крестик */}
             {canManageQuestionable && (
-              <label
-                title="Под вопросом"
-                style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: '26px', height: '26px', borderRadius: '9999px', flexShrink: 0,
-                  border: '1px solid rgba(239,68,68,0.45)',
-                  background: (localOrder as any).is_questionable ? '#EF4444' : 'transparent',
-                  color: (localOrder as any).is_questionable ? '#fff' : '#F87171',
-                  fontSize: '13px', fontWeight: 800, lineHeight: 1,
-                  cursor: questionableSaving ? 'wait' : 'pointer',
-                  opacity: questionableSaving ? 0.7 : 1,
-                  userSelect: 'none',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={!!(localOrder as any).is_questionable}
-                  disabled={questionableSaving}
-                  onChange={e => toggleQuestionable(e.target.checked)}
-                  style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }}
-                />
-                ?
-              </label>
+              <QuestionableToggle
+                variant="compact"
+                checked={!!(localOrder as any).is_questionable}
+                saving={questionableSaving}
+                onChange={(next) => toggleQuestionable(next)}
+              />
             )}
           </div>
 

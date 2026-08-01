@@ -2834,6 +2834,97 @@ export function replanAfterTripVolumeChange(input: {
 }
 
 /**
+ * Несколько правок объёма (например sync из ручных order_mixers) → одна волна хвоста.
+ * Объёмы применяются сразу; рейсы с новой вместимостью locked, хвост — stage.
+ */
+export function replanAfterTripVolumesChange(input: {
+  allTrips: PlannedTrip[];
+  changes: Array<{ tripId: string; volume: number }>;
+  orders: PlannerOrder[];
+  mixers: PlannerMixer[];
+  doneOrderIds?: Array<number | string>;
+  allowNight?: boolean;
+  useTraffic?: boolean;
+  factDelayMin?: number;
+  dayTrips?: LiveTripFact[];
+  nowMinutes?: number | null;
+  calibration?: PlannerCalibration | null;
+}): {
+  result: PlanLogisticsResult;
+  locked: PlannedTrip[];
+  shifted: PlannedTrip | null;
+} {
+  const volById = new Map<string, number>();
+  for (const c of input.changes) {
+    if (!c.tripId) continue;
+    volById.set(
+      c.tripId,
+      Math.round(Math.max(0.1, Math.min(20, Number(c.volume) || 0)) * 10) / 10,
+    );
+  }
+  if (volById.size === 0) {
+    return {
+      result: planLogistics({
+        mode: 'stage',
+        orders: input.orders,
+        mixers: input.mixers,
+        lockedTrips: input.allTrips.filter((t) => t.locked || t.done),
+        doneOrderIds: input.doneOrderIds,
+        allowNight: input.allowNight,
+        useTraffic: input.useTraffic,
+        factDelayMin: input.factDelayMin,
+        calibration: input.calibration,
+      }),
+      locked: [],
+      shifted: null,
+    };
+  }
+
+  const withVols = input.allTrips.map((t) => {
+    const v = volById.get(t.id);
+    return v != null ? applyTripPlanVolume(t, v) : t;
+  });
+
+  const sorted = [...withVols].sort(
+    (a, b) => tripLoadSortKey(a) - tripLoadSortKey(b),
+  );
+  const earliest = sorted.find((t) => volById.has(t.id));
+  if (!earliest) {
+    return {
+      result: planLogistics({
+        mode: 'stage',
+        orders: input.orders,
+        mixers: input.mixers,
+        lockedTrips: withVols.filter((t) => t.locked || t.done),
+        doneOrderIds: input.doneOrderIds,
+        allowNight: input.allowNight,
+        useTraffic: input.useTraffic,
+        factDelayMin: input.factDelayMin,
+        calibration: input.calibration,
+      }),
+      locked: [],
+      shifted: null,
+    };
+  }
+
+  return replanTailAfterTripMutate({
+    allTrips: withVols,
+    tripId: earliest.id,
+    orders: input.orders,
+    mixers: input.mixers,
+    doneOrderIds: input.doneOrderIds,
+    allowNight: input.allowNight,
+    useTraffic: input.useTraffic,
+    factDelayMin: input.factDelayMin,
+    dayTrips: input.dayTrips,
+    nowMinutes: input.nowMinutes,
+    calibration: input.calibration,
+    // объём уже применён; фиксируем голову от earliest
+    mutate: (t) => t,
+  });
+}
+
+/**
  * Перетаскивание рейса: внутри заявки или в другую заявку.
  * Вставляем beforeTripId (или в конец заявки), фиксируем голову, хвост пересчитываем.
  */

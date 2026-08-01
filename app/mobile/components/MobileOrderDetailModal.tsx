@@ -13,6 +13,7 @@ import {
   volumeModalStyle,
 } from '@/app/adminCifra/cardStyles';
 import { VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
+import QuestionableToggle from '@/app/adminCifra/components/QuestionableToggle';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatTimeHHMM } from '@/lib/ruLocale';
 import OrderCommentsPanel from '@/app/adminCifra/components/OrderCommentsPanel';
@@ -301,31 +302,13 @@ export default function MobileOrderDetailModal({
               </div>
             )}
 
-            {/* Компактный бейдж — не наезжает на крестик */}
             {canManageQuestionable && (
-              <label
-                title="Под вопросом"
-                style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  width: '26px', height: '26px', borderRadius: '9999px', flexShrink: 0,
-                  border: '1px solid rgba(239,68,68,0.45)',
-                  background: editedOrder.is_questionable ? '#EF4444' : 'transparent',
-                  color: editedOrder.is_questionable ? '#fff' : '#F87171',
-                  fontSize: '13px', fontWeight: 800, lineHeight: 1,
-                  cursor: questionableSaving ? 'wait' : 'pointer',
-                  opacity: questionableSaving ? 0.7 : 1,
-                  userSelect: 'none',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={!!editedOrder.is_questionable}
-                  disabled={questionableSaving}
-                  onChange={e => toggleQuestionable(e.target.checked)}
-                  style={{ position: 'absolute', opacity: 0, width: 0, height: 0 }}
-                />
-                ?
-              </label>
+              <QuestionableToggle
+                variant="compact"
+                checked={!!editedOrder.is_questionable}
+                saving={questionableSaving}
+                onChange={(next) => toggleQuestionable(next)}
+              />
             )}
           </div>
 

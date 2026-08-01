@@ -155,35 +155,6 @@ export default function PlannerTripFactRow({
     }
   };
 
-  const patchVolume = async (raw: string) => {
-    if (!fact.matchedTripId) return;
-    const volume = Number(String(raw).replace(',', '.'));
-    if (!Number.isFinite(volume) || volume <= 0) return;
-    if (fact.factVolume != null && Math.abs(volume - fact.factVolume) < 0.05) return;
-    try {
-      const res = await fetch('/api/adminCifra/order-mixers/volume', {
-        method: 'POST',
-        headers: headers(),
-        body: JSON.stringify({
-          id: fact.matchedTripId,
-          volume,
-          ...actor(),
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.success === false) {
-        await appAlert(data.message || data.error || 'Не удалось сменить объём', {
-          title: 'Объём рейса',
-          variant: 'danger',
-        });
-        return;
-      }
-      onPatched?.();
-    } catch {
-      await appAlert('Сеть недоступна', { title: 'Ошибка', variant: 'danger' });
-    }
-  };
-
   const deltaLoad = formatFactDeltaLabel(fact.deltaLoadMin);
   const deltaRel = formatFactDeltaLabel(fact.deltaReleaseMin);
   const showTime = fact.factPlanTime || '—';
@@ -281,7 +252,7 @@ export default function PlannerTripFactRow({
         </span>
       </DarkHoverTip>
       {showPlanVolume ? (
-        <DarkHoverTip tip="Плановый объём рейса — при правке хвост дня и вместимость миксера пересчитаются">
+        <DarkHoverTip tip="Объём в плане. Правка пересчитает хвост. Если диспетчер меняет объём в заявке вручную — план подтянет его сам. Обратно в заявку — через «Применить в заявки».">
         <label
           style={{
             display: 'inline-flex',
@@ -586,7 +557,7 @@ export default function PlannerTripFactRow({
                 {showTime}
               </span>
             </DarkHoverTip>
-            <DarkHoverTip tip="Объём рейса">
+            <DarkHoverTip tip="Объём по факту в заявке (только просмотр)">
               <span style={{ color: '#6EE7B7', fontWeight: 600 }}>
                 {showVol} м³
               </span>
@@ -631,30 +602,6 @@ export default function PlannerTripFactRow({
                   width: 52,
                   background: 'rgba(15,23,42,0.9)',
                   color: '#FDE047',
-                  border: '1px solid rgba(71,85,105,0.9)',
-                  borderRadius: 6,
-                  fontSize: controlFont,
-                  padding: inputPad,
-                }}
-              />
-            </DarkHoverTip>
-            <DarkHoverTip tip="Объём рейса">
-              <input
-                type="text"
-                disabled={busy}
-                defaultValue={
-                  fact.factVolume != null ? String(fact.factVolume) : ''
-                }
-                key={`v-${fact.matchedTripId}-${fact.factVolume}`}
-                onBlur={(e) => void patchVolume(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') e.currentTarget.blur();
-                }}
-                placeholder="м³"
-                style={{
-                  width: 42,
-                  background: 'rgba(15,23,42,0.9)',
-                  color: '#6EE7B7',
                   border: '1px solid rgba(71,85,105,0.9)',
                   borderRadius: 6,
                   fontSize: controlFont,
