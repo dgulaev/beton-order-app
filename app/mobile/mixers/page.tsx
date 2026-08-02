@@ -11,7 +11,7 @@ import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import { DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
 import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
 import { useRealtimeOrderMixers } from '@/hooks/useRealtimeOrders';
-import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { shouldDeferWakeNetworkWork, useWakeRefresh } from '@/hooks/useWakeReload';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { fetchWithTimeout, safeFetch } from '@/lib/fetchWithTimeout';
@@ -493,6 +493,7 @@ export default function MobileMixersPage() {
   });
 
   useWakeRefresh(() => {
+    if (shouldDeferWakeNetworkWork()) return;
     if (vehicleKind !== 'mixer') return;
     void safeFetch('/api/adminCifra/active-mixers')
       .then((res) => (res?.ok ? res.json() : null))

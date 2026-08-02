@@ -14,7 +14,7 @@ import {
   useRealtimeOrderMixers,
   formatOrderMixer,
 } from '@/hooks/useRealtimeOrders';
-import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { shouldDeferWakeNetworkWork, useWakeRefresh } from '@/hooks/useWakeReload';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { CARD_BORDER, CARD_GRADIENT_SOFT, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 import { appAlert, appConfirm } from '@/app/adminCifra/components/appDialog';
@@ -267,6 +267,8 @@ useEffect(() => {
 // Мягкое восстановление данных при пробуждении вкладки (без перезагрузки) —
 // подтягиваем свежие заявки и миксеры. Сокет realtime поднимает layout.
 useWakeRefresh(() => {
+  // Долгий фон → layout делает controlled reload; fetch здесь только забьёт сеть.
+  if (shouldDeferWakeNetworkWork()) return;
   if (!userId) return;
   void safeFetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`)
     .then((res) => (res?.ok ? res.json() : null))

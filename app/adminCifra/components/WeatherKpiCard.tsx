@@ -11,6 +11,7 @@ import {
   getCachedWeatherPayload,
   putCachedWeatherPayload,
 } from '@/lib/weather/browserCache';
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 
 type Props = {
   /** YYYY-MM-DD — выбранный день страницы */
@@ -67,7 +68,7 @@ export default function WeatherKpiCard({
       if (!hadDay) setLoading(true);
       setError(null);
       try {
-        const res = await fetch('/api/weather', { cache: 'no-store' });
+        const res = await fetchWithTimeout('/api/weather', { cache: 'no-store', timeoutMs: 8_000 });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as WeatherForecastPayload;
         putCachedWeatherPayload(data);
@@ -118,9 +119,9 @@ export default function WeatherKpiCard({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(
+        const res = await fetchWithTimeout(
           `/api/weather?from=${encodeURIComponent(dateKey)}&to=${encodeURIComponent(dateKey)}`,
-          { cache: 'no-store' },
+          { cache: 'no-store', timeoutMs: 8_000 },
         );
         if (!res.ok) return;
         const extra = (await res.json()) as WeatherForecastPayload;

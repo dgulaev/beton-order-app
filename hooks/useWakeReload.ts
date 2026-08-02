@@ -71,20 +71,58 @@ export function getWakeGapMs(): number {
   return Math.max(0, Date.now() - t);
 }
 
+/** Сколько мс вкладка была скрыта (по метке visibility=hidden). */
+export function getWakeHiddenGapMs(): number {
+  const t = readTs(WAKE_HIDDEN_AT_KEY);
+  if (!t) return 0;
+  return Math.max(0, Date.now() - t);
+}
+
+/**
+ * Реальный простой: max(разрыв пульса, время в hidden).
+ * Нужен, когда фоновые таймеры иногда тикают и «съедают» gap пульса,
+ * но hiddenAt всё равно показывает час в свёрнутом браузере.
+ */
+export function getEffectiveWakeGapMs(): number {
+  return Math.max(getWakeGapMs(), getWakeHiddenGapMs());
+}
+
 export function touchWakeBeat(now = Date.now()) {
   writeTs(WAKE_LAST_BEAT_KEY, now);
+}
+
+/** Уже запланирован controlled reload — не стартовать fetch/hardReset на зомби-вкладке. */
+export function isWakeReloadScheduled(): boolean {
+  const t = readTs(RELOAD_GUARD_KEY);
+  return t != null && Date.now() - t < 15_000;
+}
+
+/**
+ * Долгий фон → будет reload: страницам/broadcast нельзя параллельно
+ * долбить сеть (Samsung держит TCP до 60–70 с даже после abort).
+ */
+export function shouldDeferWakeNetworkWork(): boolean {
+  if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+    return true;
+  }
+  if (isWakeReloadScheduled()) return true;
+  return getEffectiveWakeGapMs() >= FROZEN_GAP_MS;
 }
 
 /**
  * Перезагрузка для mobile после долгого фона.
  * Сначала рвём realtime (иначе Samsung/Android может зависнуть на «Страница не отвечает»),
  * затем location.replace — чуть мягче голого reload на части WebView.
+ *
+ * Важно: флаг RELOAD_GUARD пишем ДО любых других wake-обработчиков, чтобы
+ * дашборд не успел запустить 3 fetch, а broadcast — hardReset на полумёртвой сети.
  */
 export function controlledMobileReload(reason: string) {
   if (typeof window === 'undefined') return;
   if (document.visibilityState !== 'visible') return;
   const t = readTs(RELOAD_GUARD_KEY);
   if (t != null && Date.now() - t < RELOAD_GUARD_MS) return;
+  // Сразу: остальные listeners на visibility/focus увидят «reload идёт»
   writeTs(RELOAD_GUARD_KEY, Date.now());
   touchWakeBeat();
   clearTs(WAKE_HIDDEN_AT_KEY);
@@ -94,13 +132,13 @@ export function controlledMobileReload(reason: string) {
   } catch {
     /* ignore */
   }
-  window.setTimeout(() => {
-    try {
-      window.location.replace(window.location.href);
-    } catch {
-      window.location.reload();
-    }
-  }, 150);
+  // Без паузы 150ms: иначе page useWakeRefresh успевает открыть hung-fetch'и
+  // и забить пул соединений Samsung на минуту после reload.
+  try {
+    window.location.replace(window.location.href);
+  } catch {
+    window.location.reload();
+  }
 }
 
 export function useWakeReload(enabled = true) {
@@ -133,16 +171,9 @@ export function useWakeReload(enabled = true) {
     };
 
     const checkGapAndReload = (reasonPrefix: string) => {
-      const gap = getWakeGapMs();
+      const gap = getEffectiveWakeGapMs();
       if (gap > FROZEN_GAP_MS) {
         reloadOnce(`${reasonPrefix} ${Math.round(gap / 60000)} мин`);
-        return true;
-      }
-      const hiddenAt = readTs(WAKE_HIDDEN_AT_KEY);
-      if (hiddenAt && Date.now() - hiddenAt > FROZEN_GAP_MS) {
-        reloadOnce(
-          `${reasonPrefix} (скрыта) ${Math.round((Date.now() - hiddenAt) / 60000)} мин`,
-        );
         return true;
       }
       return false;
@@ -254,28 +285,24 @@ export function useWakeRefresh(onWake: () => void, enabled = true) {
     // и broadcast не отличает короткий app-switch от долгого сна.
     // ВАЖНО: сначала проверяем gap, иначе «холостой» touch съедает evidence сна.
     if (document.visibilityState === 'visible') {
-      const gap = getWakeGapMs();
-      const hiddenAt = readTs(WAKE_HIDDEN_AT_KEY);
-      const hiddenGap = hiddenAt ? Date.now() - hiddenAt : 0;
-      if (gap >= SOCKET_STALE_GAP_MS || hiddenGap >= SOCKET_STALE_GAP_MS) {
+      if (getEffectiveWakeGapMs() >= SOCKET_STALE_GAP_MS) {
         fire();
       } else {
         touchWakeBeat();
+        // Иначе старый hiddenAt раздувает effective gap, пока вкладка уже открыта.
+        clearTs(WAKE_HIDDEN_AT_KEY);
       }
     }
 
     const beat = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       const now = Date.now();
-      const prev = readTs(WAKE_LAST_BEAT_KEY) ?? now;
-      const gap = now - prev;
-      const hiddenAt = readTs(WAKE_HIDDEN_AT_KEY);
-      const hiddenGap = hiddenAt ? now - hiddenAt : 0;
-      if (gap >= SOCKET_STALE_GAP_MS || hiddenGap >= SOCKET_STALE_GAP_MS) {
+      if (getEffectiveWakeGapMs() >= SOCKET_STALE_GAP_MS) {
         fire();
         return;
       }
       touchWakeBeat(now);
+      clearTs(WAKE_HIDDEN_AT_KEY);
     }, HEARTBEAT_MS);
 
     const onVisibility = () => {

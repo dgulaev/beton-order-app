@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { LogOut, Clock, MapPin, Package, ChevronRight, Bell, Phone, CircleHelp } from 'lucide-react';
 import { useHelp } from '@/app/adminCifra/components/help/HelpProvider';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
-import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { shouldDeferWakeNetworkWork, useWakeRefresh } from '@/hooks/useWakeReload';
 import { isFetchTimeoutError } from '@/lib/fetchWithTimeout';
 import { driverFetch, DriverMixerInfo, DriverTrip } from '../driverClient';
 import DriverTripDetailModal from './DriverTripDetailModal';
@@ -240,6 +240,7 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
   // подтягиваем свежие рейсы. Сокет realtime поднимает layout (useWakeRefresh →
   // hardResetBroadcastSocket).
   useWakeRefresh(() => {
+    if (shouldDeferWakeNetworkWork()) return;
     fetchToday();
     setHistoryOffset(0);
     fetchHistory(0, false);

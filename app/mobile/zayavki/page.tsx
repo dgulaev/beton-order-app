@@ -7,7 +7,7 @@ import MobileExitButton from '../components/MobileExitButton';
 import { Plus, MapPin, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import { useRealtimeOrders } from '@/hooks/useRealtimeOrders';
-import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { shouldDeferWakeNetworkWork, useWakeRefresh } from '@/hooks/useWakeReload';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle } from '@/app/adminCifra/cardStyles';
 import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
@@ -111,6 +111,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   });
 
   useWakeRefresh(() => {
+    if (shouldDeferWakeNetworkWork()) return;
     void safeFetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`, { cache: 'no-store' })
       .then((res) => (res?.ok ? res.json() : null))
       .then((data) => { if (Array.isArray(data)) setAllOrders(data); })

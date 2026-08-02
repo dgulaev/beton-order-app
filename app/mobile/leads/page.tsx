@@ -27,7 +27,7 @@ import {
   type LeadStatus,
 } from '@/lib/leads';
 import { useRealtimeLeads } from '@/hooks/useRealtimeLeads';
-import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { shouldDeferWakeNetworkWork, useWakeRefresh } from '@/hooks/useWakeReload';
 import {
   modalCloseButtonStyle,
   modalFieldStyle,
@@ -274,6 +274,7 @@ export default function MobileLeadsPage() {
 
   // После простоя догоняем список (сокет поднимает layout; missed events не восстанавливаются).
   useWakeRefresh(() => {
+    if (shouldDeferWakeNetworkWork()) return;
     void load({ quiet: true });
   });
 

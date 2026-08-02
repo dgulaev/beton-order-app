@@ -9,7 +9,7 @@ import { canProcessTenders } from '@/lib/demandProcessAccess';
 import { volumeCardSoftStyle } from '@/app/adminCifra/cardStyles';
 import ProcessDemandModal from '@/app/adminCifra/demand/ProcessDemandModal';
 import type { DemandItemRow } from '@/hooks/useRealtimeDemand';
-import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { shouldDeferWakeNetworkWork, useWakeRefresh } from '@/hooks/useWakeReload';
 import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 import { useUserRole } from '../../providers/UserRoleProvider';
 
@@ -58,6 +58,7 @@ export default function MobileDemandPage() {
   }, [load]);
 
   useWakeRefresh(() => {
+    if (shouldDeferWakeNetworkWork()) return;
     void load({ quiet: true });
   });
 

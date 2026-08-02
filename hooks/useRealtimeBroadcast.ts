@@ -21,7 +21,12 @@ import { useEffect, useRef, useState } from 'react';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabaseClient';
 import type { RealtimeStatus } from './useRealtimeOrders';
-import { getWakeGapMs, SOCKET_STALE_GAP_MS } from './useWakeReload';
+import {
+  FROZEN_GAP_MS,
+  getEffectiveWakeGapMs,
+  isWakeReloadScheduled,
+  SOCKET_STALE_GAP_MS,
+} from './useWakeReload';
 
 interface BroadcastListener {
   onInsert?: (record: any) => void;
@@ -444,11 +449,15 @@ function attachGlobalListeners() {
     if (document.visibilityState !== 'visible') return;
     if (registry.size === 0) return;
     if (hardResetInProgress) return;
+    // Layout уже уходит в controlled reload — hardReset на зомби только мешает.
+    if (isWakeReloadScheduled()) return;
 
     const now = Date.now();
     if (now - lastRecoverAt < 3000) return;
 
-    const gap = getWakeGapMs();
+    const gap = getEffectiveWakeGapMs();
+    if (gap >= FROZEN_GAP_MS) return;
+
     const stale = gap >= SOCKET_STALE_GAP_MS;
 
     // focus/online/pageshow без bfcache — только если простой длинный,

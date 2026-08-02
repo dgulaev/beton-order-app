@@ -26,7 +26,7 @@ import HelpProvider from '@/app/adminCifra/components/help/HelpProvider';
 import {
   controlledMobileReload,
   FROZEN_GAP_MS,
-  getWakeGapMs,
+  getEffectiveWakeGapMs,
   SOCKET_STALE_GAP_MS,
   useWakeRefresh,
 } from '@/hooks/useWakeReload';
@@ -403,8 +403,10 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   // — ≥10 мин фона → controlled reload (зомби-UI / зелёный индикатор без данных);
   // — ≥2 мин или сокет не SUBSCRIBED → hard-reset WS;
   // — данные страниц догоняют через свои useWakeRefresh (тот же fire).
+  // При reload НЕ зовём hardReset и не даём страницам стартовать fetch —
+  // иначе Samsung забивает пул TCP на 60–70 с.
   useWakeRefresh(() => {
-    const gap = getWakeGapMs();
+    const gap = getEffectiveWakeGapMs();
     if (gap >= FROZEN_GAP_MS) {
       controlledMobileReload(`фон ${Math.round(gap / 60000)} мин`);
       return;
