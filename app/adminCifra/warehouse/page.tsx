@@ -570,17 +570,15 @@ const loadTodayConsumption = async () => {
   // Poll остатков/алертов (как OperatorSilosBar): realtime ловит смену статуса
   // рейса, но глубокий минус после ручного списания/transfer на другой вкладке
   // иначе мог не всплыть, пока не обновишь страницу.
+  // Рабочий силос смены меняется редко — отдельный редкий poll (не каждые 15 с).
   useEffect(() => {
     const refreshStock = async () => {
       if (document.hidden) return;
       try {
-        const [res, shiftRes] = await Promise.all([
-          fetch('/api/adminCifra/warehouse', {
-            cache: 'no-store',
-            headers: { 'Cache-Control': 'no-cache' },
-          }).catch(() => null),
-          fetch('/api/adminCifra/operator-shift', { cache: 'no-store' }).catch(() => null),
-        ]);
+        const res = await fetch('/api/adminCifra/warehouse', {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' },
+        }).catch(() => null);
         if (res?.ok) {
           const data = await res.json();
           setSilos(data.silos || []);
@@ -594,6 +592,16 @@ const loadTodayConsumption = async () => {
           }));
           setAdditives(loadedAdditives);
         }
+      } catch {
+        // тихий poll
+      }
+    };
+    const refreshShift = async () => {
+      if (document.hidden) return;
+      try {
+        const shiftRes = await fetch('/api/adminCifra/operator-shift', {
+          cache: 'no-store',
+        }).catch(() => null);
         if (shiftRes?.ok) {
           const shift = await shiftRes.json();
           const sid = shift?.active_silo_id != null ? Number(shift.active_silo_id) : null;
@@ -603,13 +611,18 @@ const loadTodayConsumption = async () => {
         // тихий poll
       }
     };
-    const t = setInterval(refreshStock, 15000);
+    const tStock = setInterval(refreshStock, 15000);
+    const tShift = setInterval(refreshShift, 60000);
     const onVis = () => {
-      if (!document.hidden) void refreshStock();
+      if (!document.hidden) {
+        void refreshStock();
+        void refreshShift();
+      }
     };
     document.addEventListener('visibilitychange', onVis);
     return () => {
-      clearInterval(t);
+      clearInterval(tStock);
+      clearInterval(tShift);
       document.removeEventListener('visibilitychange', onVis);
     };
   }, []);

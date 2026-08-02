@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import { SILO_LOW_RATE_ADMIN_TYPE } from '@/lib/siloLowRateAdminNotif';
 import { appAlert } from './appDialog';
 
@@ -42,6 +42,10 @@ function formatMessage(list: AdminNotif[]): string {
  * Тянет непрочитанные из БД при входе + realtime INSERT; после «Понятно» —
  * is_read=true, по этому эпизоду больше не показываем.
  */
+/** Глобально: не дергать API чаще раза в 45 с (Strict Mode / смена роли / фокус вкладки). */
+let lastLoadUnreadAt = 0;
+const LOAD_UNREAD_MIN_GAP_MS = 45_000;
+
 export function useAdminSiloLowRateAlerts(enabled: boolean) {
   const busyRef = useRef(false);
   const shownIdsRef = useRef<Set<number>>(new Set());
@@ -51,7 +55,7 @@ export function useAdminSiloLowRateAlerts(enabled: boolean) {
     if (!enabled) return;
 
     let cancelled = false;
-    let channel: ReturnType<ReturnType<typeof createClient>['channel']> | null = null;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
 
     const flush = async () => {
       if (busyRef.current || cancelled) return;
@@ -108,6 +112,9 @@ export function useAdminSiloLowRateAlerts(enabled: boolean) {
     };
 
     const loadUnread = async () => {
+      const now = Date.now();
+      if (now - lastLoadUnreadAt < LOAD_UNREAD_MIN_GAP_MS) return;
+      lastLoadUnreadAt = now;
       try {
         const qs = new URLSearchParams({
           type: SILO_LOW_RATE_ADMIN_TYPE,
@@ -128,31 +135,29 @@ export function useAdminSiloLowRateAlerts(enabled: boolean) {
 
     void loadUnread();
 
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    const sb = url && key ? createClient(url, key) : null;
-    if (sb) {
-      const userId = Number(localStorage.getItem('userId') || 0);
-      channel = sb
-        .channel(`admin-silo-low-rate:${userId || 'x'}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'admin_notifications',
-            filter: userId > 0 ? `user_id=eq.${userId}` : undefined,
-          },
-          (payload) => {
-            const row = payload.new as AdminNotif;
-            if (cancelled) return;
-            enqueue([row]);
-          },
-        )
-        .subscribe();
-    }
+    // Тот же singleton, что и остальной adminCifra — без второго GoTrueClient
+    const userId = Number(
+      typeof window !== 'undefined' ? localStorage.getItem('userId') || 0 : 0,
+    );
+    channel = supabase
+      .channel(`admin-silo-low-rate:${userId || 'x'}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'admin_notifications',
+          filter: userId > 0 ? `user_id=eq.${userId}` : undefined,
+        },
+        (payload) => {
+          const row = payload.new as AdminNotif;
+          if (cancelled) return;
+          enqueue([row]);
+        },
+      )
+      .subscribe();
 
-    // Подтянуть при возврате на вкладку (офлайн → онлайн)
+    // Возврат на вкладку после долгого фона — с throttle
     const onVisible = () => {
       if (document.visibilityState === 'visible') void loadUnread();
     };
@@ -161,7 +166,7 @@ export function useAdminSiloLowRateAlerts(enabled: boolean) {
     return () => {
       cancelled = true;
       document.removeEventListener('visibilitychange', onVisible);
-      if (sb && channel) sb.removeChannel(channel);
+      if (channel) void supabase.removeChannel(channel);
     };
   }, [enabled]);
 }
