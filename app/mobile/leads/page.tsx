@@ -37,6 +37,7 @@ import {
 import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import ProcessLeadModal from '@/app/adminCifra/leads/ProcessLeadModal';
 import MobileNewOrderModal from '../components/MobileNewOrderModal';
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 import { useUserRole } from '../../providers/UserRoleProvider';
 
 const MOBILE_STATUS_FILTERS: Array<LeadStatus | ''> = [
@@ -194,7 +195,7 @@ export default function MobileLeadsPage() {
     if (!allowTenderProcess) return;
     void (async () => {
       try {
-        const res = await fetch('/api/adminCifra/employees', {
+        const res = await fetchWithTimeout('/api/adminCifra/employees', {
           headers: adminCifraAuthHeaders(),
         });
         const json = await res.json().catch(() => ({}));
@@ -216,7 +217,7 @@ export default function MobileLeadsPage() {
     const entries = await Promise.all(
       ids.map(async (id) => {
         try {
-          const res = await fetch(`/api/adminCifra/leads/${id}/shipments`, {
+          const res = await fetchWithTimeout(`/api/adminCifra/leads/${id}/shipments`, {
             headers: adminCifraAuthHeaders(),
           });
           const json = await res.json();
@@ -251,7 +252,7 @@ export default function MobileLeadsPage() {
       const qs = new URLSearchParams({ limit: mineOnly ? '300' : '100' });
       if (statusFilter) qs.set('status', statusFilter);
       if (mineOnly) qs.set('mine', '1');
-      const res = await fetch(`/api/adminCifra/leads?${qs}`, {
+      const res = await fetchWithTimeout(`/api/adminCifra/leads?${qs}`, {
         headers: adminCifraAuthHeaders(),
         cache: 'no-store',
       });
@@ -354,7 +355,7 @@ export default function MobileLeadsPage() {
     let remaining: number | null = null;
     if (working.status === 'converted' || working.order_id != null) {
       try {
-        const res = await fetch(`/api/adminCifra/leads/${working.id}/shipments`, {
+        const res = await fetchWithTimeout(`/api/adminCifra/leads/${working.id}/shipments`, {
           headers: adminCifraAuthHeaders(),
         });
         const json = await res.json();

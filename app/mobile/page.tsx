@@ -19,6 +19,7 @@ import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { CARD_BORDER, CARD_GRADIENT_SOFT, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 import { appAlert, appConfirm } from '@/app/adminCifra/components/appDialog';
 import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
+import { fetchWithTimeout, isFetchTimeoutError, safeFetch } from '@/lib/fetchWithTimeout';
 import { formatTimeHHMM } from '@/lib/ruLocale';
 
 export default function MobileDashboard() {
@@ -115,7 +116,7 @@ export default function MobileDashboard() {
     let cancelled = false;
     setOrdersLoading(true);
 
-    fetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`)
+    fetchWithTimeout(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`)
       .then((res) => {
         if (!res.ok) throw new Error(`Orders fetch failed: ${res.status}`);
         return res.json();
@@ -124,7 +125,9 @@ export default function MobileDashboard() {
         if (!cancelled) setAllOrders(data);
       })
       .catch((err) => {
-        console.error('Initial orders fetch failed:', err);
+        if (!isFetchTimeoutError(err) && !(err instanceof TypeError)) {
+          console.warn('Initial orders fetch failed:', err instanceof Error ? err.message : err);
+        }
       })
       .finally(() => {
         if (!cancelled) {
@@ -141,7 +144,7 @@ export default function MobileDashboard() {
 // 🔥 Active Mixers — API отдаёт все активные рейсы; дату фильтруем локально
 // через selectedDateStr (не toISOString — иначе UTC съезжает на −1 день).
 useEffect(() => {
-  fetch('/api/adminCifra/active-mixers')
+  fetchWithTimeout('/api/adminCifra/active-mixers')
     .then((res) => {
       if (!res.ok) throw new Error(`Active mixers error: ${res.status}`);
       return res.json();
@@ -154,7 +157,7 @@ useEffect(() => {
 
 // Список всех миксеров — нужен для определения типа (свой/наёмный) в виджете
 useEffect(() => {
-  fetch('/api/adminCifra/mixers')
+  fetchWithTimeout('/api/adminCifra/mixers')
     .then(r => r.ok ? r.json() : [])
     .then(setAllMixersList)
     .catch(() => {});
@@ -177,15 +180,15 @@ const orderIdsKey = useMemo(
   const mixersRealtimeEnabled = Boolean(userId) && initialOrdersLoaded;
 
   const onMixersReload = useCallback(() => {
-    fetch('/api/adminCifra/active-mixers')
-      .then((res) => (res.ok ? res.json() : null))
+    void safeFetch('/api/adminCifra/active-mixers')
+      .then((res) => (res?.ok ? res.json() : null))
       .then((mixers) => {
         if (Array.isArray(mixers)) setActiveMixers(mixers);
       })
       .catch(() => {});
     if (!orderIdsKey) return;
-    fetch(`/api/adminCifra/order-mixers?orderIds=${orderIdsKey}`)
-      .then((res) => (res.ok ? res.json() : null))
+    void safeFetch(`/api/adminCifra/order-mixers?orderIds=${orderIdsKey}`)
+      .then((res) => (res?.ok ? res.json() : null))
       .then((assignments) => {
         if (Array.isArray(assignments)) setMixerAssignments(assignments);
       })
@@ -244,7 +247,7 @@ useEffect(() => {
     };
   }
 
-  fetch(`/api/adminCifra/order-mixers?orderIds=${orderIdsKey}`)
+  fetchWithTimeout(`/api/adminCifra/order-mixers?orderIds=${orderIdsKey}`)
     .then((res) => {
       if (!res.ok) throw new Error(`Assignments error: ${res.status}`);
       return res.json();
@@ -265,19 +268,19 @@ useEffect(() => {
 // подтягиваем свежие заявки и миксеры. Сокет realtime поднимает layout.
 useWakeRefresh(() => {
   if (!userId) return;
-  fetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`)
-    .then((res) => (res.ok ? res.json() : null))
+  void safeFetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`)
+    .then((res) => (res?.ok ? res.json() : null))
     .then((data) => { if (data) setAllOrders(data); })
     .catch(() => {});
 
-  fetch('/api/adminCifra/active-mixers')
-    .then((res) => (res.ok ? res.json() : null))
+  void safeFetch('/api/adminCifra/active-mixers')
+    .then((res) => (res?.ok ? res.json() : null))
     .then((mixers) => { if (Array.isArray(mixers)) setActiveMixers(mixers); })
     .catch(() => {});
 
   if (orderIdsKey) {
-    fetch(`/api/adminCifra/order-mixers?orderIds=${orderIdsKey}`)
-      .then((res) => (res.ok ? res.json() : null))
+    void safeFetch(`/api/adminCifra/order-mixers?orderIds=${orderIdsKey}`)
+      .then((res) => (res?.ok ? res.json() : null))
       .then((assignments) => { if (Array.isArray(assignments)) setMixerAssignments(assignments); })
       .catch(() => {});
   }

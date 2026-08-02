@@ -3,6 +3,8 @@
 // авторизационными заголовками (номер миксера + телефон проверяются на
 // сервере при каждом запросе, см. lib/driverAuth.ts).
 
+import { fetchWithTimeout, type FetchWithTimeoutInit } from '@/lib/fetchWithTimeout';
+
 const STORAGE_KEYS = {
   number: 'driver_mixer_number',
   phone: 'driver_phone',
@@ -62,7 +64,7 @@ export function clearDriverMixerCache() {
   localStorage.removeItem(MIXER_CACHE_KEY);
 }
 
-export async function driverFetch(url: string, options: RequestInit = {}) {
+export async function driverFetch(url: string, options: FetchWithTimeoutInit = {}) {
   const session = getStoredDriverSession();
   const headers = new Headers(options.headers || {});
   if (session) {
@@ -74,7 +76,8 @@ export async function driverFetch(url: string, options: RequestInit = {}) {
   if (options.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
-  return fetch(url, { ...options, headers, cache: 'no-store' });
+  // 12 с по умолчанию — без таймаута Samsung мог крутить «Загрузка...» 60–70 с.
+  return fetchWithTimeout(url, { ...options, headers, cache: 'no-store' });
 }
 
 export interface DriverMixerInfo {

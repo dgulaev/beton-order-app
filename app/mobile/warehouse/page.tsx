@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import MobileExitButton from '../components/MobileExitButton';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import { supabase } from '@/lib/supabaseClient';
@@ -18,6 +18,7 @@ import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } f
 import { useLowRateAlerts } from '@/app/adminCifra/components/useLowRateAlerts';
 import { appAlert } from '@/app/adminCifra/components/appDialog';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { fetchWithTimeout, safeFetch } from '@/lib/fetchWithTimeout';
 import type { LowRateAlertInfo } from '@/lib/siloConfig';
 import { useUserRole } from '../../providers/UserRoleProvider';
 
@@ -162,68 +163,74 @@ export default function MobileWarehousePage() {
 
   // ==================== ЗАГРУЗКА ДАННЫХ ====================
 
-  /** fetch без throw: после сворачивания браузера iOS/Android рвёт запросы → TypeError. */
-  const safeFetch = useCallback(async (url: string, init?: RequestInit): Promise<Response | null> => {
-    try {
-      return await fetch(url, { cache: 'no-store', ...init });
-    } catch {
-      return null;
-    }
-  }, []);
+  const loadInFlightRef = useRef(false);
 
   const loadWarehouse = useCallback(async () => {
     // Не дёргаем сеть, пока вкладка в фоне — запросы всё равно отменят
     if (typeof document !== 'undefined' && document.hidden) return;
-
-    const [warehouseRes, recipesRes, labRes, shiftRes] = await Promise.all([
-      safeFetch('/api/adminCifra/warehouse'),
-      safeFetch('/api/adminCifra/recipes'),
-      safeFetch('/api/adminCifra/lab-settings', { headers: adminCifraAuthHeaders() }),
-      safeFetch('/api/adminCifra/operator-shift', { headers: adminCifraAuthHeaders() }),
-    ]);
+    // Не копим висящие poll'ы (15 с + wake) на плохой сети
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
 
     try {
-      if (warehouseRes?.ok) {
-        const data = await warehouseRes.json();
-        setSilos(data.silos || []);
-        setLowRateAlerts(Array.isArray(data.lowRateAlerts) ? data.lowRateAlerts : []);
-        setAdditives(
-          (data.additives || data.warehouse_additives || []).map((a: any) => ({
-            ...a,
-            id: a.id || a.additive_id,
-            current: Number(a.current || 0),
-            max: Number(a.max || 9000),
-          }))
-        );
-      }
+      const [warehouseRes, recipesRes, labRes, shiftRes] = await Promise.all([
+        safeFetch('/api/adminCifra/warehouse', { cache: 'no-store' }),
+        safeFetch('/api/adminCifra/recipes', { cache: 'no-store' }),
+        safeFetch('/api/adminCifra/lab-settings', {
+          cache: 'no-store',
+          headers: adminCifraAuthHeaders(),
+        }),
+        safeFetch('/api/adminCifra/operator-shift', {
+          cache: 'no-store',
+          headers: adminCifraAuthHeaders(),
+        }),
+      ]);
 
-      if (recipesRes?.ok) {
-        const all = await recipesRes.json();
-        setRecipes(all);
-        const fbs = all
-          .filter((r: any) => r.item_type === 'fbs')
-          .map((r: any) => ({
-            ...r,
-            dimensions: (r.length_cm && r.width_cm && r.height_cm)
-              ? `${r.length_cm}×${r.width_cm}×${r.height_cm} см`
-              : null,
-          }));
-        setAvailableFBS(fbs);
-      }
+      try {
+        if (warehouseRes?.ok) {
+          const data = await warehouseRes.json();
+          setSilos(data.silos || []);
+          setLowRateAlerts(Array.isArray(data.lowRateAlerts) ? data.lowRateAlerts : []);
+          setAdditives(
+            (data.additives || data.warehouse_additives || []).map((a: any) => ({
+              ...a,
+              id: a.id || a.additive_id,
+              current: Number(a.current || 0),
+              max: Number(a.max || 9000),
+            })),
+          );
+        }
 
-      if (labRes?.ok) {
-        setAdditiveDensities(densitiesFromLabSettings(await labRes.json()));
-      }
+        if (recipesRes?.ok) {
+          const all = await recipesRes.json();
+          setRecipes(all);
+          const fbs = all
+            .filter((r: any) => r.item_type === 'fbs')
+            .map((r: any) => ({
+              ...r,
+              dimensions: (r.length_cm && r.width_cm && r.height_cm)
+                ? `${r.length_cm}×${r.width_cm}×${r.height_cm} см`
+                : null,
+            }));
+          setAvailableFBS(fbs);
+        }
 
-      if (shiftRes?.ok) {
-        const shift = await shiftRes.json();
-        const sid = shift?.active_silo_id != null ? Number(shift.active_silo_id) : null;
-        setActiveSiloId(Number.isFinite(sid as number) ? sid : null);
+        if (labRes?.ok) {
+          setAdditiveDensities(densitiesFromLabSettings(await labRes.json()));
+        }
+
+        if (shiftRes?.ok) {
+          const shift = await shiftRes.json();
+          const sid = shift?.active_silo_id != null ? Number(shift.active_silo_id) : null;
+          setActiveSiloId(Number.isFinite(sid as number) ? sid : null);
+        }
+      } catch {
+        // битый JSON / обрыв ответа — тихо, данные останутся прошлыми
       }
-    } catch {
-      // битый JSON / обрыв ответа — тихо, данные останутся прошлыми
+    } finally {
+      loadInFlightRef.current = false;
     }
-  }, [safeFetch]);
+  }, []);
 
   const loadFBS = useCallback(async (available: any[]) => {
     if (!available.length) return;
@@ -244,7 +251,7 @@ export default function MobileWarehousePage() {
     if (typeof document !== 'undefined' && document.hidden) return;
     try {
       const res = await safeFetch('/api/adminCifra/production-log?today=true', {
-        signal: AbortSignal.timeout(4000),
+        timeoutMs: 4000,
       });
       if (!res?.ok) return;
       const data = await res.json();
@@ -262,7 +269,7 @@ export default function MobileWarehousePage() {
       });
       setTodayConsumption({ cement: Math.round(cement / 1000), pfm: Math.round(pfm), linomix: Math.round(linomix) });
     } catch { /* тихо */ }
-  }, [safeFetch]);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -355,7 +362,7 @@ export default function MobileWarehousePage() {
       }
       if (Object.keys(payload).length === 0) return true;
 
-      const res = await fetch('/api/adminCifra/warehouse', {
+      const res = await fetchWithTimeout('/api/adminCifra/warehouse', {
         method: 'POST',
         headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload),
@@ -383,7 +390,7 @@ export default function MobileWarehousePage() {
       onConfirm: async (kg) => {
         if (isAdd) {
           try {
-            const res = await fetch('/api/adminCifra/warehouse/silo-mutate', {
+            const res = await fetchWithTimeout('/api/adminCifra/warehouse/silo-mutate', {
               method: 'POST',
               headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
               body: JSON.stringify({

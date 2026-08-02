@@ -6,6 +6,7 @@ import MobileExitButton from '../components/MobileExitButton';
 import MobileClientDetailModal from '../components/MobileClientDetailModal';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 import { formatPhoneDisplay } from '@/lib/phone';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 
@@ -113,7 +114,7 @@ export default function MobileClientsPage() {
       const params = new URLSearchParams({ page: String(page), limit: String(LIMIT) });
       if (q) params.set('search', q);
       const userId = localStorage.getItem('userId');
-      const res = await fetch(`/api/adminCifra/clients/grouped?${params}`, {
+      const res = await fetchWithTimeout(`/api/adminCifra/clients/grouped?${params}`, {
         headers: userId ? { 'x-user-id': userId } : {},
       });
       if (!res.ok) return;
@@ -160,7 +161,7 @@ export default function MobileClientsPage() {
   const loadStaff = useCallback(async () => {
     setStaffLoading(true);
     try {
-      const res = await fetch('/api/adminCifra/staff', {
+      const res = await fetchWithTimeout('/api/adminCifra/staff', {
         headers: adminCifraAuthHeaders(),
       });
       if (!res.ok) return;

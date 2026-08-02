@@ -2,6 +2,7 @@
 
 import { createContext, useContext, ReactNode, useEffect, useState, useCallback, useRef } from 'react';
 import { FORCE_LOGOUT_CHECK_EVENT } from '@/hooks/useStaffHeartbeat';
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout, isFetchTimeoutError } from '@/lib/fetchWithTimeout';
 
 interface UserRole {
   role: string;
@@ -17,6 +18,8 @@ interface UserRoleContextType {
   error: string | null;
   isAdmin: boolean;
   refreshRole: () => void;
+  /** Сразу применить сессию после admin-login (без ожидания /api/user/role). */
+  applyLoginSession: (session: UserRole) => void;
   logout: () => void;
 }
 
@@ -25,11 +28,7 @@ interface UserRoleContextType {
 // на вкладку проверка всё равно срабатывает сразу.
 const FORCE_LOGOUT_POLL_MS = 5 * 60_000;
 
-// Сколько ждём ответ /api/user/role, прежде чем сдаться — без этого при
-// холодном старте сервера (Vercel cold start) или плохой мобильной сети
-// запрос мог "висеть" очень долго, а вместе с ним и весь экран за
-// блокирующим "Загрузка..." (см. app/mobile/layout.tsx).
-const ROLE_FETCH_TIMEOUT_MS = 12_000;
+// Таймаут role — см. lib/fetchWithTimeout (Samsung мог крутить полоску 60–70 с).
 const ROLE_CACHE_KEY = 'userRoleCache';
 
 const UserRoleContext = createContext<UserRoleContextType | undefined>(undefined);
@@ -76,14 +75,22 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const inFlightRef = useRef<Promise<void> | null>(null);
   const lastFetchAtRef = useRef(0);
+  /** Инкремент при новом fetch — старый ответ не должен перезаписать свежий логин. */
+  const fetchGenRef = useRef(0);
 
-  const fetchRole = useCallback(async (force = false, opts?: { urgent?: boolean }) => {
+  const fetchRole = useCallback(async (
+    force = false,
+    opts?: { urgent?: boolean; bypassInFlight?: boolean },
+  ) => {
     // Схлопываем гонки: visibility + poll + ручной refresh в одну секунду
     // иначе в логе пачка POST /api/user/role подряд.
-    // urgent (force-logout от heartbeat) — debounce не применяем.
+    // urgent / bypassInFlight (после логина) — debounce и схлопывание не применяем.
     const now = Date.now();
-    if (inFlightRef.current) return inFlightRef.current;
-    if (force && !opts?.urgent && now - lastFetchAtRef.current < 1500) return;
+    const bypass = !!(opts?.urgent || opts?.bypassInFlight);
+    if (!bypass && inFlightRef.current) return inFlightRef.current;
+    if (force && !bypass && now - lastFetchAtRef.current < 1500) return;
+
+    const myGen = ++fetchGenRef.current;
 
     const run = (async () => {
       try {
@@ -91,26 +98,15 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
 
         const savedUserId = localStorage.getItem('userId');
         if (!savedUserId) {
-          setUser(null);
-          setLoading(false);
+          if (myGen === fetchGenRef.current) {
+            setUser(null);
+            setLoading(false);
+          }
           return;
         }
 
-        // AbortController на Samsung Internet иногда не рвёт зависший fetch
-        // (полоска «загрузки» 60–70 с). Promise.race гарантирует выход через 12 с.
-        const controller = new AbortController();
-        let timedOut = false;
-        const timeoutId = setTimeout(() => {
-          timedOut = true;
-          try {
-            controller.abort();
-          } catch {
-            /* ignore */
-          }
-        }, ROLE_FETCH_TIMEOUT_MS);
-
         lastFetchAtRef.current = Date.now();
-        const fetchPromise = fetch('/api/user/role', {
+        const res = await fetchWithTimeout('/api/user/role', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -118,25 +114,16 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
           },
           body: JSON.stringify({}),
           cache: 'no-store',
-          signal: controller.signal,
+          timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
         });
-        // Поздний abort после race не должен давать UnhandledRejection.
-        void fetchPromise.catch(() => {});
 
-        const res = await Promise.race([
-          fetchPromise,
-          new Promise<Response>((_, reject) => {
-            window.setTimeout(() => {
-              timedOut = true;
-              reject(new DOMException('Role fetch timeout', 'AbortError'));
-            }, ROLE_FETCH_TIMEOUT_MS);
-          }),
-        ]).finally(() => clearTimeout(timeoutId));
+        // Уже ушёл более новый fetch (логин / urgent) — ответ устарел
+        if (myGen !== fetchGenRef.current) return;
 
-        if (timedOut) throw new DOMException('Role fetch timeout', 'AbortError');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const data = await res.json();
+        if (myGen !== fetchGenRef.current) return;
         if (data?.success === false) throw new Error(data?.message || 'Role check failed');
 
         // Проверка принудительного выхода — ДО записи кэша роли
@@ -157,16 +144,24 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        setUser(data);
+        const session: UserRole = {
+          role: data.role,
+          full_name: data.full_name,
+          username: data.username || data.full_name || '',
+          force_logout_version: currentVersion,
+          can_process_tenders: data.can_process_tenders === true,
+        };
+        setUser(session);
         setError(null);
         try {
-          localStorage.setItem(ROLE_CACHE_KEY, JSON.stringify(data));
+          localStorage.setItem(ROLE_CACHE_KEY, JSON.stringify(session));
         } catch {
           // localStorage может быть недоступен (приватный режим) — не критично.
         }
 
         localStorage.setItem('lastForceLogoutVersion', String(currentVersion));
       } catch (err: any) {
+        if (myGen !== fetchGenRef.current) return;
         // fetch кидает TypeError ("Failed to fetch"), когда сервер временно
         // недоступен (перезапуск дев-сервера, потеря сети, уход со страницы), а
         // AbortError — когда сами прервали запрос по таймауту (см. выше). Оба
@@ -179,18 +174,40 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
         // приложение продолжает работать с ней, а не выкидывает на экран входа.
         // И НЕ трогаем lastForceLogoutVersion при ошибке — иначе fail-open
         // мог бы «съесть» pending force-logout.
-        if (!(err instanceof TypeError) && err?.name !== 'AbortError') {
+        const isTransient =
+          err instanceof TypeError
+          || err?.name === 'AbortError'
+          || isFetchTimeoutError(err);
+        if (!isTransient) {
           console.warn('Role fetch error:', err);
+          setError(err?.message || 'Role check failed');
         }
-        setError(err.message);
       } finally {
-        setLoading(false);
-        inFlightRef.current = null;
+        if (myGen === fetchGenRef.current) {
+          setLoading(false);
+          inFlightRef.current = null;
+        }
       }
     })();
 
     inFlightRef.current = run;
     return run;
+  }, []);
+
+  const applyLoginSession = useCallback((session: UserRole) => {
+    // Инвалидируем любой in-flight /api/user/role, стартовавший до логина
+    // (иначе старый ответ мог затереть только что вошедшего пользователя).
+    fetchGenRef.current += 1;
+    inFlightRef.current = null;
+    lastFetchAtRef.current = 0;
+    setUser(session);
+    setLoading(false);
+    setError(null);
+    try {
+      localStorage.setItem(ROLE_CACHE_KEY, JSON.stringify(session));
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const logout = useCallback(() => {
@@ -243,7 +260,7 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
   }, [fetchRole]);
 
   const refreshRole = useCallback(() => {
-    fetchRole(true);
+    void fetchRole(true, { bypassInFlight: true });
   }, [fetchRole]);
 
   return (
@@ -254,6 +271,7 @@ export function UserRoleProvider({ children }: { children: ReactNode }) {
         error,
         isAdmin: (user?.role || '').toLowerCase() === 'admin',
         refreshRole,
+        applyLoginSession,
         logout,
       }}
     >

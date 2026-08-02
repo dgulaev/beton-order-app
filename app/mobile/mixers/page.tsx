@@ -14,6 +14,7 @@ import { useRealtimeOrderMixers } from '@/hooks/useRealtimeOrders';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { fetchWithTimeout, safeFetch } from '@/lib/fetchWithTimeout';
 import {
   VEHICLE_KINDS,
   TRAILER_KINDS,
@@ -223,7 +224,7 @@ function TariffsTab() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('/api/adminCifra/delivery-settings');
+        const res = await fetchWithTimeout('/api/adminCifra/delivery-settings');
         if (res.ok) {
           const d = await res.json();
           setSettings({
@@ -435,7 +436,7 @@ export default function MobileMixersPage() {
 
   const fetchCouples = useCallback(async () => {
     try {
-      const res = await fetch('/api/adminCifra/fleet-couples', {
+      const res = await fetchWithTimeout('/api/adminCifra/fleet-couples', {
         headers: adminCifraAuthHeaders(),
       });
       if (!res.ok) { setCouples([]); return; }
@@ -449,14 +450,12 @@ export default function MobileMixersPage() {
   const fetchUnits = useCallback(async (kind: VehicleKind) => {
     setLoading(true);
     try {
-      const tasks: Promise<Response>[] = [
-        fetch(`/api/adminCifra/mixers?kind=${kind}`),
-      ];
-      if (kind === 'mixer') {
-        tasks.push(fetch('/api/adminCifra/active-mixers'));
-      }
-      const [unitsRes, tripsRes] = await Promise.all(tasks);
-      if (unitsRes.ok) {
+      // safeFetch: timeout одного запроса не валит весь Promise.all
+      const [unitsRes, tripsRes] = await Promise.all([
+        safeFetch(`/api/adminCifra/mixers?kind=${kind}`),
+        kind === 'mixer' ? safeFetch('/api/adminCifra/active-mixers') : Promise.resolve(null),
+      ]);
+      if (unitsRes?.ok) {
         const data = await unitsRes.json();
         setUnits(Array.isArray(data) ? data : []);
       } else {
@@ -484,8 +483,8 @@ export default function MobileMixersPage() {
   useRealtimeOrderMixers(setActiveTrips, {
     activeOnly: true,
     onReload: () => {
-      fetch('/api/adminCifra/active-mixers')
-        .then((res) => (res.ok ? res.json() : null))
+      void safeFetch('/api/adminCifra/active-mixers')
+        .then((res) => (res?.ok ? res.json() : null))
         .then((trips) => {
           if (Array.isArray(trips)) setActiveTrips(trips);
         })
@@ -495,8 +494,8 @@ export default function MobileMixersPage() {
 
   useWakeRefresh(() => {
     if (vehicleKind !== 'mixer') return;
-    fetch('/api/adminCifra/active-mixers')
-      .then((res) => (res.ok ? res.json() : null))
+    void safeFetch('/api/adminCifra/active-mixers')
+      .then((res) => (res?.ok ? res.json() : null))
       .then((trips) => { if (Array.isArray(trips)) setActiveTrips(trips); })
       .catch(() => {});
   });

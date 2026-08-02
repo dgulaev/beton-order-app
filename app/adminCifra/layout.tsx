@@ -25,6 +25,7 @@ import { formatTimeHHMM, ruPastByName } from '@/lib/ruLocale';
 import { formatBuildLabelFull, formatBuildVersion } from '@/lib/buildInfo';
 import { bulkVolumeUnitLabel } from '@/lib/orderLogistics';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from '@/lib/fetchWithTimeout';
 import {
   DEFAULT_SYSTEM_SETTINGS,
   SIDEBAR_COLLAPSED_PREF_KEY,
@@ -155,7 +156,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   useWakeReload();
 
   // ==================== 1. РОЛЬ ИЗ PROVIDER ====================
-  const { user, loading: roleLoading, refreshRole, logout } = useUserRole();
+  const { user, loading: roleLoading, refreshRole, applyLoginSession, logout } = useUserRole();
 
   const [isCollapsed, setIsCollapsed] = useState(true);
   const [systemSettings, setSystemSettings] = useState<SystemSettingsData>(DEFAULT_SYSTEM_SETTINGS);
@@ -476,10 +477,11 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     setLoginError('');
 
     try {
-      const res = await fetch('/api/auth/admin-login', {
+      const res = await fetchWithTimeout('/api/auth/admin-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone, password }),
+        timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
       });
 
       const data = await res.json();
@@ -488,12 +490,22 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
         localStorage.setItem('userId', data.userId.toString());
         // После сброса force_logout_version на сервере синхронизируем локальный маркер
         localStorage.setItem('lastForceLogoutVersion', '0');
-        refreshRole(); // подхватываем роль сразу, без перезагрузки страницы
+        // Сразу открываем UI из ответа логина — не ждём /api/user/role
+        // (и не даём старому in-flight role-запросу затереть сессию).
+        applyLoginSession({
+          role: String(data.role || ''),
+          full_name: String(data.name || data.phone || 'Сотрудник'),
+          username: String(data.name || data.phone || ''),
+          force_logout_version: 0,
+          can_process_tenders: data.can_process_tenders === true,
+        });
+        // Фоном дотягиваем полную роль (can_process_tenders и т.п.)
+        refreshRole();
       } else {
         setLoginError(data.message || 'Неверный телефон или пароль');
       }
     } catch (err) {
-      console.error('Login error:', err);
+      console.warn('Login error:', err instanceof Error ? err.message : err);
       setLoginError('Ошибка соединения с сервером');
     } finally {
       setLoginLoading(false);

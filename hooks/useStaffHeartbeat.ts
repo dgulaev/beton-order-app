@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { fetchWithTimeout, isFetchTimeoutError } from '@/lib/fetchWithTimeout';
 
 /** Кастомное событие: проверить force-logout без синтетического visibilitychange. */
 export const FORCE_LOGOUT_CHECK_EVENT = 'admincifra:force-logout-check';
@@ -56,25 +57,33 @@ export function useStaffHeartbeat(enabled: boolean) {
         // Сервер выключен / перезапуск — не долбим и не шумим в консоль
         if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
 
-        const res = await fetch('/api/adminCifra/heartbeat', {
+        const res = await fetchWithTimeout('/api/adminCifra/heartbeat', {
           method: 'POST',
           headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ userId }),
           signal,
+          timeoutMs: 8_000,
         });
         if (res.status === 403) {
           notifyForceLogoutCheck();
           return;
         }
       } catch (e) {
-        if (cancelled || signal.aborted) return;
+        if (cancelled) return;
+        // Следующий тик abort'нул предыдущий запрос — не ретраим и не шумим.
+        // Таймаут (Fetch timeout) тоже AbortError, но его нужно ретраить.
+        const timedOut = isFetchTimeoutError(e);
+        if (!timedOut && (signal.aborted || (e instanceof DOMException && e.name === 'AbortError'))) {
+          return;
+        }
         const msg = e instanceof Error ? e.message : String(e);
         const isNet =
+          timedOut ||
           msg.includes('Failed to fetch') ||
           msg.includes('NetworkError') ||
           msg.includes('Load failed') ||
           msg.includes('network');
-        // Перезапуск Next/Turbopack, HMR, краткий оффлайн — ожидаемо, без warn в консоль
+        // Перезапуск Next/Turbopack, HMR, краткий оффлайн / таймаут — ожидаемо
         if (isNet) {
           if (!isRetry) {
             retryTimer = window.setTimeout(() => {

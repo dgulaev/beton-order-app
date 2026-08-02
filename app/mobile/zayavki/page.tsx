@@ -12,6 +12,7 @@ import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle } from '@/app/adminCi
 import { appConfirm } from '@/app/adminCifra/components/appDialog';
 import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { fetchWithTimeout, isFetchTimeoutError, safeFetch } from '@/lib/fetchWithTimeout';
 import { formatTimeHHMM } from '@/lib/ruLocale';
 import { findRecipeByGrade } from '@/lib/recipeAdditives';
 import { isOrderGradeRecipe } from '@/app/adminCifra/recipes/productCatalog';
@@ -45,7 +46,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   // ==================== 4. ЗАГРУЗКА ДАННЫХ ====================
   // Рецепты грузим один раз — справочник маленький и не меняется от даты.
   useEffect(() => {
-    fetch('/api/adminCifra/recipes')
+    fetchWithTimeout('/api/adminCifra/recipes')
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => setRecipes((Array.isArray(data) ? data : []).filter(isOrderGradeRecipe)))
       .catch((err) => console.error('Ошибка загрузки рецептов:', err));
@@ -53,7 +54,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
 
   useEffect(() => {
     const userId = localStorage.getItem('userId');
-    fetch('/api/adminCifra/clients', {
+    fetchWithTimeout('/api/adminCifra/clients', {
       headers: userId ? { 'x-user-id': userId } : {},
     })
       .then(r => r.ok ? r.json() : [])
@@ -75,7 +76,7 @@ const { user } = useUserRole();   // ← Берём роль из провайд
     let cancelled = false;
     setLoading(true);
 
-    fetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`, { cache: 'no-store' })
+    fetchWithTimeout(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`, { cache: 'no-store' })
       .then((res) => {
         if (!res.ok) throw new Error(`Orders fetch failed: ${res.status}`);
         return res.json();
@@ -84,7 +85,9 @@ const { user } = useUserRole();   // ← Берём роль из провайд
         if (!cancelled) setAllOrders(Array.isArray(data) ? data : []);
       })
       .catch((err) => {
-        console.error('Ошибка загрузки заявок:', err);
+        if (!isFetchTimeoutError(err) && !(err instanceof TypeError)) {
+          console.warn('Ошибка загрузки заявок:', err instanceof Error ? err.message : err);
+        }
       })
       .finally(() => {
         if (!cancelled) {
@@ -108,8 +111,8 @@ const { user } = useUserRole();   // ← Берём роль из провайд
   });
 
   useWakeRefresh(() => {
-    fetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`, { cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
+    void safeFetch(`/api/adminCifra/orders?year=${selectedYearNum}&month=${selectedMonthNum}`, { cache: 'no-store' })
+      .then((res) => (res?.ok ? res.json() : null))
       .then((data) => { if (Array.isArray(data)) setAllOrders(data); })
       .catch(() => {});
   });

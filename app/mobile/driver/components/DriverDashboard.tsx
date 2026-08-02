@@ -9,6 +9,7 @@ import { LogOut, Clock, MapPin, Package, ChevronRight, Bell, Phone, CircleHelp }
 import { useHelp } from '@/app/adminCifra/components/help/HelpProvider';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { isFetchTimeoutError } from '@/lib/fetchWithTimeout';
 import { driverFetch, DriverMixerInfo, DriverTrip } from '../driverClient';
 import DriverTripDetailModal from './DriverTripDetailModal';
 import RouteButton from './RouteButton';
@@ -172,7 +173,10 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
       setTodayTrips(trips);
       return trips;
     } catch (err) {
-      console.error('Ошибка загрузки рейсов на сегодня:', err);
+      // Таймаут/обрыв сети — ожидаемо на мобиле, без console.error (dev overlay).
+      if (!isFetchTimeoutError(err) && !(err instanceof TypeError)) {
+        console.warn('Ошибка загрузки рейсов на сегодня:', err instanceof Error ? err.message : err);
+      }
     }
     return [];
   };
@@ -200,7 +204,9 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
       setHasMoreHistory(hasMore);
       setHistoryOffset(offset + page.length);
     } catch (err) {
-      console.error('Ошибка загрузки истории поездок:', err);
+      if (!isFetchTimeoutError(err) && !(err instanceof TypeError)) {
+        console.warn('Ошибка загрузки истории поездок:', err instanceof Error ? err.message : err);
+      }
     }
   };
 

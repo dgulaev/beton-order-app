@@ -35,10 +35,7 @@ import './globals.css';
 import { hardResetBroadcastSocket, useGlobalBroadcastStatus, reconnectAllBroadcastChannels } from '@/hooks/useRealtimeBroadcast';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 import AppDialogHost, { appConfirm } from '@/app/adminCifra/components/appDialog';
-
-// Сколько ждём ответ /api/driver/auth, прежде чем сдаться (см. пояснение у
-// ROLE_FETCH_TIMEOUT_MS в UserRoleProvider — та же причина).
-const DRIVER_AUTH_TIMEOUT_MS = 12_000;
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from '@/lib/fetchWithTimeout';
 
 type DriverMixerOption = { number: string; model: string | null; driver: string };
 type LoginStep = 'phone' | 'password' | 'driver-mixer' | 'choose-role';
@@ -111,7 +108,7 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
 
   // ==================== 1. РОЛЬ СОТРУДНИКА ИЗ PROVIDER ====================
-  const { user, loading: roleLoading, refreshRole, logout } = useUserRole();
+  const { user, loading: roleLoading, refreshRole, applyLoginSession, logout } = useUserRole();
   // Достаточно наличия user (пусть даже пока из кэша, а не свежего сетевого
   // ответа) — актуальность (в т.ч. force-logout) провайдер всё равно
   // перепроверяет в фоне и сам разлогинит при необходимости (см. fetchRole).
@@ -161,32 +158,16 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
       settled = true;
       setCheckingDriverSession(false);
     };
-    const timeoutId = window.setTimeout(() => {
-      try {
-        controller.abort();
-      } catch {
-        /* ignore */
-      }
-      finish();
-    }, DRIVER_AUTH_TIMEOUT_MS);
 
     (async () => {
       try {
-        const fetchPromise = fetch('/api/driver/auth', {
+        const res = await fetchWithTimeout('/api/driver/auth', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(session),
           signal: controller.signal,
+          timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
         });
-        const res = await Promise.race([
-          fetchPromise,
-          new Promise<Response>((_, reject) => {
-            window.setTimeout(
-              () => reject(new DOMException('Driver auth timeout', 'AbortError')),
-              DRIVER_AUTH_TIMEOUT_MS,
-            );
-          }),
-        ]);
         const data = await res.json();
         if (data.success && data.mixer) {
           setDriverMixer(data.mixer);
@@ -205,13 +186,11 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
           console.warn('Driver session check error:', err);
         }
       } finally {
-        window.clearTimeout(timeoutId);
         finish();
       }
     })();
 
     return () => {
-      window.clearTimeout(timeoutId);
       try {
         controller.abort();
       } catch {
@@ -266,10 +245,11 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
     setLoginError('');
 
     try {
-      const res = await fetch('/api/auth/identify', {
+      const res = await fetchWithTimeout('/api/auth/identify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: phone.trim() }),
+        timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
       });
       const data = await res.json();
 
@@ -308,10 +288,11 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
     setLoginError('');
 
     try {
-      const res = await fetch('/api/auth/admin-login', {
+      const res = await fetchWithTimeout('/api/auth/admin-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: phone.trim(), password }),
+        timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
       });
       const data = await res.json();
 
@@ -322,6 +303,13 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
         clearDriverSession();
         clearDriverMixerCache();
         setDriverMixer(null);
+        applyLoginSession({
+          role: String(data.role || ''),
+          full_name: String(data.name || data.phone || 'Сотрудник'),
+          username: String(data.name || data.phone || ''),
+          force_logout_version: 0,
+          can_process_tenders: data.can_process_tenders === true,
+        });
         refreshRole();
         resetLoginFlow();
       } else {
@@ -346,10 +334,11 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
     setLoginError('');
 
     try {
-      const res = await fetch('/api/driver/auth', {
+      const res = await fetchWithTimeout('/api/driver/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ number: mixerNumber.trim(), phone: phone.trim() }),
+        timeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
       });
       const data = await res.json();
 

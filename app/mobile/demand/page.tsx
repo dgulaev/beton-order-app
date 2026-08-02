@@ -10,6 +10,7 @@ import { volumeCardSoftStyle } from '@/app/adminCifra/cardStyles';
 import ProcessDemandModal from '@/app/adminCifra/demand/ProcessDemandModal';
 import type { DemandItemRow } from '@/hooks/useRealtimeDemand';
 import { useWakeRefresh } from '@/hooks/useWakeReload';
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 import { useUserRole } from '../../providers/UserRoleProvider';
 
 const btnBase: CSSProperties = {
@@ -37,7 +38,7 @@ export default function MobileDemandPage() {
   const load = useCallback(async (opts?: { quiet?: boolean }) => {
     if (!opts?.quiet) setLoading(true);
     try {
-      const res = await fetch('/api/adminCifra/demand?status=new&min_score=40', {
+      const res = await fetchWithTimeout('/api/adminCifra/demand?status=new&min_score=40', {
         headers: adminCifraAuthHeaders(),
         cache: 'no-store',
       });
@@ -45,6 +46,7 @@ export default function MobileDemandPage() {
       if (json.success) setItems(json.items || []);
       else if (!opts?.quiet) alert(json.error || 'Не удалось загрузить спрос');
     } catch {
+      // Wake (quiet) — без алерта; первый заход — сообщаем
       if (!opts?.quiet) alert('Ошибка соединения с сервером');
     } finally {
       if (!opts?.quiet) setLoading(false);

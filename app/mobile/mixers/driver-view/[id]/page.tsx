@@ -11,6 +11,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useUserRole } from '@/app/providers/UserRoleProvider';
 import DriverDashboard from '@/app/mobile/driver/components/DriverDashboard';
 import { DriverMixerInfo, DriverTrip } from '@/app/mobile/driver/driverClient';
+import { fetchWithTimeout } from '@/lib/fetchWithTimeout';
 
 export default function DriverViewPage() {
   const params = useParams();
@@ -36,13 +37,15 @@ export default function DriverViewPage() {
 
     (async () => {
       try {
-        const res = await fetch(`/api/admin/mixer-trips?mixerId=${mixerId}&scope=today`, {
+        const res = await fetchWithTimeout(`/api/admin/mixer-trips?mixerId=${mixerId}&scope=today`, {
           headers: { 'x-user-id': userId },
           cache: 'no-store',
         });
         if (res.status === 403) { router.replace('/mobile'); return; }
         const data = await res.json();
         if (data.success && data.mixer) setMixer(data.mixer);
+      } catch {
+        /* таймаут / сеть — покажем «не найден» */
       } finally {
         setLoadingMixer(false);
       }
@@ -58,13 +61,17 @@ export default function DriverViewPage() {
     const userId = localStorage.getItem('userId');
     if (!userId) return [];
     const url = `/api/admin/mixer-trips?mixerId=${mixerId}&scope=${scope}&offset=${offset}&limit=${limit}`;
-    const res = await fetch(url, {
-      headers: { 'x-user-id': userId },
-      cache: 'no-store',
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.success ? (data.trips as DriverTrip[]) : [];
+    try {
+      const res = await fetchWithTimeout(url, {
+        headers: { 'x-user-id': userId },
+        cache: 'no-store',
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.success ? (data.trips as DriverTrip[]) : [];
+    } catch {
+      return [];
+    }
   }, [mixerId]);
 
   if (roleLoading || loadingMixer) {
