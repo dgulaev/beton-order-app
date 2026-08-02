@@ -27,6 +27,7 @@ import {
   volumeModalStyle,
 } from '../cardStyles';
 import { appAlert, appConfirm, appPrompt } from '../components/appDialog';
+import DarkHoverTip from '../components/DarkHoverTip';
 import { useLowRateAlerts } from '../components/useLowRateAlerts';
 import { FileText, GripVertical, Plus, Scale, ScrollText, Trash2, X } from 'lucide-react';
 import type { LowRateAlertInfo } from '@/lib/siloConfig';
@@ -1874,48 +1875,54 @@ const removeLastCube = async (index: number) => {
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 {isAdmin ? (
-                  <button
-                    type="button"
-                    onClick={() => setCementSavingsOpen(true)}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      padding: '7px 12px',
-                      borderRadius: 10,
-                      border: '1px solid rgba(52, 211, 153, 0.4)',
-                      background: 'rgba(16, 185, 129, 0.12)',
-                      color: '#34D399',
-                      fontSize: '12.5px',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    Экономия
-                  </button>
+                  <DarkHoverTip tip="Журнал зафиксированной экономии цемента при обнулении / внесении из минуса">
+                    <button
+                      type="button"
+                      onClick={() => setCementSavingsOpen(true)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '7px 12px',
+                        borderRadius: 10,
+                        border: '1px solid rgba(52, 211, 153, 0.4)',
+                        background: 'rgba(16, 185, 129, 0.12)',
+                        color: '#34D399',
+                        fontSize: '12.5px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      Экономия
+                    </button>
+                  </DarkHoverTip>
                 ) : null}
-                <button
-                  type="button"
-                  onClick={() => setCementUnderdoseOpen(true)}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '7px 12px',
-                    borderRadius: 10,
-                    border: '1px solid rgba(248, 113, 113, 0.4)',
-                    background: 'rgba(248, 113, 113, 0.12)',
-                    color: '#FCA5A5',
-                    fontSize: '12.5px',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  <Scale size={14} />
-                  Недосып
-                </button>
+                {isAdmin ? (
+                  <DarkHoverTip tip="Расчёт недосыпа: факт в силосе vs рецепты, история до внесения и риск-заявки">
+                    <button
+                      type="button"
+                      onClick={() => setCementUnderdoseOpen(true)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '7px 12px',
+                        borderRadius: 10,
+                        border: '1px solid rgba(248, 113, 113, 0.4)',
+                        background: 'rgba(248, 113, 113, 0.12)',
+                        color: '#FCA5A5',
+                        fontSize: '12.5px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <Scale size={14} />
+                      Недосып
+                    </button>
+                  </DarkHoverTip>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => setSiloJournalOpen(true)}
@@ -3028,7 +3035,7 @@ const removeLastCube = async (index: number) => {
       {cementSavingsOpen && isAdmin ? (
         <CementSavingsModal onClose={() => setCementSavingsOpen(false)} />
       ) : null}
-      {cementUnderdoseOpen ? (
+      {cementUnderdoseOpen && isAdmin ? (
         <CementUnderdoseModal
           onClose={() => setCementUnderdoseOpen(false)}
           initialSiloId={activeSiloId}

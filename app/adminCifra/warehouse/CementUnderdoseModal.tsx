@@ -2,8 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { AlertTriangle, RefreshCw, Scale, X } from 'lucide-react';
-import { SILO_SPEC } from '@/lib/siloConfig';
-import type { UnderdoseOrderRow, UnderdoseSummary } from '@/lib/cementUnderdose';
+import { expectedSiloSavingTons, SILO_SPEC } from '@/lib/siloConfig';
+import type {
+  RefillContext,
+  RiskOrderRow,
+  RiskOrdersSummary,
+  TimelineEvent,
+  UnderdoseOrderRow,
+  UnderdoseSummary,
+} from '@/lib/cementUnderdose';
+import DarkHoverTip from '../components/DarkHoverTip';
 import {
   CARD_BORDER,
   modalCloseButtonStyle,
@@ -18,6 +26,8 @@ type Refill = {
   createdAt: string;
   amountKg: number;
   userName: string | null;
+  oldValue?: number | null;
+  newValue?: number | null;
 };
 
 type Props = {
@@ -70,7 +80,41 @@ function formatKg(n: number): string {
 }
 
 function formatTons(kg: number): string {
-  return (kg / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 3 });
+  return (kg / 1000).toLocaleString('ru-RU', {
+    maximumFractionDigits: 3,
+    signDisplay: 'auto',
+  });
+}
+
+function formatTonsSigned(kg: number): string {
+  const t = kg / 1000;
+  const s = t.toLocaleString('ru-RU', { maximumFractionDigits: 3 });
+  return t > 0 ? `+${s}` : s;
+}
+
+function formatWhen(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('ru-RU', {
+    timeZone: 'Europe/Moscow',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+function formatTimeOnly(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleTimeString('ru-RU', {
+    timeZone: 'Europe/Moscow',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
 }
 
 function formatRefillLabel(r: Refill): string {
@@ -91,10 +135,100 @@ const fieldLabel: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  fontSize: 12,
+  fontSize: 13.5,
   fontWeight: 600,
   color: '#94A3B8',
 };
+
+const tableFont: CSSProperties = {
+  fontSize: 13.5,
+  color: '#E2E8F0',
+};
+
+function OrdersMiniTable({
+  title,
+  rows,
+  emptyText,
+}: {
+  title: string;
+  rows: Array<{
+    orderId: number;
+    client: string;
+    grade: string;
+    volumeM3: number;
+    recipeCementKg: number;
+    trips: number;
+  }>;
+  emptyText?: string;
+}) {
+  if (rows.length === 0) {
+    return emptyText ? (
+      <div style={{ color: '#94A3B8', fontSize: 13 }}>{emptyText}</div>
+    ) : null;
+  }
+  return (
+    <div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: '#E2E8F0', marginBottom: 8 }}>
+        {title}
+      </div>
+      <div style={{ borderRadius: 12, border: CARD_BORDER, overflow: 'auto' }}>
+        <table
+          style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            ...tableFont,
+          }}
+        >
+          <thead>
+            <tr style={{ background: 'rgba(15, 23, 42, 0.85)', color: '#94A3B8' }}>
+              {['#', 'Клиент', 'Марка', 'м³', 'Цемент рецепт', 'Рейсы'].map((h) => (
+                <th
+                  key={h}
+                  style={{
+                    textAlign: h === 'Клиент' || h === 'Марка' ? 'left' : 'right',
+                    padding: '8px 10px',
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap',
+                    borderBottom: '1px solid rgba(148,163,184,0.18)',
+                  }}
+                >
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.orderId} style={{ borderBottom: '1px solid rgba(148,163,184,0.10)' }}>
+                <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>
+                  {r.orderId}
+                </td>
+                <td style={{ padding: '7px 10px', maxWidth: 220 }}>
+                  <span
+                    style={{
+                      display: 'block',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {r.client}
+                  </span>
+                </td>
+                <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{r.grade}</td>
+                <td style={{ padding: '7px 10px', textAlign: 'right' }}>{formatKg(r.volumeM3)}</td>
+                <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                  {formatKg(r.recipeCementKg)}
+                </td>
+                <td style={{ padding: '7px 10px', textAlign: 'right' }}>{r.trips}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) {
   const startSilo =
@@ -110,9 +244,23 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
   const [actualTons, setActualTons] = useState('');
   const [summary, setSummary] = useState<UnderdoseSummary | null>(null);
   const [rows, setRows] = useState<UnderdoseOrderRow[]>([]);
+  const [refillContext, setRefillContext] = useState<RefillContext | null>(null);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [riskOrders, setRiskOrders] = useState<RiskOrderRow[]>([]);
+  const [riskSummary, setRiskSummary] = useState<RiskOrdersSummary | null>(null);
+  const [expectedSavingTons, setExpectedSavingTons] = useState(() => expectedSiloSavingTons(startSilo));
   const [loadingRefills, setLoadingRefills] = useState(true);
   const [loadingCalc, setLoadingCalc] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const clearResults = useCallback(() => {
+    setSummary(null);
+    setRows([]);
+    setRefillContext(null);
+    setTimeline([]);
+    setRiskOrders([]);
+    setRiskSummary(null);
+  }, []);
 
   const applyRefill = useCallback((r: Refill | null) => {
     if (!r) {
@@ -128,8 +276,7 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
   const loadRefills = useCallback(async () => {
     setLoadingRefills(true);
     setError(null);
-    setSummary(null);
-    setRows([]);
+    clearResults();
     try {
       const qs = new URLSearchParams({ siloId: String(siloId) });
       const res = await fetch(`/api/adminCifra/warehouse/cement-underdose?${qs}`, {
@@ -141,6 +288,11 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
         setError(data.error || 'Не удалось загрузить загрузки');
         setRefills([]);
         return;
+      }
+      if (data.expectedSavingTons != null) {
+        setExpectedSavingTons(Number(data.expectedSavingTons));
+      } else {
+        setExpectedSavingTons(expectedSiloSavingTons(siloId));
       }
       const list: Refill[] = Array.isArray(data.refills) ? data.refills : [];
       setRefills(list);
@@ -158,7 +310,7 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
     } finally {
       setLoadingRefills(false);
     }
-  }, [siloId, applyRefill]);
+  }, [siloId, applyRefill, clearResults]);
 
   useEffect(() => {
     void loadRefills();
@@ -186,6 +338,9 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
         until,
         actualKg: String(Math.round(tons * 1000 * 10) / 10),
       });
+      if (typeof selectedRefillId === 'number') {
+        qs.set('refillId', String(selectedRefillId));
+      }
       const res = await fetch(`/api/adminCifra/warehouse/cement-underdose?${qs}`, {
         headers: adminAuthHeaders(),
         cache: 'no-store',
@@ -193,22 +348,27 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error || 'Не удалось посчитать');
-        setSummary(null);
-        setRows([]);
+        clearResults();
         return;
       }
       if (Array.isArray(data.refills)) setRefills(data.refills);
+      if (data.expectedSavingTons != null) {
+        setExpectedSavingTons(Number(data.expectedSavingTons));
+      }
       setSummary(data.summary || null);
       setRows(Array.isArray(data.rows) ? data.rows : []);
+      setRefillContext(data.refillContext || null);
+      setTimeline(Array.isArray(data.timeline) ? data.timeline : []);
+      setRiskOrders(Array.isArray(data.riskOrders) ? data.riskOrders : []);
+      setRiskSummary(data.riskSummary || null);
     } catch (err) {
       console.error(err);
       setError('Не удалось посчитать');
-      setSummary(null);
-      setRows([]);
+      clearResults();
     } finally {
       setLoadingCalc(false);
     }
-  }, [siloId, sinceLocal, untilLocal, actualTons]);
+  }, [siloId, sinceLocal, untilLocal, actualTons, selectedRefillId, clearResults]);
 
   // Автопересчёт после подстановки загрузки / смены силоса
   useEffect(() => {
@@ -267,6 +427,29 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
     ];
   }, [summary]);
 
+  const beforeCard = useMemo(() => {
+    if (!refillContext) return null;
+    const before = refillContext.beforeKg;
+    const deficit = refillContext.deficitBeforeKg;
+    const who = refillContext.userName || 'оператор';
+    const assess = refillContext.savingAssessment;
+    return {
+      beforeKg: before,
+      afterKg: refillContext.afterKg,
+      amountKg: refillContext.amountKg,
+      who,
+      deficitKg: deficit,
+      deficitSource: refillContext.deficitSource,
+      assess,
+      createdAt: refillContext.createdAt,
+    };
+  }, [refillContext]);
+
+  const alertThresholdHint =
+    siloId === 3
+      ? 'алерт оператору при минусе глубже −10 т'
+      : 'алерт оператору при минусе глубже −5 т';
+
   return (
     <div
       onClick={onClose}
@@ -285,12 +468,13 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
       <div
         onClick={(e) => e.stopPropagation()}
         style={volumeModalStyle({
-          width: 'min(1100px, 100%)',
-          maxHeight: 'min(90vh, 920px)',
+          width: 'min(1240px, 100%)',
+          maxHeight: 'min(96vh, 1100px)',
           display: 'flex',
           flexDirection: 'column',
           padding: 0,
           overflow: 'hidden',
+          marginTop: '-2vh',
         })}
       >
         <div
@@ -299,19 +483,19 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
             alignItems: 'flex-start',
             justifyContent: 'space-between',
             gap: 12,
-            padding: '18px 20px 14px',
+            padding: '20px 22px 16px',
             borderBottom: '1px solid rgba(148, 163, 184, 0.18)',
             flexShrink: 0,
           }}
         >
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <Scale size={18} color="#F87171" />
-              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#F1F5F9' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <Scale size={20} color="#F87171" />
+              <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#F1F5F9' }}>
                 Недосып цемента
               </h2>
             </div>
-            <div style={{ fontSize: 12.5, color: '#94A3B8', maxWidth: 720, lineHeight: 1.4 }}>
+            <div style={{ fontSize: 14, color: '#94A3B8', maxWidth: 780, lineHeight: 1.45 }}>
               Сравниваем цемент по рецептам на отгрузки с этого силоса с тем, сколько реально
               было в силосе. Если по рецептам больше — считаем равномерный недосып и оценку марки.
             </div>
@@ -488,6 +672,99 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
             gap: 14,
           }}
         >
+          {beforeCard ? (
+            <div
+              style={volumeCardSoftStyle({
+                borderRadius: 12,
+                padding: '14px 16px',
+                border:
+                  beforeCard.assess === 'anomaly'
+                    ? '1px solid rgba(248, 113, 113, 0.45)'
+                    : CARD_BORDER,
+                background:
+                  beforeCard.assess === 'anomaly'
+                    ? 'rgba(248, 113, 113, 0.08)'
+                    : undefined,
+              })}
+            >
+              <div style={{ fontSize: 13.5, color: '#94A3B8', fontWeight: 600, marginBottom: 6 }}>
+                До внесения
+                {beforeCard.createdAt ? ` · ${formatWhen(beforeCard.createdAt)}` : ''}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '10px 18px',
+                  alignItems: 'baseline',
+                }}
+              >
+                <div>
+                  <span
+                    style={{
+                      fontSize: 22,
+                      fontWeight: 800,
+                      color:
+                        beforeCard.beforeKg != null && beforeCard.beforeKg < 0
+                          ? '#F87171'
+                          : '#E2E8F0',
+                    }}
+                  >
+                    {beforeCard.beforeKg != null
+                      ? `${formatTons(beforeCard.beforeKg)} т`
+                      : '—'}
+                  </span>
+                  <span style={{ fontSize: 13.5, color: '#64748B', marginLeft: 6 }}>было</span>
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: '#34D399' }}>
+                  {formatTonsSigned(beforeCard.amountKg)} т
+                  <span style={{ fontSize: 13.5, color: '#94A3B8', fontWeight: 600, marginLeft: 6 }}>
+                    внёс {beforeCard.who}
+                  </span>
+                </div>
+                <div>
+                  <span style={{ fontSize: 20, fontWeight: 800, color: '#94A3B8' }}>
+                    {beforeCard.afterKg != null
+                      ? `${formatTons(beforeCard.afterKg)} т`
+                      : '—'}
+                  </span>
+                  <span style={{ fontSize: 13.5, color: '#64748B', marginLeft: 6 }}>стало</span>
+                </div>
+              </div>
+              {beforeCard.deficitKg != null && beforeCard.deficitKg > 0 ? (
+                <div style={{ marginTop: 8, fontSize: 14, lineHeight: 1.45 }}>
+                  {beforeCard.deficitSource === 'reset' || beforeCard.deficitSource === 'savings' ? (
+                    <span style={{ color: '#FCA5A5', fontWeight: 600 }}>
+                      Перед обнулением/внесением силос уже был в минусе на{' '}
+                      {formatTons(beforeCard.deficitKg)} т
+                      {beforeCard.assess === 'normal'
+                        ? ` — в пределах нормы экономии (~${expectedSavingTons} т)`
+                        : beforeCard.assess === 'anomaly'
+                          ? ` — аномалия (норма ~${expectedSavingTons} т), проверьте оборудование`
+                          : ''}
+                      .
+                    </span>
+                  ) : (
+                    <span style={{ color: '#FCA5A5', fontWeight: 600 }}>
+                      Остаток до внесения отрицательный:{' '}
+                      −{formatTons(beforeCard.deficitKg)} т
+                      {beforeCard.assess === 'normal'
+                        ? ` (ожидаемая экономия ~${expectedSavingTons} т)`
+                        : beforeCard.assess === 'anomaly'
+                          ? ` — аномалия при норме ~${expectedSavingTons} т`
+                          : ''}
+                      .
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div style={{ marginTop: 8, fontSize: 13.5, color: '#64748B' }}>
+                  Норма экономии на полном цикле ~{expectedSavingTons} т (~2%).
+                </div>
+              )}
+            </div>
+          ) : null}
+
           {kpi ? (
             <div
               style={{
@@ -505,13 +782,13 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
                     border: CARD_BORDER,
                   })}
                 >
-                  <div style={{ fontSize: 11.5, color: '#94A3B8', fontWeight: 600, marginBottom: 4 }}>
+                  <div style={{ fontSize: 13, color: '#94A3B8', fontWeight: 600, marginBottom: 4 }}>
                     {card.label}
                   </div>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: card.accent, lineHeight: 1.15 }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: card.accent, lineHeight: 1.15 }}>
                     {card.value}
                   </div>
-                  <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 4 }}>{card.sub}</div>
+                  <div style={{ fontSize: 13, color: '#64748B', marginTop: 4 }}>{card.sub}</div>
                 </div>
               ))}
             </div>
@@ -523,143 +800,328 @@ export default function CementUnderdoseModal({ onClose, initialSiloId }: Props) 
             </div>
           )}
 
-          {rows.length > 0 ? (
+          {riskSummary?.firstNegativeAt ? (
             <div
-              style={{
+              style={volumeCardSoftStyle({
                 borderRadius: 12,
-                border: CARD_BORDER,
-                overflow: 'auto',
-              }}
+                padding: '12px 14px',
+                border: '1px solid rgba(251, 191, 36, 0.35)',
+              })}
             >
-              <table
-                style={{
-                  width: '100%',
-                  borderCollapse: 'collapse',
-                  fontSize: 12.5,
-                  color: '#E2E8F0',
-                }}
-              >
-                <thead>
-                  <tr style={{ background: 'rgba(15, 23, 42, 0.85)', color: '#94A3B8' }}>
-                    {[
-                      '#',
-                      'Клиент',
-                      'Марка заявки',
-                      'Оценка факта',
-                      'м³',
-                      'Цемент рецепт',
-                      'Цемент факт',
-                      'Недосып',
-                      'кг/м³',
-                    ].map((h) => (
-                      <th
-                        key={h}
-                        style={{
-                          textAlign: h === 'Клиент' || h === 'Марка заявки' || h === 'Оценка факта' ? 'left' : 'right',
-                          padding: '8px 10px',
-                          fontWeight: 700,
-                          whiteSpace: 'nowrap',
-                          borderBottom: '1px solid rgba(148,163,184,0.18)',
-                        }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr
-                      key={r.orderId}
-                      style={{ borderBottom: '1px solid rgba(148,163,184,0.10)' }}
-                    >
-                      <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>
-                        {r.orderId}
-                      </td>
-                      <td style={{ padding: '7px 10px', maxWidth: 220 }}>
-                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {r.client}
-                        </span>
-                      </td>
-                      <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{r.grade}</td>
-                      <td
-                        style={{
-                          padding: '7px 10px',
-                          whiteSpace: 'nowrap',
-                          color: summary?.hasUnderdose ? '#FBBF24' : '#6EE7B7',
-                          fontWeight: 700,
-                        }}
-                      >
-                        {r.estimatedGrade || '—'}
-                      </td>
-                      <td style={{ padding: '7px 10px', textAlign: 'right' }}>
-                        {formatKg(r.volumeM3)}
-                      </td>
-                      <td style={{ padding: '7px 10px', textAlign: 'right' }}>
-                        {formatKg(r.recipeCementKg)}
-                      </td>
-                      <td style={{ padding: '7px 10px', textAlign: 'right' }}>
-                        {formatKg(r.actualCementKg)}
-                      </td>
-                      <td
-                        style={{
-                          padding: '7px 10px',
-                          textAlign: 'right',
-                          color: r.shortfallKg > 0 ? '#F87171' : '#64748B',
-                          fontWeight: 600,
-                        }}
-                      >
-                        {r.shortfallKg > 0 ? formatKg(r.shortfallKg) : '—'}
-                      </td>
-                      <td style={{ padding: '7px 10px', textAlign: 'right', whiteSpace: 'nowrap', color: '#94A3B8' }}>
-                        {r.recipeKgPerM3 != null && r.actualKgPerM3 != null
-                          ? `${formatKg(r.recipeKgPerM3)} → ${formatKg(r.actualKgPerM3)}`
-                          : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                {summary ? (
-                  <tfoot>
-                    <tr style={{ background: 'rgba(15, 23, 42, 0.65)', fontWeight: 800 }}>
-                      <td colSpan={3} style={{ padding: '8px 10px' }}>
-                        Итого
-                      </td>
-                      <td style={{ padding: '8px 10px' }} />
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>
-                        {formatKg(summary.volumeM3)}
-                      </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>
-                        {formatKg(summary.recipeKg)}
-                      </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>
-                        {formatKg(summary.actualKg)}
-                      </td>
-                      <td
-                        style={{
-                          padding: '8px 10px',
-                          textAlign: 'right',
-                          color: summary.hasUnderdose ? '#F87171' : '#64748B',
-                        }}
-                      >
-                        {summary.hasUnderdose ? formatKg(summary.shortfallKg) : '—'}
-                      </td>
-                      <td style={{ padding: '8px 10px' }} />
-                    </tr>
-                  </tfoot>
-                ) : null}
-              </table>
-            </div>
-          ) : summary && !loadingCalc ? (
-            <div style={{ color: '#94A3B8', fontSize: 13 }}>
-              За период нет списаний цемента с этого силоса.
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#FDE047', marginBottom: 4 }}>
+                Когда начались проблемы
+              </div>
+              <div style={{ fontSize: 14, color: '#E2E8F0', lineHeight: 1.45 }}>
+                Первый уход в минус:{' '}
+                <strong>{formatWhen(riskSummary.firstNegativeAt)}</strong>
+                {riskSummary.firstNegativeOrderId
+                  ? ` · заявка #${riskSummary.firstNegativeOrderId}`
+                  : ''}
+                . Риск-заявки от аномалии / выбранной загрузки до конца периода —{' '}
+                {riskSummary.orderCount} заявок / {riskSummary.tripCount} рейсов, по рецептам{' '}
+                {formatTons(riskSummary.recipeKg)} т.
+              </div>
             </div>
           ) : null}
 
-          <div style={{ fontSize: 11.5, color: '#64748B', lineHeight: 1.4 }}>
-            Оценка марки — только по кг цемента на м³ из рецептов, не лабораторная прочность.
-            Модель: равномерный недосып на все рейсы периода.
-          </div>
+          {timeline.length > 0 ? (
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#E2E8F0', marginBottom: 8 }}>
+                Цепочка событий силоса
+              </div>
+              <div
+                style={{
+                  borderRadius: 12,
+                  border: CARD_BORDER,
+                  overflow: 'auto',
+                  maxHeight: 340,
+                }}
+              >
+                <table
+                  style={{
+                    width: '100%',
+                    borderCollapse: 'collapse',
+                    ...tableFont,
+                  }}
+                >
+                  <thead>
+                    <tr style={{ background: 'rgba(15, 23, 42, 0.85)', color: '#94A3B8' }}>
+                      {['Время (МСК)', 'Операция', 'Кто', 'Кол-во', 'Остаток', 'Заявка'].map((h) => (
+                        <th
+                          key={h}
+                          style={{
+                            textAlign: 'left',
+                            padding: '9px 12px',
+                            fontWeight: 700,
+                            whiteSpace: 'nowrap',
+                            borderBottom: '1px solid rgba(148,163,184,0.18)',
+                            fontSize: 13,
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {timeline.map((ev) => {
+                      const muted = ev.ignoredInCalc || ev.cancelPair;
+                      const rowColor = ev.isSelectedRefill
+                        ? 'rgba(52, 211, 153, 0.10)'
+                        : ev.isNegativeCrossing
+                          ? 'rgba(248, 113, 113, 0.12)'
+                          : ev.inDeficit
+                            ? 'rgba(248, 113, 113, 0.06)'
+                            : undefined;
+                      return (
+                        <tr
+                          key={ev.id}
+                          style={{
+                            borderBottom: '1px solid rgba(148,163,184,0.08)',
+                            background: rowColor,
+                            opacity: muted ? 0.55 : 1,
+                          }}
+                        >
+                          <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                            {formatTimeOnly(ev.createdAt)}
+                          </td>
+                          <td style={{ padding: '8px 12px' }}>
+                            {ev.label}
+                            {ev.cancelPair ? (
+                              <span style={{ color: '#94A3B8', marginLeft: 6 }}>
+                                · не учитывается
+                              </span>
+                            ) : null}
+                            {ev.isNegativeCrossing ? (
+                              <span style={{ color: '#F87171', marginLeft: 6, fontWeight: 700 }}>
+                                · уход в минус
+                              </span>
+                            ) : null}
+                            {ev.isSelectedRefill ? (
+                              <span style={{ color: '#34D399', marginLeft: 6, fontWeight: 700 }}>
+                                · выбранная загрузка
+                              </span>
+                            ) : null}
+                          </td>
+                          <td
+                            style={{
+                              padding: '8px 12px',
+                              whiteSpace: 'nowrap',
+                              fontWeight: 600,
+                              color: '#CBD5E1',
+                            }}
+                          >
+                            {ev.operatorName || '—'}
+                          </td>
+                          <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                            {ev.amountKg > 0
+                              ? `${formatKg(ev.amountKg)} кг (${formatTons(ev.amountKg)} т)`
+                              : '—'}
+                          </td>
+                          <td
+                            style={{
+                              padding: '8px 12px',
+                              whiteSpace: 'nowrap',
+                              color:
+                                ev.newKg != null && ev.newKg < 0 ? '#F87171' : '#94A3B8',
+                            }}
+                          >
+                            {ev.oldKg != null || ev.newKg != null
+                              ? `${ev.oldKg != null ? formatTons(ev.oldKg) : '—'} → ${
+                                  ev.newKg != null ? formatTons(ev.newKg) : '—'
+                                } т`
+                              : '—'}
+                          </td>
+                          <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                            {ev.orderId ? `#${ev.orderId}` : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
+          {riskOrders.length > 0 ? (
+            <OrdersMiniTable
+              title="Заявки с риском (от аномалии / загрузки до конца периода)"
+              rows={riskOrders}
+            />
+          ) : null}
+
+          {rows.length > 0 ? (
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#E2E8F0', marginBottom: 8 }}>
+                После внесения — недосып по заявкам
+              </div>
+              <div
+                style={{
+                  borderRadius: 12,
+                  border: CARD_BORDER,
+                  overflow: 'auto',
+                }}
+              >
+                <table
+                  style={{
+                    width: '100%',
+                    borderCollapse: 'collapse',
+                    ...tableFont,
+                  }}
+                >
+                  <thead>
+                    <tr style={{ background: 'rgba(15, 23, 42, 0.85)', color: '#94A3B8' }}>
+                      {[
+                        '#',
+                        'Клиент',
+                        'Марка заявки',
+                        'Оценка факта',
+                        'м³',
+                        'Цемент рецепт',
+                        'Цемент факт',
+                        'Недосып',
+                        'кг/м³',
+                      ].map((h) => (
+                        <th
+                          key={h}
+                          style={{
+                            textAlign:
+                              h === 'Клиент' || h === 'Марка заявки' || h === 'Оценка факта'
+                                ? 'left'
+                                : 'right',
+                            padding: '8px 10px',
+                            fontWeight: 700,
+                            whiteSpace: 'nowrap',
+                            borderBottom: '1px solid rgba(148,163,184,0.18)',
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => (
+                      <tr
+                        key={r.orderId}
+                        style={{ borderBottom: '1px solid rgba(148,163,184,0.10)' }}
+                      >
+                        <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700 }}>
+                          {r.orderId}
+                        </td>
+                        <td style={{ padding: '7px 10px', maxWidth: 220 }}>
+                          <span
+                            style={{
+                              display: 'block',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {r.client}
+                          </span>
+                        </td>
+                        <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{r.grade}</td>
+                        <td
+                          style={{
+                            padding: '7px 10px',
+                            whiteSpace: 'nowrap',
+                            color: summary?.hasUnderdose ? '#FBBF24' : '#6EE7B7',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {r.estimatedGrade || '—'}
+                        </td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                          {formatKg(r.volumeM3)}
+                        </td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                          {formatKg(r.recipeCementKg)}
+                        </td>
+                        <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                          {formatKg(r.actualCementKg)}
+                        </td>
+                        <td
+                          style={{
+                            padding: '7px 10px',
+                            textAlign: 'right',
+                            color: r.shortfallKg > 0 ? '#F87171' : '#64748B',
+                            fontWeight: 600,
+                          }}
+                        >
+                          {r.shortfallKg > 0 ? formatKg(r.shortfallKg) : '—'}
+                        </td>
+                        <td
+                          style={{
+                            padding: '7px 10px',
+                            textAlign: 'right',
+                            whiteSpace: 'nowrap',
+                            color: '#94A3B8',
+                          }}
+                        >
+                          {r.recipeKgPerM3 != null && r.actualKgPerM3 != null
+                            ? `${formatKg(r.recipeKgPerM3)} → ${formatKg(r.actualKgPerM3)}`
+                            : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {summary ? (
+                    <tfoot>
+                      <tr style={{ background: 'rgba(15, 23, 42, 0.65)', fontWeight: 800 }}>
+                        <td colSpan={3} style={{ padding: '8px 10px' }}>
+                          Итого
+                        </td>
+                        <td style={{ padding: '8px 10px' }} />
+                        <td style={{ padding: '8px 10px', textAlign: 'right' }}>
+                          {formatKg(summary.volumeM3)}
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right' }}>
+                          {formatKg(summary.recipeKg)}
+                        </td>
+                        <td style={{ padding: '8px 10px', textAlign: 'right' }}>
+                          {formatKg(summary.actualKg)}
+                        </td>
+                        <td
+                          style={{
+                            padding: '8px 10px',
+                            textAlign: 'right',
+                            color: summary.hasUnderdose ? '#F87171' : '#64748B',
+                          }}
+                        >
+                          {summary.hasUnderdose ? formatKg(summary.shortfallKg) : '—'}
+                        </td>
+                        <td style={{ padding: '8px 10px' }} />
+                      </tr>
+                    </tfoot>
+                  ) : null}
+                </table>
+              </div>
+            </div>
+          ) : summary && !loadingCalc ? (
+            <div style={{ color: '#94A3B8', fontSize: 13 }}>
+              За период после внесения нет списаний цемента с этого силоса.
+            </div>
+          ) : null}
+
+          <DarkHoverTip
+            tip={
+              `Оценка марки — только по кг цемента на м³ из рецептов, не лабораторная прочность. `
+              + `Модель: равномерный недосып на рейсы после выбранной загрузки. `
+              + `Ручные списания, MEKA-копейки и пары «+X/−X» в загрузки не входят. `
+              + `Норма экономии ~2% (${expectedSavingTons} т). ${alertThresholdHint}.`
+            }
+            maxWidth={420}
+            display="block"
+          >
+            <div style={{ fontSize: 13.5, color: '#64748B', lineHeight: 1.45, cursor: 'help' }}>
+              Оценка марки — по кг/м³ из рецептов · равномерный недосып после загрузки ·
+              норма экономии ~{expectedSavingTons} т (~2%) · {alertThresholdHint}
+              {' '}
+              <span style={{ color: '#94A3B8', textDecoration: 'underline dotted' }}>подробнее</span>
+            </div>
+          </DarkHoverTip>
         </div>
       </div>
     </div>

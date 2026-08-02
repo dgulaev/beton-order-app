@@ -12,7 +12,10 @@ export function siloNameById(siloId: number | null | undefined): string {
   return spec?.name || (siloId ? `Силос №${siloId}` : 'Силос');
 }
 
-/** Порог «глубокого минуса» (т): силос 1/2 → 5 т, силос 3 → 10 т. */
+/**
+ * Порог «глубокого минуса» (т) для one-shot алерта оператору:
+ * силосы ~75 т (1/2) → 5 т, силос ~150 т (3) → 10 т.
+ */
 export function siloLowRateThresholdTons(
   siloId: number | null | undefined,
   overrides?: { lowRateTonsSilo12?: number; lowRateTonsSilo3?: number } | null,
@@ -21,6 +24,11 @@ export function siloLowRateThresholdTons(
     return overrides?.lowRateTonsSilo3 ?? 10;
   }
   return overrides?.lowRateTonsSilo12 ?? 5;
+}
+
+/** Ожидаемая экономия на полном цикле (~2% рабочего объёма): 75 т → 1.5 т, 150 т → 3 т. */
+export function expectedSiloSavingTons(siloId: number | null | undefined): number {
+  return Number(siloId) === 3 ? 3 : 1.5;
 }
 
 export type LowRateAlertInfo = {
@@ -72,7 +80,7 @@ export async function syncSiloLowRateAlert(
     }
     const row = Array.isArray(data) ? data[0] : data;
     if (!row) return null;
-    return {
+    const info: LowRateAlertInfo = {
       siloId: Number(row.silo_id),
       siloName: siloNameById(Number(row.silo_id)),
       currentTons: Number(row.current_tons ?? 0),
@@ -82,6 +90,16 @@ export async function syncSiloLowRateAlert(
       pending: Boolean(row.pending),
       alertAt: row.alert_at ? String(row.alert_at) : null,
     };
+    // Персистентный алерт админам (офлайн → увидят при входе); идемпотентно по эпизоду
+    if (info.pending || info.fired) {
+      try {
+        const { notifySiloLowRateAdmins } = await import('@/lib/notifySiloLowRateAdmins');
+        void notifySiloLowRateAdmins(info);
+      } catch (notifyErr) {
+        console.error('notifySiloLowRateAdmins:', notifyErr);
+      }
+    }
+    return info;
   } catch (err) {
     console.error('syncSiloLowRateAlert:', err);
     return null;

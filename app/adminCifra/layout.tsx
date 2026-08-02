@@ -39,6 +39,7 @@ import { setRouteOriginCoordsOverride } from '@/lib/geocodeAddress';
 import { setRouteOriginAddressOverride } from '@/lib/bryanskAddress';
 import AppDialogHost, { appConfirm } from './components/appDialog';
 import HelpProvider, { useHelp } from './components/help/HelpProvider';
+import { useAdminSiloLowRateAlerts } from './components/useAdminSiloLowRateAlerts';
 import { isHelpEnabledForRole } from '@/lib/help/registry';
 
 /** Единица объёма в тостах: бетон — м³, отгрузка — т/шт/м³ по технике и марке. */
@@ -315,6 +316,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   const isLoggedIn = !!user && !roleLoading;
   const userRole = user?.role || null;
   const isGuest = userRole === 'guest';
+  // Персистентный one-shot: глубокий минус силоса → задание оператору (даже если админ был офлайн)
+  useAdminSiloLowRateAlerts(userRole === 'admin');
 
   const navOk = (section: NavSection) =>
     canAccessNavSection(userRole, section, systemSettings.roleAccess);

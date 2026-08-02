@@ -28,8 +28,8 @@ function formatAlertMessage(alerts: LowRateAlertInfo[]): string {
     return `• ${a.siloName}: ${cur} т (порог −${thr} т)`;
   });
   return (
-    'Расход слишком низкий — проверьте завод!\n\n'
-    + 'Остаток силоса ушёл глубоко в минус относительно рецептов:\n'
+    'Остаток силоса ушёл глубоко в минус — проверьте оборудование!\n\n'
+    + 'Одноразовое напоминание: сверьте весы, шнек и рабочий силос.\n'
     + lines.join('\n')
   );
 }
@@ -52,7 +52,7 @@ export function useLowRateAlerts(alerts: LowRateAlertInfo[] | undefined | null) 
       try {
         for (const a of pending) globalShownEpisodes.add(episodeKey(a));
         await appAlert(formatAlertMessage(pending), {
-          title: 'Проверьте завод',
+          title: 'Проверьте оборудование',
           variant: 'warning',
           okLabel: 'Понятно',
         });

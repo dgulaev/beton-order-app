@@ -134,7 +134,9 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettingsData = {
     ownUnloadAllowanceMin: OWN_UNLOAD_ALLOWANCE_MIN,
   },
   warehouse: {
+    /** Силосы ~75 т (1/2): алерт при минусе глубже −5 т */
     lowRateTonsSilo12: 5,
+    /** Силос ~150 т (3): алерт при минусе глубже −10 т */
     lowRateTonsSilo3: 10,
   },
   interface: {

@@ -905,12 +905,12 @@ export default function SettingsPage() {
 
           {active === 'warehouse' && (
             <SectionCard
-              title="Склад — пороги низкого остатка"
-              hint="Чтобы алерт в БД считал эти пороги, один раз выполни scripts/warehouse-silo-low-rate-alert-settings-threshold.sql в Supabase."
+              title="Склад — пороги глубокого минуса"
+              hint="Одноразовый алерт оператору и админу (админу — персистентно, даже если был офлайн): проверить оборудование / дать задание оператору. Дефолт — силосы ~75 т → 5 т, силос ~150 т → 10 т. Чтобы БД считала эти пороги, один раз выполни scripts/warehouse-silo-low-rate-alert-settings-threshold.sql в Supabase."
             >
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
                 <div>
-                  <label style={labelStyle}>Силос 1 и 2, тонн</label>
+                  <label style={labelStyle}>Силос 1 и 2 (~75 т), порог минуса</label>
                   <input
                     type="number"
                     min={0}
@@ -930,7 +930,7 @@ export default function SettingsPage() {
                   />
                 </div>
                 <div>
-                  <label style={labelStyle}>Силос 3, тонн</label>
+                  <label style={labelStyle}>Силос 3 (~150 т), порог минуса</label>
                   <input
                     type="number"
                     min={0}
