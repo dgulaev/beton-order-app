@@ -2539,6 +2539,8 @@ export function orderProgressStatus(
 /**
  * Live order_mixers, которых нет среди слотов плана (диспетчер завёл вручную).
  * Показываем в UI как read-only строки «из заявки».
+ * ETA объекта/возврата считаем по той же схеме, что и план (погрузка + дорога + разгрузка),
+ * иначе в строке были бы «объект — / обр. —» при живом «В пути».
  */
 export function orphanLiveTripsAsPlanned(
   order: PlannerOrder,
@@ -2558,6 +2560,9 @@ export function orphanLiveTripsAsPlanned(
   }
   const oid = String(order.id);
   const out: PlannedTrip[] = [];
+  const pickup = isPickupOrder(order.address);
+  const baseRoad = Math.max(5, Number(order.roadMin) || 30);
+
   for (const d of dayTrips) {
     if (String(d.orderId ?? d.order_id) !== oid) continue;
     if (d.id == null) continue;
@@ -2569,24 +2574,63 @@ export function orphanLiveTripsAsPlanned(
     const loadHhMm = timeRaw.slice(0, 5) || '—';
     const loadAt = parseHhMm(loadHhMm);
     const vol = Math.round((Number(d.volume) || 0) * 10) / 10;
+    const tripVol = vol > 0 ? vol : 0.1;
+    const loadMin = loadMinutesForVolume(tripVol);
+    const unloadMin = pickup
+      ? 0
+      : unloadMinutesForMixer({
+          id: `live-${id}`,
+          number: mixer,
+          volume: tripVol,
+          type: 'own',
+        });
+
+    let arriveTime = '—';
+    let unloadDoneTime = '—';
+    let returnTime = '—';
+    let arriveAtMin: number | undefined;
+    let returnAtMin: number | undefined;
+
+    if (loadAt != null) {
+      if (pickup) {
+        const readyAt = loadAt + loadMin;
+        arriveTime = formatMinutes(readyAt);
+        arriveAtMin = readyAt;
+      } else {
+        const roadOut = roadWithTraffic(baseRoad, loadAt, false);
+        const arrive = loadAt + loadMin + roadOut;
+        const unloadDone = arrive + unloadMin;
+        const roadBack = roadWithTraffic(baseRoad, unloadDone, false);
+        const returnAt = unloadDone + roadBack;
+        arriveTime = formatMinutes(arrive);
+        unloadDoneTime = formatMinutes(unloadDone);
+        returnTime = formatMinutes(returnAt);
+        arriveAtMin = arrive;
+        returnAtMin = returnAt;
+      }
+    }
+
     out.push({
       id: `live-orphan-${id}`,
       orderId: order.id,
       client: order.client,
       mixerNumber: mixer,
       mixerId: `live-${id}`,
-      volume: vol > 0 ? vol : 0.1,
+      volume: tripVol,
       loadTime: loadHhMm,
-      arriveTime: '—',
-      unloadDoneTime: '—',
-      returnTime: '—',
+      arriveTime,
+      unloadDoneTime,
+      returnTime,
       loadAtMin: loadAt ?? undefined,
-      roadMin: Number(order.roadMin) || 0,
-      loadMin: 0,
-      unloadMin: 0,
+      arriveAtMin,
+      returnAtMin,
+      roadMin: baseRoad,
+      loadMin,
+      unloadMin,
       locked: true,
       done: st === 'Разгружен' || st === 'Возврат',
       orderMixerId: Number.isFinite(Number(d.id)) ? Number(d.id) : null,
+      pickup: pickup || undefined,
     });
   }
   return out;

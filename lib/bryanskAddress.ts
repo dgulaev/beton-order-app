@@ -20,8 +20,19 @@ const KNOWN_LANDMARKS: { keywords: string[]; address: string }[] = [
   { keywords: ['варяг'], address: 'Брянск, улица Дуки, 56В' },
 ];
 
+/**
+ * Маркер населённого пункта вне «голой» улицы Брянска.
+ * Важно: `д.` (деревня) и `п.` (посёлок) — частые сокращения диспетчеров;
+ * без них «д. Заречная» нормализуется в «г. Брянск, …» и геокодер
+ * находит одноимённую улицу в городе.
+ * Длинные формы — раньше коротких (`деревня` до `д.`, `посёлок` до `п.`).
+ */
 const SETTLEMENT_MARKER =
-  /(?:^|[\s,])(г\.?|город|гор\.|пос\.?|посёлок|поселок|село|с\.|дер\.?|деревня|ст\.?|станица|рп\.?|пгт\.?)\s*[А-ЯЁ]/i;
+  /(?:^|[\s,])(город|гор\.|г\.?|посёлок|поселок|поселение|пос\.?|пгт\.?|рп\.?|село|с\.|деревня|дер\.?|д\.|станица|ст\.?|хутор|х\.|п\.)\s*[А-ЯЁ]/i;
+
+/** Район без типа НП («Комаричский р-н») — тоже не городская улица. */
+const DISTRICT_MARKER =
+  /(?:^|[\s,./])(?:р-?н|район)(?:$|[\s,.])/i;
 
 const CYRILLIC_LETTER = /[а-яё]/i;
 
@@ -57,6 +68,7 @@ export function isOutsideBryansk(rawAddress: string | null | undefined): boolean
   if (mentionsBryanskCity(trimmed)) return false;
   if (mentionsBryanskRegion(trimmed)) return true;
   if (SETTLEMENT_MARKER.test(trimmed)) return true;
+  if (DISTRICT_MARKER.test(trimmed)) return true;
 
   return false;
 }
@@ -74,7 +86,7 @@ export function normalizeDeliveryAddress(rawAddress: string | null | undefined):
   if (mentionsBryanskRegion(trimmed)) return trimmed;
   if (mentionsBryanskCity(trimmed)) return trimmed;
 
-  if (SETTLEMENT_MARKER.test(trimmed)) {
+  if (SETTLEMENT_MARKER.test(trimmed) || DISTRICT_MARKER.test(trimmed)) {
     return `${trimmed}, Брянская область`;
   }
 

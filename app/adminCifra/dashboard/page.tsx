@@ -462,6 +462,26 @@ const selectedDateStr = `${selectedYear}-${selectedMonth}-${selectedDay}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDateStr]);
 
+  // Realtime: смена адреса → новый road_time_min, не держим старый кэш в roadTimes.
+  useEffect(() => {
+    setRoadTimes((prev) => {
+      let next = prev;
+      let changed = false;
+      for (const o of allOrders as any[]) {
+        if (String(o.delivery_date || '').substring(0, 10) !== selectedDateStr) continue;
+        const id = String(o.id);
+        const m = o.road_time_min != null ? Number(o.road_time_min) : NaN;
+        if (!Number.isFinite(m) || prev[id] === m) continue;
+        if (!changed) {
+          next = { ...prev };
+          changed = true;
+        }
+        next[id] = m;
+      }
+      return changed ? next : prev;
+    });
+  }, [allOrders, selectedDateStr]);
+
 const ordersOnSelectedDay = allOrders.filter((o: Order) => {
   if (!o?.delivery_date) return false;
 

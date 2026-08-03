@@ -229,6 +229,25 @@ function PlanningPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateKey]);
 
+  // Realtime: менеджер сменил адрес → в заявке новый road_time_min.
+  useEffect(() => {
+    setRoadTimes((prev) => {
+      let next = prev;
+      let changed = false;
+      for (const o of dayOrders) {
+        const id = String(o.id);
+        const m = o.road_time_min != null ? Number(o.road_time_min) : NaN;
+        if (!Number.isFinite(m) || prev[id] === m) continue;
+        if (!changed) {
+          next = { ...prev };
+          changed = true;
+        }
+        next[id] = m;
+      }
+      return changed ? next : prev;
+    });
+  }, [dayOrders]);
+
   useEffect(() => {
     let cancelled = false;
     const load = async () => {

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { pruneGhostTripsFromLogisticsPlan } from '@/lib/pruneLogisticsPlanGhosts';
+import { computeRoadMinutes } from '@/lib/travelTime';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -271,6 +272,24 @@ export async function PUT(request: NextRequest) {
           old_value: 'true',
           new_value: 'false',
         });
+      }
+    }
+
+    // road_time_min только с сервера (геокод), клиентский payload игнорируем.
+    delete updateData.road_time_min;
+
+    // Смена адреса → сразу пересчитать дорогу, чтобы диспетчер в планировании
+    // увидел новые «объект/обр.» без ручного «Обновить дороги».
+    if (Object.prototype.hasOwnProperty.call(updateData, 'address')) {
+      const oldAddr = String(currentOrder.address || '').trim();
+      const newAddr = String(updateData.address ?? '').trim();
+      if (oldAddr !== newAddr) {
+        try {
+          const { road_time_min } = await computeRoadMinutes(newAddr);
+          updateData.road_time_min = road_time_min;
+        } catch (e) {
+          console.warn('road_time_min after address change:', e);
+        }
       }
     }
 

@@ -840,6 +840,26 @@ export default function LogisticsPlannerTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- раз при смене состава дня
   }, [dateKey, orderIdsKey]);
 
+  // Менеджер сменил адрес → realtime принёс новый road_time_min в props.orders.
+  // Подтягиваем в локальный кэш, иначе «объект/обр.» остаются по старой дороге.
+  useEffect(() => {
+    setLocalRoadTimes((prev) => {
+      let next = prev;
+      let changed = false;
+      for (const o of orders) {
+        const id = String(o.id);
+        const m = o.road_time_min != null ? Number(o.road_time_min) : NaN;
+        if (!Number.isFinite(m) || prev[id] === m) continue;
+        if (!changed) {
+          next = { ...prev };
+          changed = true;
+        }
+        next[id] = m;
+      }
+      return changed ? next : prev;
+    });
+  }, [orders]);
+
   const plannerOrders: PlannerOrder[] = useMemo(
     () =>
       orders

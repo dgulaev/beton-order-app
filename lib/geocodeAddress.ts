@@ -46,7 +46,16 @@ export function extractCoordsFromAddress(address: string | null | undefined): Co
   return null;
 }
 
-type DadataSuggestion = { data: { geo_lat: string | null; geo_lon: string | null } };
+type DadataSuggestion = {
+  value?: string;
+  data: {
+    geo_lat: string | null;
+    geo_lon: string | null;
+    street?: string | null;
+    settlement?: string | null;
+    city?: string | null;
+  };
+};
 
 async function suggest(query: string): Promise<DadataSuggestion[]> {
   const token = process.env.DADATA_API_KEY;
@@ -71,28 +80,61 @@ async function suggest(query: string): Promise<DadataSuggestion[]> {
   return data?.suggestions || [];
 }
 
+/** НП целиком (деревня без улицы) важнее «ул. Заречная» в другом селе. */
+function pickBestSuggestion(suggestions: DadataSuggestion[]): DadataSuggestion | null {
+  const withCoords = suggestions.filter((s) => s.data.geo_lat && s.data.geo_lon);
+  if (withCoords.length === 0) return null;
+  const settlementOnly = withCoords.find(
+    (s) => s.data.settlement && !String(s.data.street || '').trim(),
+  );
+  return settlementOnly || withCoords[0];
+}
+
 /**
- * Геокодирует адрес с упрощением хвоста (дом → улица → город), если точного
- * совпадения нет — как в /api/geocode.
+ * Упрощение запроса при пустом ответе DaData.
+ * Не выкидываем «Брянская обл» / «… район» — иначе «д. Заречная» матчится
+ * как улица в городе. Сначала снимаем дом/улицу, регион оставляем дольше.
+ */
+function trimQueryForRetry(query: string): string | null {
+  const parts = query.split(',').map((p) => p.trim()).filter(Boolean);
+  if (parts.length <= 1) return null;
+
+  const isRegionOrDistrict = (p: string) =>
+    /брянск[а-яё]*\s*обл/i.test(p)
+    || /(^|[\s,./])(?:район|р-?н)(?:$|[\s,.])/i.test(` ${p} `);
+
+  // С конца, но пропускаем регион/район — режем улицу/дом перед ними.
+  for (let i = parts.length - 1; i >= 1; i--) {
+    if (isRegionOrDistrict(parts[i])) continue;
+    parts.splice(i, 1);
+    return parts.join(', ');
+  }
+
+  // Остались только НП + район/область — убрать самый левый кусок (лишняя улица).
+  parts.shift();
+  return parts.length ? parts.join(', ') : null;
+}
+
+/**
+ * Геокодирует адрес с упрощением хвоста, если точного совпадения нет.
  */
 export async function geocodeAddressWithFallback(rawQuery: string): Promise<GeocodeCoords | null> {
   let query = String(rawQuery || '').trim();
   if (!query || !process.env.DADATA_API_KEY) return null;
 
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     const suggestions = await suggest(query);
-    const withCoords = suggestions.find((s) => s.data.geo_lat && s.data.geo_lon);
-    if (withCoords) {
+    const best = pickBestSuggestion(suggestions);
+    if (best) {
       return {
-        lat: parseFloat(withCoords.data.geo_lat!),
-        lon: parseFloat(withCoords.data.geo_lon!),
+        lat: parseFloat(best.data.geo_lat!),
+        lon: parseFloat(best.data.geo_lon!),
       };
     }
 
-    const parts = query.split(',').map((p) => p.trim()).filter(Boolean);
-    if (parts.length <= 1) break;
-    parts.pop();
-    query = parts.join(', ');
+    const next = trimQueryForRetry(query);
+    if (!next || next === query) break;
+    query = next;
   }
 
   return null;

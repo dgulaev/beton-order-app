@@ -459,6 +459,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    let road_time_min: number | null = null;
+    try {
+      const { computeRoadMinutes } = await import('@/lib/travelTime');
+      const road = await computeRoadMinutes(String(address || ''));
+      road_time_min = road.road_time_min;
+    } catch (e) {
+      console.warn('road_time_min on create:', e);
+    }
+
     const orderRow: Record<string, unknown> = {
       user_id: finalUserId,
       grade,
@@ -485,6 +494,7 @@ export async function POST(request: NextRequest) {
       order_type,
       fleet_vehicle_kind,
       loading_point_id,
+      ...(road_time_min != null ? { road_time_min } : {}),
     };
 
     let { data: orderData, error: insertError } = await supabase
