@@ -173,9 +173,18 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
     effectiveStatus = 'Разгружен';
   }
 
+  // Старт таймера оператора: статус уже «Загрузка» (дефолт очереди), но
+  // loading_started_at ещё null. Нельзя short-circuit'ить — иначе таймер
+  // живёт только в React-state и пропадает после reload страницы.
+  const startingLoadTimer =
+    status === 'Загрузка'
+    && !!loading_started_at
+    && !mixer.loading_started_at;
+
   // Идемпотентность: повтор «В пути»/тот же статус (двойной клик, auto-heal,
   // retry после таймаута) — успех, не 409 «конфликт с диспетчером».
-  if (effectiveStatus && oldStatus === effectiveStatus) {
+  // Исключение: startingLoadTimer — идём дальше и пишем loading_started_at.
+  if (effectiveStatus && oldStatus === effectiveStatus && !startingLoadTimer) {
     return {
       httpStatus: 200,
       body: {
@@ -239,11 +248,6 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
   // ==================== РАБОЧИЙ СИЛОС: СТАРТ ЗАГРУЗКИ И «В ПУТИ» ====================
   // Берём только «свежий» силос за сегодня МСК — иначе UI мог показывать вчерашний,
   // а в БД id ещё лежал до ближайшего GET (ложный блок «силос выбран, а Начать нет»).
-  const startingLoadTimer =
-    status === 'Загрузка'
-    && !!loading_started_at
-    && !mixer.loading_started_at;
-
   if (startingLoadTimer) {
     const siloForLoad = await getFreshActiveSiloId();
     if (siloForLoad == null) {

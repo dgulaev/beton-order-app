@@ -14,7 +14,7 @@ type RpcRow = {
 };
 
 async function writeHistory(opts: {
-  operation_type: 'add' | 'reset';
+  operation_type: 'add' | 'reset' | 'subtract';
   siloId: number;
   amountKg: number;
   oldTons: number;
@@ -150,12 +150,67 @@ export async function POST(request: NextRequest) {
 
     if (action === 'add') {
       const amountKg = Number(body?.amountKg);
-      if (!Number.isFinite(amountKg) || amountKg <= 0) {
+      if (!Number.isFinite(amountKg) || amountKg === 0) {
         return NextResponse.json(
-          { error: 'Укажи количество кг больше 0 (списание — отдельной кнопкой)' },
+          { error: 'Укажи количество кг не равное нулю (минус — ручное списание)' },
           { status: 400 },
         );
       }
+
+      // Минус: ручная корректировка остатка вниз — без закрытия цикла экономии
+      // (как на странице склада). Плюс: поступление через RPC с экономией.
+      if (amountKg < 0) {
+        const { data: siloRow, error: siloErr } = await supabase
+          .from('warehouse_silos')
+          .select('current')
+          .eq('silo_id', siloId)
+          .single();
+        if (siloErr || !siloRow) {
+          return NextResponse.json(
+            { error: siloErr?.message || 'Силос не найден' },
+            { status: 404 },
+          );
+        }
+        const oldTons = Number(siloRow.current || 0);
+        const deltaTons = amountKg / 1000;
+        // Как на складе: не уходим ниже −50 т
+        const newTons = Math.max(-50, oldTons + deltaTons);
+        const appliedKg = Math.round((newTons - oldTons) * 1000 * 10) / 10;
+        if (appliedKg === 0) {
+          return NextResponse.json(
+            { error: 'Остаток уже на минимуме (−50 т)' },
+            { status: 400 },
+          );
+        }
+        const { error: updErr } = await supabase
+          .from('warehouse_silos')
+          .update({ current: newTons, updated_at: new Date().toISOString() })
+          .eq('silo_id', siloId);
+        if (updErr) {
+          return NextResponse.json({ error: updErr.message }, { status: 500 });
+        }
+        await writeHistory({
+          operation_type: 'subtract',
+          siloId,
+          amountKg: Math.abs(appliedKg),
+          oldTons,
+          newTons,
+          userName,
+        });
+        const lowRate = await syncSiloLowRateAlert(supabase, siloId);
+        return NextResponse.json({
+          success: true,
+          action: 'subtract',
+          siloId,
+          siloName: siloNameById(siloId),
+          amountKg: appliedKg,
+          oldCurrent: oldTons,
+          newCurrent: newTons,
+          savingKg: 0,
+          lowRateAlert: lowRate?.pending ? lowRate : null,
+        });
+      }
+
       const deltaTons = amountKg / 1000;
 
       const { data, error } = await supabase.rpc('warehouse_silo_book_and_add', {

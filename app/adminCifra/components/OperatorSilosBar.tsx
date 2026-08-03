@@ -99,19 +99,25 @@ export default function OperatorSilosBar({
   };
 
   const handleAdd = async (siloId: number) => {
-    const input = await appPrompt(`Сколько цемента внести в силос №${siloId}?`, {
-      title: 'Поступление цемента',
-      okLabel: 'Внести',
-      cancelLabel: 'Отмена',
-      variant: 'info',
-      placeholder: '0',
-      inputMode: 'decimal',
-      unit: 'кг',
-    });
+    const input = await appPrompt(
+      `Сколько цемента внести в силос №${siloId}?\n\nМинус (−) — ручное списание без закрытия цикла экономии.`,
+      {
+        title: 'Поступление / корректировка',
+        okLabel: 'Внести',
+        cancelLabel: 'Отмена',
+        variant: 'info',
+        placeholder: '0',
+        inputMode: 'decimal',
+        unit: 'кг',
+      },
+    );
     if (input === null) return;
     const kg = parseFloat(String(input).replace(',', '.'));
-    if (!Number.isFinite(kg) || kg <= 0) {
-      await appAlert('Введите количество кг больше 0', { title: 'Ошибка', variant: 'danger' });
+    if (!Number.isFinite(kg) || kg === 0) {
+      await appAlert('Введите число не равное нулю (минус — списание)', {
+        title: 'Ошибка',
+        variant: 'danger',
+      });
       return;
     }
 

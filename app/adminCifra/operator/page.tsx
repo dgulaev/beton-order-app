@@ -369,11 +369,19 @@ export default function OperatorBSUPage() {
   // всегда срабатывает"). tick форсирует регулярный перерендер, пока есть
   // хотя бы одна активная загрузка.
   const [tick, setTick] = useState(() => Date.now());
+  // Тик и при восстановлении из БД (loading_started_at), пока local state ещё пуст.
+  const hasActiveLoadTimers =
+    Object.keys(loadingTrips).length > 0
+    || queueTrips.some(
+      (t: any) =>
+        t.status === 'Загрузка'
+        && (t.loading_started_at || t.loadingStartedAt),
+    );
   useEffect(() => {
-    if (Object.keys(loadingTrips).length === 0) return;
+    if (!hasActiveLoadTimers) return;
     const interval = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, [loadingTrips]);
+  }, [hasActiveLoadTimers]);
 
   const handleActiveSiloChange = (siloId: number) => {
     if (siloId === activeSiloId) return;
@@ -1653,11 +1661,26 @@ export default function OperatorBSUPage() {
   };
 
     // ==================== 1.4 РАСЧЁТ ВРЕМЕНИ ЗАГРУЗКИ ====================
-  const getLoadingDuration = (tripId: number) => {
-    const startTime = tripStartTimes[tripId];
+  /** Таймер активен: local state или loading_started_at из БД (после reload). */
+  const isTripActivelyLoading = (trip: any) =>
+    !!(
+      loadingTrips[trip.id]
+      || trip.loading_started_at
+      || trip.loadingStartedAt
+    );
+
+  const getTripLoadStart = (trip: any): string | null =>
+    tripStartTimes[trip.id]
+    || trip.loading_started_at
+    || trip.loadingStartedAt
+    || null;
+
+  const getLoadingDuration = (tripId: number, fallbackStart?: string | null) => {
+    const startTime = tripStartTimes[tripId] || fallbackStart || null;
     if (!startTime) return '—';
 
     const start = new Date(startTime).getTime();
+    if (!Number.isFinite(start)) return '—';
     const minutes = Math.floor((tick - start) / 60000);
 
     return minutes > 0 ? `${minutes} мин` : '1 мин';
@@ -2478,28 +2501,33 @@ export default function OperatorBSUPage() {
                       </DarkHoverTip>
 
                       <div style={{ display: 'flex', gap: '5px', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'nowrap', overflow: 'hidden' }}>
+                        {(() => {
+                          const activelyLoading = isTripActivelyLoading(trip);
+                          const loadStart = getTripLoadStart(trip);
+                          return (
+                        <>
                         <button 
                           onClick={(e) => { 
                             e.stopPropagation(); 
                             startLoading(trip); 
                           }} 
-                          disabled={loadingTrips[trip.id]}
+                          disabled={activelyLoading}
                           style={{ 
                             padding: '6px 11px', 
-                            background: loadingTrips[trip.id] ? '#475569' : '#10B981', 
+                            background: activelyLoading ? '#475569' : '#10B981', 
                             color: 'white', 
                             border: 'none', 
                             borderRadius: '9999px', 
                             fontSize: '12.5px', 
                             fontWeight: '600',
-                            cursor: loadingTrips[trip.id] ? 'not-allowed' : 'pointer',
+                            cursor: activelyLoading ? 'not-allowed' : 'pointer',
                             minWidth: '90px',
                             whiteSpace: 'nowrap',
                             flexShrink: 0
                           }}
                         >
-                          {loadingTrips[trip.id] 
-                            ? `В работе • ${getLoadingDuration(trip.id)}` 
+                          {activelyLoading
+                            ? `В работе • ${getLoadingDuration(trip.id, loadStart)}` 
                             : 'Начать'}
                         </button>
                         
@@ -2508,22 +2536,25 @@ export default function OperatorBSUPage() {
                             e.stopPropagation(); 
                             completeLoading(trip); 
                           }} 
-                          disabled={!loadingTrips[trip.id] || completingTripIds.has(trip.id)}   // ← Активна только когда начата загрузка и не в процессе завершения (защита от дублей по двойному клику)
+                          disabled={!activelyLoading || completingTripIds.has(trip.id)}
                           style={{ 
                             padding: '6px 11px', 
-                            background: loadingTrips[trip.id] && !completingTripIds.has(trip.id) ? '#3B82F6' : '#475569', 
+                            background: activelyLoading && !completingTripIds.has(trip.id) ? '#3B82F6' : '#475569', 
                             color: 'white', 
                             border: 'none', 
                             borderRadius: '9999px', 
                             fontSize: '12.5px', 
                             fontWeight: '600',
-                            cursor: loadingTrips[trip.id] && !completingTripIds.has(trip.id) ? 'pointer' : 'not-allowed',
+                            cursor: activelyLoading && !completingTripIds.has(trip.id) ? 'pointer' : 'not-allowed',
                             whiteSpace: 'nowrap',
                             flexShrink: 0
                           }}
                         >
                           {completingTripIds.has(trip.id) ? 'Сохранение…' : 'Загружен'}
                         </button>
+                        </>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
