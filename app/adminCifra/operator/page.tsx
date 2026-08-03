@@ -8,7 +8,7 @@ import WarehousePage from '../warehouse/page';
 import ReportsPage, { preloadReportsData } from '../reports/page';
 import RecipesPage, { type LabTab } from '../recipes/page';
 import { CARD_VOLUME_SOFT, MODAL_VOLUME_GLOW, modalCloseButtonStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
-import { UserCog, ChevronDown, UserRound, Truck, CircleHelp } from 'lucide-react';
+import { UserCog, ChevronDown, UserRound, Truck, CircleHelp, ClipboardList } from 'lucide-react';
 import ModalSelect from '../components/ModalSelect';
 import OperatorSilosBar from '../components/OperatorSilosBar';
 import OperatorMekaUploadCard from '../components/OperatorMekaUploadCard';
@@ -2307,8 +2307,16 @@ export default function OperatorBSUPage() {
             })}>
               
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexShrink: 0 }}>
-                <h2 style={{ fontSize: '19px', fontWeight: '600' }}>
-                  📋 Очередь на загрузку ({queueTrips.length})
+                <h2 style={{
+                  fontSize: '19px',
+                  fontWeight: '600',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  margin: 0,
+                }}>
+                  <ClipboardList size={22} color="#94A3B8" strokeWidth={2} />
+                  Очередь на загрузку ({queueTrips.length})
                 </h2>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>

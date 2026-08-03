@@ -53,11 +53,25 @@ export async function POST(request: NextRequest) {
         { status: 409 },
       );
     }
+    // Статус «Загрузка» без loading_started_at — наследие бага short-circuit
+    // (кнопка «Начать» не писала таймер). Оператор уже грузит и меняет силос:
+    // дописываем таймер и продолжаем, а не блокируем mid_load.
     if (!mixer.loading_started_at) {
-      return NextResponse.json(
-        { error: 'Загрузка рейса ещё не начата' },
-        { status: 409 },
-      );
+      const healedAt = new Date().toISOString();
+      const { error: healError } = await supabase
+        .from('order_mixers')
+        .update({ loading_started_at: healedAt })
+        .eq('id', orderMixerId)
+        .eq('status', 'Загрузка')
+        .is('loading_started_at', null);
+      if (healError) {
+        console.error('cement-segment: heal loading_started_at:', healError);
+        return NextResponse.json(
+          { error: 'Загрузка рейса ещё не начата — нажми «Начать» и повтори смену силоса' },
+          { status: 409 },
+        );
+      }
+      mixer.loading_started_at = healedAt;
     }
 
     const activeSiloId = await getFreshActiveSiloId();
