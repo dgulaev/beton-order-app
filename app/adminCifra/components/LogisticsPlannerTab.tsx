@@ -1,6 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Copy,
   Calculator,
@@ -10,12 +17,13 @@ import {
   Route,
   Database,
   Upload,
+  Send,
 } from 'lucide-react';
 import ModalActionButton from './ModalActionButton';
 import PlannerTripFactRow from './PlannerTripFactRow';
 import PlannerOperatorView from './PlannerOperatorView';
-import OrderPlanProgressBar from './OrderPlanProgressBar';
 import PlannerInsightsPanel from './PlannerInsightsPanel';
+import PlannerOrderHeader from './PlannerOrderHeader';
 import PlannerFleetMixerChip from './PlannerFleetMixerChip';
 import DarkHoverTip from './DarkHoverTip';
 import PlannerSwitch from './PlannerSwitch';
@@ -84,14 +92,14 @@ import {
   type DailyLogisticsPlanRow,
 } from '@/lib/dailyLogisticsPlan';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
-import { volumeCardStyle } from '../cardStyles';
+import { CARD_GRADIENT_SOFT, volumeCardStyle } from '../cardStyles';
 import { useRealtimeProductionLogs } from '@/hooks/useRealtimeOrders';
 import {
   useRealtimeDailyLogisticsPlan,
   type SharedLogisticsPlanRecord,
 } from '@/hooks/useRealtimeDailyLogisticsPlan';
 import { pluralRu, withSelectedMixersPhrase } from '@/lib/ruLocale';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 /** dateKey дашборда (YYYY-M-D) → YYYY-MM-DD для API. */
 function toApiDateKey(dateKey: string): string {
@@ -265,17 +273,6 @@ function actorDisplayName(): string | null {
 }
 
 /** % выполнения плана заявки: отгруженный факт / объём заявки. */
-function orderPlanPercent(
-  orderVol: number,
-  shipped: number,
-  manualDone: boolean,
-  statusDone: boolean,
-): number {
-  if (manualDone || statusDone) return 100;
-  if (!(orderVol > 0)) return shipped > 0 ? 100 : 0;
-  return Math.min(100, Math.round((shipped / orderVol) * 100));
-}
-
 export default function LogisticsPlannerTab({
   dateKey,
   dateLabel,
@@ -374,9 +371,9 @@ export default function LogisticsPlannerTab({
   const applyRemoteRef = useRef<(record: SharedLogisticsPlanRecord) => void>(
     () => {},
   );
-  const runPlanRef = useRef<(mode: 'full_day' | 'stage') => Promise<void>>(
-    async () => {},
-  );
+  const runPlanRef = useRef<
+    (mode: 'full_day' | 'stage', opts?: { silent?: boolean }) => Promise<void>
+  >(async () => {});
   const lastAutoStageDelayRef = useRef(0);
   const autoStageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoStageReadyAtRef = useRef(0);
@@ -640,7 +637,8 @@ export default function LogisticsPlannerTab({
       setAutoStageNote(
         'Автоэтап: миксеры в «Загрузке» поднимаю вверх, хвост пересчитываю…',
       );
-      void runPlanRef.current('stage').finally(() => {
+      // silent: не спамить модалкой, если день уже закрыт по факту.
+      void runPlanRef.current('stage', { silent: true }).finally(() => {
         // Если фантомы остались — не блокируем повтор тем же fingerprint.
         lastLoadingStageKeyRef.current = disorderKey;
         window.setTimeout(() => {
@@ -684,7 +682,7 @@ export default function LogisticsPlannerTab({
       if (busy) return;
       lastAutoStageDelayRef.current = delay;
       setAutoStageNote(`Автосдвиг по факту: опоздание ~${delay} мин — пересчитываю этап…`);
-      void runPlanRef.current('stage').finally(() => {
+      void runPlanRef.current('stage', { silent: true }).finally(() => {
         setAutoStageNote(`Автосдвиг по факту учёл опоздание ~${delay} мин`);
         window.setTimeout(() => setAutoStageNote(''), 8000);
       });
@@ -1866,14 +1864,19 @@ export default function LogisticsPlannerTab({
     });
   };
 
-  const runPlan = async (mode: 'full_day' | 'stage') => {
+  const runPlan = async (
+    mode: 'full_day' | 'stage',
+    opts?: { silent?: boolean },
+  ) => {
     if (!canMutatePlan) return;
+    const silent = Boolean(opts?.silent);
     setBusy(true);
     try {
       if (
         mode === 'full_day' &&
         (lockedTrips.length > 0 || trips.some((t) => t.locked || t.done))
       ) {
+        if (silent) return;
         const ok = await appConfirm(
           'Пересчитать весь день? Зафиксированные и отработанные рейсы будут сброшены. История волн начнётся заново с «Утро».',
           { title: 'Весь день', okLabel: 'Пересчитать', variant: 'danger' },
@@ -1935,14 +1938,28 @@ export default function LogisticsPlannerTab({
               st === 'Проблема' ||
               (PLANNER_FACT_SHIPPED_STATUSES as readonly string[]).includes(st));
           if (isLive) return true;
-          // Есть live в этой заявке — старый фикс без факта отпускаем в хвост.
-          if (
-            liveActiveOrderIds.has(String(t.orderId)) &&
-            (!fact?.hasMatch || !isLive)
-          ) {
-            return false;
+
+          // Явный фикс (замок / «Зафиксировать»): держим якорем.
+          // Фантом отпускаем только если: нет факта + в заявке уже live +
+          // плановая загрузка уже в прошлом (просроченный слот «над» Загрузкой).
+          if (t.locked) {
+            if (String(t.id).startsWith('live-orphan-')) return false;
+            const phantomNoMatch =
+              liveActiveOrderIds.has(String(t.orderId)) && !fact?.hasMatch;
+            if (phantomNoMatch) {
+              const loadMin =
+                t.loadAtMin ?? parsePlanHhMm(String(t.loadTime));
+              if (
+                nowMin != null &&
+                loadMin != null &&
+                loadMin < nowMin - 10
+              ) {
+                return false;
+              }
+            }
+            return true;
           }
-          if (t.locked) return true;
+
           return dayTrips.some(
             (d) =>
               String(d.orderId ?? d.order_id) === String(t.orderId) &&
@@ -1973,10 +1990,15 @@ export default function LogisticsPlannerTab({
 
       // Пустой остаток ≠ «считай заново весь день»: иначе done/manualDone сбрасываются.
       if (ordersForPlan.length === 0) {
-        await appAlert(
-          'Нет заявок для расчёта — все уже отработаны или закрыты по факту.',
-          { title: 'Расчёт', variant: 'warning' },
-        );
+        // Автоэтап/автосдвиг не долбят модалкой, когда день уже закрыт.
+        if (!silent) {
+          await appAlert(
+            'Нет заявок для расчёта — все уже отработаны или закрыты по факту.',
+            { title: 'Расчёт', variant: 'warning' },
+          );
+        } else {
+          setAutoStageNote('');
+        }
         return;
       }
 
@@ -1989,6 +2011,8 @@ export default function LogisticsPlannerTab({
         allowNight,
         useTraffic,
         factDelayMin: delayFactMin || undefined,
+        // Этап: новые соски не раньше «сейчас» (иначе JIT к утренней цели → 09:00).
+        nowMinutes: mode === 'stage' ? nowMin : undefined,
         calibration: calibrationRef.current || calibration,
       };
 
@@ -2369,21 +2393,44 @@ export default function LogisticsPlannerTab({
 
   const lockAllCurrent = () => {
     if (!canMutatePlan) return;
-    setTrips((prev) => prev.map((t) => ({ ...t, locked: true })));
-    setLockedTrips((prev) => {
-      const map = new Map(prev.map((t) => [t.id, t]));
-      for (const t of trips) map.set(t.id, { ...t, locked: true });
-      return [...map.values()];
+    const nextTrips = trips.map((t) => ({ ...t, locked: true }));
+    const map = new Map(lockedTrips.map((t) => [t.id, t]));
+    for (const t of nextTrips) map.set(t.id, t);
+    const nextLocked = [...map.values()];
+    setTrips(nextTrips);
+    setLockedTrips(nextLocked);
+    persist({ trips: nextTrips, lockedTrips: nextLocked });
+    schedulePublish({
+      draft: {
+        selectedMixerIds: [...selectedIds],
+        lockedTrips: nextLocked,
+        manualDoneOrderIds: [...manualDone],
+        trips: nextTrips,
+        allowNight,
+        useTraffic,
+        orderShifts,
+        warnings: warningsRef.current,
+        waves: wavesRef.current,
+        mixerVolumeOverrides: mixerVolumeOverridesRef.current,
+      },
     });
   };
 
-  /** Снять фикс с одного рейса — снова участвует в этапе/хвосте. */
-  const unlockTrip = (tripId: string) => {
+  /** Поставить / снять фикс с одного рейса (этап не трогает locked). */
+  const setTripLocked = (tripId: string, locked: boolean) => {
     if (!canMutatePlan || !tripId) return;
     const nextTrips = trips.map((t) =>
-      t.id === tripId ? { ...t, locked: false } : t,
+      t.id === tripId ? { ...t, locked } : t,
     );
-    const nextLocked = lockedTrips.filter((t) => t.id !== tripId);
+    let nextLocked: PlannedTrip[];
+    if (locked) {
+      const map = new Map(lockedTrips.map((t) => [t.id, t]));
+      const hit = nextTrips.find((t) => t.id === tripId);
+      if (hit) map.set(tripId, { ...hit, locked: true });
+      nextLocked = [...map.values()];
+    } else {
+      nextLocked = lockedTrips.filter((t) => t.id !== tripId);
+    }
     setTrips(nextTrips);
     setLockedTrips(nextLocked);
     persist({ trips: nextTrips, lockedTrips: nextLocked });
@@ -2552,13 +2599,23 @@ export default function LogisticsPlannerTab({
   const copyPlan = async (onlyNew: boolean) => {
     // В буфер — оперативный текст без выполненных (как для Макс).
     const body = buildMaxBlock({ onlyNew, excludeCompleted: true });
-    try {
-      await navigator.clipboard.writeText(body);
-      await appAlert('План скопирован — можно вставить в Макс', {
-        title: 'Готово',
-        variant: 'success',
+    if (!String(body || '').trim()) {
+      await appAlert('Нечего копировать — текст плана пуст', {
+        title: 'Пусто',
+        variant: 'warning',
       });
-    } catch {
+      return;
+    }
+    const { copyTextToClipboard } = await import('@/lib/clipboard');
+    const ok = await copyTextToClipboard(body);
+    if (ok) {
+      await appAlert(
+        onlyNew
+          ? 'Этап скопирован — можно вставить в Макс'
+          : 'План скопирован — можно вставить в Макс',
+        { title: 'Готово', variant: 'success' },
+      );
+    } else {
       await appAlert('Не удалось скопировать', { title: 'Ошибка', variant: 'danger' });
     }
   };
@@ -3137,6 +3194,14 @@ export default function LogisticsPlannerTab({
 
   const sideColumn = (
     <>
+      {isPageLayout ? (
+        <PlannerInsightsPanel
+          dateKey={toApiDateKey(dateKey)}
+          uiScale={uiScale}
+          canEdit={canMutatePlan}
+          compact
+        />
+      ) : null}
       <div
         style={{
           padding: `${sp(12)}px ${sp(14)}px`,
@@ -3281,11 +3346,15 @@ export default function LogisticsPlannerTab({
         <div
           className="scroll-hidden"
           style={{
-            maxHeight: isPageLayout ? (is4k ? sp(220) : sp(180)) : is4k ? sp(120) : sp(88),
+            maxHeight: isPageLayout ? (is4k ? sp(236) : sp(196)) : is4k ? sp(120) : sp(88),
             overflowY: 'auto',
             display: 'flex',
             flexWrap: 'wrap',
+            alignContent: 'flex-start',
             gap: sp(8),
+            // Иначе нижний ряд чипов визуально «режется» бордером карточки.
+            paddingBottom: sp(6),
+            boxSizing: 'border-box',
           }}
         >
           {rankedAll.map((m) => {
@@ -3392,134 +3461,310 @@ export default function LogisticsPlannerTab({
     </>
   );
 
-  const actionsColumn = (
-    <>
-      {/* Кнопки расчёта + «Включая ночь» */}
+  // Как на 4K: средние подписи (tier 1) + заголовки блоков. Полные (tier 0)
+  // на 1600–1920 тоже обрезают «Макс», поэтому не используем.
+  const actionsBarRef = useRef<HTMLDivElement | null>(null);
+  const [labelTier, setLabelTier] = useState(1);
+  const btnSize = uiScale >= 1.2 ? 'lg' : 'sm';
+  const switchSize = uiScale >= 1.2 ? 'md' : 'sm';
+  const btnIcon = fs(uiScale >= 1.2 ? 16 : 14);
+  const actionGap = sp(uiScale >= 1.2 ? 10 : uiScale >= 1.1 ? 8 : 6);
+  const stackBlockLabels = labelTier <= 1;
+  // Одна высота ряда контролов: иначе в «Параметры» (только свитчи) они выше,
+  // чем свитчи рядом с крупными кнопками в «Запись».
+  const controlsRowMinH = btnSize === 'lg' ? sp(48) : sp(34);
+
+  const actionLabels = useMemo(() => {
+    const tiers = [
+      {
+        fullDay: 'Рассчитать весь день',
+        stageCalc: 'Рассчитать этап',
+        lock: 'Зафиксировать текущее',
+        reset: 'Сбросить расчёт',
+        roads: 'Обновить дороги',
+        traffic: 'Учитывать пробки',
+        night: 'Включая ночь',
+        applyScopeOn: 'Только выбранные',
+        applyScopeOff: 'Ко всем заявкам',
+        overwrite: 'Заменить ручные «Загрузка»',
+        publish: 'Опубликовать',
+        apply: 'Применить в заявки',
+        toMax: 'В Макс',
+        copyPlan: 'Скопировать план',
+        copyStage: 'Скопировать этап',
+      },
+      {
+        fullDay: 'Весь день',
+        stageCalc: 'Этап',
+        lock: 'Зафиксировать',
+        reset: 'Сбросить',
+        roads: 'Дороги',
+        traffic: 'Пробки',
+        night: 'Ночь',
+        applyScopeOn: 'Выбранные',
+        applyScopeOff: 'Все заявки',
+        overwrite: 'Ручные загрузки',
+        publish: 'Опубликовать',
+        apply: 'В заявки',
+        toMax: 'В Макс',
+        copyPlan: 'Копия плана',
+        copyStage: 'Копия этапа',
+      },
+      {
+        fullDay: 'Весь день',
+        stageCalc: 'Этап',
+        lock: 'Фикс',
+        reset: 'Сброс',
+        roads: 'Дороги',
+        traffic: 'Пробки',
+        night: 'Ночь',
+        applyScopeOn: 'Выбранные',
+        applyScopeOff: 'Все',
+        overwrite: 'Ручные',
+        publish: 'Опубликовать',
+        apply: 'В заявки',
+        toMax: 'В Макс',
+        copyPlan: 'План',
+        copyStage: 'Этап',
+      },
+    ] as const;
+    const base = tiers[Math.min(2, Math.max(0, labelTier))];
+    return {
+      fullDay: busy ? 'Считаю…' : base.fullDay,
+      stageCalc: base.stageCalc,
+      lock: base.lock,
+      reset: base.reset,
+      roads: roadsRefreshing ? (labelTier === 0 ? 'Дороги…' : '…') : base.roads,
+      traffic: base.traffic,
+      night: base.night,
+      applyScope: applyOnlySelected ? base.applyScopeOn : base.applyScopeOff,
+      overwrite: base.overwrite,
+      publish: publishing ? (labelTier === 0 ? 'Публикую…' : '…') : base.publish,
+      apply: applying ? (labelTier === 0 ? 'Пишу…' : '…') : base.apply,
+      toMax: base.toMax,
+      copyPlan: base.copyPlan,
+      copyStage: base.copyStage,
+    };
+  }, [
+    labelTier,
+    busy,
+    roadsRefreshing,
+    applyOnlySelected,
+    publishing,
+    applying,
+  ]);
+
+  useLayoutEffect(() => {
+    const el = actionsBarRef.current;
+    if (!el) return;
+
+    const tierForWidth = (w: number) => {
+      // 1600 / 1920 / 4K — один режим: medium. Короче только на узкой панели.
+      if (w >= 1100) return 1;
+      return 2;
+    };
+
+    const apply = () => {
+      const next = tierForWidth(el.clientWidth);
+      setLabelTier((t) => (t === next ? t : next));
+    };
+
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [btnSize, actionGap, uiScale]);
+
+  const actionBlock = (
+    label: string,
+    children: ReactNode,
+    opts?: { dividerBefore?: boolean },
+  ) => (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: stackBlockLabels ? 'column' : 'row',
+        alignItems: stackBlockLabels ? 'stretch' : 'center',
+        justifyContent: 'flex-start',
+        gap: stackBlockLabels ? sp(6) : actionGap,
+        flexShrink: 0,
+        flexGrow: 0,
+        paddingLeft: opts?.dividerBefore ? sp(stackBlockLabels ? 14 : 8) : 0,
+        borderLeft: opts?.dividerBefore
+          ? '1px solid rgba(71,85,105,0.9)'
+          : undefined,
+        marginLeft: opts?.dividerBefore ? sp(stackBlockLabels ? 4 : 2) : 0,
+      }}
+    >
+      <span
+        style={{
+          fontSize: fs(stackBlockLabels ? 11 : 9),
+          fontWeight: 800,
+          color: '#64748B',
+          textTransform: 'uppercase',
+          letterSpacing: '0.04em',
+          whiteSpace: 'nowrap',
+          lineHeight: 1.1,
+          flexShrink: 0,
+        }}
+      >
+        {label}
+      </span>
       <div
         style={{
           display: 'flex',
-          flexWrap: 'wrap',
-          gap: sp(10),
-          flexShrink: 0,
           alignItems: 'center',
+          gap: actionGap,
+          flexShrink: 0,
+          flexWrap: 'nowrap',
+          minHeight: controlsRowMinH,
         }}
       >
-        <ModalActionButton
-          color="#34D399"
-          icon={<Calculator size={fs(16)} />}
-          label={busy ? 'Считаю…' : 'Рассчитать весь день'}
-          size="lg"
-          onClick={() => void runPlan('full_day')}
-          disabled={!canMutatePlan || busy || loadingFleet || roadsRefreshing}
-        />
-        <ModalActionButton
-          color="#60A5FA"
-          icon={<Layers size={fs(16)} />}
-          label="Рассчитать этап"
-          size="lg"
-          onClick={() => void runPlan('stage')}
-          disabled={!canMutatePlan || busy || loadingFleet || roadsRefreshing}
-        />
-        <ModalActionButton
-          color="#94A3B8"
-          icon={<Lock size={fs(16)} />}
-          label="Зафиксировать текущее"
-          size="lg"
-          onClick={lockAllCurrent}
-          disabled={!canMutatePlan || !trips.length}
-        />
-        <ModalActionButton
-          color="#F87171"
-          icon={<RefreshCw size={fs(16)} />}
-          label="Сбросить расчёт"
-          size="lg"
-          onClick={() => void resetPlan()}
-          disabled={
-            !canEditPlan ||
-            (!trips.length && !lockedTrips.length && warnings.length === 0)
-          }
-        />
-        <ModalActionButton
-          color="#38BDF8"
-          icon={<Route size={fs(16)} />}
-          label={roadsRefreshing ? 'Дороги…' : 'Обновить дороги'}
-          size="lg"
-          onClick={() => void refreshRoadTimes()}
-          disabled={roadsRefreshing || !orders.length}
-        />
-        <DarkHoverTip
-          tip="Утро 7–9 и вечер 16–18: дорога чуть дольше (×1.25–1.35) к обычному времени в пути. Выкл — считаем без надбавки за пробки."
-          maxWidth={340}
-          style={{ marginLeft: 'auto' }}
-        >
-          <PlannerSwitch
-            checked={useTraffic}
-            disabled={!canMutatePlan}
-            accent="sky"
-            label="Учитывать пробки"
-            onChange={(next) => {
-              setUseTraffic(next);
-              setScenarios([]);
-              setActiveScenarioId(null);
-            }}
-          />
-        </DarkHoverTip>
-        <DarkHoverTip
-          tip="Выкл — возврат на базу ≤ 21:00. Открытие соски сдвигается раньше 06:00, если есть ранние доставки (к 06:00 и т.п.). Вкл — рейсы после 21:00 и на следующие сутки."
-          maxWidth={360}
-        >
-          <PlannerSwitch
-            checked={allowNight}
-            disabled={!canMutatePlan}
-            accent="amber"
-            label="Включая ночь"
-            onChange={(next) => {
-              setAllowNight(next);
-              setScenarios([]);
-              setActiveScenarioId(null);
-            }}
-          />
-        </DarkHoverTip>
+        {children}
       </div>
-      {/* Липкий низ */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: sp(10),
-          justifyContent: 'flex-end',
-          alignItems: 'center',
-          flexShrink: 0,
-          paddingTop: sp(10),
-          borderTop: '1px solid rgba(51,65,85,0.9)',
-        }}
-      >
-        <div
-          style={{
-            marginRight: 'auto',
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            gap: sp(12),
-          }}
-        >
+    </div>
+  );
+
+  // Четыре блока в ряд, без «дыры» flex:1. На широком — равномерно; Макс не уезжает.
+  const actionsColumn = (
+    <div
+      ref={actionsBarRef}
+      style={{
+        display: 'flex',
+        flexWrap: 'nowrap',
+        alignItems: stackBlockLabels ? 'stretch' : 'center',
+        justifyContent: 'space-between',
+        gap: actionGap,
+        flexShrink: 0,
+        width: '100%',
+        boxSizing: 'border-box',
+        overflowX: 'hidden',
+        overflowY: 'hidden',
+        paddingBottom: sp(2),
+        minWidth: 0,
+      }}
+    >
+      {actionBlock(
+        'Расчёт',
+        <>
+          <DarkHoverTip tip="Полный пересчёт плана на весь день" maxWidth={260}>
+            <ModalActionButton
+              color="#34D399"
+              icon={<Calculator size={btnIcon} />}
+              label={actionLabels.fullDay}
+              size={btnSize}
+              onClick={() => void runPlan('full_day')}
+              disabled={!canMutatePlan || busy || loadingFleet || roadsRefreshing}
+            />
+          </DarkHoverTip>
+          <DarkHoverTip tip="Пересчёт только незафиксированного этапа" maxWidth={280}>
+            <ModalActionButton
+              color="#60A5FA"
+              icon={<Layers size={btnIcon} />}
+              label={actionLabels.stageCalc}
+              size={btnSize}
+              onClick={() => void runPlan('stage')}
+              disabled={!canMutatePlan || busy || loadingFleet || roadsRefreshing}
+            />
+          </DarkHoverTip>
+          <DarkHoverTip tip="Зафиксировать текущие рейсы — этап их не пересчитает" maxWidth={300}>
+            <ModalActionButton
+              color="#94A3B8"
+              icon={<Lock size={btnIcon} />}
+              label={actionLabels.lock}
+              size={btnSize}
+              onClick={lockAllCurrent}
+              disabled={!canMutatePlan || !trips.length}
+            />
+          </DarkHoverTip>
+          <DarkHoverTip tip="Сбросить расчёт плана" maxWidth={220}>
+            <ModalActionButton
+              color="#F87171"
+              icon={<RefreshCw size={btnIcon} />}
+              label={actionLabels.reset}
+              size={btnSize}
+              onClick={() => void resetPlan()}
+              disabled={
+                !canEditPlan ||
+                (!trips.length && !lockedTrips.length && warnings.length === 0)
+              }
+            />
+          </DarkHoverTip>
+          <DarkHoverTip tip="Обновить времена дороги по маршрутам заявок" maxWidth={280}>
+            <ModalActionButton
+              color="#38BDF8"
+              icon={<Route size={btnIcon} />}
+              label={actionLabels.roads}
+              size={btnSize}
+              onClick={() => void refreshRoadTimes()}
+              disabled={roadsRefreshing || !orders.length}
+            />
+          </DarkHoverTip>
+        </>,
+      )}
+      {actionBlock(
+        'Параметры',
+        <>
           <DarkHoverTip
-            tip="Выкл — «Применить в заявки» пишет во все заявки с рейсами. Вкл — только в отмеченные фиолетовым переключателем в списке."
+            tip="Утро 7–9 и вечер 16–18: дорога чуть дольше (×1.25–1.35). Выкл — без надбавки за пробки."
+            maxWidth={340}
+          >
+            <PlannerSwitch
+              checked={useTraffic}
+              disabled={!canMutatePlan}
+              accent="sky"
+              size={switchSize}
+              label={actionLabels.traffic}
+              onChange={(next) => {
+                setUseTraffic(next);
+                setScenarios([]);
+                setActiveScenarioId(null);
+              }}
+            />
+          </DarkHoverTip>
+          <DarkHoverTip
+            tip="Выкл — возврат на базу ≤ 21:00. Вкл — рейсы после 21:00 и на следующие сутки."
+            maxWidth={360}
+          >
+            <PlannerSwitch
+              checked={allowNight}
+              disabled={!canMutatePlan}
+              accent="amber"
+              size={switchSize}
+              label={actionLabels.night}
+              onChange={(next) => {
+                setAllowNight(next);
+                setScenarios([]);
+                setActiveScenarioId(null);
+              }}
+            />
+          </DarkHoverTip>
+        </>,
+        { dividerBefore: true },
+      )}
+      {actionBlock(
+        'Запись',
+        <>
+          <DarkHoverTip
+            tip="Выкл — «Применить в заявки» пишет во все заявки с рейсами. Вкл — только в отмеченные фиолетовым в списке."
             maxWidth={340}
           >
             <PlannerSwitch
               checked={applyOnlySelected}
               disabled={!canMutatePlan}
               accent="violet"
-              label={
-                applyOnlySelected
-                  ? 'Только выбранные заявки'
-                  : 'Применяется ко всем заявкам'
-              }
+              size={switchSize}
+              label={actionLabels.applyScope}
               onChange={setApplyOnlySelected}
               suffix={
                 applyOnlySelected && applyableOrderIds.size > 0 ? (
-                  <span style={{ color: '#A78BFA', fontWeight: 700, fontSize: fs(13) }}>
+                  <span
+                    style={{
+                      color: '#A78BFA',
+                      fontWeight: 700,
+                      fontSize: fs(uiScale >= 1.2 ? 13 : 11),
+                    }}
+                  >
                     ({[...applyOrderIds].filter((id) => applyableOrderIds.has(id)).length}/
                     {applyableOrderIds.size})
                   </span>
@@ -3528,66 +3773,84 @@ export default function LogisticsPlannerTab({
             />
           </DarkHoverTip>
           <DarkHoverTip
-            tip="По умолчанию выкл: заявки, где диспетчер уже поставил миксеры («Загрузка»), интеллект не трогает. Включи только если сознательно хочешь заменить ручные назначения планом."
+            tip="По умолчанию выкл: ручные «Загрузка» интеллект не трогает. Вкл — заменить их планом."
             maxWidth={360}
           >
             <PlannerSwitch
               checked={overwriteManual}
               disabled={!canMutatePlan}
               accent="rose"
-              label="Заменить ручные «Загрузка»"
+              size={switchSize}
+              label={actionLabels.overwrite}
               onChange={setOverwriteManual}
             />
           </DarkHoverTip>
-        </div>
-        <ModalActionButton
-          color={publishDirty ? '#A78BFA' : '#818CF8'}
-          icon={<Upload size={fs(16)} />}
-          label={
-            publishing
-              ? 'Публикую…'
-              : publishDirty
-                ? 'Опубликовать'
-                : 'Опубликовано'
-          }
-          size="lg"
-          onClick={() => void publishNow()}
-          disabled={!canMutatePlan || publishing || (!publishDirty && !trips.length)}
-        />
-        <ModalActionButton
-          color="#C084FC"
-          icon={<Database size={fs(16)} />}
-          label={applying ? 'Пишу…' : 'Применить в заявки'}
-          size="lg"
-          onClick={() => void applyToOrders()}
-          disabled={!canMutatePlan || applying || applyableOrderIds.size === 0}
-        />
-        <ModalActionButton
-          color="#34D399"
-          icon={<Copy size={fs(16)} />}
-          label="Скопировать план"
-          size="lg"
-          onClick={() => void copyPlan(false)}
-          disabled={!trips.length}
-        />
-        <ModalActionButton
-          color="#60A5FA"
-          icon={<Copy size={fs(16)} />}
-          label="Скопировать этап"
-          size="lg"
-          onClick={() => void copyPlan(true)}
-          disabled={!trips.some((t) => !t.locked && !t.done)}
-        />
-        <ModalActionButton
-          color="#A78BFA"
-          icon={<Copy size={fs(16)} />}
-          label="В Макс"
-          size="lg"
-          onClick={() => applyToMax(false)}
-          disabled={!canMutatePlan || !trips.length}
-        />
-      </div>
-    </>
+          <DarkHoverTip
+            tip="Сохранить общий план дня для всех диспетчеров. Не пишет миксеры в заявки."
+            maxWidth={320}
+          >
+            <ModalActionButton
+              color={publishDirty ? '#A78BFA' : '#818CF8'}
+              icon={<Upload size={btnIcon} />}
+              label={actionLabels.publish}
+              size={btnSize}
+              onClick={() => void publishNow()}
+              disabled={!canMutatePlan || publishing || (!publishDirty && !trips.length)}
+            />
+          </DarkHoverTip>
+          <DarkHoverTip tip="Записать рассчитанные рейсы в заявки." maxWidth={280}>
+            <ModalActionButton
+              color="#C084FC"
+              icon={<Database size={btnIcon} />}
+              label={actionLabels.apply}
+              size={btnSize}
+              onClick={() => void applyToOrders()}
+              disabled={!canMutatePlan || applying || applyableOrderIds.size === 0}
+            />
+          </DarkHoverTip>
+        </>,
+        { dividerBefore: true },
+      )}
+      {actionBlock(
+        'Макс',
+        <>
+          <DarkHoverTip
+            tip="Окно с текстом плана: правка и копирование для Макс. Сохраняет снимок в общий план."
+            maxWidth={340}
+          >
+            <ModalActionButton
+              color="#A78BFA"
+              icon={<Send size={btnIcon} />}
+              label={actionLabels.toMax}
+              size={btnSize}
+              onClick={() => applyToMax(false)}
+              disabled={!canMutatePlan || !trips.length}
+            />
+          </DarkHoverTip>
+          <DarkHoverTip tip="Сразу в буфер: оперативный план дня без выполненных." maxWidth={300}>
+            <ModalActionButton
+              color="#34D399"
+              icon={<Copy size={btnIcon} />}
+              label={actionLabels.copyPlan}
+              size={btnSize}
+              onClick={() => void copyPlan(false)}
+              disabled={!trips.length}
+            />
+          </DarkHoverTip>
+          <DarkHoverTip tip="Сразу в буфер: только незафиксированный этап." maxWidth={300}>
+            <ModalActionButton
+              color="#60A5FA"
+              icon={<Copy size={btnIcon} />}
+              label={actionLabels.copyStage}
+              size={btnSize}
+              onClick={() => void copyPlan(true)}
+              disabled={!trips.some((t) => !t.locked && !t.done)}
+            />
+          </DarkHoverTip>
+        </>,
+        { dividerBefore: true },
+      )}
+    </div>
   );
 
   if (isPageLayout) {
@@ -3600,15 +3863,9 @@ export default function LogisticsPlannerTab({
           flex: 1,
           overflow: 'hidden',
           height: '100%',
-          gap: sp(12),
+          gap: sp(10),
         }}
       >
-        <PlannerInsightsPanel
-          dateKey={toApiDateKey(dateKey)}
-          uiScale={uiScale}
-          canEdit={canMutatePlan}
-        />
-
         {(sharedMeta?.updatedByName ||
           editingOther ||
           publishDirty ||
@@ -3710,7 +3967,9 @@ export default function LogisticsPlannerTab({
         >
           <div
             style={volumeCardStyle({
+              background: CARD_GRADIENT_SOFT,
               minHeight: 0,
+              minWidth: 0,
               display: 'flex',
               flexDirection: 'column',
               overflow: 'hidden',
@@ -3724,6 +3983,7 @@ export default function LogisticsPlannerTab({
         style={{
           flex: 1,
           minHeight: 0,
+          minWidth: 0,
           display: 'flex',
           flexDirection: 'column',
         }}
@@ -3745,10 +4005,12 @@ export default function LogisticsPlannerTab({
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
+            overflowX: 'hidden',
             display: 'flex',
             flexDirection: 'column',
-            gap: sp(10),
-            paddingRight: 4,
+            gap: sp(12),
+            paddingRight: sp(8),
+            boxSizing: 'border-box',
           }}
         >
           {plannerOrders.length === 0 ? (
@@ -3773,8 +4035,53 @@ export default function LogisticsPlannerTab({
               const canApply = applyableOrderIds.has(oid);
               const selectedForApply = applyOrderIds.has(oid);
               return (
-                <div key={oid} style={{ display: 'flex', flexDirection: 'column', gap: sp(2) }}>
-                  <div
+                <div
+                  key={oid}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 0,
+                    flexShrink: 0,
+                    minWidth: 0,
+                    maxWidth: '100%',
+                    borderRadius: 14,
+                    overflow: 'hidden',
+                    background:
+                      st === 'done'
+                        ? 'rgba(15,23,42,0.72)'
+                        : 'rgba(15,23,42,0.78)',
+                    border:
+                      st === 'done'
+                        ? '1px solid rgba(52,211,153,0.4)'
+                        : st === 'in_work'
+                          ? '1px solid rgba(250,204,21,0.38)'
+                          : '1px solid rgba(148,163,184,0.34)',
+                    boxShadow:
+                      '0 8px 20px rgba(0,0,0,0.28), 0 1px 0 rgba(255,255,255,0.04)',
+                  }}
+                >
+                  <PlannerOrderHeader
+                    order={o}
+                    status={st}
+                    badge={badge}
+                    pickup={pickup}
+                    dayTrips={dayTrips}
+                    manualDone={manualDone.has(oid)}
+                    canMutatePlan={canMutatePlan}
+                    canEditPlan={canEditPlan}
+                    applyOnlySelected={applyOnlySelected}
+                    canApply={canApply}
+                    selectedForApply={selectedForApply}
+                    dragOver={dragOverOrderId === oid}
+                    dragHint={
+                      dragTripId && !pickup && st !== 'done'
+                        ? 'Отпусти здесь — рейс в конец заявки'
+                        : undefined
+                    }
+                    fs={fs}
+                    sp={sp}
+                    onToggleDone={() => toggleOrderDone(oid)}
+                    onToggleApply={() => toggleApplyOrder(oid)}
                     onDragOver={(e) => {
                       if (
                         !canMutatePlan ||
@@ -3800,160 +4107,19 @@ export default function LogisticsPlannerTab({
                     onDragLeave={() => {
                       setDragOverOrderId((prev) => (prev === oid ? null : prev));
                     }}
-                    title={
-                      dragTripId && !pickup && st !== 'done'
-                        ? 'Отпусти здесь — рейс в конец заявки'
-                        : undefined
-                    }
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: sp(8),
-                      flexWrap: 'nowrap',
-                      whiteSpace: 'nowrap',
-                      padding:
-                        st === 'done'
-                          ? `${sp(3)}px ${sp(8)}px`
-                          : `${sp(4)}px ${sp(8)}px`,
-                      minHeight: st === 'done' ? sp(28) : sp(32),
-                      borderRadius: 8,
-                      background:
-                        st === 'done'
-                          ? 'linear-gradient(180deg, rgba(15,23,42,0.55) 0%, rgba(15,23,42,0.72) 100%)'
-                          : 'linear-gradient(180deg, rgba(30,41,59,0.75) 0%, rgba(15,23,42,0.88) 100%)',
-                      border:
-                        dragOverOrderId === oid
-                          ? '1px solid rgba(96,165,250,0.85)'
-                          : '1px solid rgba(148,163,184,0.2)',
-                      boxShadow:
-                        dragOverOrderId === oid
-                          ? '0 0 0 2px rgba(96,165,250,0.25), 0 1px 2px rgba(0,0,0,0.25)'
-                          : 'inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.25)',
-                      opacity: st === 'done' ? 0.7 : 1,
-                      fontSize: fs(13),
-                      lineHeight: 1.2,
-                      color: '#E2E8F0',
-                      outline:
-                        applyOnlySelected && canApply && selectedForApply
-                          ? '1px solid rgba(167,139,250,0.55)'
-                          : undefined,
-                    }}
-                  >
-                    {(() => {
-                      const dbSt = String(o.status || '').toLowerCase();
-                      if (dbSt === 'completed' || dbSt === 'cancelled') {
-                        return (
-                          <DarkHoverTip
-                            tip={
-                              dbSt === 'cancelled'
-                                ? 'Заявка отменена — статус здесь не меняется'
-                                : 'Заявка выполнена — статус здесь не меняется'
-                            }
-                            maxWidth={280}
-                          >
-                            <span
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                height: sp(18),
-                                padding: `0 ${sp(8)}px`,
-                                borderRadius: 999,
-                                fontSize: fs(11),
-                                fontWeight: 700,
-                                whiteSpace: 'nowrap',
-                                color: dbSt === 'cancelled' ? '#FECACA' : '#A7F3D0',
-                                background:
-                                  dbSt === 'cancelled'
-                                    ? 'rgba(248,113,113,0.2)'
-                                    : 'rgba(16,185,129,0.2)',
-                                border:
-                                  dbSt === 'cancelled'
-                                    ? '1px solid rgba(248,113,113,0.45)'
-                                    : '1px solid rgba(52,211,153,0.4)',
-                                flexShrink: 0,
-                              }}
-                            >
-                              {dbSt === 'cancelled' ? 'Отменена' : 'Выполнена'}
-                            </span>
-                          </DarkHoverTip>
-                        );
-                      }
-                      return (
-                        <PlannerSwitch
-                          size="sm"
-                          accent="emerald"
-                          checked={manualDone.has(oid) || st === 'done'}
-                          disabled={!canMutatePlan}
-                          title="Пометить отработанной"
-                          onChange={() => toggleOrderDone(oid)}
-                        />
-                      );
-                    })()}
-                    {applyOnlySelected && canApply && canEditPlan ? (
-                      <PlannerSwitch
-                        size="sm"
-                        accent="violet"
-                        checked={selectedForApply}
-                        title="Включить в «Применить в заявки»"
-                        onChange={() => toggleApplyOrder(oid)}
-                      />
-                    ) : null}
-                    <span style={{ fontWeight: 700, flexShrink: 0 }}>#{o.id}</span>
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {o.client}
-                    </span>
-                    {(() => {
-                      const shipped = liveShippedVolumeForOrder(o.id, dayTrips);
-                      const planVol = Number(o.volume) || 0;
-                      const pct = orderPlanPercent(
-                        planVol,
-                        shipped,
-                        manualDone.has(oid),
-                        st === 'done',
-                      );
-                      return (
-                        <OrderPlanProgressBar
-                          percent={pct}
-                          shipped={shipped}
-                          planVol={planVol}
-                          fs={fs}
-                          sp={sp}
-                        />
-                      );
-                    })()}
-                    <span style={{ color: '#10B981', fontWeight: 700, flexShrink: 0 }}>{o.volume} м³</span>
-                    <span style={{ color: '#94A3B8', flexShrink: 0 }}>{o.deliveryTime}</span>
-                    {pickup ? (
-                      <span
-                        style={{
-                          padding: `${sp(2)}px ${sp(8)}px`,
-                          borderRadius: 999,
-                          fontSize: fs(12),
-                          fontWeight: 700,
-                          background: 'rgba(251,146,60,0.18)',
-                          color: '#FDBA74',
-                          flexShrink: 0,
-                        }}
-                        title="Клиент забирает сам — в плане только соска"
-                      >
-                        самовывоз
-                      </span>
-                    ) : null}
-                    <span
+                  />
+                  {orderTrips.length > 0 ? (
+                    <div
                       style={{
-                        padding: `${sp(2)}px ${sp(8)}px`,
-                        borderRadius: 999,
-                        fontSize: fs(12),
-                        fontWeight: 700,
-                        background: badge.bg,
-                        color: badge.color,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: sp(3),
                         flexShrink: 0,
+                        padding: `${sp(6)}px ${sp(6)}px ${sp(7)}px`,
+                        background: 'rgba(2,6,23,0.55)',
+                        boxShadow: 'inset 0 3px 10px rgba(0,0,0,0.4)',
                       }}
                     >
-                      {badge.label}
-                    </span>
-                  </div>
                   {orderTrips.map((t) => {
                     const waveHighlight =
                       activeWaveId != null &&
@@ -3966,6 +4132,9 @@ export default function LogisticsPlannerTab({
                         key={t.id}
                         style={{
                           opacity: dragTripId === t.id ? 0.55 : 1,
+                          flexShrink: 0,
+                          minWidth: 0,
+                          maxWidth: '100%',
                         }}
                       >
                         <PlannerTripFactRow
@@ -3992,8 +4161,10 @@ export default function LogisticsPlannerTab({
                           onShiftLoadTime={(id, hhmm) => void shiftTripLoad(id, hhmm)}
                           onTripDelayMin={(id, mins) => void applyTripDelay(id, mins)}
                           onPlanVolumeChange={(id, vol) => void applyTripPlanVolume(id, vol)}
-                          onUnlockTrip={
-                            canMutatePlan && !isLiveOrphan ? unlockTrip : undefined
+                          onSetTripLocked={
+                            canMutatePlan && !isLiveOrphan
+                              ? setTripLocked
+                              : undefined
                           }
                           canDrag={canMutatePlan && !isLiveOrphan}
                           dragOver={dragOverTripId === t.id}
@@ -4023,6 +4194,8 @@ export default function LogisticsPlannerTab({
                       </div>
                     );
                   })}
+                    </div>
+                  ) : null}
                 </div>
               );
             })
@@ -4057,6 +4230,7 @@ export default function LogisticsPlannerTab({
           <div
             className="scroll-subtle"
             style={volumeCardStyle({
+              background: CARD_GRADIENT_SOFT,
               minHeight: 0,
               overflowY: 'auto',
               display: 'flex',
@@ -4073,10 +4247,16 @@ export default function LogisticsPlannerTab({
         <div
           style={volumeCardStyle({
             flexShrink: 0,
+            width: '100%',
+            minWidth: 0,
+            boxSizing: 'border-box',
             display: 'flex',
             flexDirection: 'column',
             gap: sp(8),
-            padding: `${sp(12)}px ${sp(14)}px`,
+            padding:
+              uiScale >= 1.2
+                ? `${sp(14)}px ${sp(16)}px`
+                : `${sp(10)}px ${sp(12)}px`,
             borderRadius: 18,
           })}
         >
@@ -4311,10 +4491,12 @@ export default function LogisticsPlannerTab({
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
+            overflowX: 'hidden',
             display: 'flex',
             flexDirection: 'column',
-            gap: sp(10),
-            paddingRight: 4,
+            gap: sp(12),
+            paddingRight: sp(8),
+            boxSizing: 'border-box',
           }}
         >
           {plannerOrders.length === 0 ? (
@@ -4339,8 +4521,53 @@ export default function LogisticsPlannerTab({
               const canApply = applyableOrderIds.has(oid);
               const selectedForApply = applyOrderIds.has(oid);
               return (
-                <div key={oid} style={{ display: 'flex', flexDirection: 'column', gap: sp(2) }}>
-                  <div
+                <div
+                  key={oid}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 0,
+                    flexShrink: 0,
+                    minWidth: 0,
+                    maxWidth: '100%',
+                    borderRadius: 14,
+                    overflow: 'hidden',
+                    background:
+                      st === 'done'
+                        ? 'rgba(15,23,42,0.72)'
+                        : 'rgba(15,23,42,0.78)',
+                    border:
+                      st === 'done'
+                        ? '1px solid rgba(52,211,153,0.4)'
+                        : st === 'in_work'
+                          ? '1px solid rgba(250,204,21,0.38)'
+                          : '1px solid rgba(148,163,184,0.34)',
+                    boxShadow:
+                      '0 8px 20px rgba(0,0,0,0.28), 0 1px 0 rgba(255,255,255,0.04)',
+                  }}
+                >
+                  <PlannerOrderHeader
+                    order={o}
+                    status={st}
+                    badge={badge}
+                    pickup={pickup}
+                    dayTrips={dayTrips}
+                    manualDone={manualDone.has(oid)}
+                    canMutatePlan={canMutatePlan}
+                    canEditPlan={canEditPlan}
+                    applyOnlySelected={applyOnlySelected}
+                    canApply={canApply}
+                    selectedForApply={selectedForApply}
+                    dragOver={dragOverOrderId === oid}
+                    dragHint={
+                      dragTripId && !pickup && st !== 'done'
+                        ? 'Отпусти здесь — рейс в конец заявки'
+                        : undefined
+                    }
+                    fs={fs}
+                    sp={sp}
+                    onToggleDone={() => toggleOrderDone(oid)}
+                    onToggleApply={() => toggleApplyOrder(oid)}
                     onDragOver={(e) => {
                       if (
                         !canMutatePlan ||
@@ -4366,160 +4593,19 @@ export default function LogisticsPlannerTab({
                     onDragLeave={() => {
                       setDragOverOrderId((prev) => (prev === oid ? null : prev));
                     }}
-                    title={
-                      dragTripId && !pickup && st !== 'done'
-                        ? 'Отпусти здесь — рейс в конец заявки'
-                        : undefined
-                    }
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: sp(8),
-                      flexWrap: 'nowrap',
-                      whiteSpace: 'nowrap',
-                      padding:
-                        st === 'done'
-                          ? `${sp(3)}px ${sp(8)}px`
-                          : `${sp(4)}px ${sp(8)}px`,
-                      minHeight: st === 'done' ? sp(28) : sp(32),
-                      borderRadius: 8,
-                      background:
-                        st === 'done'
-                          ? 'linear-gradient(180deg, rgba(15,23,42,0.55) 0%, rgba(15,23,42,0.72) 100%)'
-                          : 'linear-gradient(180deg, rgba(30,41,59,0.75) 0%, rgba(15,23,42,0.88) 100%)',
-                      border:
-                        dragOverOrderId === oid
-                          ? '1px solid rgba(96,165,250,0.85)'
-                          : '1px solid rgba(148,163,184,0.2)',
-                      boxShadow:
-                        dragOverOrderId === oid
-                          ? '0 0 0 2px rgba(96,165,250,0.25), 0 1px 2px rgba(0,0,0,0.25)'
-                          : 'inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 2px rgba(0,0,0,0.25)',
-                      opacity: st === 'done' ? 0.7 : 1,
-                      fontSize: fs(13),
-                      lineHeight: 1.2,
-                      color: '#E2E8F0',
-                      outline:
-                        applyOnlySelected && canApply && selectedForApply
-                          ? '1px solid rgba(167,139,250,0.55)'
-                          : undefined,
-                    }}
-                  >
-                    {(() => {
-                      const dbSt = String(o.status || '').toLowerCase();
-                      if (dbSt === 'completed' || dbSt === 'cancelled') {
-                        return (
-                          <DarkHoverTip
-                            tip={
-                              dbSt === 'cancelled'
-                                ? 'Заявка отменена — статус здесь не меняется'
-                                : 'Заявка выполнена — статус здесь не меняется'
-                            }
-                            maxWidth={280}
-                          >
-                            <span
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                height: sp(18),
-                                padding: `0 ${sp(8)}px`,
-                                borderRadius: 999,
-                                fontSize: fs(11),
-                                fontWeight: 700,
-                                whiteSpace: 'nowrap',
-                                color: dbSt === 'cancelled' ? '#FECACA' : '#A7F3D0',
-                                background:
-                                  dbSt === 'cancelled'
-                                    ? 'rgba(248,113,113,0.2)'
-                                    : 'rgba(16,185,129,0.2)',
-                                border:
-                                  dbSt === 'cancelled'
-                                    ? '1px solid rgba(248,113,113,0.45)'
-                                    : '1px solid rgba(52,211,153,0.4)',
-                                flexShrink: 0,
-                              }}
-                            >
-                              {dbSt === 'cancelled' ? 'Отменена' : 'Выполнена'}
-                            </span>
-                          </DarkHoverTip>
-                        );
-                      }
-                      return (
-                        <PlannerSwitch
-                          size="sm"
-                          accent="emerald"
-                          checked={manualDone.has(oid) || st === 'done'}
-                          disabled={!canMutatePlan}
-                          title="Пометить отработанной"
-                          onChange={() => toggleOrderDone(oid)}
-                        />
-                      );
-                    })()}
-                    {applyOnlySelected && canApply && canEditPlan ? (
-                      <PlannerSwitch
-                        size="sm"
-                        accent="violet"
-                        checked={selectedForApply}
-                        title="Включить в «Применить в заявки»"
-                        onChange={() => toggleApplyOrder(oid)}
-                      />
-                    ) : null}
-                    <span style={{ fontWeight: 700, flexShrink: 0 }}>#{o.id}</span>
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {o.client}
-                    </span>
-                    {(() => {
-                      const shipped = liveShippedVolumeForOrder(o.id, dayTrips);
-                      const planVol = Number(o.volume) || 0;
-                      const pct = orderPlanPercent(
-                        planVol,
-                        shipped,
-                        manualDone.has(oid),
-                        st === 'done',
-                      );
-                      return (
-                        <OrderPlanProgressBar
-                          percent={pct}
-                          shipped={shipped}
-                          planVol={planVol}
-                          fs={fs}
-                          sp={sp}
-                        />
-                      );
-                    })()}
-                    <span style={{ color: '#10B981', fontWeight: 700, flexShrink: 0 }}>{o.volume} м³</span>
-                    <span style={{ color: '#94A3B8', flexShrink: 0 }}>{o.deliveryTime}</span>
-                    {pickup ? (
-                      <span
-                        style={{
-                          padding: `${sp(2)}px ${sp(8)}px`,
-                          borderRadius: 999,
-                          fontSize: fs(12),
-                          fontWeight: 700,
-                          background: 'rgba(251,146,60,0.18)',
-                          color: '#FDBA74',
-                          flexShrink: 0,
-                        }}
-                        title="Клиент забирает сам — в плане только соска"
-                      >
-                        самовывоз
-                      </span>
-                    ) : null}
-                    <span
+                  />
+                  {orderTrips.length > 0 ? (
+                    <div
                       style={{
-                        padding: `${sp(2)}px ${sp(8)}px`,
-                        borderRadius: 999,
-                        fontSize: fs(12),
-                        fontWeight: 700,
-                        background: badge.bg,
-                        color: badge.color,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: sp(3),
                         flexShrink: 0,
+                        padding: `${sp(6)}px ${sp(6)}px ${sp(7)}px`,
+                        background: 'rgba(2,6,23,0.55)',
+                        boxShadow: 'inset 0 3px 10px rgba(0,0,0,0.4)',
                       }}
                     >
-                      {badge.label}
-                    </span>
-                  </div>
                   {orderTrips.map((t) => {
                     const waveHighlight =
                       activeWaveId != null &&
@@ -4532,6 +4618,9 @@ export default function LogisticsPlannerTab({
                         key={t.id}
                         style={{
                           opacity: dragTripId === t.id ? 0.55 : 1,
+                          flexShrink: 0,
+                          minWidth: 0,
+                          maxWidth: '100%',
                         }}
                       >
                         <PlannerTripFactRow
@@ -4558,8 +4647,10 @@ export default function LogisticsPlannerTab({
                           onShiftLoadTime={(id, hhmm) => void shiftTripLoad(id, hhmm)}
                           onTripDelayMin={(id, mins) => void applyTripDelay(id, mins)}
                           onPlanVolumeChange={(id, vol) => void applyTripPlanVolume(id, vol)}
-                          onUnlockTrip={
-                            canMutatePlan && !isLiveOrphan ? unlockTrip : undefined
+                          onSetTripLocked={
+                            canMutatePlan && !isLiveOrphan
+                              ? setTripLocked
+                              : undefined
                           }
                           canDrag={canMutatePlan && !isLiveOrphan}
                           dragOver={dragOverTripId === t.id}
@@ -4589,6 +4680,8 @@ export default function LogisticsPlannerTab({
                       </div>
                     );
                   })}
+                    </div>
+                  ) : null}
                 </div>
               );
             })
@@ -4656,11 +4749,14 @@ export default function LogisticsPlannerTab({
         <div
           className="scroll-hidden"
           style={{
-            maxHeight: isPageLayout ? (is4k ? sp(220) : sp(180)) : is4k ? sp(120) : sp(88),
+            maxHeight: isPageLayout ? (is4k ? sp(236) : sp(196)) : is4k ? sp(136) : sp(100),
             overflowY: 'auto',
             display: 'flex',
             flexWrap: 'wrap',
+            alignContent: 'flex-start',
             gap: sp(8),
+            paddingBottom: sp(6),
+            boxSizing: 'border-box',
           }}
         >
           {rankedAll.map((m) => {
@@ -4768,201 +4864,7 @@ export default function LogisticsPlannerTab({
       ) : null}
 
 
-      {/* Кнопки расчёта + «Включая ночь» */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: sp(10),
-          flexShrink: 0,
-          alignItems: 'center',
-        }}
-      >
-        <ModalActionButton
-          color="#34D399"
-          icon={<Calculator size={fs(16)} />}
-          label={busy ? 'Считаю…' : 'Рассчитать весь день'}
-          size="lg"
-          onClick={() => void runPlan('full_day')}
-          disabled={!canMutatePlan || busy || loadingFleet || roadsRefreshing}
-        />
-        <ModalActionButton
-          color="#60A5FA"
-          icon={<Layers size={fs(16)} />}
-          label="Рассчитать этап"
-          size="lg"
-          onClick={() => void runPlan('stage')}
-          disabled={!canMutatePlan || busy || loadingFleet || roadsRefreshing}
-        />
-        <ModalActionButton
-          color="#94A3B8"
-          icon={<Lock size={fs(16)} />}
-          label="Зафиксировать текущее"
-          size="lg"
-          onClick={lockAllCurrent}
-          disabled={!canMutatePlan || !trips.length}
-        />
-        <ModalActionButton
-          color="#F87171"
-          icon={<RefreshCw size={fs(16)} />}
-          label="Сбросить расчёт"
-          size="lg"
-          onClick={() => void resetPlan()}
-          disabled={
-            !canEditPlan ||
-            (!trips.length && !lockedTrips.length && warnings.length === 0)
-          }
-        />
-        <ModalActionButton
-          color="#38BDF8"
-          icon={<Route size={fs(16)} />}
-          label={roadsRefreshing ? 'Дороги…' : 'Обновить дороги'}
-          size="lg"
-          onClick={() => void refreshRoadTimes()}
-          disabled={roadsRefreshing || !orders.length}
-        />
-        <DarkHoverTip
-          tip="Утро 7–9 и вечер 16–18: дорога чуть дольше (×1.25–1.35) к обычному времени в пути. Выкл — считаем без надбавки за пробки."
-          maxWidth={340}
-          style={{ marginLeft: 'auto' }}
-        >
-          <PlannerSwitch
-            checked={useTraffic}
-            disabled={!canMutatePlan}
-            accent="sky"
-            label="Учитывать пробки"
-            onChange={(next) => {
-              setUseTraffic(next);
-              setScenarios([]);
-              setActiveScenarioId(null);
-            }}
-          />
-        </DarkHoverTip>
-        <DarkHoverTip
-          tip="Выкл — возврат на базу ≤ 21:00. Открытие соски сдвигается раньше 06:00, если есть ранние доставки (к 06:00 и т.п.). Вкл — рейсы после 21:00 и на следующие сутки."
-          maxWidth={360}
-        >
-          <PlannerSwitch
-            checked={allowNight}
-            disabled={!canMutatePlan}
-            accent="amber"
-            label="Включая ночь"
-            onChange={(next) => {
-              setAllowNight(next);
-              setScenarios([]);
-              setActiveScenarioId(null);
-            }}
-          />
-        </DarkHoverTip>
-      </div>
-
-
-      {/* Липкий низ */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: sp(10),
-          justifyContent: 'flex-end',
-          alignItems: 'center',
-          flexShrink: 0,
-          paddingTop: sp(10),
-          borderTop: '1px solid rgba(51,65,85,0.9)',
-        }}
-      >
-        <div
-          style={{
-            marginRight: 'auto',
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            gap: sp(12),
-          }}
-        >
-          <DarkHoverTip
-            tip="Выкл — «Применить в заявки» пишет во все заявки с рейсами. Вкл — только в отмеченные фиолетовым переключателем в списке."
-            maxWidth={340}
-          >
-            <PlannerSwitch
-              checked={applyOnlySelected}
-              disabled={!canMutatePlan}
-              accent="violet"
-              label={
-                applyOnlySelected
-                  ? 'Только выбранные заявки'
-                  : 'Применяется ко всем заявкам'
-              }
-              onChange={setApplyOnlySelected}
-              suffix={
-                applyOnlySelected && applyableOrderIds.size > 0 ? (
-                  <span style={{ color: '#A78BFA', fontWeight: 700, fontSize: fs(13) }}>
-                    ({[...applyOrderIds].filter((id) => applyableOrderIds.has(id)).length}/
-                    {applyableOrderIds.size})
-                  </span>
-                ) : null
-              }
-            />
-          </DarkHoverTip>
-          <DarkHoverTip
-            tip="По умолчанию выкл: заявки, где диспетчер уже поставил миксеры («Загрузка»), интеллект не трогает. Включи только если сознательно хочешь заменить ручные назначения планом."
-            maxWidth={360}
-          >
-            <PlannerSwitch
-              checked={overwriteManual}
-              disabled={!canMutatePlan}
-              accent="rose"
-              label="Заменить ручные «Загрузка»"
-              onChange={setOverwriteManual}
-            />
-          </DarkHoverTip>
-        </div>
-        <ModalActionButton
-          color={publishDirty ? '#A78BFA' : '#818CF8'}
-          icon={<Upload size={fs(16)} />}
-          label={
-            publishing
-              ? 'Публикую…'
-              : publishDirty
-                ? 'Опубликовать'
-                : 'Опубликовано'
-          }
-          size="lg"
-          onClick={() => void publishNow()}
-          disabled={!canMutatePlan || publishing || (!publishDirty && !trips.length)}
-        />
-        <ModalActionButton
-          color="#C084FC"
-          icon={<Database size={fs(16)} />}
-          label={applying ? 'Пишу…' : 'Применить в заявки'}
-          size="lg"
-          onClick={() => void applyToOrders()}
-          disabled={!canMutatePlan || applying || applyableOrderIds.size === 0}
-        />
-        <ModalActionButton
-          color="#34D399"
-          icon={<Copy size={fs(16)} />}
-          label="Скопировать план"
-          size="lg"
-          onClick={() => void copyPlan(false)}
-          disabled={!trips.length}
-        />
-        <ModalActionButton
-          color="#60A5FA"
-          icon={<Copy size={fs(16)} />}
-          label="Скопировать этап"
-          size="lg"
-          onClick={() => void copyPlan(true)}
-          disabled={!trips.some((t) => !t.locked && !t.done)}
-        />
-        <ModalActionButton
-          color="#A78BFA"
-          icon={<Copy size={fs(16)} />}
-          label="В Макс"
-          size="lg"
-          onClick={() => applyToMax(false)}
-          disabled={!canMutatePlan || !trips.length}
-        />
-      </div>
+      {actionsColumn}
     </div>
   );
 }

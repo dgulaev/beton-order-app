@@ -115,6 +115,7 @@ export default function QuestionableToggle({
         opacity: busy ? 0.7 : 1,
         userSelect: 'none',
         whiteSpace: 'nowrap',
+        flexShrink: 0,
         transition: 'background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
       }}
     >
@@ -155,10 +156,10 @@ export default function QuestionableToggle({
       <span
         style={{
           display: 'inline-flex',
-          flexDirection: 'column',
-          alignItems: 'flex-start',
-          gap: 1,
-          lineHeight: 1.15,
+          alignItems: 'baseline',
+          gap: 6,
+          lineHeight: 1.2,
+          whiteSpace: 'nowrap',
         }}
       >
         <span
@@ -172,14 +173,12 @@ export default function QuestionableToggle({
         </span>
         <span
           style={{
-            fontSize: 10,
-            fontWeight: 800,
-            letterSpacing: '0.04em',
-            textTransform: 'uppercase',
+            fontSize: 11,
+            fontWeight: 700,
             color: checked ? '#FCA5A5' : '#64748B',
           }}
         >
-          {saving ? 'сохраняю…' : checked ? 'включено' : 'выключено'}
+          {saving ? '…' : checked ? 'вкл' : 'выкл'}
         </span>
       </span>
     </button>

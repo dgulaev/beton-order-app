@@ -453,6 +453,11 @@ export type PlanLogisticsInput = {
    * на этапе, чтобы хвост не строился в «оптимистичное» прошлое.
    */
   factDelayMin?: number;
+  /**
+   * «Сейчас» (минуты от полуночи) — для mode=stage: новые загрузки не раньше этого
+   * момента. Иначе свободные миксеры снова встают на утренний JIT (09:00 при клике в 15:00).
+   */
+  nowMinutes?: number | null;
   /** V2: нормы из истории план↔факт (load/road/unload/join). */
   calibration?: PlannerCalibration | null;
 };
@@ -1165,6 +1170,23 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
     useTraffic,
     arriveOverrides: overrides,
   });
+  // Этап днём: пол загрузки = max(открытие БСУ, сейчас). Полный день — только plantOpen.
+  const nowMinRaw = Number(input.nowMinutes);
+  const loadFloor =
+    input.mode === 'stage' && Number.isFinite(nowMinRaw)
+      ? Math.max(plantOpen, Math.floor(nowMinRaw))
+      : plantOpen;
+  if (
+    input.mode === 'stage' &&
+    loadFloor > plantOpen &&
+    !warnings.some((w) => w.message.startsWith('Этап от текущего времени:'))
+  ) {
+    warnings.push({
+      level: 'warn',
+      message:
+        `Этап от текущего времени: новые загрузки не раньше ${formatMinutes(loadFloor)}.`,
+    });
+  }
   if (
     plantOpen < PLANT_OPEN_DEFAULT_MINUTES &&
     !warnings.some((w) => w.message.startsWith('Ранние доставки:'))
@@ -1325,7 +1347,7 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
         const volume = Math.min(left, pickupChunkCap);
         const loadMin = loadMinutesForVolume(volume);
         // К времени заявки бетон должен быть готов → грузим к (цель − loadMin).
-        let desiredLoad = Math.max(plantOpen, nextReady - loadMin);
+        let desiredLoad = Math.max(loadFloor, nextReady - loadMin);
         const slot = pushNoOverlap(nozzle, desiredLoad, loadMin);
         const loadStart = slot.start;
         const readyAt = loadStart + loadMin;
@@ -1425,7 +1447,8 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
             useTraffic,
             excludeNumbers,
             tripCounts,
-            plantOpenMinutes: plantOpen,
+            // Этап: floor = max(открытие БСУ, сейчас), иначе скоринг снова тянет к утру.
+            plantOpenMinutes: loadFloor,
             orderAddress: order.address,
             orderPickup: false,
           },
@@ -1450,10 +1473,10 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
         );
         const idealLoad = nextArrive - roadGuess - loadMin;
         const earliestLoad = Math.max(
-          plantOpen,
+          loadFloor,
           idealLoad - MAX_EARLY_ARRIVE_MIN,
         );
-        let desiredLoad = Math.max(plantOpen, idealLoad);
+        let desiredLoad = Math.max(loadFloor, idealLoad);
 
         const freeFrom = mixerBusy.get(mixer.number) ?? -Infinity;
         const earlyFrom = Math.max(earliestLoad, freeFrom === -Infinity ? earliestLoad : freeFrom);
@@ -1472,6 +1495,8 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
           desiredLoad = freeFrom;
           delayedByMixer = true;
         }
+        // После early-slot / freeFrom всё равно не уходим в прошлое дня.
+        if (desiredLoad < loadFloor) desiredLoad = loadFloor;
 
         const slot = pushNoOverlap(nozzle, desiredLoad, loadMin);
 
@@ -1602,7 +1627,7 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
           const loadMin = loadMinutesForVolume(volume);
           const unloadMin = unloadMinutesForMixer(mixer);
           const freeFrom = mixerBusy.get(mixer.number) ?? -Infinity;
-          let desiredLoad = Math.max(plantOpen, freeFrom);
+          let desiredLoad = Math.max(loadFloor, freeFrom === -Infinity ? loadFloor : freeFrom);
           const slot = pushNoOverlap(nozzle, desiredLoad, loadMin);
           const loadStart = slot.start;
           const roadOut = roadWithTraffic(baseRoadMin, loadStart, useTraffic);
@@ -2819,6 +2844,7 @@ function replanTailAfterTripMutate(input: ReplanTailInput): {
         allowNight: input.allowNight,
         useTraffic: input.useTraffic,
         factDelayMin: input.factDelayMin,
+        nowMinutes: input.nowMinutes,
         calibration: input.calibration,
       }),
       locked: [],
@@ -2852,6 +2878,7 @@ function replanTailAfterTripMutate(input: ReplanTailInput): {
     allowNight: input.allowNight,
     useTraffic: input.useTraffic,
     factDelayMin: input.factDelayMin,
+    nowMinutes: input.nowMinutes,
     calibration: input.calibration,
   });
 

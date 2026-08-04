@@ -28,6 +28,7 @@ import {
 } from '../cardStyles';
 import { appAlert, appConfirm, appPrompt } from '../components/appDialog';
 import DarkHoverTip from '../components/DarkHoverTip';
+import ModalDateInput from '../components/ModalDateInput';
 import { useLowRateAlerts } from '../components/useLowRateAlerts';
 import { FileText, GripVertical, Plus, Scale, ScrollText, Trash2, X } from 'lucide-react';
 import type { LowRateAlertInfo } from '@/lib/siloConfig';
@@ -107,6 +108,10 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
   const [historyItemFilter, setHistoryItemFilter] = useState<
     'all' | 'silo1' | 'silo2' | 'silo3' | 'additives' | 'fbs'
   >('all');
+  /** Фильтр по типу операции: все / загрузки / списания / обнуления / прочие */
+  const [historyOpFilter, setHistoryOpFilter] = useState<
+    'all' | 'add' | 'subtract' | 'reset' | 'other'
+  >('all');
   /** Дата ленты YYYY-MM-DD (МСК) или '' = все дни */
   const [historyDateFilter, setHistoryDateFilter] = useState('');
   const [historyHasMore, setHistoryHasMore] = useState(false);
@@ -136,6 +141,23 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
       if (historyItemFilter === 'fbs') {
         if (!/(фбс|блок)/i.test(item) && String(op?.unit || '') !== 'шт') return false;
       }
+      let opType = String(op?.operation_type || '');
+      if (!opType) {
+        const action = String(op?.action || '');
+        if (/Спис/i.test(action)) opType = 'subtract';
+        else if (/Внес|Добав|\+\s*Кубик/i.test(action)) opType = 'add';
+        else if (/Обнул/i.test(action)) opType = 'reset';
+        else if (action) opType = 'other';
+      }
+      if (historyOpFilter === 'add' && opType !== 'add') return false;
+      if (historyOpFilter === 'subtract' && opType !== 'subtract') return false;
+      if (historyOpFilter === 'reset' && opType !== 'reset') return false;
+      if (
+        historyOpFilter === 'other'
+        && (opType === 'add' || opType === 'subtract' || opType === 'reset')
+      ) {
+        return false;
+      }
       if (historyDateFilter) {
         const iso = op?.created_at || op?.time;
         if (!iso) return false;
@@ -149,7 +171,7 @@ export default function WarehousePage({ recipes = [], actorName = null }: Wareho
       }
       return true;
     },
-    [historyItemFilter, historyDateFilter],
+    [historyItemFilter, historyOpFilter, historyDateFilter],
   );
 
   /** Анимация кубиков добавок при заходе: idle → running → done (один раз). */
@@ -507,6 +529,7 @@ const loadTodayConsumption = async () => {
           limit: String(HISTORY_PAGE),
           offset: String(offset),
           item: historyItemFilter,
+          op: historyOpFilter,
         });
         if (historyDateFilter) qs.set('date', historyDateFilter);
 
@@ -530,7 +553,7 @@ const loadTodayConsumption = async () => {
         else setHistoryLoading(false);
       }
     },
-    [historyDateFilter, historyItemFilter],
+    [historyDateFilter, historyItemFilter, historyOpFilter],
   );
 
   // ==================== 2.3 ЗАГРУЗКА ДАННЫХ И ИНИЦИАЛИЗАЦИЯ ====================
@@ -548,7 +571,7 @@ const loadTodayConsumption = async () => {
     historyHasMoreRef.current = true;
     historyLenRef.current = 0;
     void loadOperationHistory({ append: false });
-  }, [historyItemFilter, historyDateFilter, loadOperationHistory]);
+  }, [historyItemFilter, historyOpFilter, historyDateFilter, loadOperationHistory]);
 
   // Подгрузка при скролле к низу ленты
   useEffect(() => {
@@ -2829,73 +2852,154 @@ const removeLastCube = async (index: number) => {
 
               {/* Дата + фильтры */}
               <div style={{ flexShrink: 0, marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <input
-                  type="date"
+                <ModalDateInput
                   value={historyDateFilter}
-                  onChange={(e) => setHistoryDateFilter(e.target.value)}
-                  title="Фильтр по дате"
+                  onChange={setHistoryDateFilter}
+                  title="Фильтр ленты по дате"
+                  allowClear
                   style={{
                     width: '100%',
-                    boxSizing: 'border-box',
                     padding: '7px 10px',
                     borderRadius: 10,
-                    border: CARD_BORDER,
-                    background: '#0F172A',
-                    color: '#E2E8F0',
                     fontSize: 12,
-                    colorScheme: 'dark',
-                    outline: 'none',
+                    fontWeight: 600,
                   }}
                 />
-                {historyDateFilter ? (
-                  <button
-                    type="button"
-                    onClick={() => setHistoryDateFilter('')}
-                    style={{
-                      alignSelf: 'flex-start',
-                      padding: 0,
-                      border: 'none',
-                      background: 'transparent',
-                      color: '#93C5FD',
-                      fontSize: 11,
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                    }}
-                  >
-                    Сбросить дату
-                  </button>
-                ) : null}
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
+                    gap: 4,
+                    width: '100%',
+                  }}
+                >
                   {(
                     [
-                      { key: 'all', label: 'Все' },
-                      { key: 'silo1', label: 'Силос 1' },
-                      { key: 'silo2', label: 'Силос 2' },
-                      { key: 'silo3', label: 'Силос 3' },
-                      { key: 'additives', label: 'Добавки' },
-                      { key: 'fbs', label: 'ФБС' },
+                      { key: 'all', label: 'Все', tip: 'Все позиции' },
+                      { key: 'silo1', label: 'С1', tip: 'Силос 1' },
+                      { key: 'silo2', label: 'С2', tip: 'Силос 2' },
+                      { key: 'silo3', label: 'С3', tip: 'Силос 3' },
+                      { key: 'additives', label: 'Доб.', tip: 'Добавки' },
+                      { key: 'fbs', label: 'ФБС', tip: 'ФБС' },
                     ] as const
                   ).map((f) => {
                     const on = historyItemFilter === f.key;
                     return (
-                      <button
+                      <DarkHoverTip
                         key={f.key}
-                        type="button"
-                        onClick={() => setHistoryItemFilter(f.key)}
-                        style={{
-                          padding: '4px 8px',
-                          borderRadius: 9999,
-                          border: on ? '1px solid rgba(96,165,250,0.55)' : CARD_BORDER,
-                          background: on ? 'rgba(59,130,246,0.22)' : 'rgba(15,23,42,0.65)',
-                          color: on ? '#BFDBFE' : '#94A3B8',
-                          fontSize: 11,
-                          fontWeight: 600,
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap',
-                        }}
+                        tip={f.tip}
+                        display="block"
+                        style={{ minWidth: 0, width: '100%' }}
                       >
-                        {f.label}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => setHistoryItemFilter(f.key)}
+                          style={{
+                            width: '100%',
+                            padding: '4px 2px',
+                            borderRadius: 9999,
+                            border: on ? '1px solid rgba(96,165,250,0.55)' : CARD_BORDER,
+                            background: on ? 'rgba(59,130,246,0.22)' : 'rgba(15,23,42,0.65)',
+                            color: on ? '#BFDBFE' : '#94A3B8',
+                            fontSize: 10,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            minWidth: 0,
+                            textAlign: 'center',
+                          }}
+                        >
+                          {f.label}
+                        </button>
+                      </DarkHoverTip>
+                    );
+                  })}
+                </div>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+                    gap: 4,
+                    width: '100%',
+                  }}
+                >
+                  {(
+                    [
+                      {
+                        key: 'all' as const,
+                        label: 'Все',
+                        tip: 'Все типы операций',
+                        onBorder: '1px solid rgba(148,163,184,0.45)',
+                        onBg: 'rgba(148,163,184,0.18)',
+                        onColor: '#E2E8F0',
+                      },
+                      {
+                        key: 'add' as const,
+                        label: 'Загр.',
+                        tip: 'Загрузки / внесения',
+                        onBorder: '1px solid rgba(52,211,153,0.5)',
+                        onBg: 'rgba(16,185,129,0.18)',
+                        onColor: '#6EE7B7',
+                      },
+                      {
+                        key: 'subtract' as const,
+                        label: 'Спис.',
+                        tip: 'Списания',
+                        onBorder: '1px solid rgba(248,113,113,0.5)',
+                        onBg: 'rgba(239,68,68,0.16)',
+                        onColor: '#FCA5A5',
+                      },
+                      {
+                        key: 'reset' as const,
+                        label: 'Обнул.',
+                        tip: 'Обнуления',
+                        onBorder: '1px solid rgba(251,191,36,0.5)',
+                        onBg: 'rgba(245,158,11,0.16)',
+                        onColor: '#FCD34D',
+                      },
+                      {
+                        key: 'other' as const,
+                        label: 'Проч.',
+                        tip: 'Прочие (алерты и др.)',
+                        onBorder: '1px solid rgba(167,139,250,0.5)',
+                        onBg: 'rgba(139,92,246,0.16)',
+                        onColor: '#C4B5FD',
+                      },
+                    ]
+                  ).map((f) => {
+                    const on = historyOpFilter === f.key;
+                    return (
+                      <DarkHoverTip
+                        key={f.key}
+                        tip={f.tip}
+                        display="block"
+                        style={{ minWidth: 0, width: '100%' }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setHistoryOpFilter(f.key)}
+                          style={{
+                            width: '100%',
+                            padding: '4px 2px',
+                            borderRadius: 9999,
+                            border: on ? f.onBorder : CARD_BORDER,
+                            background: on ? f.onBg : 'rgba(15,23,42,0.65)',
+                            color: on ? f.onColor : '#94A3B8',
+                            fontSize: 10,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            minWidth: 0,
+                            textAlign: 'center',
+                          }}
+                        >
+                          {f.label}
+                        </button>
+                      </DarkHoverTip>
                     );
                   })}
                 </div>

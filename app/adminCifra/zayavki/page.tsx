@@ -5,14 +5,13 @@ import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders, useRealtimeOrderMixers } from '../../../hooks/useRealtimeOrders';
 import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
-import { Package, Save, Trash2, Send, Share2, Copy, X, AlertTriangle, CheckCircle2, Search } from 'lucide-react';
+import { Package, Save, Trash2, Send, Share2, Copy, X, Search } from 'lucide-react';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 import OrderRouteMap from '@/app/adminCifra/components/OrderRouteMap';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
 import {
   findRecipeByGrade,
   getAdditiveDosage,
-  ADDITIVE_NAMES,
   calculateCementUsageKg,
   densitiesFromLabSettings,
   type AdditiveDensities,
@@ -35,6 +34,7 @@ import { appConfirm, appPrompt } from '@/app/adminCifra/components/appDialog';
 import ModalSelect from '@/app/adminCifra/components/ModalSelect';
 import WeatherKpiCard from '@/app/adminCifra/components/WeatherKpiCard';
 import CementKpiModal from '@/app/adminCifra/components/CementKpiModal';
+import AdditiveKpiModal from '@/app/adminCifra/components/AdditiveKpiModal';
 import { InstantFieldHint, VOLUME_LOCKED_HINT } from '@/app/adminCifra/components/InstantFieldHint';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { formatRuDateWithWeekday, formatTimeHHMM, pluralWord } from '@/lib/ruLocale';
@@ -746,8 +746,14 @@ export default function ZayavkiPage() {
   /** Суммарный остаток цемента по силосам (т), live со склада */
   const [warehouseCementTons, setWarehouseCementTons] = useState<number | null>(null);
   const [additiveDensities, setAdditiveDensities] = useState<AdditiveDensities>({});
-  const [showAdditivePopup, setShowAdditivePopup] = useState(false);
+  const [showAdditiveModal, setShowAdditiveModal] = useState(false);
+  const [additiveModalId, setAdditiveModalId] = useState<1 | 2>(1);
   const [showCementModal, setShowCementModal] = useState(false);
+
+  const openAdditiveModal = (additiveId: 1 | 2) => {
+    setAdditiveModalId(additiveId);
+    setShowAdditiveModal(true);
+  };
 
   // ==================== ПОИСК КЛИЕНТА В МОДАЛКЕ РЕДАКТИРОВАНИЯ ====================
   const [allClients, setAllClients] = useState<any[]>([]);
@@ -1755,71 +1761,54 @@ ${order.customer_type?.includes('Юридическое')
 
   const fmtKg = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1));
 
-  // ==================== ПРОГНОЗ ДОБАВОК — скользящие 7 дней от selectedDate ====================
-  // Не привязываемся к ПН-ВС: берём selectedDate + 6 следующих дней.
+  // Прогноз добавок на 7 дней (бейдж на карточке; детальный разбор — в модалке)
   const weekAdditiveForecast = useMemo(() => {
     if (!recipes.length) return null;
-
-    // 7 дат начиная с selectedDate
     const forecastDates: string[] = [];
     for (let i = 0; i < 7; i++) {
       const d = new Date(selectedDate);
       d.setDate(d.getDate() + i);
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      forecastDates.push(`${y}-${m}-${day}`);
+      forecastDates.push(getLocalDateString(d));
     }
     const forecastDateSet = new Set(forecastDates);
-    const dateFrom = forecastDates[0];
-    const dateTo   = forecastDates[6];
-
-    // Активные заявки в диапазоне
-    const forecastOrders = allOrders.filter((o: any) => {
-      if (o.status === 'cancelled') return false;
-      if (!o.delivery_date) return false;
-      const ds = typeof o.delivery_date === 'string'
-        ? o.delivery_date.substring(0, 10)
-        : (() => { const d = new Date(o.delivery_date); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
-      return forecastDateSet.has(ds);
-    });
 
     let pfmLiters = 0;
     let linomixLiters = 0;
-
-    // Детали по каждой заявке для попапа
-    const details: Array<{
-      id: number; grade: string; volume: number; deliveryDate: string;
-      additiveId: 1 | 2; additiveName: string; kg: number; liters: number;
-    }> = [];
-
-    forecastOrders.forEach((order: any) => {
-      const recipe = findRecipeByGrade(recipes, order.grade);
-      const dosage = getAdditiveDosage(recipe, additiveDensities);
-      if (!dosage) return;
+    for (const order of allOrders as any[]) {
+      if (order.status === 'cancelled' || !order.delivery_date) continue;
+      const ds =
+        typeof order.delivery_date === 'string'
+          ? order.delivery_date.substring(0, 10)
+          : getLocalDateString(new Date(order.delivery_date));
+      if (!forecastDateSet.has(ds)) continue;
       const volume = Number(order.volume || 0);
-      if (volume <= 0) return;
-      const kg = volume * dosage.kgPerM3;
-      const liters = kg / dosage.densityKgPerLiter;
+      if (volume <= 0) continue;
+      const dosage = getAdditiveDosage(
+        findRecipeByGrade(recipes, order.grade),
+        additiveDensities,
+      );
+      if (!dosage) continue;
+      const liters = (volume * dosage.kgPerM3) / dosage.densityKgPerLiter;
       if (dosage.additiveId === 1) pfmLiters += liters;
       else linomixLiters += liters;
-      const ds = typeof order.delivery_date === 'string'
-        ? order.delivery_date.substring(0, 10)
-        : (() => { const d = new Date(order.delivery_date); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
-      details.push({ id: order.id, grade: order.grade || '—', volume, deliveryDate: ds, additiveId: dosage.additiveId, additiveName: dosage.name, kg: Math.round(kg * 10) / 10, liters: Math.round(liters * 10) / 10 });
-    });
+    }
 
-    const pfmStock     = warehouseAdditives?.pfm    ?? null;
+    const pfmStock = warehouseAdditives?.pfm ?? null;
     const linomixStock = warehouseAdditives?.linomix ?? null;
+    const pfmBring =
+      pfmStock != null ? Math.max(0, Math.round(pfmLiters - pfmStock)) : null;
+    const linomixBring =
+      linomixStock != null ? Math.max(0, Math.round(linomixLiters - linomixStock)) : null;
 
     return {
-      dateFrom, dateTo,
-      totalOrders: forecastOrders.length,
-      totalVolume: Math.round(forecastOrders.reduce((s: number, o: any) => s + Number(o.volume || 0), 0)),
-      pfm:     { needed: Math.round(pfmLiters),     stock: pfmStock,     shortage: pfmStock     !== null && pfmStock     < pfmLiters },
-      linomix: { needed: Math.round(linomixLiters),  stock: linomixStock, shortage: linomixStock !== null && linomixStock < linomixLiters },
-      hasAlert: (pfmStock !== null && pfmStock < pfmLiters) || (linomixStock !== null && linomixStock < linomixLiters),
-      details,
+      pfm: {
+        bringLiters: pfmBring,
+        shortage: pfmBring != null && pfmBring > 0,
+      },
+      linomix: {
+        bringLiters: linomixBring,
+        shortage: linomixBring != null && linomixBring > 0,
+      },
     };
   }, [allOrders, selectedDate, recipes, warehouseAdditives, additiveDensities]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1979,9 +1968,9 @@ ${order.customer_type?.includes('Юридическое')
             minWidth: 0,
             cursor: 'pointer',
             transition: 'filter 0.15s ease, transform 0.15s ease',
-            border: weekCementForecast?.shortage
-              ? '1px solid rgba(248,113,113,0.45)'
-              : undefined,
+            ...(weekCementForecast?.shortage
+              ? { border: '1px solid rgba(248,113,113,0.45)' }
+              : {}),
           })}
           onMouseEnter={(e) => {
             e.currentTarget.style.filter = 'brightness(1.08)';
@@ -2077,13 +2066,55 @@ ${order.customer_type?.includes('Юридическое')
           </div>
         </div>
 
-        {/* ПФМ */}
-        <div style={volumeCardStyle({ borderRadius: 18, padding: '14px 16px', minWidth: 0 })}>
-          <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em', marginBottom: '6px' }}>
-            ПФМ
-            {weekAdditiveForecast?.pfm?.shortage && (
-              <span style={{ marginLeft: '6px', fontSize: '11px', color: '#F87171', fontWeight: 700 }}>нехватка</span>
-            )}
+        {/* ПФМ — клик открывает прогноз на неделю */}
+        <div
+          role="button"
+          tabIndex={0}
+          title="Открыть прогноз ПФМ на неделю"
+          onClick={() => openAdditiveModal(1)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              openAdditiveModal(1);
+            }
+          }}
+          style={volumeCardStyle({
+            borderRadius: 18,
+            padding: '14px 16px',
+            minWidth: 0,
+            cursor: 'pointer',
+            transition: 'filter 0.15s ease',
+            ...(weekAdditiveForecast?.pfm?.shortage
+              ? { border: '1px solid rgba(248,113,113,0.45)' }
+              : {}),
+          })}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.filter = 'brightness(1.08)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.filter = 'none';
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: 6,
+              marginBottom: 6,
+            }}
+          >
+            <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em' }}>
+              ПФМ
+              {weekAdditiveForecast?.pfm?.shortage ? (
+                <span style={{ marginLeft: 6, fontSize: 11, color: '#F87171', fontWeight: 700 }}>
+                  нехватка
+                </span>
+              ) : null}
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#64748B', flexShrink: 0 }}>
+              подробнее
+            </div>
           </div>
           <div style={{ fontSize: '22px', fontWeight: 700, color: '#FACC15', lineHeight: 1.1, marginBottom: '8px', whiteSpace: 'nowrap' }}>
             {fmtKg(additiveFactByType.pfm)}
@@ -2100,18 +2131,103 @@ ${order.customer_type?.includes('Юридическое')
               transition: 'width 0.4s ease',
             }} />
           </div>
-          <div style={{ fontSize: '13px', color: '#CBD5E1', fontWeight: 600, whiteSpace: 'nowrap' }}>
-            склад {warehouseAdditives ? `${Math.round(warehouseAdditives.pfm)} л` : '—'}
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              alignItems: 'center',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            <span style={{ color: '#94A3B8' }}>от разгруженного</span>
+            {warehouseAdditives ? (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '2px 8px',
+                  borderRadius: 9999,
+                  background: 'rgba(250,204,21,0.15)',
+                  border: '1px solid rgba(250,204,21,0.35)',
+                  color: '#FDE68A',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                склад {Math.round(warehouseAdditives.pfm)} л
+              </span>
+            ) : null}
+            {weekAdditiveForecast?.pfm?.shortage && weekAdditiveForecast.pfm.bringLiters != null ? (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '2px 8px',
+                  borderRadius: 9999,
+                  background: 'rgba(239,68,68,0.15)',
+                  border: '1px solid rgba(248,113,113,0.4)',
+                  color: '#FCA5A5',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                +{weekAdditiveForecast.pfm.bringLiters} л на неделю
+              </span>
+            ) : null}
           </div>
         </div>
 
-        {/* Линомикс */}
-        <div style={volumeCardStyle({ borderRadius: 18, padding: '14px 16px', minWidth: 0 })}>
-          <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em', marginBottom: '6px' }}>
-            Линомикс
-            {weekAdditiveForecast?.linomix?.shortage && (
-              <span style={{ marginLeft: '6px', fontSize: '11px', color: '#F87171', fontWeight: 700 }}>нехватка</span>
-            )}
+        {/* Линомикс — клик открывает прогноз на неделю */}
+        <div
+          role="button"
+          tabIndex={0}
+          title="Открыть прогноз Линомикс на неделю"
+          onClick={() => openAdditiveModal(2)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              openAdditiveModal(2);
+            }
+          }}
+          style={volumeCardStyle({
+            borderRadius: 18,
+            padding: '14px 16px',
+            minWidth: 0,
+            cursor: 'pointer',
+            transition: 'filter 0.15s ease',
+            ...(weekAdditiveForecast?.linomix?.shortage
+              ? { border: '1px solid rgba(248,113,113,0.45)' }
+              : {}),
+          })}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.filter = 'brightness(1.08)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.filter = 'none';
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: 6,
+              marginBottom: 6,
+            }}
+          >
+            <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em' }}>
+              Линомикс
+              {weekAdditiveForecast?.linomix?.shortage ? (
+                <span style={{ marginLeft: 6, fontSize: 11, color: '#F87171', fontWeight: 700 }}>
+                  нехватка
+                </span>
+              ) : null}
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#64748B', flexShrink: 0 }}>
+              подробнее
+            </div>
           </div>
           <div style={{ fontSize: '22px', fontWeight: 700, color: '#A78BFA', lineHeight: 1.1, marginBottom: '8px', whiteSpace: 'nowrap' }}>
             {fmtKg(additiveFactByType.linomix)}
@@ -2128,8 +2244,52 @@ ${order.customer_type?.includes('Юридическое')
               transition: 'width 0.4s ease',
             }} />
           </div>
-          <div style={{ fontSize: '13px', color: '#CBD5E1', fontWeight: 600, whiteSpace: 'nowrap' }}>
-            склад {warehouseAdditives ? `${Math.round(warehouseAdditives.linomix)} л` : '—'}
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              alignItems: 'center',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            <span style={{ color: '#94A3B8' }}>от разгруженного</span>
+            {warehouseAdditives ? (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '2px 8px',
+                  borderRadius: 9999,
+                  background: 'rgba(167,139,250,0.15)',
+                  border: '1px solid rgba(167,139,250,0.35)',
+                  color: '#DDD6FE',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                склад {Math.round(warehouseAdditives.linomix)} л
+              </span>
+            ) : null}
+            {weekAdditiveForecast?.linomix?.shortage
+            && weekAdditiveForecast.linomix.bringLiters != null ? (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '2px 8px',
+                  borderRadius: 9999,
+                  background: 'rgba(239,68,68,0.15)',
+                  border: '1px solid rgba(248,113,113,0.4)',
+                  color: '#FCA5A5',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                +{weekAdditiveForecast.linomix.bringLiters} л на неделю
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -2533,33 +2693,6 @@ ${order.customer_type?.includes('Юридическое')
     {/* Отступ вправо */}
     <div style={{ flex: 1 }} />
 
-    {/* Пилюля нехватки добавок */}
-    {weekAdditiveForecast?.hasAlert && (
-      <button
-        onClick={() => setShowAdditivePopup(true)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: '5px',
-          padding: '8px 14px',
-          background: 'rgba(239,68,68,0.10)',
-          border: '1.5px solid rgba(239,68,68,0.40)',
-          borderRadius: '9999px',
-          color: '#FCA5A5',
-          fontSize: '13px',
-          fontWeight: 600,
-          cursor: 'pointer',
-          transition: 'filter 0.15s',
-          whiteSpace: 'nowrap',
-          flexShrink: 0,
-        }}
-        onMouseEnter={e => (e.currentTarget.style.filter = 'brightness(1.2)')}
-        onMouseLeave={e => (e.currentTarget.style.filter = '')}
-        title="Нехватка добавок — нажмите для деталей"
-      >
-        <AlertTriangle size={13} color="#EF4444" />
-        Не хватает добавок
-      </button>
-    )}
-
     {/* Кнопка Новая заявка */}
     <button
       onClick={() => setShowNewOrderModal(true)}
@@ -2713,17 +2846,37 @@ ${order.customer_type?.includes('Юридическое')
       {/* МОДАЛЬНОЕ ОКНО ЗАКАЗА — БЕЗ IFRAME */}
 {selectedOrder && (
   <div 
-    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.82)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+    style={{
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,0.82)',
+      zIndex: 9999,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      overflow: 'auto',
+      padding: '12px',
+      boxSizing: 'border-box',
+    }}
     onClick={() => setSelectedOrder(null)}
   >
     <div 
-      className="w-full max-w-[1650px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
+      className="w-full max-w-[1650px] scroll-hidden"
       style={volumeModalStyle({ 
         position: 'relative',
         borderRadius: 24, 
+        // На обычных экранах — почти на всё окно; на 4K потолок 1100px,
+        // чтобы модалка не растягивалась на всю высоту монитора.
+        height: 'min(calc(100dvh - 24px), 1100px)',
+        maxHeight: 'min(calc(100dvh - 24px), 1100px)',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+        margin: 'auto',
         // Небольшой доп. отступ сверху — заголовок теперь встроен в шапки
         // колонок, а не в отдельную строку (см. комментарий в OrderDetailModal.tsx).
-        padding: '38px 32px 32px 32px', 
+        padding: '28px 32px 20px 32px', 
       })} 
       onClick={e => e.stopPropagation()}
     >
@@ -2749,7 +2902,14 @@ ${order.customer_type?.includes('Юридическое')
       </button>
 
       {/* ==================== ТЕЛО МОДАЛКИ: КАРТА СЛЕВА (НА ВСЮ ВЫСОТУ) + ОСТАЛЬНОЙ КОНТЕНТ ==================== */}
-      <div style={{ display: 'flex', gap: '28px', alignItems: 'stretch' }}>
+      <div style={{
+        display: 'flex',
+        gap: '28px',
+        alignItems: 'stretch',
+        flex: 1,
+        minHeight: 0,
+        overflow: 'hidden',
+      }}>
 
         <div style={{ width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <div style={{ flex: 1, minHeight: 0 }}>
@@ -2798,13 +2958,18 @@ ${order.customer_type?.includes('Юридическое')
           </div>
         </div>
 
-      <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: '40px',
+        flex: 1,
+        minHeight: 0,
+        alignItems: 'stretch',
+      }}>
         
-        {/* Левая колонка — Информация (с возможностью редактирования, ПОЛНОСТЬЮ без обрезки/скролла).
-            display:flex + height:100% — колонка растягивается по высоте сетки на уровень
-            правой колонки (грид уже это делает по умолчанию), а Комментарий клиента
-            (flex:1) дотягивается вниз до её нижнего края, на уровень с "Историей изменений". */}
+        {/* Левая колонка — карточка клиента + комментарий в одном блоке.
+            Колонка тянется по высоте правой; комментарий (flex:1) заполняет низ карточки. */}
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           {/* ==================== ЗАГОЛОВОК ЗАЯВКИ + СТАТУС + "ПОД ВОПРОСОМ" (на месте бывшей "Информация о заказе") ==================== */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', flexWrap: 'wrap' }}>
@@ -2901,8 +3066,22 @@ ${order.customer_type?.includes('Юридическое')
             )}
           </div>
           
-          <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '14px 18px', lineHeight: '1.3' })}>
-            <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: '7px', alignItems: 'center' }}>
+          <div style={volumeCardSoftStyle({
+            borderRadius: 16,
+            padding: '14px 18px',
+            lineHeight: '1.3',
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
+          })}>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '140px 1fr',
+              gap: '7px',
+              alignItems: 'center',
+              flexShrink: 0,
+            }}>
 
               <div style={{ color: '#94A3B8' }}>Клиент</div>
               {/* ── Поиск клиента ── */}
@@ -3106,39 +3285,63 @@ ${order.customer_type?.includes('Юридическое')
               />
 
             </div>
-          </div>
 
-          {/* Комментарий — редактируемое поле. flex:1 растягивает его вниз до нижнего
-              края правой колонки (на уровень с "Историей изменений"); скроллбар
-              textarea скрыт, вместо него — мерцающая стрелка, если текст не влезает. */}
-          {selectedOrder.comment && (
-            <div style={{ marginTop: '10px', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-              <h4 style={{ color: '#94A3B8', marginBottom: '6px', flexShrink: 0 }}>Комментарий клиента</h4>
+            {/* Комментарий клиента — в той же карточке, с разделителем */}
+            <div
+              style={{
+                marginTop: 12,
+                paddingTop: 12,
+                borderTop: '1px solid rgba(71,85,105,0.55)',
+                flex: 1,
+                minHeight: 0,
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              <div
+                style={{
+                  color: '#94A3B8',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                  marginBottom: 6,
+                  flexShrink: 0,
+                }}
+              >
+                Комментарий клиента
+              </div>
               <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-                <textarea 
+                <textarea
                   ref={commentRef}
                   onScroll={handleCommentScroll}
-                  value={selectedOrder.comment} 
+                  value={selectedOrder.comment || ''}
                   onChange={(e) => setSelectedOrder({ ...selectedOrder, comment: e.target.value })}
-                  style={volumeCardSoftStyle({
+                  placeholder="Комментарий к заявке…"
+                  style={{
                     width: '100%',
                     height: '100%',
                     boxSizing: 'border-box',
                     resize: 'none',
-                    borderRadius: 16,
-                    padding: '12px 16px',
-                    color: '#fff',
-                    minHeight: '72px',
-                  })}
+                    borderRadius: 10,
+                    padding: '10px 12px',
+                    color: '#E2E8F0',
+                    fontSize: '14px',
+                    lineHeight: '1.5',
+                    minHeight: 'clamp(140px, 22dvh, 288px)',
+                    background: 'rgba(15,23,42,0.45)',
+                    border: '1px solid rgba(71,85,105,0.55)',
+                    outline: 'none',
+                  }}
                 />
                 <ScrollMoreHint visible={commentHasMore} />
               </div>
             </div>
-          )}
+          </div>
         </div>          
               
                             {/* Правая колонка — вкладки Логистика / Комментарии + История */}
-              <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 14 }}>
                   <button
                     type="button"
@@ -3157,19 +3360,27 @@ ${order.customer_type?.includes('Юридическое')
                   </button>
                 </div>
 
-                {/* Обе панели в одной ячейке — без скачка высоты */}
-                <div style={{ display: 'grid', marginBottom: 16 }}>
+                {/* Логистика заполняет пространство до истории; история снизу */}
+                <div style={{
+                  display: 'grid',
+                  flex: 1,
+                  minHeight: 0,
+                  marginBottom: 12,
+                }}>
                   <div style={{
                     gridArea: '1 / 1',
                     visibility: orderModalRightTab === 'comments' ? 'visible' : 'hidden',
                     pointerEvents: orderModalRightTab === 'comments' ? 'auto' : 'none',
+                    minHeight: 0,
+                    height: '100%',
+                    overflow: 'hidden',
                   }}>
                     <OrderCommentsPanel
                       orderId={Number(selectedOrder.id)}
                       userName={userFullName || 'Сотрудник'}
                       userRole={currentRole || 'admin'}
                       active={orderModalRightTab === 'comments'}
-                      listMaxHeight="clamp(160px, calc(160px + (100vh - 1080px) * 0.3), 420px)"
+                      listMaxHeight="100%"
                       onUnreadChange={(n) => setOrderUnread(selectedOrder.id, n)}
                     />
                   </div>
@@ -3177,9 +3388,13 @@ ${order.customer_type?.includes('Юридическое')
                     gridArea: '1 / 1',
                     visibility: orderModalRightTab === 'logistics' ? 'visible' : 'hidden',
                     pointerEvents: orderModalRightTab === 'logistics' ? 'auto' : 'none',
+                    minHeight: 0,
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
                   }}>
                 {/* ==================== НАЗНАЧЕННЫЕ МИКСЕРЫ + ПРОСТОЙ ==================== */}
-                {orderMixers.length > 0 ? (() => {
+                {(() => {
                   const totalDowntime = orderMixers.reduce((sum, m) => sum + Number(m.downtimeMinutes || 0), 0);
                   const formatOnSiteDuration = (m: any): string | null => {
                     if (!m.onSiteAt) return null;
@@ -3189,34 +3404,57 @@ ${order.customer_type?.includes('Юридическое')
                   };
 
                   return (
-                    <div style={{ marginBottom: '20px' }}>
-                      <h3 style={{ marginBottom: '10px', color: '#94A3B8' }}>
-                        Назначенные миксеры ({orderMixers.length})
-                      </h3>
+                    <div style={volumeCardSoftStyle({
+                      borderRadius: 16,
+                      padding: '14px',
+                      flex: 1,
+                      minHeight: 0,
+                      height: '100%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      boxSizing: 'border-box',
+                    })}>
+                      {/* Шапка внутри блока */}
+                      <div style={{
+                        marginBottom: '12px',
+                        paddingBottom: '12px',
+                        borderBottom: CARD_BORDER,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '12px',
+                        flexShrink: 0,
+                      }}>
+                        <span style={{ color: '#E2E8F0', fontSize: '15px', fontWeight: 600 }}>
+                          Назначенные миксеры ({orderMixers.length})
+                        </span>
+                        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 8, whiteSpace: 'nowrap' }}>
+                          <span style={{ color: '#94A3B8', fontSize: '13.5px' }}>Общий простой</span>
+                          <span style={{
+                            color: totalDowntime > 0 ? '#F97316' : '#10B981',
+                            fontWeight: 700,
+                            fontSize: '16px',
+                          }}>
+                            {totalDowntime} мин
+                          </span>
+                        </span>
+                      </div>
 
-                      <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '14px' })}>
-                        <div style={{
-                          marginBottom: '12px',
-                          paddingBottom: '12px',
-                          borderBottom: CARD_BORDER,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '8px'
-                        }}>
-                          <span style={{ color: '#94A3B8', fontSize: '13.5px' }}>Общий простой по заявке:</span>
-                          <span style={{ color: totalDowntime > 0 ? '#F97316' : '#10B981', fontWeight: '700', fontSize: '16px' }}>{totalDowntime} мин</span>
-                        </div>
-
-                        {/* Список миксеров — своя внутренняя прокрутка. Скроллбар скрыт,
-                            вместо него — мерцающая стрелка вниз, пока список не докручен. */}
-                        <div style={{ position: 'relative' }}>
+                      {/* Список — на всю оставшуюся высоту до истории, даже если рейсов мало */}
+                      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
                         <div
                           ref={mixerListRef}
                           onScroll={handleMixerListScroll}
-                          style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '8px',
+                            height: '100%',
+                            overflowY: 'auto',
+                            boxSizing: 'border-box',
+                          }}
                         >
-                          {orderMixers.map((mixer: any) => {
+                          {orderMixers.length > 0 ? orderMixers.map((mixer: any) => {
                             const duration = formatOnSiteDuration(mixer);
                             return (
                               <div
@@ -3229,6 +3467,7 @@ ${order.customer_type?.includes('Юридическое')
                                   padding: '7px 12px',
                                   whiteSpace: 'nowrap',
                                   overflow: 'hidden',
+                                  flexShrink: 0,
                                 })}
                               >
                                 <span style={{ fontWeight: '700', fontSize: '13.5px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -3275,35 +3514,51 @@ ${order.customer_type?.includes('Юридическое')
                                 </span>
                               </div>
                             );
-                          })}
+                          }) : (
+                            <div style={{
+                              color: '#64748B',
+                              fontSize: 13,
+                              padding: '24px 8px',
+                              textAlign: 'center',
+                              fontStyle: 'italic',
+                            }}>
+                              Пока нет назначенных миксеров
+                            </div>
+                          )}
                         </div>
                         <ScrollMoreHint visible={mixerListHasMore} />
-                        </div>
                       </div>
                     </div>
                   );
-                })() : (
-                  <div style={{ color: '#64748B', fontSize: 13, padding: '12px 0' }}>
-                    Пока нет назначенных миксеров
-                  </div>
-                )}
+                })()}
                   </div>
                 </div>
 
                                                {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ ==================== */}
-<div>
-  <h3 style={{ marginBottom: '12px', color: '#94A3B8' }}>История изменений</h3>
-  <div style={{ position: 'relative' }}>
+{/* Высота как у блока «Комментарий клиента»; marginTop:auto — низы совпадают ⇒ верхи вровень */}
+<div style={{
+  marginTop: 'auto',
+  flex: '0 0 auto',
+  // ≈ подпись + clamp(140px, 22dvh, 288px) у textarea комментария
+  height: 'clamp(300px, calc(33dvh + 84px), 510px)',
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+}}>
+  <h3 style={{ marginBottom: '10px', color: '#94A3B8', flexShrink: 0 }}>История изменений</h3>
+  <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
   <div
     ref={historyRef}
     onScroll={handleHistoryScroll}
     style={volumeCardSoftStyle({
     borderRadius: 16,
     padding: '16px',
-    maxHeight: '260px',
+    height: '100%',
+    maxHeight: 'none',
     overflowY: 'auto',
     fontSize: '14px',
     lineHeight: '1.6',
+    boxSizing: 'border-box',
   })}>
     <OrderHistoryTimeline entries={orderHistory} />
   </div>
@@ -3320,7 +3575,14 @@ ${order.customer_type?.includes('Юридическое')
       {/* /ТЕЛО МОДАЛКИ: карта + остальной контент */}
 
         {/* ==================== КНОПКИ ДЕЙСТВИЙ — компактные, элегантные, без "таблеточного" фона ==================== */}
-    <div style={{ marginTop: '32px', display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+    <div style={{
+      marginTop: '16px',
+      display: 'flex',
+      gap: '10px',
+      justifyContent: 'center',
+      flexWrap: 'wrap',
+      flexShrink: 0,
+    }}>
 
       { hasManagerPermissions(currentRole) && (
         <>
@@ -3446,155 +3708,12 @@ ${order.customer_type?.includes('Юридическое')
         dateKey={selectedDateStr}
       />
 
-      {/* ==================== ПОПАП: ПРОГНОЗ ДОБАВОК ==================== */}
-      {showAdditivePopup && weekAdditiveForecast && (
-        <div
-          onClick={() => setShowAdditivePopup(false)}
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-            zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: '24px',
-          }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            className="scroll-hidden"
-            style={volumeModalStyle({
-              borderRadius: 20, padding: '28px',
-              width: '100%', maxWidth: '560px', maxHeight: '80vh',
-              overflowY: 'auto',
-              border: weekAdditiveForecast.hasAlert ? '1.5px solid rgba(239,68,68,0.4)' : '1.5px solid rgba(16,185,129,0.3)',
-            })}
-          >
-            {/* Заголовок */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                  {weekAdditiveForecast.hasAlert
-                    ? <AlertTriangle size={18} color="#EF4444" />
-                    : <CheckCircle2 size={18} color="#10B981" />}
-                  <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 700 }}>
-                    Прогноз добавок — 7 дней
-                  </h2>
-                </div>
-                <div style={{ color: '#64748B', fontSize: '13px' }}>
-                  {(() => {
-                    const fmt = (ds: string) => {
-                      const [y, m, d] = ds.split('-');
-                      return `${d}.${m}.${y}`;
-                    };
-                    return `${fmt(weekAdditiveForecast.dateFrom)} — ${fmt(weekAdditiveForecast.dateTo)}`;
-                  })()}
-                  {' · '}
-                  {pluralWord(weekAdditiveForecast.totalOrders, 'заявка', 'заявки', 'заявок')}, {weekAdditiveForecast.totalVolume} м³
-                </div>
-              </div>
-              <button
-                onClick={() => setShowAdditivePopup(false)}
-                style={modalCloseButtonStyle({ color: '#64748B' })}
-              >✕</button>
-            </div>
-
-            {/* Блоки по каждой добавке */}
-            {([
-              { key: 'pfm' as const, id: 1 as const, name: ADDITIVE_NAMES[1] },
-              { key: 'linomix' as const, id: 2 as const, name: ADDITIVE_NAMES[2] },
-            ] as const).map(({ key, id, name }) => {
-              const item = weekAdditiveForecast[key];
-              if (item.needed === 0) return null;
-              const pct = item.stock !== null && item.needed > 0
-                ? Math.min(100, Math.round((item.stock / item.needed) * 100))
-                : null;
-              const orders = weekAdditiveForecast.details.filter(d => d.additiveId === id);
-              return (
-                <div key={key} style={volumeCardSoftStyle({
-                  borderRadius: 14, padding: '16px', marginBottom: '14px',
-                  border: item.shortage ? '1px solid rgba(239,68,68,0.3)' : CARD_BORDER,
-                })}>
-                  {/* Шапка добавки */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                    <span style={{ fontWeight: 700, fontSize: '15px' }}>{name}</span>
-                    {item.shortage && item.stock !== null && (
-                      <span style={{ background: '#EF444425', color: '#F87171', fontSize: '12px', fontWeight: 700, borderRadius: '8px', padding: '3px 10px' }}>
-                        Нехватка {item.needed - Math.round(item.stock)} л
-                      </span>
-                    )}
-                    {!item.shortage && (
-                      <span style={{ background: '#10B98120', color: '#34D399', fontSize: '12px', fontWeight: 700, borderRadius: '8px', padding: '3px 10px' }}>
-                        Достаточно
-                      </span>
-                    )}
-                  </div>
-                  {/* Цифры */}
-                  <div style={{ display: 'flex', gap: '24px', marginBottom: '10px' }}>
-                    <div>
-                      <div style={{ color: '#64748B', fontSize: '12px', marginBottom: '2px' }}>На складе</div>
-                      <div style={{ fontSize: '22px', fontWeight: 700, color: item.shortage ? '#EF4444' : '#10B981' }}>
-                        {item.stock !== null ? `${Math.round(item.stock)} л` : '—'}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ color: '#64748B', fontSize: '12px', marginBottom: '2px' }}>Нужно</div>
-                      <div style={{ fontSize: '22px', fontWeight: 700, color: '#CBD5E1' }}>{item.needed} л</div>
-                    </div>
-                    {item.stock !== null && (
-                      <div>
-                        <div style={{ color: '#64748B', fontSize: '12px', marginBottom: '2px' }}>Обеспечение</div>
-                        <div style={{ fontSize: '22px', fontWeight: 700, color: item.shortage ? '#FACC15' : '#10B981' }}>{pct}%</div>
-                      </div>
-                    )}
-                  </div>
-                  {/* Прогресс */}
-                  {pct !== null && (
-                    <div style={{ height: '6px', background: '#334155', borderRadius: '9999px', overflow: 'hidden', marginBottom: '14px' }}>
-                      <div style={{ height: '100%', width: `${pct}%`, background: item.shortage ? 'linear-gradient(90deg,#EF4444,#F97316)' : '#10B981', borderRadius: '9999px', transition: 'width 0.4s ease' }} />
-                    </div>
-                  )}
-                  {/* Таблица заявок */}
-                  {orders.length > 0 && (
-                    <>
-                      <div style={{ color: '#475569', fontSize: '12px', fontWeight: 600, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                        Заявки ({orders.length})
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '48px 1fr 60px 60px 60px', gap: '4px 8px', color: '#64748B', fontSize: '11px', marginBottom: '4px' }}>
-                        <div>№</div><div>Марка</div><div style={{ textAlign: 'right' }}>Объём</div><div style={{ textAlign: 'right' }}>кг</div><div style={{ textAlign: 'right' }}>л</div>
-                      </div>
-                      {orders.sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate)).map((o, i) => (
-                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '48px 1fr 60px 60px 60px', gap: '4px 8px', padding: '5px 0', borderTop: '1px solid #334155', fontSize: '13px', alignItems: 'center' }}>
-                          <div style={{ color: '#60A5FA', fontWeight: 600 }}>#{o.id}</div>
-                          <div style={{ color: '#CBD5E1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {o.grade} <span style={{ color: '#475569', fontSize: '11px' }}>{o.deliveryDate.slice(5).replace('-', '.')}</span>
-                          </div>
-                          <div style={{ textAlign: 'right', color: '#CBD5E1' }}>{o.volume} м³</div>
-                          <div style={{ textAlign: 'right', color: '#94A3B8' }}>{o.kg} кг</div>
-                          <div style={{ textAlign: 'right', color: '#94A3B8' }}>{o.liters} л</div>
-                        </div>
-                      ))}
-                    </>
-                  )}
-                </div>
-              );
-            })}
-
-            {/* Кнопка закрытия */}
-            <button
-              onClick={() => setShowAdditivePopup(false)}
-              style={volumeCardSoftStyle({
-                width: '100%',
-                padding: '12px',
-                borderRadius: 12,
-                color: '#94A3B8',
-                cursor: 'pointer',
-                fontWeight: 600,
-                fontSize: '14px',
-                marginTop: '4px',
-              })}
-            >
-              Закрыть
-            </button>
-          </div>
-        </div>
-      )}
+      <AdditiveKpiModal
+        open={showAdditiveModal}
+        onClose={() => setShowAdditiveModal(false)}
+        dateKey={selectedDateStr}
+        additiveId={additiveModalId}
+      />
 
     </div>
     </div>

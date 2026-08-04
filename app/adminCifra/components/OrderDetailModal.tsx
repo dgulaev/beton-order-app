@@ -456,12 +456,15 @@ const formatVolume = (value: number | string) => {
       zIndex: 10000, 
       display: 'flex', 
       alignItems: 'center', 
-      justifyContent: 'center' 
+      justifyContent: 'center',
+      overflow: 'auto',
+      padding: '32px 12px',
+      boxSizing: 'border-box',
     }} 
     onClick={onClose}
   >
     <div 
-    className="w-full max-w-[1650px] max-h-[90vh] overflow-auto mx-auto my-10 scroll-hidden"
+    className="max-h-[90vh] overflow-y-auto scroll-hidden"
   style={volumeModalStyle({
     borderRadius: 24,
     // Небольшой доп. отступ сверху относительно боковых/нижнего —
@@ -469,16 +472,43 @@ const formatVolume = (value: number | string) => {
     // заголовком заявки, теперь заголовок переехал в шапки колонок,
     // поэтому добавляем чуть больше паддинга сверху, чтобы не смотрелось,
     // будто контент прилипает к скруглённому верхнему краю модалки.
-    padding: '38px 32px 32px 32px',
+    // Справа 28px — как gap между картой и колонкой клиента.
+    // Ширина строго по блокам (340+28+1320 + паддинги); блоки не сжимаем.
+    padding: '38px 28px 32px 32px',
     border: CARD_BORDER,
+    width: 1750,
+    minWidth: 1750,
+    maxWidth: 'none',
+    boxSizing: 'border-box',
+    overflowX: 'visible',
+    // margin:auto — центр по вертикали/горизонтали; при переполнении верх не клипается
+    margin: 'auto',
   })}
         onClick={e => e.stopPropagation()}
       >
         {/* ==================== ТЕЛО МОДАЛКИ: КАРТА СЛЕВА (НА ВСЮ ВЫСОТУ) + ОСТАЛЬНОЙ КОНТЕНТ ==================== */}
-        <div style={{ display: 'flex', gap: '28px', alignItems: 'stretch' }}>
+        <div
+          style={{
+            display: 'flex',
+            gap: '28px',
+            alignItems: 'stretch',
+            width: 'max-content',
+            boxSizing: 'border-box',
+          }}
+        >
 
-        <div style={{ width: '340px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <div style={{ flex: 1, minHeight: 0 }}>
+        {/* overflow/minWidth: карта не раздувает fit-content модалки (leaflet/svg) */}
+        <div style={{
+          width: '340px',
+          minWidth: '340px',
+          maxWidth: '340px',
+          flexShrink: 0,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+        }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
             <OrderRouteMap address={order.address} routeHref={yandexRouteHref} />
           </div>
           {/* Google Карты — запасной вариант, если геокодирование адреса не сработало.
@@ -506,195 +536,339 @@ const formatVolume = (value: number | string) => {
           </a>
         </div>
 
-        <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Ровно ширина двух колонок (500+40+780); без раздувания внешней модалки */}
+        <div style={{
+          flex: '0 0 auto',
+          width: 1320,
+          boxSizing: 'border-box',
+        }}>
 
-        {/* ==================== GRID 1fr 1fr ==================== */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
+        {/* Клиент и логистика — колонки тянутся по высоте (на 4K клиент = логистика) */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '515px 780px',
+            gap: '25px',
+            width: 1320,
+            justifyContent: 'start',
+            alignItems: 'stretch',
+            boxSizing: 'border-box',
+          }}
+        >
           
           {/* ==================== ЛЕВАЯ КОЛОНКА — ИНФОРМАЦИЯ ==================== */}
-          <div>
-            {/* ==================== ЗАГОЛОВОК ЗАЯВКИ + СТАТУС-ПИЛЮЛЯ (на месте бывшей "Информация о заказе") ==================== */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '18px', flexWrap: 'wrap' }}>
-              <h2 style={{ margin: 0, fontSize: '22px', color: '#F1F5F9', whiteSpace: 'nowrap' }}>
+          <div style={{
+            minWidth: 0,
+            maxWidth: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
+            height: '100%',
+          }}>
+            {/* Номер + статус + «Под вопросом» — всегда одна строка (колонка не уже этого) */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                marginBottom: 18,
+                minHeight: 36,
+                minWidth: 0,
+                flexWrap: 'nowrap',
+                flexShrink: 0,
+              }}
+            >
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: '22px',
+                  color: '#F1F5F9',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                }}
+              >
                 Заявка #{order.id}
               </h2>
 
-              {/* ==================== СТАТУС ЗАКАЗА (компактная пилюля) ==================== */}
-              {getStatusConfig(localOrder.status).final ? (
-                // Финальные статусы менять нельзя — просто цветная пилюля
-                <div style={{
-                  backgroundColor: getStatusConfig(localOrder.status).bg,
-                  color: getStatusConfig(localOrder.status).color,
-                  border: `1px solid ${getStatusConfig(localOrder.status).color}40`,
-                  padding: '7px 16px',
-                  borderRadius: '9999px',
-                  fontWeight: '600',
-                  fontSize: '13px',
-                  letterSpacing: '0.2px',
-                  whiteSpace: 'nowrap'
-                }}>
-                  {getStatusConfig(localOrder.status).label}
-                </div>
-              ) : (
-                // Можно менять — сама пилюля и есть select (клик открывает меню статусов).
-                // Обёртка нужна, чтобы поверх нативного select нарисовать свой шеврон —
-                // у select убран стандартный вид (appearance: none), иначе на разных ОС/
-                // браузерах он выглядит по-разному и не вписывается в дизайн пилюли.
-                <ModalSelect
-                  value={localOrder.status || 'new'}
-                  title="Сменить статус заявки"
-                  chevronColor={getStatusConfig(localOrder.status).color}
-                  triggerStyle={{
-                    background: getStatusConfig(localOrder.status).bg,
-                    color: getStatusConfig(localOrder.status).color,
-                    border: `1px solid ${getStatusConfig(localOrder.status).color}40`,
-                    borderRadius: '9999px',
-                    padding: '7px 14px 7px 16px',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    letterSpacing: '0.2px',
-                  }}
-                  options={[
-                    { value: 'new', label: 'Новая', text: 'Новая' },
-                    { value: 'processing', label: 'В работе', text: 'В работе' },
-                    { value: 'completed', label: 'Выполнена', text: 'Выполнена' },
-                    { value: 'cancelled', label: 'Отменена', text: 'Отменена' },
-                  ]}
-                  onChange={async (newStatus) => {
-                    if (newStatus === localOrder.status) return;
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  flexWrap: 'nowrap',
+                  flexShrink: 0,
+                }}
+              >
+                {getStatusConfig(localOrder.status).final ? (
+                  <div
+                    style={{
+                      backgroundColor: getStatusConfig(localOrder.status).bg,
+                      color: getStatusConfig(localOrder.status).color,
+                      border: `1px solid ${getStatusConfig(localOrder.status).color}40`,
+                      padding: '7px 16px',
+                      borderRadius: '9999px',
+                      fontWeight: '600',
+                      fontSize: '13px',
+                      letterSpacing: '0.2px',
+                      whiteSpace: 'nowrap',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {getStatusConfig(localOrder.status).label}
+                  </div>
+                ) : (
+                  <ModalSelect
+                    value={localOrder.status || 'new'}
+                    title="Сменить статус заявки"
+                    chevronColor={getStatusConfig(localOrder.status).color}
+                    triggerStyle={{
+                      background: getStatusConfig(localOrder.status).bg,
+                      color: getStatusConfig(localOrder.status).color,
+                      border: `1px solid ${getStatusConfig(localOrder.status).color}40`,
+                      borderRadius: '9999px',
+                      padding: '7px 14px 7px 16px',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      letterSpacing: '0.2px',
+                      flexShrink: 0,
+                    }}
+                    options={[
+                      { value: 'new', label: 'Новая', text: 'Новая' },
+                      { value: 'processing', label: 'В работе', text: 'В работе' },
+                      { value: 'completed', label: 'Выполнена', text: 'Выполнена' },
+                      { value: 'cancelled', label: 'Отменена', text: 'Отменена' },
+                    ]}
+                    onChange={async (newStatus) => {
+                      if (newStatus === localOrder.status) return;
 
-                    const oldStatus = localOrder.status;
-                    const oldQuestionable = !!(localOrder as any).is_questionable;
-                    const clearQuestionable = newStatus === 'processing' && oldStatus !== 'processing';
+                      const oldStatus = localOrder.status;
+                      const oldQuestionable = !!(localOrder as any).is_questionable;
+                      const clearQuestionable =
+                        newStatus === 'processing' && oldStatus !== 'processing';
 
-                    setLocalOrder(prev => ({
-                      ...prev,
-                      status: newStatus,
-                      ...(clearQuestionable ? { is_questionable: false } : {}),
-                    } as any));
-                    setAllOrders(prev => prev.map(o =>
-                      o.id === order.id
-                        ? ({ ...o, status: newStatus, ...(clearQuestionable ? { is_questionable: false } : {}) } as any)
-                        : o
-                    ));
+                      setLocalOrder(
+                        (prev) =>
+                          ({
+                            ...prev,
+                            status: newStatus,
+                            ...(clearQuestionable ? { is_questionable: false } : {}),
+                          }) as any,
+                      );
+                      setAllOrders((prev) =>
+                        prev.map((o) =>
+                          o.id === order.id
+                            ? ({
+                                ...o,
+                                status: newStatus,
+                                ...(clearQuestionable ? { is_questionable: false } : {}),
+                              } as any)
+                            : o,
+                        ),
+                      );
 
-                    try {
-                      const res = await fetch('/api/adminCifra/orders/update', {
-                        method: 'PUT',
-                        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
-                        body: JSON.stringify({
-                          id: order.id,
-                          status: newStatus,
-                          userName: getCurrentUserName(),
-                          userRole: getCurrentRole()
-                        })
-                      });
+                      try {
+                        const res = await fetch('/api/adminCifra/orders/update', {
+                          method: 'PUT',
+                          headers: adminCifraAuthHeaders({
+                            'Content-Type': 'application/json',
+                          }),
+                          body: JSON.stringify({
+                            id: order.id,
+                            status: newStatus,
+                            userName: getCurrentUserName(),
+                            userRole: getCurrentRole(),
+                          }),
+                        });
 
-                      const data = await res.json();
+                        const data = await res.json();
 
-                      if (data.success) {
-                        if (typeof setHistory === 'function') {
-                          const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
+                        if (data.success) {
+                          if (typeof setHistory === 'function') {
+                            const histRes = await fetch(
+                              `/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`,
+                            );
+                            if (histRes.ok) setHistory(await histRes.json());
+                          }
+                        } else {
+                          setLocalOrder(
+                            (prev) =>
+                              ({
+                                ...prev,
+                                status: oldStatus,
+                                is_questionable: oldQuestionable,
+                              }) as any,
+                          );
+                          setAllOrders((prev) =>
+                            prev.map((o) =>
+                              o.id === order.id
+                                ? ({
+                                    ...o,
+                                    status: oldStatus,
+                                    is_questionable: oldQuestionable,
+                                  } as any)
+                                : o,
+                            ),
+                          );
+                          alert('Ошибка сохранения: ' + (data.message || ''));
+                        }
+                      } catch (err) {
+                        console.error(err);
+                        setLocalOrder(
+                          (prev) =>
+                            ({
+                              ...prev,
+                              status: oldStatus,
+                              is_questionable: oldQuestionable,
+                            }) as any,
+                        );
+                        setAllOrders((prev) =>
+                          prev.map((o) =>
+                            o.id === order.id
+                              ? ({
+                                  ...o,
+                                  status: oldStatus,
+                                  is_questionable: oldQuestionable,
+                                } as any)
+                              : o,
+                          ),
+                        );
+                        alert('Не удалось связаться с сервером');
+                      }
+                    }}
+                  />
+                )}
+
+                {['admin', 'manager', 'dispatcher', 'logist'].includes(
+                  getCurrentRole(),
+                ) && (
+                  <QuestionableToggle
+                    checked={!!(localOrder as any).is_questionable}
+                    saving={questionableSaving}
+                    onChange={async (newValue) => {
+                      if (questionableSavingRef.current) return;
+                      questionableSavingRef.current = true;
+                      setQuestionableSaving(true);
+
+                      const prevValue = !!(localOrder as any).is_questionable;
+
+                      setLocalOrder(
+                        (prev) => ({ ...prev, is_questionable: newValue }) as any,
+                      );
+                      setAllOrders((prev) =>
+                        prev.map((o) =>
+                          o.id === order.id
+                            ? ({ ...o, is_questionable: newValue } as any)
+                            : o,
+                        ),
+                      );
+                      if (typeof setSelectedOrder === 'function') {
+                        setSelectedOrder((prev) =>
+                          prev
+                            ? ({ ...prev, is_questionable: newValue } as any)
+                            : prev,
+                        );
+                      }
+
+                      try {
+                        const res = await fetch('/api/adminCifra/orders/update', {
+                          method: 'PUT',
+                          headers: adminCifraAuthHeaders({
+                            'Content-Type': 'application/json',
+                          }),
+                          body: JSON.stringify({
+                            id: order.id,
+                            is_questionable: newValue,
+                            userName: getCurrentUserName(),
+                            userRole: getCurrentRole(),
+                          }),
+                        });
+                        if (!res.ok) {
+                          setLocalOrder(
+                            (prev) =>
+                              ({ ...prev, is_questionable: prevValue }) as any,
+                          );
+                          setAllOrders((prev) =>
+                            prev.map((o) =>
+                              o.id === order.id
+                                ? ({ ...o, is_questionable: prevValue } as any)
+                                : o,
+                            ),
+                          );
+                        } else if (typeof setHistory === 'function') {
+                          const histRes = await fetch(
+                            `/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`,
+                          );
                           if (histRes.ok) setHistory(await histRes.json());
                         }
-                      } else {
-                        setLocalOrder(prev => ({
-                          ...prev,
-                          status: oldStatus,
-                          is_questionable: oldQuestionable,
-                        } as any));
-                        setAllOrders(prev => prev.map(o =>
-                          o.id === order.id
-                            ? ({ ...o, status: oldStatus, is_questionable: oldQuestionable } as any)
-                            : o
-                        ));
-                        alert('Ошибка сохранения: ' + (data.message || ''));
+                      } catch {
+                        setLocalOrder(
+                          (prev) =>
+                            ({ ...prev, is_questionable: prevValue }) as any,
+                        );
+                        setAllOrders((prev) =>
+                          prev.map((o) =>
+                            o.id === order.id
+                              ? ({ ...o, is_questionable: prevValue } as any)
+                              : o,
+                          ),
+                        );
+                      } finally {
+                        questionableSavingRef.current = false;
+                        setQuestionableSaving(false);
                       }
-                    } catch (err) {
-                      console.error(err);
-                      setLocalOrder(prev => ({
-                        ...prev,
-                        status: oldStatus,
-                        is_questionable: oldQuestionable,
-                      } as any));
-                      setAllOrders(prev => prev.map(o =>
-                        o.id === order.id
-                          ? ({ ...o, status: oldStatus, is_questionable: oldQuestionable } as any)
-                          : o
-                      ));
-                      alert('Не удалось связаться с сервером');
-                    }
-                  }}
-                />
-              )}
-
-              {/* Метка «Под вопросом» — заметный switch; CAS на сервере + lock здесь */}
-              {['admin', 'manager', 'dispatcher', 'logist'].includes(getCurrentRole()) && (
-                <QuestionableToggle
-                  checked={!!(localOrder as any).is_questionable}
-                  saving={questionableSaving}
-                  onChange={async (newValue) => {
-                    if (questionableSavingRef.current) return;
-                    questionableSavingRef.current = true;
-                    setQuestionableSaving(true);
-
-                    const prevValue = !!(localOrder as any).is_questionable;
-
-                    setLocalOrder(prev => ({ ...prev, is_questionable: newValue } as any));
-                    setAllOrders(prev => prev.map(o =>
-                      o.id === order.id ? { ...o, is_questionable: newValue } as any : o
-                    ));
-                    if (typeof setSelectedOrder === 'function') {
-                      setSelectedOrder(prev => prev ? ({ ...prev, is_questionable: newValue } as any) : prev);
-                    }
-
-                    try {
-                      const res = await fetch('/api/adminCifra/orders/update', {
-                        method: 'PUT',
-                        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
-                        body: JSON.stringify({
-                          id: order.id,
-                          is_questionable: newValue,
-                          userName: getCurrentUserName(),
-                          userRole: getCurrentRole(),
-                        }),
-                      });
-                      if (!res.ok) {
-                        setLocalOrder(prev => ({ ...prev, is_questionable: prevValue } as any));
-                        setAllOrders(prev => prev.map(o =>
-                          o.id === order.id ? { ...o, is_questionable: prevValue } as any : o
-                        ));
-                      } else if (typeof setHistory === 'function') {
-                        const histRes = await fetch(`/api/adminCifra/order-history?orderId=${order.id}&_t=${Date.now()}`);
-                        if (histRes.ok) setHistory(await histRes.json());
-                      }
-                    } catch {
-                      setLocalOrder(prev => ({ ...prev, is_questionable: prevValue } as any));
-                      setAllOrders(prev => prev.map(o =>
-                        o.id === order.id ? { ...o, is_questionable: prevValue } as any : o
-                      ));
-                    } finally {
-                      questionableSavingRef.current = false;
-                      setQuestionableSaving(false);
-                    }
-                  }}
-                />
-              )}
+                    }}
+                  />
+                )}
+              </div>
             </div>
 
-            <div style={volumeCardSoftStyle({ borderRadius: 16, padding: '16px 20px', lineHeight: '1.45' })}>
-              <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: '6px 12px', alignItems: 'baseline' }}>
+            {/* Клиент + комментарий — тянется по высоте до низа блока логистики */}
+            <div
+              style={volumeCardSoftStyle({
+                borderRadius: 16,
+                padding: '16px 20px',
+                lineHeight: '1.45',
+                minWidth: 0,
+                maxWidth: '100%',
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: 0,
+              })}
+            >
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '130px 1fr',
+                  gap: '6px 12px',
+                  alignItems: 'baseline',
+                  minWidth: 0,
+                  flexShrink: 0,
+                }}
+              >
                 <div style={{ color: '#94A3B8' }}>Клиент</div>
-                <div style={{ fontWeight: '600' }}>{(order as any).organization_name || (order as any).full_name || '—'}</div>
+                <div style={{ fontWeight: '600' }}>
+                  {(order as any).organization_name ||
+                    (order as any).full_name ||
+                    '—'}
+                </div>
 
                 <div style={{ color: '#94A3B8' }}>Телефон</div>
                 <div>{order.phone || '—'}</div>
 
                 <div style={{ color: '#94A3B8' }}>Марка бетона</div>
-                <div style={{ fontWeight: '600', color: '#60A5FA' }}>{order.grade}</div>
+                <div style={{ fontWeight: '600', color: '#60A5FA' }}>
+                  {order.grade}
+                </div>
 
                 <div style={{ color: '#94A3B8' }}>Объём</div>
-                <div style={{ fontSize: '20px', fontWeight: '700', color: '#10B981' }}>
+                <div
+                  style={{
+                    fontSize: '20px',
+                    fontWeight: '700',
+                    color: '#10B981',
+                  }}
+                >
                   {order.volume}{' '}
                   {(order as any).order_type === 'bulk'
                     ? bulkVolumeUnitLabel((order as any).fleet_vehicle_kind, {
@@ -705,42 +879,72 @@ const formatVolume = (value: number | string) => {
                 </div>
 
                 <div style={{ color: '#94A3B8' }}>Дата и время</div>
-                <div>{order.delivery_date} • {formatTimeHHMM(order.delivery_time)}</div>
+                <div>
+                  {order.delivery_date} • {formatTimeHHMM(order.delivery_time)}
+                </div>
 
                 <div style={{ color: '#94A3B8' }}>Адрес доставки</div>
-                <div style={{ fontWeight: '600', fontSize: '15px' }}>{order.address}</div>
-              </div>
-            </div>
-
-            {order.comment && (
-              <div style={{ marginTop: '16px' }}>
-                <h4 style={{ color: '#94A3B8', marginBottom: '6px' }}>Комментарий клиента</h4>
-                <div style={volumeCardSoftStyle({
-                  padding: '12px 16px',
-                  borderRadius: 16,
-                  whiteSpace: 'pre-wrap',
-                  // clamp вместо фикс-px — на 4K (больше реальной высоты
-                  // окна) блок пропорционально вырастает и показывает
-                  // больше текста без обрезки, а на 1920 остаётся как был.
-                  // До 1080px высоты вьюпорта (весь диапазон 1920×1080, в т.ч.
-                  // с браузерной панелью/таскбаром) формула даёт ровно 76px —
-                  // поведение на 1920 не меняется. Выше 1080px (4K и крупнее)
-                  // блок начинает расти дальше, до потолка в 240px.
-                  maxHeight: 'clamp(76px, calc(76px + (100vh - 1080px) * 0.15), 240px)',
-                  overflowY: 'auto',
-                  fontSize: '14px',
-                  lineHeight: '1.5',
-                })}>
-                  {order.comment}
+                <div style={{ fontWeight: '600', fontSize: '15px' }}>
+                  {order.address}
                 </div>
               </div>
-            )}
+
+              {order.comment ? (
+                <div
+                  style={{
+                    marginTop: 12,
+                    paddingTop: 12,
+                    borderTop: '1px solid rgba(71,85,105,0.55)',
+                    flex: 1,
+                    minHeight: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                  }}
+                >
+                  <div
+                    style={{
+                      color: '#94A3B8',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                      marginBottom: 6,
+                      flexShrink: 0,
+                    }}
+                  >
+                    Комментарий клиента
+                  </div>
+                  <div
+                    style={{
+                      whiteSpace: 'pre-wrap',
+                      flex: 1,
+                      minHeight: 76,
+                      overflowY: 'auto',
+                      fontSize: '14px',
+                      lineHeight: '1.5',
+                      color: '#E2E8F0',
+                    }}
+                  >
+                    {order.comment}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ flex: 1, minHeight: 0 }} />
+              )}
+            </div>
           </div>
 
                     {/* ==================== ПРАВАЯ КОЛОНКА — ЛОГИСТИКА / КОММЕНТАРИИ ==================== */}
-          <div>
+          <div style={{
+            minWidth: 0,
+            maxWidth: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
+            height: '100%',
+          }}>
             {/* Вкладки Логистика / Комментарии + крестик */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px', gap: 12, minWidth: 0, flexShrink: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <button
                   type="button"
@@ -781,7 +985,7 @@ const formatVolume = (value: number | string) => {
             </div>
 
             {/* Обе панели в одной ячейке — высота не прыгает при переключении */}
-            <div style={{ display: 'grid' }}>
+            <div style={{ display: 'grid', flex: 1, minHeight: 0, alignContent: 'start' }}>
               <div style={{
                 gridArea: '1 / 1',
                 visibility: rightTab === 'logistics' ? 'visible' : 'hidden',
@@ -856,9 +1060,27 @@ const formatVolume = (value: number | string) => {
 
                   {/* ==================== СПИСОК НАЗНАЧЕННЫХ МИКСЕРОВ ==================== */}
 <div>
-  <div style={{ color: '#94A3B8', fontSize: '15px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
-    <span>Назначенные миксеры ({currentMixers.length})</span>
-    <span style={{ fontSize: '13px', color: '#64748B' }}>Изменяй время — список пересортируется (с учётом суток)</span>
+  <div style={{
+    color: '#94A3B8',
+    fontSize: '15px',
+    marginBottom: '8px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    gap: 12,
+    minWidth: 0,
+  }}>
+    <span style={{ flexShrink: 0 }}>Назначенные миксеры ({currentMixers.length})</span>
+    <span style={{
+      fontSize: '13px',
+      color: '#64748B',
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    }}>
+      Изменяй время — список пересортируется (с учётом суток)
+    </span>
   </div>
   
   <div style={{ position: 'relative' }}>
@@ -887,6 +1109,9 @@ const formatVolume = (value: number | string) => {
             alignItems: 'center',
             gap: '12px',
             minHeight: '36px',
+            minWidth: 0,
+            maxWidth: '100%',
+            boxSizing: 'border-box',
             userSelect: 'none',
           })}
         >
@@ -922,11 +1147,12 @@ const formatVolume = (value: number | string) => {
               padding: '4px 8px',
               fontSize: '13px',
               width: '92px',
+              flexShrink: 0,
             }}
           />
 
           {/* Объём — РЕДАКТИРУЕМОЕ (напр. чтобы поправить факт постфактум) */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '3px', minWidth: '78px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '3px', minWidth: '78px', flexShrink: 0 }}>
             <input
               type="number"
               step="0.1"
@@ -968,6 +1194,7 @@ const formatVolume = (value: number | string) => {
               border: '1px solid rgba(148,163,184,0.25)',
               fontSize: '13px',
               minWidth: 120,
+              flexShrink: 0,
             }}
             options={[
               { value: 'Загрузка', label: '🟡 Загрузка', text: '🟡 Загрузка' },
@@ -985,6 +1212,7 @@ const formatVolume = (value: number | string) => {
             padding: '3px 9px',
             borderRadius: '6px',
             whiteSpace: 'nowrap',
+            flexShrink: 0,
             background: Number(mixer.downtimeMinutes) > 0 ? 'rgba(249, 115, 22, 0.15)' : 'rgba(148, 163, 184, 0.15)',
             color: Number(mixer.downtimeMinutes) > 0 ? '#F97316' : '#94A3B8'
           }}
@@ -1003,7 +1231,8 @@ const formatVolume = (value: number | string) => {
               border: 'none', 
               cursor: 'pointer', 
               fontSize: '17px',
-              padding: '2px 6px'
+              padding: '2px 6px',
+              flexShrink: 0,
             }}
           >
             ✕
@@ -1079,6 +1308,8 @@ const formatVolume = (value: number | string) => {
           borderTop: CARD_BORDER,
           paddingTop: '10px',
           marginTop: '10px',
+          width: '100%',
+          boxSizing: 'border-box',
         }}>
           <h4 style={{ color: '#94A3B8', marginBottom: '10px' }}>
             {isBulkOrder ? 'Добавить технику / сцепку' : 'Добавить миксер'}
@@ -1086,9 +1317,12 @@ const formatVolume = (value: number | string) => {
           
           <div style={{ 
             display: 'grid', 
-            gridTemplateColumns: '2.6fr 1.8fr 1.4fr 1.1fr auto', 
+            gridTemplateColumns: 'minmax(160px, 2.6fr) minmax(140px, 1.8fr) minmax(120px, 1.4fr) minmax(72px, 1.1fr) auto', 
             gap: '16px', 
-            alignItems: 'end' 
+            alignItems: 'end',
+            width: '100%',
+            minWidth: 0,
+            boxSizing: 'border-box',
           }}>
     
             {/* Выбор миксера / сцепки из базы */}
@@ -1381,7 +1615,13 @@ const formatVolume = (value: number | string) => {
         </div>
 
         {/* ==================== ИСТОРИЯ ИЗМЕНЕНИЙ (ПОЛНАЯ + МИКСЕРЫ) ==================== */}
-<div style={{ marginTop: '10px', borderTop: CARD_BORDER, paddingTop: '8px' }}>
+<div style={{
+  marginTop: '10px',
+  borderTop: CARD_BORDER,
+  paddingTop: '8px',
+  width: '100%',
+  boxSizing: 'border-box',
+}}>
   <h4 style={{ color: '#94A3B8', marginBottom: '8px' }}>История изменений</h4>
   
   <div style={volumeCardSoftStyle({

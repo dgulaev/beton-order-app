@@ -37,12 +37,17 @@ export default function WeatherForecastModal({
   const [mounted, setMounted] = useState(false);
   const [range, setRange] = useState<RangeDays>(7);
   const [activeDate, setActiveDate] = useState(initialDateKey);
+  /** Якорь полоски «N дней»: день открытия модалки, не сдвигается кликом по чипу. */
+  const [rangeAnchor, setRangeAnchor] = useState(initialDateKey);
 
   useBodyScrollLock(open);
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
-    if (open) setActiveDate(initialDateKey);
+    if (open) {
+      setActiveDate(initialDateKey);
+      setRangeAnchor(initialDateKey);
+    }
   }, [open, initialDateKey]);
 
   useEffect(() => {
@@ -54,10 +59,15 @@ export default function WeatherForecastModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
+  // После past_days в API days[] начинается ~3 месяца назад.
+  // «7/10 дней» — окно от выбранного дня (календарь / сегодня), не slice(0, N).
   const daysInRange = useMemo(() => {
     const all = forecast?.days || [];
-    return all.slice(0, range);
-  }, [forecast, range]);
+    if (!all.length) return [];
+    const startIdx = all.findIndex((d) => d.date >= rangeAnchor);
+    const idx = startIdx >= 0 ? startIdx : Math.max(0, all.length - range);
+    return all.slice(idx, idx + range);
+  }, [forecast, range, rangeAnchor]);
 
   const activeDay: WeatherDay | null = useMemo(() => {
     const all = forecast?.days || [];

@@ -35,8 +35,8 @@ export default function OrderPlanProgressBar({
         alignItems: 'center',
         gap: sp(6),
         flexShrink: 0,
-        minWidth: fs(92),
-        maxWidth: fs(120),
+        width: '100%',
+        minWidth: 0,
       }}
     >
       <div

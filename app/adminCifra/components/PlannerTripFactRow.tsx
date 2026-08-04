@@ -1,6 +1,6 @@
 'use client';
 
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { GripVertical, Lock } from 'lucide-react';
 import { appAlert } from './appDialog';
 import DarkHoverTip from './DarkHoverTip';
@@ -46,8 +46,8 @@ type Props = {
   onDragEndTrip?: () => void;
   /** Подсветка активной волны пересчёта */
   waveHighlight?: boolean;
-  /** Снять фикс с рейса (клик по бейджу) */
-  onUnlockTrip?: (tripId: string) => void;
+  /** Поставить / снять фикс с рейса (клик по бейджу) */
+  onSetTripLocked?: (tripId: string, locked: boolean) => void;
 };
 
 function deltaColor(d: number | null): string {
@@ -57,15 +57,80 @@ function deltaColor(d: number | null): string {
   return '#94A3B8';
 }
 
+function factStatusColor(status: string | null | undefined): string {
+  switch (String(status || '')) {
+    case 'Загрузка':
+      return '#93C5FD';
+    case 'В пути':
+      return '#FDE047';
+    case 'На объекте':
+      return '#FDBA74';
+    case 'Разгружен':
+      return '#6EE7B7';
+    case 'Возврат':
+      return '#A7F3D0';
+    case 'Проблема':
+      return '#FCA5A5';
+    default:
+      return '#CBD5E1';
+  }
+}
+
 function cellStyle(extra?: CSSProperties): CSSProperties {
   return {
     display: 'flex',
     alignItems: 'center',
     gap: 4,
     minWidth: 0,
+    maxWidth: '100%',
     overflow: 'hidden',
     ...extra,
   };
+}
+
+/** Подпись фиксированной ширины + значение — колонки не плывут. */
+function Labeled({
+  label,
+  labelW,
+  children,
+  valueColor,
+  labelColor = '#94A3B8',
+  fontWeight,
+}: {
+  label: string;
+  labelW: number;
+  children: ReactNode;
+  valueColor?: string;
+  labelColor?: string;
+  fontWeight?: number;
+}) {
+  return (
+    <span
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `${labelW}px minmax(0, 1fr)`,
+        alignItems: 'center',
+        columnGap: 4,
+        width: '100%',
+        minWidth: 0,
+        color: valueColor,
+        fontWeight,
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      <span style={{ color: labelColor, fontWeight: 500 }}>{label}</span>
+      <span
+        style={{
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          minWidth: 0,
+        }}
+      >
+        {children}
+      </span>
+    </span>
+  );
 }
 
 export default function PlannerTripFactRow({
@@ -86,7 +151,7 @@ export default function PlannerTripFactRow({
   onDropOnTrip,
   onDragEndTrip,
   waveHighlight,
-  onUnlockTrip,
+  onSetTripLocked,
 }: Props) {
   const isPu = Boolean(trip.pickup || trip.mixerNumber === PICKUP_MIXER_NUMBER);
   const canEdit = Boolean(fact.matchedTripId);
@@ -183,9 +248,6 @@ export default function PlannerTripFactRow({
 
   const deltaLoad = formatFactDeltaLabel(fact.deltaLoadMin);
   const deltaRel = formatFactDeltaLabel(fact.deltaReleaseMin);
-  const showTime = fact.factPlanTime || '—';
-  const showVol =
-    fact.factVolume != null ? String(fact.factVolume) : String(trip.volume);
 
   const inputPad = `0 ${sp(3)}px`;
   const controlFont = fs(11);
@@ -200,19 +262,37 @@ export default function PlannerTripFactRow({
     borderRadius: 5,
   };
 
-  // Фиксированные колонки — и отработанные, и активные в одной сетке.
+  const labelPlanW = sp(30);
+  const labelArriveW = sp(44);
+  const labelRetW = sp(28);
+  const labelFactW = sp(36);
+
+  const indent = sp(16);
+  // Отступ слева — padding (не margin): иначе width:100%+margin клипает справа.
   const gridCols = [
-    `${sp(18)}px`, // grip (всегда, чтобы не съезжало)
-    `${sp(88)}px`, // миксер
-    `${sp(56)}px`, // объём
-    `${sp(112)}px`, // план загр.
-    `${sp(88)}px`, // объект / соска
-    `${sp(72)}px`, // обр.
-    `${sp(108)}px`, // задержка + фикс
-    `${sp(8)}px`, // разделитель
-    `minmax(${sp(280)}px, 1.6fr)`, // факт (ярлык + старт + выпуск)
-    `minmax(${sp(176)}px, max-content)`, // статус / действия («отработан» + время + м³)
+    `${sp(14)}px`, // grip
+    `minmax(0, 0.9fr)`, // миксер
+    `${sp(42)}px`, // объём
+    `minmax(0, 0.75fr)`, // план
+    `minmax(0, 0.9fr)`, // объект / соска
+    `minmax(0, 0.7fr)`, // обр.
+    `${sp(78)}px`, // задержка + замок фикса
+    `${sp(1)}px`, // разделитель
+    `${sp(36)}px`, // ярлык блока факта
+    `minmax(0, 1.15fr)`, // старт + Δ
+    `minmax(0, 1.25fr)`, // выпуск + Δ
+    `${sp(88)}px`, // статус в конце строки (+ правки времени)
   ].join(' ');
+
+  const baseShadow = dragOver
+    ? '0 0 0 2px rgba(96,165,250,0.25), 0 1px 2px rgba(0,0,0,0.28)'
+    : waveHighlight
+      ? '0 0 0 1px rgba(96,165,250,0.2), inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 2px rgba(0,0,0,0.28)'
+      : 'inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 2px rgba(0,0,0,0.28)';
+  // Как у оператора: «без пульта» = янтарная подкова слева, без текстового бейджа.
+  const rowShadow = fact.noOperatorRecord
+    ? `${baseShadow}, inset 3px 0 0 #F59E0B`
+    : baseShadow;
 
   return (
     <div
@@ -238,14 +318,17 @@ export default function PlannerTripFactRow({
         display: 'grid',
         gridTemplateColumns: gridCols,
         alignItems: 'center',
-        columnGap: sp(5),
-        marginLeft: sp(28),
-        padding: `${sp(1)}px ${sp(6)}px`,
-        minHeight: controlH + sp(4),
-        height: 'auto',
-        borderRadius: 6,
+        columnGap: sp(4),
+        marginLeft: 0,
+        padding: `${sp(4)}px ${sp(8)}px ${sp(4)}px ${indent}px`,
+        minHeight: controlH + sp(10),
+        flexShrink: 0,
+        width: '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
+        borderRadius: 8,
         background: isUnloaded
-          ? 'rgba(16,185,129,0.07)'
+          ? 'rgba(16,185,129,0.1)'
           : trip.locked
             ? 'rgba(96,165,250,0.07)'
             : isPu
@@ -255,18 +338,15 @@ export default function PlannerTripFactRow({
           ? '1px solid rgba(96,165,250,0.85)'
           : waveHighlight
             ? '1px solid rgba(96,165,250,0.55)'
-            : '1px solid rgba(148,163,184,0.22)',
-        boxShadow: dragOver
-          ? '0 0 0 2px rgba(96,165,250,0.25), 0 1px 2px rgba(0,0,0,0.28)'
-          : waveHighlight
-            ? '0 0 0 1px rgba(96,165,250,0.2), inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 2px rgba(0,0,0,0.28)'
-            : 'inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 2px rgba(0,0,0,0.28)',
+            : fact.noOperatorRecord
+              ? '1px solid rgba(245,158,11,0.35)'
+              : '1px solid rgba(148,163,184,0.22)',
+        boxShadow: rowShadow,
         fontSize: controlFont,
-        lineHeight: 1.15,
+        lineHeight: 1.2,
         color: '#E2E8F0',
-        opacity: isUnloaded ? 0.82 : 1,
-        overflowX: 'auto',
-        overflowY: 'visible',
+        opacity: isUnloaded ? 0.9 : 1,
+        overflow: 'hidden',
         cursor: allowDrag ? 'grab' : undefined,
       }}
     >
@@ -287,28 +367,33 @@ export default function PlannerTripFactRow({
       <div style={cellStyle()}>
         <DarkHoverTip
           tip={
-            isPu
-              ? 'Самовывоз: слот на соске'
-              : mixerMismatch
-                ? `В заявке: ${liveMixer} (в плане было ${trip.mixerNumber}) — подтягиваем live`
-                : isUnloaded
-                  ? 'Рейс отработан'
-                  : trip.locked
-                    ? 'Зафиксирован: этап не пересчитает'
-                    : canEdit
-                      ? 'Есть факт по рейсу — можно править статус, время и объём'
-                      : 'Нет связи с рейсом в заявке — запиши план в заявки или сверь номера миксеров'
+            fact.noOperatorRecord
+              ? 'Без пульта оператора: статус выставлен мимо «Загружен» на БСУ — точного времени загрузки нет (жёлтая полоса слева)'
+              : isPu
+                ? 'Самовывоз: слот на соске'
+                : mixerMismatch
+                  ? `В заявке: ${liveMixer} (в плане было ${trip.mixerNumber}) — подтягиваем live`
+                  : isUnloaded
+                    ? 'Рейс отработан'
+                    : trip.locked
+                      ? 'Зафиксирован: этап не пересчитает'
+                      : canEdit
+                        ? 'Есть факт по рейсу — можно править статус, время и объём'
+                        : 'Нет связи с рейсом в заявке — запиши план в заявки или сверь номера миксеров'
           }
-          maxWidth={320}
+          maxWidth={340}
+          display="flex"
+          style={{ width: '100%', minWidth: 0 }}
         >
           <span
             style={{
               fontWeight: 700,
-              color: mixerMismatch ? '#FDE047' : undefined,
+              color: isPu ? '#FDBA74' : mixerMismatch ? '#FDE047' : undefined,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
               width: '100%',
+              minWidth: 0,
             }}
           >
             {displayMixer}
@@ -317,7 +402,13 @@ export default function PlannerTripFactRow({
       </div>
 
       {/* 3 volume */}
-      <div style={cellStyle({ color: '#10B981', fontWeight: 700 })}>
+      <div
+        style={cellStyle({
+          color: '#10B981',
+          fontWeight: 700,
+          fontVariantNumeric: 'tabular-nums',
+        })}
+      >
         {showPlanVolume ? (
           <DarkHoverTip tip="Объём в плане. Правка пересчитает хвост. Если диспетчер меняет объём в заявке вручную — план подтянет его сам. Обратно в заявку — через «Применить в заявки».">
             <label
@@ -365,15 +456,21 @@ export default function PlannerTripFactRow({
         )}
       </div>
 
-      {/* 4 plan load */}
+      {/* 4 plan */}
       <div style={cellStyle({ color: '#FDE047', fontWeight: 600 })}>
         {showShift ? (
-          <DarkHoverTip tip="Сдвинуть план загрузки — хвост дня пересчитается">
+          <DarkHoverTip
+            tip="Сдвинуть план загрузки — хвост дня пересчитается"
+            display="block"
+            style={{ width: '100%' }}
+          >
             <label
               style={{
-                display: 'inline-flex',
+                display: 'grid',
+                gridTemplateColumns: `${labelPlanW}px minmax(0, 1fr)`,
                 alignItems: 'center',
-                gap: 3,
+                columnGap: 4,
+                width: '100%',
                 color: '#FDE047',
                 fontWeight: 600,
                 fontSize: controlFont,
@@ -396,7 +493,8 @@ export default function PlannerTripFactRow({
                 }}
                 style={{
                   ...inputBox,
-                  width: 44,
+                  width: '100%',
+                  maxWidth: 44,
                   background: 'rgba(15,23,42,0.9)',
                   color: '#FDE047',
                   border: '1px solid rgba(250,204,21,0.45)',
@@ -405,11 +503,10 @@ export default function PlannerTripFactRow({
             </label>
           </DarkHoverTip>
         ) : (
-          <DarkHoverTip tip="План: загрузка на БСУ">
-            <span style={{ whiteSpace: 'nowrap', fontSize: controlFont }}>
-              <span style={{ color: muted, fontWeight: 500 }}>план </span>
+          <DarkHoverTip tip="План: загрузка на БСУ" display="block" style={{ width: '100%' }}>
+            <Labeled label="план" labelW={labelPlanW} valueColor="#FDE047" fontWeight={600}>
               {String(trip.loadTime || '').slice(0, 5) || '—'}
-            </span>
+            </Labeled>
           </DarkHoverTip>
         )}
       </div>
@@ -417,33 +514,34 @@ export default function PlannerTripFactRow({
       {/* 5 arrive */}
       <div style={cellStyle({ fontSize: controlFont })}>
         {isPu ? (
-          <DarkHoverTip tip="План: соска будет готова">
-            <span style={{ color: '#FDBA74', whiteSpace: 'nowrap' }}>
-              <span style={{ color: muted }}>соска </span>
-              {trip.arriveTime}
-            </span>
+          <DarkHoverTip tip="План: соска будет готова" display="block" style={{ width: '100%' }}>
+            <Labeled label="соска" labelW={labelArriveW} valueColor="#FDBA74">
+              {trip.arriveTime || '—'}
+            </Labeled>
           </DarkHoverTip>
         ) : (
-          <span style={{ color: '#93C5FD', whiteSpace: 'nowrap' }}>
-            <span style={{ color: muted }}>объект </span>
-            {trip.arriveTime}
-          </span>
+          <Labeled label="объект" labelW={labelArriveW} valueColor="#93C5FD">
+            {trip.arriveTime || '—'}
+          </Labeled>
         )}
       </div>
 
       {/* 6 return */}
       <div style={cellStyle({ fontSize: controlFont, color: muted })}>
-        {isPu ? (
-          <span>—</span>
-        ) : (
-          <span style={{ whiteSpace: 'nowrap' }}>
-            обр. {trip.returnTime}
-          </span>
-        )}
+        <Labeled label="обр." labelW={labelRetW} valueColor={muted}>
+          {isPu ? '—' : trip.returnTime || '—'}
+        </Labeled>
       </div>
 
       {/* 7 delay + фикс */}
-      <div style={cellStyle({ gap: sp(6), fontSize: controlFont })}>
+      <div
+        style={cellStyle({
+          gap: sp(4),
+          fontSize: controlFont,
+          overflow: 'visible',
+          justifyContent: 'flex-end',
+        })}
+      >
         {showDelay ? (
           <DarkHoverTip
             tip="Задержка на объекте (мин). Пример: разгрузят 60 мин вместо 30 → поставь 30. Хвост дня пересчитается."
@@ -456,6 +554,7 @@ export default function PlannerTripFactRow({
                 gap: 3,
                 color: delayVal > 0 ? '#FCA5A5' : muted,
                 fontWeight: 600,
+                flexShrink: 0,
               }}
             >
               <input
@@ -494,40 +593,52 @@ export default function PlannerTripFactRow({
             </label>
           </DarkHoverTip>
         ) : delayVal > 0 ? (
-          <span style={{ color: '#FCA5A5', fontWeight: 700 }}>+{delayVal} мин</span>
-        ) : (
-          <span style={{ color: 'transparent' }}>·</span>
-        )}
-        {trip.locked && !isUnloaded ? (
+          <span style={{ color: '#FCA5A5', fontWeight: 700, flexShrink: 0 }}>
+            +{delayVal} мин
+          </span>
+        ) : null}
+        {trip.locked || onSetTripLocked || isUnloaded ? (
           <DarkHoverTip
             tip={
-              onUnlockTrip
-                ? 'Зафиксирован: этап не пересчитает. Кликни — снять фикс'
-                : 'Зафиксирован: этап не пересчитает'
+              isUnloaded
+                ? 'Отработан: этап и так не пересчитает'
+                : trip.locked
+                  ? onSetTripLocked
+                    ? 'Зафиксирован: этап не пересчитает. Кликни — снять фикс'
+                    : 'Зафиксирован: этап не пересчитает'
+                  : 'Кликни — зафиксировать рейс (этап не пересчитает)'
             }
+            style={{ flexShrink: 0 }}
           >
             <button
               type="button"
-              disabled={!onUnlockTrip || busy}
+              disabled={!onSetTripLocked || busy || isUnloaded}
               onClick={(e) => {
                 e.stopPropagation();
-                onUnlockTrip?.(trip.id);
+                if (isUnloaded) return;
+                onSetTripLocked?.(trip.id, !trip.locked);
               }}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 2,
-                color: '#93C5FD',
+                color:
+                  isUnloaded || trip.locked ? '#93C5FD' : '#64748B',
                 fontSize: controlFont,
                 fontWeight: 700,
                 border: 'none',
                 background: 'transparent',
                 padding: 0,
-                cursor: onUnlockTrip && !busy ? 'pointer' : 'default',
-                opacity: busy ? 0.6 : 1,
+                cursor:
+                  onSetTripLocked && !busy && !isUnloaded
+                    ? 'pointer'
+                    : 'default',
+                opacity: busy ? 0.6 : isUnloaded || trip.locked ? 1 : 0.85,
+                flexShrink: 0,
               }}
             >
-              <Lock size={fs(11)} /> фикс
+              <Lock size={fs(11)} />
+              {isUnloaded || trip.locked ? <span>фикс</span> : null}
             </button>
           </DarkHoverTip>
         ) : null}
@@ -543,47 +654,32 @@ export default function PlannerTripFactRow({
         }}
       />
 
-      {/* 9 fact — внутри тоже сетка: ярлык | старт+Δ | выпуск+Δ */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: !fact.hasMatch
-            ? '1fr'
-            : `${sp(52)}px ${sp(118)}px ${sp(118)}px auto`,
-          alignItems: 'center',
-          columnGap: sp(8),
-          fontSize: controlFont,
-          minWidth: 0,
-          width: '100%',
-        }}
-      >
+      {/* 9 ярлык блока факта — сам статус в конце строки */}
+      <div style={cellStyle({ fontSize: controlFont })}>
         {!fact.hasMatch ? (
-          <span style={{ color: '#64748B' }}>факта нет</span>
+          <span style={{ color: '#64748B', whiteSpace: 'nowrap' }}>факта нет</span>
         ) : (
-          <>
-            <span
-              style={{
-                color: '#CBD5E1',
-                fontWeight: 700,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {!isUnloaded && fact.factStatus ? fact.factStatus : 'факт'}
-            </span>
-            <span
-              style={{
-                color: muted,
-                whiteSpace: 'nowrap',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              старт {fact.factLoadStart || '—'}
+          <span style={{ color: '#CBD5E1', fontWeight: 700, whiteSpace: 'nowrap' }}>
+            факт
+          </span>
+        )}
+      </div>
+
+      {/* 10 fact start */}
+      <div
+        style={cellStyle({
+          fontSize: controlFont,
+          color: muted,
+          fontVariantNumeric: 'tabular-nums',
+        })}
+      >
+        {fact.hasMatch ? (
+          <Labeled label="старт" labelW={labelFactW} valueColor={muted}>
+            <span>
+              {fact.factLoadStart || '—'}
               <span
                 style={{
                   display: 'inline-block',
-                  minWidth: sp(62),
                   marginLeft: 4,
                   color: deltaLoad ? deltaColor(fact.deltaLoadMin) : 'transparent',
                 }}
@@ -591,18 +687,24 @@ export default function PlannerTripFactRow({
                 {deltaLoad ? `(${deltaLoad})` : '(+0 мин)'}
               </span>
             </span>
-            <span
-              style={{
-                color: muted,
-                whiteSpace: 'nowrap',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              выпуск {fact.factRelease || '—'}
+          </Labeled>
+        ) : null}
+      </div>
+
+      {/* 11 fact release */}
+      <div
+        style={cellStyle({
+          fontSize: controlFont,
+          color: muted,
+          fontVariantNumeric: 'tabular-nums',
+        })}
+      >
+        {fact.hasMatch ? (
+          <Labeled label="выпуск" labelW={sp(44)} valueColor={muted}>
+            <span>
+              {fact.factRelease || '—'}
               <span
                 style={{
-                  display: 'inline-block',
-                  minWidth: sp(62),
                   marginLeft: 4,
                   color: deltaRel ? deltaColor(fact.deltaReleaseMin) : 'transparent',
                 }}
@@ -610,78 +712,40 @@ export default function PlannerTripFactRow({
                 {deltaRel ? `(${deltaRel})` : '(+0 мин)'}
               </span>
             </span>
-            {fact.noOperatorRecord ? (
-              <span
-                style={{
-                  padding: '0 6px',
-                  borderRadius: 999,
-                  background: 'rgba(248,113,113,0.15)',
-                  color: '#FCA5A5',
-                  fontWeight: 700,
-                  fontSize: fs(10),
-                  justifySelf: 'start',
-                }}
-              >
-                без пульта
-              </span>
-            ) : (
-              <span />
-            )}
-          </>
-        )}
+          </Labeled>
+        ) : null}
       </div>
 
-      {/* 10 actions */}
+      {/* 12 статус в конце строки (+ правки для активного рейса) */}
       <div
-        style={cellStyle({
-          justifyContent: 'flex-end',
-          gap: sp(6),
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'stretch',
+          justifyContent: 'center',
+          gap: 2,
+          minWidth: 0,
+          width: '100%',
+          overflow: 'hidden',
           fontSize: controlFont,
-          // иначе flex-end + overflow:hidden обрезает начало «отработан»
-          overflow: 'visible',
-          minWidth: 'max-content',
-        })}
+        }}
       >
-        {isUnloaded && fact.hasMatch ? (
-          <>
-            <span
-              style={{
-                padding: `0 ${sp(5)}px`,
-                borderRadius: 999,
-                background: 'rgba(16,185,129,0.18)',
-                color: '#6EE7B7',
-                fontWeight: 700,
-                fontSize: fs(10),
-                lineHeight: `${controlH}px`,
-                height: controlH,
-                display: 'inline-flex',
-                alignItems: 'center',
-                flexShrink: 0,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              отработан
-            </span>
-            <span style={{ color: '#FDE047', fontWeight: 600, minWidth: sp(40) }}>
-              {showTime}
-            </span>
-            <span style={{ color: '#6EE7B7', fontWeight: 600, minWidth: sp(44) }}>
-              {showVol} м³
-            </span>
-          </>
-        ) : canEdit ? (
+        {!fact.hasMatch ? (
+          <span style={{ color: '#64748B', fontSize: fs(10) }}>нет в заявке</span>
+        ) : !isUnloaded && canEdit ? (
           <>
             <select
               disabled={busy}
               value={fact.factStatus || 'Загрузка'}
               onChange={(e) => void patchStatus(e.target.value)}
+              title="Статус рейса"
               style={{
                 ...inputBox,
                 background: 'rgba(15,23,42,0.9)',
-                color: '#E2E8F0',
+                color: factStatusColor(fact.factStatus),
                 border: '1px solid rgba(71,85,105,0.9)',
-                width: sp(92),
-                flexShrink: 0,
+                width: '100%',
+                fontWeight: 700,
               }}
             >
               {STATUS_OPTIONS.map((s) => (
@@ -702,16 +766,27 @@ export default function PlannerTripFactRow({
               placeholder="ЧЧ:ММ"
               style={{
                 ...inputBox,
-                width: 44,
+                width: '100%',
                 background: 'rgba(15,23,42,0.9)',
                 color: '#FDE047',
                 border: '1px solid rgba(71,85,105,0.9)',
-                flexShrink: 0,
               }}
             />
           </>
         ) : (
-          <span style={{ color: '#64748B', fontSize: fs(10) }}>нет в заявке</span>
+          <span
+            title={fact.factStatus || 'Статус рейса'}
+            style={{
+              color: factStatusColor(fact.factStatus),
+              fontWeight: 700,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              textAlign: 'right',
+            }}
+          >
+            {fact.factStatus || '—'}
+          </span>
         )}
       </div>
     </div>

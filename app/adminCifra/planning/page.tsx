@@ -95,9 +95,13 @@ function PlanningPageInner() {
   const setDateKey = useCallback(
     (next: string) => {
       const norm = parseDateKey(next);
-      router.replace(`/adminCifra/planning?date=${encodeURIComponent(norm)}`);
+      // Сохраняем прочие query (?desktop=true и т.п.) — иначе смена дня
+      // сбрасывает флаг и layout может увести на /mobile.
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('date', norm);
+      router.replace(`/adminCifra/planning?${params.toString()}`);
     },
-    [router],
+    [router, searchParams],
   );
 
   const fetchOrdersForMonth = useCallback(async (year: number, month: number) => {
@@ -329,15 +333,20 @@ function PlanningPageInner() {
         padding: `${sp(12)}px ${sp(16)}px ${sp(10)}px`,
         boxSizing: 'border-box',
         overflow: 'hidden',
-        background: 'linear-gradient(180deg, #0B1220 0%, #0F172A 40%, #0B1220 100%)',
+        // Без отдельного «чёрного» фона страницы — виден общий #0F172A админки.
+        background: 'transparent',
       }}
     >
       <header
         style={volumeCardStyle({
-          display: 'flex',
-          flexWrap: 'wrap',
+          // 3 колонки: дата всегда по центру, диспетчер справа не сдвигает пагинацию.
+          display: 'grid',
+          gridTemplateColumns: narrow
+            ? '1fr'
+            : 'minmax(0, 1fr) auto minmax(0, 1fr)',
           alignItems: 'center',
-          gap: sp(12),
+          columnGap: sp(12),
+          rowGap: sp(10),
           flexShrink: 0,
           padding: `${sp(12)}px ${sp(16)}px`,
           borderRadius: 18,
@@ -362,8 +371,9 @@ function PlanningPageInner() {
           style={{
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'center',
             gap: sp(6),
-            marginLeft: 'auto',
+            justifySelf: narrow ? 'start' : 'center',
           }}
         >
           <button
@@ -408,24 +418,35 @@ function PlanningPageInner() {
           </button>
         </div>
 
-        <PlannerWeatherChip dateKey={dateKey} uiScale={uiScale} />
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: narrow ? 'flex-start' : 'flex-end',
+            flexWrap: 'wrap',
+            gap: sp(8),
+            minWidth: 0,
+          }}
+        >
+          <PlannerWeatherChip dateKey={dateKey} uiScale={uiScale} />
 
-        {shiftDispatchers.map((name) => (
-          <span key={`d-${name}`} style={pillStyle('#60A5FA', '#BFDBFE')}>
-            Диспетчер: {name}
-          </span>
-        ))}
-        {shiftOperator ? (
-          <span style={pillStyle('#FB923C', '#FDBA74')}>Оператор: {shiftOperator}</span>
-        ) : null}
+          {shiftDispatchers.map((name) => (
+            <span key={`d-${name}`} style={pillStyle('#60A5FA', '#BFDBFE')}>
+              Диспетчер: {name}
+            </span>
+          ))}
+          {shiftOperator ? (
+            <span style={pillStyle('#FB923C', '#FDBA74')}>Оператор: {shiftOperator}</span>
+          ) : null}
 
-        {loading ? (
-          <span style={{ fontSize: fs(13), color: '#64748B' }}>Загружаю заявки…</span>
-        ) : (
-          <span style={{ fontSize: fs(13), color: '#64748B' }}>
-            {dayOrders.length} заявок · {dayTrips.length} рейс. в заявках
-          </span>
-        )}
+          {loading ? (
+            <span style={{ fontSize: fs(13), color: '#64748B' }}>Загружаю заявки…</span>
+          ) : (
+            <span style={{ fontSize: fs(13), color: '#64748B' }}>
+              {dayOrders.length} заявок · {dayTrips.length} рейс. в заявках
+            </span>
+          )}
+        </div>
       </header>
 
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>

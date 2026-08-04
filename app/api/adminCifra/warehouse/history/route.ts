@@ -97,6 +97,8 @@ async function enrichSiloOpsWithOrders(
 }
 
 type ItemFilter = 'all' | 'silo1' | 'silo2' | 'silo3' | 'additives' | 'fbs';
+/** Фильтр по типу операции: внесения / списания / обнуления / прочее. */
+type OpFilter = 'all' | 'add' | 'subtract' | 'reset' | 'other';
 
 function parseItemFilter(raw: string | null): ItemFilter {
   const v = String(raw || 'all').toLowerCase();
@@ -104,6 +106,20 @@ function parseItemFilter(raw: string | null): ItemFilter {
     return v;
   }
   return 'all';
+}
+
+function parseOpFilter(raw: string | null): OpFilter {
+  const v = String(raw || 'all').toLowerCase();
+  if (v === 'add' || v === 'subtract' || v === 'reset' || v === 'other') return v;
+  return 'all';
+}
+
+function applyOpFilter(query: any, op: OpFilter) {
+  if (op === 'all') return query;
+  if (op === 'other') {
+    return query.not('operation_type', 'in', '(add,subtract,reset)');
+  }
+  return query.eq('operation_type', op);
 }
 
 function applyItemFilter(query: any, item: ItemFilter, scope: string | null) {
@@ -136,6 +152,10 @@ export async function GET(request: NextRequest) {
     const dateKey =
       dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : null;
     const item = parseItemFilter(request.nextUrl.searchParams.get('item'));
+    const op = parseOpFilter(
+      request.nextUrl.searchParams.get('op')
+        ?? request.nextUrl.searchParams.get('type'),
+    );
     const limitRaw = Number(request.nextUrl.searchParams.get('limit') || 40);
     const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 40, 1), 1000);
     const offsetRaw = Number(request.nextUrl.searchParams.get('offset') || 0);
@@ -149,6 +169,7 @@ export async function GET(request: NextRequest) {
       .order('created_at', { ascending: false });
 
     query = applyItemFilter(query, item, scope);
+    query = applyOpFilter(query, op);
 
     if (dateKey) {
       const { start, end } = moscowDayBounds(dateKey);

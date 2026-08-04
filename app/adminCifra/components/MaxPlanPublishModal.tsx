@@ -18,6 +18,7 @@ import {
 } from '@/lib/dailyMixerReport';
 import { normalizePlanDateKey } from '@/lib/dailyLogisticsPlan';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { copyTextToClipboard } from '@/lib/clipboard';
 
 type Props = {
   open: boolean;
@@ -176,31 +177,6 @@ export default function MaxPlanPublishModal({
     const el = textareaRef.current;
     if (!el) return;
     selectionRef.current = { start: el.selectionStart, end: el.selectionEnd };
-  };
-
-  const copyTextToClipboard = async (value: string): Promise<boolean> => {
-    try {
-      if (navigator.clipboard?.writeText && window.isSecureContext) {
-        await navigator.clipboard.writeText(value);
-        return true;
-      }
-    } catch {
-      /* fallback */
-    }
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = value;
-      ta.setAttribute('readonly', '');
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(ta);
-      return ok;
-    } catch {
-      return false;
-    }
   };
 
   const handleCopy = async () => {
