@@ -302,10 +302,22 @@ export default function ClientsPage() {
   const [totalClients, setTotalClients] = useState(0);
   // Сколько элементов на странице — из замера доступной области (см. useEffect ниже)
   const itemsPerPage = viewMode === 'table' ? tablePerPage : gridFit.perPage;
+  // Стабильный limit для API: gridFit прыгает при SPA-входе (60/300ms + RO),
+  // без debounce гонка ответов оставляла «дырявую» сетку до F5.
+  const [fetchLimit, setFetchLimit] = useState(12);
+  const fetchSeqRef = useRef(0);
+  const clientsLoadedOnceRef = useRef(false);
 
   const [activeTab, setActiveTab] = useState<'clients' | 'staff'>('clients');
   /** hide — обычный список без спама; only — только помеченные is_spam */
   const [spamFilter, setSpamFilter] = useState<'hide' | 'only'>('hide');
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setFetchLimit((prev) => (prev === itemsPerPage ? prev : itemsPerPage));
+    }, 180);
+    return () => window.clearTimeout(t);
+  }, [itemsPerPage]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -412,10 +424,13 @@ export default function ClientsPage() {
 
     // ==================== 2. ЗАГРУЗКА КЛИЕНТОВ С ПАГИНАЦИЕЙ ====================
     const fetchClientsPage = async (page: number = 1) => {
-    setLoading(true);
+    const seq = ++fetchSeqRef.current;
+    // Не сносим весь UI в «Загрузка CRM…» при пересчёте perPage / повторном fetch.
+    const soft = clientsLoadedOnceRef.current;
+    if (!soft) setLoading(true);
 
     try {
-      let url = `/api/adminCifra/clients/grouped?page=${page}&limit=${itemsPerPage}`;
+      let url = `/api/adminCifra/clients/grouped?page=${page}&limit=${fetchLimit}`;
       
       if (debouncedSearch) {
         url += `&search=${encodeURIComponent(debouncedSearch)}`;
@@ -427,31 +442,34 @@ export default function ClientsPage() {
 
       // Список клиентов — только grouped. Стафф грузится отдельно через /staff/stats.
       if (activeTab === 'staff') {
-        setLoading(false);
+        if (seq === fetchSeqRef.current) setLoading(false);
         return;
       }
 
       const res = await adminCifraFetch(url);
+      if (seq !== fetchSeqRef.current) return;
 
       if (res.ok) {
         const data = await res.json();
         setProfiles(data.clients || data.groups || data);
         setTotalPages(data.totalPages || 1);
         setTotalClients(data.total || 0);
+        clientsLoadedOnceRef.current = true;
       } else if (res.status === 403) {
         console.error('❌ Нет доступа к списку клиентов');
       }
     } catch (err) {
+      if (seq !== fetchSeqRef.current) return;
       console.error('❌ Ошибка загрузки клиентов:', err);
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) setLoading(false);
     }
   };
 
   // Первая загрузка и смена страницы + поиск + фильтр типа клиента / спама
   useEffect(() => {
     fetchClientsPage(currentPage);
-  }, [currentPage, debouncedSearch, activeTab, itemsPerPage, clientTypeFilter, spamFilter]);
+  }, [currentPage, debouncedSearch, activeTab, fetchLimit, clientTypeFilter, spamFilter]);
 
   // При смене вида отображения (карточки/список) размер страницы меняется —
   // сбрасываем на первую страницу, чтобы не оказаться на "несуществующей" странице.
@@ -1823,7 +1841,15 @@ const displayedClients = filteredList.slice(startIndex, startIndex + itemsPerPag
     ? new Date(userOrders[0].delivery_date || userOrders[0].created_at).toLocaleDateString('ru-RU') 
     : '—';
 
-  if (loading) return <div style={{ padding: '120px', textAlign: 'center', color: '#94A3B8' }}>Загрузка CRM...</div>;
+  // Раньше весь page shell с listAreaRef размонтировался → замер сетки и fetch
+  // гонялись по кругу. Спиннер только при первой загрузке без данных.
+  if (loading && !clientsLoadedOnceRef.current && profiles.length === 0) {
+    return (
+      <div style={{ padding: '120px', textAlign: 'center', color: '#94A3B8' }}>
+        Загрузка CRM...
+      </div>
+    );
+  }
 
 // ==================== ФУНКЦИЯ РЕДАКТИРОВАНИЯ СОТРУДНИКА ====================
 const editStaff = (staffMember: any) => {

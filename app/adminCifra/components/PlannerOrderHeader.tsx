@@ -1,6 +1,6 @@
 'use client';
 
-import type { CSSProperties, DragEvent, ReactNode } from 'react';
+import type { CSSProperties, DragEvent } from 'react';
 import DarkHoverTip from './DarkHoverTip';
 import OrderPlanProgressBar from './OrderPlanProgressBar';
 import PlannerSwitch from './PlannerSwitch';
@@ -57,8 +57,9 @@ function cell(extra?: CSSProperties): CSSProperties {
 }
 
 /**
- * Шапка заявки дня — фиксированная сетка, чтобы прогресс/м³/время/бейджи
- * не «плыли» из‑за «самовывоз», «Выполнена» и опционального apply-свитча.
+ * Шапка заявки дня — одна и та же сетка для всех строк.
+ * Свитч всегда слева (фикс. ширина); «Выполнена»/«в плане» — только справа,
+ * чтобы контент не смещался относительно соседних заявок.
  */
 export default function PlannerOrderHeader({
   order,
@@ -85,75 +86,46 @@ export default function PlannerOrderHeader({
   const oid = String(order.id);
   const dbSt = String(order.status || '').toLowerCase();
   const showApplyCol = applyOnlySelected && canEditPlan;
-  // «Выполнена»/«Отменена» слева уже говорят статус — «отработана» справа не дублируем.
-  const showPlanBadge = dbSt !== 'completed' && dbSt !== 'cancelled';
+  const lockedFinal = dbSt === 'completed' || dbSt === 'cancelled';
   const shipped = liveShippedVolumeForOrder(order.id, dayTrips);
   const planVol = Number(order.volume) || 0;
   const pct = orderPlanPercent(planVol, shipped, manualDone, status === 'done');
 
+  // Колонки одинаковы у всех заявок (кроме опционального apply — он общий на экран).
   const gridCols = [
-    `${sp(88)}px`, // статус: Выполнена / свитч
+    `${sp(36)}px`, // свитч «отработана»
     ...(showApplyCol ? [`${sp(28)}px`] : []),
     `${sp(48)}px`, // #id
     `minmax(0, 1.4fr)`, // клиент
     `minmax(${sp(88)}px, 0.9fr)`, // прогресс
     `${sp(52)}px`, // м³
     `${sp(44)}px`, // время
-    `minmax(${sp(72)}px, 0.7fr)`, // слот «самовывоз» (всегда)
-    ...(showPlanBadge ? [`${sp(84)}px`] : []), // в плане / в работе / отработана
+    `minmax(${sp(72)}px, 0.7fr)`, // самовывоз
+    `${sp(96)}px`, // статус справа (всегда)
   ].join(' ');
 
-  let statusControl: ReactNode;
-  if (dbSt === 'completed' || dbSt === 'cancelled') {
-    statusControl = (
-      <DarkHoverTip
-        tip={
-          dbSt === 'cancelled'
-            ? 'Заявка отменена — статус здесь не меняется'
-            : 'Заявка выполнена — статус здесь не меняется'
-        }
-        maxWidth={280}
-        display="flex"
-        style={{ width: '100%', justifyContent: 'flex-start' }}
-      >
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: sp(18),
-            padding: `0 ${sp(8)}px`,
-            borderRadius: 999,
-            fontSize: fs(11),
-            fontWeight: 700,
-            whiteSpace: 'nowrap',
-            color: dbSt === 'cancelled' ? '#FECACA' : '#A7F3D0',
-            background:
-              dbSt === 'cancelled'
-                ? 'rgba(248,113,113,0.2)'
-                : 'rgba(16,185,129,0.2)',
-            border:
-              dbSt === 'cancelled'
-                ? '1px solid rgba(248,113,113,0.45)'
-                : '1px solid rgba(52,211,153,0.4)',
-          }}
-        >
-          {dbSt === 'cancelled' ? 'Отменена' : 'Выполнена'}
-        </span>
-      </DarkHoverTip>
-    );
+  let rightBadge: Badge;
+  if (dbSt === 'completed') {
+    rightBadge = {
+      label: 'Выполнена',
+      bg: 'rgba(16,185,129,0.2)',
+      color: '#A7F3D0',
+    };
+  } else if (dbSt === 'cancelled') {
+    rightBadge = {
+      label: 'Отменена',
+      bg: 'rgba(248,113,113,0.2)',
+      color: '#FECACA',
+    };
   } else {
-    statusControl = (
-      <PlannerSwitch
-        size="sm"
-        accent="emerald"
-        checked={manualDone || status === 'done'}
-        disabled={!canMutatePlan}
-        title="Пометить отработанной"
-        onChange={onToggleDone}
-      />
-    );
+    rightBadge = badge;
   }
+
+  const switchTip = lockedFinal
+    ? dbSt === 'cancelled'
+      ? 'Заявка отменена — статус здесь не меняется'
+      : 'Заявка выполнена — статус здесь не меняется'
+    : 'Пометить отработанной';
 
   return (
     <div
@@ -166,7 +138,6 @@ export default function PlannerOrderHeader({
         gridTemplateColumns: gridCols,
         alignItems: 'center',
         columnGap: sp(8),
-        // Лента шапки блока заявки (вариант B): без своей рамки, на всю ширину.
         padding: status === 'done' ? `${sp(7)}px ${sp(12)}px` : `${sp(8)}px ${sp(12)}px`,
         minHeight: status === 'done' ? sp(32) : sp(36),
         borderRadius: 0,
@@ -197,7 +168,18 @@ export default function PlannerOrderHeader({
         boxSizing: 'border-box',
       }}
     >
-      <div style={cell()}>{statusControl}</div>
+      <div style={cell({ justifyContent: 'flex-start' })}>
+        <DarkHoverTip tip={switchTip} maxWidth={280} display="flex">
+          <PlannerSwitch
+            size="sm"
+            accent="emerald"
+            checked={manualDone || status === 'done' || dbSt === 'completed'}
+            disabled={!canMutatePlan || lockedFinal}
+            title={switchTip}
+            onChange={onToggleDone}
+          />
+        </DarkHoverTip>
+      </div>
 
       {showApplyCol ? (
         <div style={cell({ justifyContent: 'center' })}>
@@ -281,23 +263,27 @@ export default function PlannerOrderHeader({
         ) : null}
       </div>
 
-      {showPlanBadge ? (
-        <div style={cell({ justifyContent: 'flex-end' })}>
-          <span
-            style={{
-              padding: `${sp(2)}px ${sp(8)}px`,
-              borderRadius: 999,
-              fontSize: fs(12),
-              fontWeight: 700,
-              background: badge.bg,
-              color: badge.color,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {badge.label}
-          </span>
-        </div>
-      ) : null}
+      <div style={cell({ justifyContent: 'flex-end' })}>
+        <span
+          style={{
+            padding: `${sp(2)}px ${sp(8)}px`,
+            borderRadius: 999,
+            fontSize: fs(12),
+            fontWeight: 700,
+            background: rightBadge.bg,
+            color: rightBadge.color,
+            whiteSpace: 'nowrap',
+            border:
+              dbSt === 'completed'
+                ? '1px solid rgba(52,211,153,0.4)'
+                : dbSt === 'cancelled'
+                  ? '1px solid rgba(248,113,113,0.45)'
+                  : undefined,
+          }}
+        >
+          {rightBadge.label}
+        </span>
+      </div>
     </div>
   );
 }

@@ -52,6 +52,7 @@ import {
   orphanLiveTripsAsPlanned,
   PICKUP_MIXER_NUMBER,
   PLANNER_FACT_SHIPPED_STATUSES,
+  formatPlannerWaveLabel,
   makePlannerWave,
   medianFactDelayMin,
   nextWaveStageIndex,
@@ -1878,7 +1879,7 @@ export default function LogisticsPlannerTab({
       ) {
         if (silent) return;
         const ok = await appConfirm(
-          'Пересчитать весь день? Зафиксированные и отработанные рейсы будут сброшены. История волн начнётся заново с «Утро».',
+          'Пересчитать весь день? Зафиксированные и отработанные рейсы будут сброшены. История волн начнётся заново с «План дня».',
           { title: 'Весь день', okLabel: 'Пересчитать', variant: 'danger' },
         );
         if (!ok) return;
@@ -2558,7 +2559,7 @@ export default function LogisticsPlannerTab({
                   ? ` · опоздание +${w.delayFactMin} мин`
                   : '';
               const sum = w.summary ? ` · ${w.summary}` : '';
-              return `—— ${w.label}${t ? ` (${t})` : ''} · ${w.newTripCount} рейс.${delay}${sum} ——`;
+              return `—— ${formatPlannerWaveLabel(w.label)}${t ? ` (${t})` : ''} · ${w.newTripCount} рейс.${delay}${sum} ——`;
             })
             .join('\n') + '\n\n'
         : '';
@@ -3257,12 +3258,13 @@ export default function LogisticsPlannerTab({
             {waves.map((w) => {
               const active = activeWaveId === w.id;
               const t = formatPlanUpdatedAtLabel(w.createdAt);
+              const waveLabel = formatPlannerWaveLabel(w.label);
               return (
                 <button
                   key={w.id}
                   type="button"
                   title={
-                    `${w.label}` +
+                    `${waveLabel}` +
                     (t ? ` · ${t}` : '') +
                     (w.createdByName ? ` · ${w.createdByName}` : '') +
                     (w.summary ? ` · ${w.summary}` : '') +
@@ -3288,7 +3290,7 @@ export default function LogisticsPlannerTab({
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  {w.label}
+                  {waveLabel}
                   {t ? (
                     <span style={{ fontWeight: 500, color: '#64748B', marginLeft: 6 }}>
                       {t}
@@ -4420,12 +4422,13 @@ export default function LogisticsPlannerTab({
             {waves.map((w) => {
               const active = activeWaveId === w.id;
               const t = formatPlanUpdatedAtLabel(w.createdAt);
+              const waveLabel = formatPlannerWaveLabel(w.label);
               return (
                 <button
                   key={w.id}
                   type="button"
                   title={
-                    `${w.label}` +
+                    `${waveLabel}` +
                     (t ? ` · ${t}` : '') +
                     (w.createdByName ? ` · ${w.createdByName}` : '') +
                     (w.summary ? ` · ${w.summary}` : '') +
@@ -4451,7 +4454,7 @@ export default function LogisticsPlannerTab({
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  {w.label}
+                  {waveLabel}
                   {t ? (
                     <span style={{ fontWeight: 500, color: '#64748B', marginLeft: 6 }}>
                       {t}

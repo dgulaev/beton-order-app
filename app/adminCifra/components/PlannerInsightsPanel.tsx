@@ -312,16 +312,14 @@ export default function PlannerInsightsPanel({
           onClick={() => void runLearn(false)}
           disabled={!canEdit || learning}
         />
-        {!compact ? (
-          <ModalActionButton
-            color="#A78BFA"
-            icon={<Brain size={16} />}
-            label={learning ? 'Учусь…' : 'Backfill 45 дней'}
-            size="lg"
-            onClick={() => void runLearn(true)}
-            disabled={!canEdit || learning}
-          />
-        ) : null}
+        <ModalActionButton
+          color="#A78BFA"
+          icon={<Brain size={compact ? 14 : 16} />}
+          label={learning ? 'Учусь…' : compact ? '45 дней' : 'Backfill 45 дней'}
+          size={compact ? 'sm' : 'lg'}
+          onClick={() => void runLearn(true)}
+          disabled={!canEdit || learning}
+        />
       </div>
     </div>
   );

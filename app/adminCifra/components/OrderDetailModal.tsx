@@ -918,7 +918,7 @@ const formatVolume = (value: number | string) => {
                     style={{
                       whiteSpace: 'pre-wrap',
                       flex: 1,
-                      minHeight: 76,
+                      minHeight: 96,
                       overflowY: 'auto',
                       fontSize: '14px',
                       lineHeight: '1.5',
@@ -1088,9 +1088,9 @@ const formatVolume = (value: number | string) => {
     ref={mixerListRef}
     onScroll={handleMixerListScroll}
     style={{ 
-    // Тот же принцип: до 1080px высоты вьюпорта — ровно 128px (как на 1920),
-    // на 4K и выше — растёт дальше, до потолка в 430px.
-    maxHeight: 'clamp(128px, calc(128px + (100vh - 1080px) * 0.28), 430px)',
+    // +~36px взамен убранного заголовка «Добавить миксер» — список и колонка
+    // клиента/логистики занимают освободившуюся высоту.
+    maxHeight: 'clamp(164px, calc(164px + (100vh - 1080px) * 0.28), 466px)',
     overflowY: 'auto',
     paddingRight: '8px',
     display: 'flex',
@@ -1306,15 +1306,11 @@ const formatVolume = (value: number | string) => {
           visibility: rightTab === 'logistics' ? 'visible' : 'hidden',
           pointerEvents: rightTab === 'logistics' ? 'auto' : 'none',
           borderTop: CARD_BORDER,
-          paddingTop: '10px',
-          marginTop: '10px',
+          paddingTop: '8px',
+          marginTop: '8px',
           width: '100%',
           boxSizing: 'border-box',
         }}>
-          <h4 style={{ color: '#94A3B8', marginBottom: '10px' }}>
-            {isBulkOrder ? 'Добавить технику / сцепку' : 'Добавить миксер'}
-          </h4>
-          
           <div style={{ 
             display: 'grid', 
             gridTemplateColumns: 'minmax(160px, 2.6fr) minmax(140px, 1.8fr) minmax(120px, 1.4fr) minmax(72px, 1.1fr) auto', 
@@ -1328,7 +1324,7 @@ const formatVolume = (value: number | string) => {
             {/* Выбор миксера / сцепки из базы */}
             <div>
               <label style={{ display: 'block', color: '#94A3B8', fontSize: '14px', marginBottom: '8px' }}>
-                {isBulkOrder ? 'Сцепка / техника' : 'Миксер'}
+                {isBulkOrder ? 'Добавить технику / сцепку' : 'Добавить миксер'}
               </label>
               <ModalSelect
                 value={newMixerPick}
@@ -1337,7 +1333,6 @@ const formatVolume = (value: number | string) => {
                 onChange={(val) => {
                   setNewMixerPick(val);
                   const nameEl = document.getElementById('mixerName') as HTMLInputElement | null;
-                  const volEl = document.getElementById('mixerVolume') as HTMLInputElement | null;
                   if (!nameEl) return;
                   if (val === 'custom' || !val) {
                     nameEl.value = '';
@@ -1346,21 +1341,19 @@ const formatVolume = (value: number | string) => {
                   if (isBulkOrder) {
                     const selected = bulkAssignable.find((x) => x.value === val);
                     if (selected) {
-                      // Сцепка — полная подпись; моноблок — госномер
+                      // Сцепка — полная подпись; моноблок — госномер.
+                      // Объём не подставляем — диспетчер вводит вручную.
                       nameEl.value =
                         selected.type === 'couple'
                           ? selected.label || selected.number || ''
                           : selected.number || '';
-                      if (volEl && selected.volume != null) {
-                        volEl.value = String(selected.volume);
-                      }
                     }
                     return;
                   }
                   const selected = allMixers.find(m => m.id === Number(val));
                   if (selected) {
+                    // Номер подставляем, объём (м³) — только вручную.
                     nameEl.value = selected.number;
-                    if (volEl && selected.volume != null) volEl.value = String(selected.volume);
                   }
                 }}
                 options={

@@ -27,6 +27,14 @@ export const LOCAL_RADIUS_MAX_KM = 30;
 /** Как в app/api/adminCifra/travel-time (формула v2). */
 const TRAVEL_AVG_SPEED_KMH = 55;
 
+/**
+ * Заявки 11–12 м³ — один рейс большой бочкой.
+ * Свой миксер 285 (О285ЕХ32 и т.п.) или наём с бочкой ≥ остатка, если он в парке дня.
+ */
+export const PREFERRED_12M3_OWN_MARKERS = ['285'] as const;
+const LARGE_SINGLE_LOAD_VOL_MIN = 10.95;
+const LARGE_SINGLE_LOAD_VOL_MAX = 12.05;
+
 const PLATE_LOOKALIKES_PLANNER: Record<string, string> = {
   А: 'A',
   В: 'B',
@@ -55,6 +63,34 @@ function normalizePlannerPlate(raw: string): string {
 export function isLocalRadiusMixer(mixerNumber: string): boolean {
   const key = normalizePlannerPlate(mixerNumber);
   return LOCAL_RADIUS_MIXER_MARKERS.some((m) => key.includes(m));
+}
+
+/** Свой 12-кубовый 285 — приоритет на заявки 11–12 м³. */
+export function isPreferred12m3OwnMixer(mixerNumber: string): boolean {
+  const key = normalizePlannerPlate(mixerNumber);
+  return PREFERRED_12M3_OWN_MARKERS.some((m) => key.includes(m));
+}
+
+/** Объём заявки «ровно под одну большую бочку» (11–12 м³). */
+export function isLargeSingleLoadOrderVolume(volumeM3: number): boolean {
+  const v = Number(volumeM3) || 0;
+  return v >= LARGE_SINGLE_LOAD_VOL_MIN && v <= LARGE_SINGLE_LOAD_VOL_MAX;
+}
+
+/**
+ * Кандидат на заявку 11–12 м³: свой 285 или наём с бочкой ≥ остатка (≥11).
+ * Только из уже выбранного парка дня (caller фильтрует список).
+ */
+export function isPreferredLargeSingleLoadMixer(
+  mixer: Pick<PlannerMixer, 'number' | 'volume' | 'type'>,
+  remainingVolume: number,
+): boolean {
+  const cap = Number(mixer.volume) || 0;
+  const need = Math.max(0, Number(remainingVolume) || 0);
+  if (need <= 0.05 || cap + 0.05 < need) return false;
+  if (isPreferred12m3OwnMixer(mixer.number)) return true;
+  if (String(mixer.type) === 'rented' && cap >= 11) return true;
+  return false;
 }
 
 /** Оценка дорожного км из road_time_min (обратная к travel-time v2). */
@@ -381,7 +417,7 @@ export type PlannedTrip = {
   orderMixerId?: number | null;
 };
 
-/** Волна дня: Утро / Этап N / сдвиг рейса (Фаза 4). */
+/** Волна дня: План дня / Этап N / сдвиг рейса (Фаза 4). */
 export type PlannerWave = {
   id: string;
   /** 0 = утро (весь день), 1+ = этапы; сдвиги могут делить index с текущим этапом */
@@ -846,6 +882,7 @@ export function fleetHintFromPlan(
  * иначе 6–8 м³ машины отбрасываются и крутится одна двенадцатика.
  * Порядок: кто раньше свободен (+ балансировка рейсов) → меньше пустоты в бочке
  * → меньшая бочка раньше большей (6 м³ в 6-куб, хвост 4 — в крупный) → ранг.
+ * Для заявок 11–12 м³ сначала пробуем свой 285 / наём с подходящей бочкой.
  */
 function pickMixerForChunk(
   rankedMixers: PlannerMixer[],
@@ -866,6 +903,11 @@ function pickMixerForChunk(
     orderAddress?: string | null;
     /** Самовывоз — радиус не проверяем */
     orderPickup?: boolean;
+    /**
+     * Заявка 11–12 м³: сначала свой 285 / наём с подходящей бочкой
+     * (если они в парке дня и свободны в окне).
+     */
+    preferLargeSingleLoad?: boolean;
   },
 ): PlannerMixer | null {
   const allowNight = opts?.allowNight ?? false;
@@ -874,6 +916,7 @@ function pickMixerForChunk(
   const exclude = opts?.excludeNumbers;
   const tripCounts = opts?.tripCounts;
   const plantOpen = opts?.plantOpenMinutes ?? PLANT_OPEN_DEFAULT_MINUTES;
+  const preferLarge = Boolean(opts?.preferLargeSingleLoad);
   const orderForRadius = {
     address: opts?.orderAddress,
     roadMin: baseRoad,
@@ -884,6 +927,9 @@ function pickMixerForChunk(
   const LOAD_BALANCE_PENALTY_MIN = 12;
   /** В этом окне готовность «примерно равна» — решает посадка по объёму бочки. */
   const READY_TOLERANCE_MIN = 15;
+  /** Среди приоритетных 12-кубов свой 285 раньше найма. */
+  const LARGE_PREF_OWN = 0;
+  const LARGE_PREF_RENTED = 1;
 
   type Cand = {
     mixer: PlannerMixer;
@@ -891,40 +937,55 @@ function pickMixerForChunk(
     unused: number;
     cap: number;
     rank: number;
+    largePref: number;
   };
   let bestMixer: PlannerMixer | null = null;
   let bestReady = Infinity;
   let bestUnused = Infinity;
   let bestCap = Infinity;
   let bestRank = Infinity;
+  let bestLargePref = Infinity;
 
   const takeIfBetter = (cand: Cand) => {
     const a = cand;
     const better =
       !bestMixer ||
-      a.readyScore < bestReady - READY_TOLERANCE_MIN ||
-      (!(bestReady < a.readyScore - READY_TOLERANCE_MIN) &&
-        (a.unused + 0.05 < bestUnused ||
-          (!(bestUnused + 0.05 < a.unused) &&
-            (a.cap + 0.05 < bestCap ||
-              (!(bestCap + 0.05 < a.cap) &&
-                (a.readyScore < bestReady ||
-                  (a.readyScore === bestReady && a.rank < bestRank)))))));
+      a.largePref < bestLargePref ||
+      (a.largePref === bestLargePref &&
+        (a.readyScore < bestReady - READY_TOLERANCE_MIN ||
+          (!(bestReady < a.readyScore - READY_TOLERANCE_MIN) &&
+            (a.unused + 0.05 < bestUnused ||
+              (!(bestUnused + 0.05 < a.unused) &&
+                (a.cap + 0.05 < bestCap ||
+                  (!(bestCap + 0.05 < a.cap) &&
+                    (a.readyScore < bestReady ||
+                      (a.readyScore === bestReady && a.rank < bestRank)))))))));
     if (!better) return;
     bestMixer = a.mixer;
     bestReady = a.readyScore;
     bestUnused = a.unused;
     bestCap = a.cap;
     bestRank = a.rank;
+    bestLargePref = a.largePref;
   };
 
-  const consider = (onlyWithinWindow: boolean, allowOrphan: boolean) => {
+  const consider = (
+    onlyWithinWindow: boolean,
+    allowOrphan: boolean,
+    onlyPreferredLarge: boolean,
+  ) => {
     rankedMixers.forEach((m, rank) => {
       if (exclude?.has(m.number)) return;
       if (
         !mixerAllowedForPlannerOrder(m.number, orderForRadius, {
           pickup: orderPickup,
         })
+      ) {
+        return;
+      }
+      if (
+        onlyPreferredLarge &&
+        !isPreferredLargeSingleLoadMixer(m, remainingVolume)
       ) {
         return;
       }
@@ -955,22 +1016,35 @@ function pickMixerForChunk(
       }
       const trips = tripCounts?.get(m.number) ?? 0;
       const unused = Math.round((cap - vol) * 10) / 10;
+      let largePref = 50;
+      if (onlyPreferredLarge || preferLarge) {
+        if (isPreferred12m3OwnMixer(m.number)) largePref = LARGE_PREF_OWN;
+        else if (String(m.type) === 'rented' && cap >= 11) largePref = LARGE_PREF_RENTED;
+        else if (!onlyPreferredLarge) largePref = 40;
+      }
       takeIfBetter({
         mixer: m,
         readyScore: ready + trips * LOAD_BALANCE_PENALTY_MIN,
         unused,
         cap,
         rank,
+        largePref,
       });
     });
   };
 
-  consider(true, false);
-  if (!bestMixer) consider(true, true);
-  if (!bestMixer && allowNight) {
-    consider(false, false);
-    if (!bestMixer) consider(false, true);
-  }
+  const runPasses = (onlyPreferredLarge: boolean) => {
+    consider(true, false, onlyPreferredLarge);
+    if (!bestMixer) consider(true, true, onlyPreferredLarge);
+    if (!bestMixer && allowNight) {
+      consider(false, false, onlyPreferredLarge);
+      if (!bestMixer) consider(false, true, onlyPreferredLarge);
+    }
+  };
+
+  // 11–12 м³: сначала 285 / подходящий найм, иначе обычный подбор.
+  if (preferLarge) runPasses(true);
+  if (!bestMixer) runPasses(false);
   return bestMixer;
 }
 
@@ -1451,6 +1525,9 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
             plantOpenMinutes: loadFloor,
             orderAddress: order.address,
             orderPickup: false,
+            // 11–12 м³ одним рейсом: приоритет 285 / наём с бочкой ≥ остатка.
+            preferLargeSingleLoad:
+              isLargeSingleLoadOrderVolume(order.volume) && left >= 10.5,
           },
         );
         if (!mixer) break;
@@ -2694,9 +2771,11 @@ export function makePlannerWave(opts: {
   summary?: string;
   calibrationSource?: PlannerWave['calibrationSource'];
 }): PlannerWave {
+  // «План дня» — первый полный расчёт (не время суток). В скобках в отчёте
+  // потом пишется createdAt (когда посчитали), напр. «План дня (22:43)».
   const label =
     opts.mode === 'full_day' || opts.index === 0
-      ? 'Утро'
+      ? 'План дня'
       : opts.mode === 'shift'
         ? 'Сдвиг рейса'
         : `Этап ${opts.index}`;
@@ -2716,6 +2795,13 @@ export function makePlannerWave(opts: {
     summary: opts.summary,
     calibrationSource: opts.calibrationSource,
   };
+}
+
+/** Подпись волны для UI/отчёта (старые планы могли хранить «Утро»). */
+export function formatPlannerWaveLabel(label: string | null | undefined): string {
+  const t = String(label || '').trim();
+  if (!t || t === 'Утро') return 'План дня';
+  return t;
 }
 
 export function nextWaveStageIndex(waves: PlannerWave[]): number {

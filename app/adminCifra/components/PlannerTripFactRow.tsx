@@ -57,20 +57,21 @@ function deltaColor(d: number | null): string {
   return '#94A3B8';
 }
 
+/** Цвета как на дашборде (строки миксеров) — иначе «В пути» жёлтый путает с «Загрузка». */
 function factStatusColor(status: string | null | undefined): string {
   switch (String(status || '')) {
     case 'Загрузка':
-      return '#93C5FD';
-    case 'В пути':
       return '#FDE047';
+    case 'В пути':
+      return '#93C5FD';
     case 'На объекте':
-      return '#FDBA74';
+      return '#34D399';
     case 'Разгружен':
       return '#6EE7B7';
     case 'Возврат':
-      return '#A7F3D0';
+      return '#CBD5E1';
     case 'Проблема':
-      return '#FCA5A5';
+      return '#F87171';
     default:
       return '#CBD5E1';
   }
@@ -278,7 +279,7 @@ export default function PlannerTripFactRow({
     `minmax(0, 0.7fr)`, // обр.
     `${sp(78)}px`, // задержка + замок фикса
     `${sp(1)}px`, // разделитель
-    `${sp(36)}px`, // ярлык блока факта
+    `${sp(64)}px`, // ярлык («факт» / «факта нет» — раньше 36px обрезало)
     `minmax(0, 1.15fr)`, // старт + Δ
     `minmax(0, 1.25fr)`, // выпуск + Δ
     `${sp(88)}px`, // статус в конце строки (+ правки времени)
@@ -676,16 +677,25 @@ export default function PlannerTripFactRow({
         {fact.hasMatch ? (
           <Labeled label="старт" labelW={labelFactW} valueColor={muted}>
             <span>
-              {fact.factLoadStart || '—'}
-              <span
-                style={{
-                  display: 'inline-block',
-                  marginLeft: 4,
-                  color: deltaLoad ? deltaColor(fact.deltaLoadMin) : 'transparent',
-                }}
-              >
-                {deltaLoad ? `(${deltaLoad})` : '(+0 мин)'}
-              </span>
+              {fact.factLoadStart ? (
+                fact.factLoadStart
+              ) : fact.noOperatorRecord ||
+                String(trip.id).startsWith('live-orphan-') ? (
+                <span style={{ color: '#F59E0B', fontWeight: 700 }}>вручную</span>
+              ) : (
+                '—'
+              )}
+              {fact.factLoadStart ? (
+                <span
+                  style={{
+                    display: 'inline-block',
+                    marginLeft: 4,
+                    color: deltaLoad ? deltaColor(fact.deltaLoadMin) : 'transparent',
+                  }}
+                >
+                  {deltaLoad ? `(${deltaLoad})` : '(+0 мин)'}
+                </span>
+              ) : null}
             </span>
           </Labeled>
         ) : null}

@@ -3,6 +3,66 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 
+/** Как в calloutService.normalizeOrgKey — без ООО/кавычек, для устойчивого поиска. */
+function normalizeOrgKey(name: string | null | undefined): string {
+  let s = String(name || '').toLowerCase().replace(/["'«»„“]/g, ' ');
+  const opf = [
+    'публичное акционерное общество',
+    'акционерное общество',
+    'общество с ограниченной ответственностью',
+    'индивидуальный предприниматель',
+    'пао',
+    'ооо',
+    'зао',
+    'оао',
+    'ао',
+    'ип',
+  ];
+  for (const w of opf) {
+    s = s.replace(new RegExp(`(^|\\s+)${w.replace(/\s+/g, '\\s+')}(?=\\s+|$)`, 'gi'), ' ');
+  }
+  return s
+    .replace(/[^a-zа-яё0-9]+/gi, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+/** Токены поиска: без ООО/кавычек, порядок слов не важен. */
+function clientSearchTokens(raw: string): string[] {
+  const normalized = normalizeOrgKey(raw);
+  const tokens = normalized.split(/\s+/).filter((t) => t.length >= 2);
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length >= 4) tokens.push(digits);
+  return [...new Set(tokens)].slice(0, 8);
+}
+
+function groupMatchesSearch(group: any, tokens: string[]): boolean {
+  if (tokens.length === 0) return true;
+  const nameHay = normalizeOrgKey(
+    [
+      group.organization_name,
+      group.full_name,
+      ...(Array.isArray(group.clients)
+        ? group.clients.map((c: any) => `${c.organization_name || ''} ${c.full_name || ''}`)
+        : []),
+    ].join(' '),
+  );
+  const phoneDigits = [
+    ...(Array.isArray(group.phones) ? group.phones : []),
+    ...(Array.isArray(group.clients) ? group.clients.map((c: any) => c.phone) : []),
+  ]
+    .join(' ')
+    .replace(/\D/g, '');
+  const inn = String(group.inn || '');
+
+  return tokens.every((t) => {
+    if (/^\d+$/.test(t)) {
+      return phoneDigits.includes(t) || inn.includes(t) || nameHay.includes(t);
+    }
+    return nameHay.includes(t);
+  });
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAdminCifraStaff(request);
@@ -11,15 +71,21 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '18', 10) || 18));
-    let search = searchParams.get('search')?.trim() || '';
+    const search = (searchParams.get('search') || '').trim().replace(/,/g, ' ');
     const clientType = (searchParams.get('clientType') || 'all').toLowerCase();
     // spam=hide (default) | only | all
     const spamMode = (searchParams.get('spam') || 'hide').toLowerCase();
 
     const from = (page - 1) * limit;
+    const tokens = search.length > 0 ? clientSearchTokens(search) : [];
 
-    console.log(`🚀 [Загрузка] Страница ${page} | Поиск: "${search}" | Тип: ${clientType} | spam: ${spamMode}`);
+    console.log(
+      `🚀 [Загрузка] Страница ${page} | Поиск: "${search}" | токены: [${tokens.join(', ')}] | Тип: ${clientType} | spam: ${spamMode}`,
+    );
 
+    // Поиск — после группировки (нормализация ОПФ/кавычек/порядка слов).
+    // Хрупкий PostgREST .or(ilike.… " …) с кавычками ломал выдачу и не находил
+    // «ООО " РСФ…"» при карточке «РСФ "…" ООО».
     let query = supabase
       .from('users')
       .select('*')
@@ -28,14 +94,6 @@ export async function GET(request: NextRequest) {
 
     if (spamMode === 'only') query = query.eq('is_spam', true);
     else if (spamMode !== 'all') query = query.eq('is_spam', false);
-
-    if (search.length > 0) {
-      search = search.replace(/,/g, ' ');
-      const searchTerm = `%${search}%`;
-      query = query.or(
-        `full_name.ilike.${searchTerm},organization_name.ilike.${searchTerm},phone.ilike.${searchTerm},inn.ilike.${searchTerm}`
-      );
-    }
 
     // Загружаем ВСЕХ подходящих клиентов — группировка должна происходить
     // по всей базе, а не по срезу страницы. Иначе клиенты одной компании
@@ -174,6 +232,21 @@ export async function GET(request: NextRequest) {
       allGroups = allGroups.filter(
         (g: any) => !(g.organization_name || g.inn)
       );
+    }
+
+    if (tokens.length > 0) {
+      allGroups = allGroups.filter((g: any) => groupMatchesSearch(g, tokens));
+    } else if (search.length > 0) {
+      // После нормализации токенов не осталось (одна буква / только ООО) —
+      // мягкий fallback по нормализованной строке.
+      const key = normalizeOrgKey(search);
+      if (key) {
+        allGroups = allGroups.filter((g: any) =>
+          normalizeOrgKey(
+            `${g.organization_name || ''} ${g.full_name || ''}`,
+          ).includes(key),
+        );
+      }
     }
 
     // Пагинируем группы, а не индивидуальных клиентов
