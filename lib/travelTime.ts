@@ -2,21 +2,24 @@
  * Оценка времени в пути завод → адрес (минуты).
  * Используется API travel-time и автопересчётом при смене адреса заявки.
  *
- * Формула v2: кривизна 1.3, скорость 55 км/ч.
+ * Формула v3: кривизна 1.3, скорость 55 км/ч; самовывоз → 0.
  */
-import { normalizeDeliveryAddress } from '@/lib/bryanskAddress';
+import { isPickupOrder, normalizeDeliveryAddress } from '@/lib/bryanskAddress';
 import {
   extractCoordsFromAddress,
   geocodeAddressWithFallback,
   getRouteOriginCoords,
+  prepareGeocodeQuery,
 } from '@/lib/geocodeAddress';
 
 /** Версия формулы — при росте сбрасывать кэш через force. */
-export const TRAVEL_FORMULA_VERSION = 2;
+export const TRAVEL_FORMULA_VERSION = 3;
 
 const ROUTING_FACTOR = 1.3;
 const AVG_SPEED_KMH = 55;
 const MIN_TRAVEL_MIN = 10;
+/** Ближе этого — считаем «на заводе» (самовывоз / точка БСУ). */
+const PLANT_EPS_KM = 0.25;
 export const FALLBACK_TRAVEL_MIN = 30;
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -31,44 +34,44 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
 }
 
 /**
- * Подготовка адреса для DaData: регион + «район» вместо «р-н».
- * Без «Брянская область» запрос «д. Заречная, Комаричский р-н» часто даёт 0 подсказок.
+ * Подготовка адреса для геокода: normalize (ЖК/Ходаринка/самовывоз) + expand сокращений.
  */
 export function prepareTravelGeocodeQuery(raw: string): string {
   if (extractCoordsFromAddress(raw)) return raw.trim();
-  let q = normalizeDeliveryAddress(raw);
-  // DaData стабильнее на полных словах, чем на «д.» / «р-н».
-  // Важно: \\b в JS плохо дружит с кириллицей — только явные границы.
-  q = q.replace(/(^|[\s,./])р-?н\.?(?=$|[\s,.])/gi, '$1район');
-  // Длинные маркеры раньше коротких (`пгт` до `п.`, `г.` отдельно от города).
-  q = q.replace(/(^|[\s,])пгт\.?\s*(?=[А-ЯЁ])/gi, '$1посёлок городского типа ');
-  q = q.replace(/(^|[\s,])г\.\s*(?=[А-ЯЁ])/gi, '$1город ');
-  q = q.replace(/(^|[\s,])д\.\s*(?=[А-ЯЁ])/gi, '$1деревня ');
-  q = q.replace(/(^|[\s,])п\.\s*(?=[А-ЯЁ])/gi, '$1посёлок ');
-  q = q.replace(/(^|[\s,])с\.\s*(?=[А-ЯЁ])/gi, '$1село ');
-  q = q.replace(/\s{2,}/g, ' ').replace(/\s+,/g, ',').trim();
-  return q;
+  return prepareGeocodeQuery(normalizeDeliveryAddress(raw));
 }
 
 /** Считает дорогу по адресу (без записи в БД). */
 export async function computeRoadMinutes(
   address: string | null | undefined,
 ): Promise<{ road_time_min: number; source: 'calculated' | 'fallback' }> {
-  let road_time_min = FALLBACK_TRAVEL_MIN;
-  let source: 'calculated' | 'fallback' = 'fallback';
   const raw = String(address || '').trim();
-  if (!raw) return { road_time_min, source };
+  if (!raw) {
+    return { road_time_min: FALLBACK_TRAVEL_MIN, source: 'fallback' };
+  }
+
+  // Самовывоз — клиент на заводе, дороги нет (раньше получалось 10 мин → ложные задержки).
+  if (isPickupOrder(raw)) {
+    return { road_time_min: 0, source: 'calculated' };
+  }
 
   const query = prepareTravelGeocodeQuery(raw);
   const coords =
     extractCoordsFromAddress(query) || (await geocodeAddressWithFallback(query));
-  if (coords) {
-    const plant = getRouteOriginCoords();
-    const straightKm = haversineKm(plant.lat, plant.lon, coords.lat, coords.lon);
-    const roadKm = straightKm * ROUTING_FACTOR;
-    const estimatedMin = Math.round((roadKm / AVG_SPEED_KMH) * 60);
-    road_time_min = Math.max(MIN_TRAVEL_MIN, estimatedMin);
-    source = 'calculated';
+  if (!coords) {
+    return { road_time_min: FALLBACK_TRAVEL_MIN, source: 'fallback' };
   }
-  return { road_time_min, source };
+
+  const plant = getRouteOriginCoords();
+  const straightKm = haversineKm(plant.lat, plant.lon, coords.lat, coords.lon);
+  if (straightKm < PLANT_EPS_KM) {
+    return { road_time_min: 0, source: 'calculated' };
+  }
+
+  const roadKm = straightKm * ROUTING_FACTOR;
+  const estimatedMin = Math.round((roadKm / AVG_SPEED_KMH) * 60);
+  return {
+    road_time_min: Math.max(MIN_TRAVEL_MIN, estimatedMin),
+    source: 'calculated',
+  };
 }

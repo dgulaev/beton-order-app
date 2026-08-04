@@ -486,10 +486,11 @@ export default function LogisticsPlannerTab({
         address: String(raw.address || '').trim(),
         grade: String(raw.grade || ''),
         status: String(raw.status || ''),
-        roadMin:
-          localRoadTimes[String(raw.id)] ??
-          roadTimes[String(raw.id)] ??
-          (raw.road_time_min != null ? Number(raw.road_time_min) : 30),
+        roadMin: isPickupOrder(String(raw.address || ''))
+          ? 0
+          : localRoadTimes[String(raw.id)] ??
+            roadTimes[String(raw.id)] ??
+            (raw.road_time_min != null ? Number(raw.road_time_min) : 30),
       };
       const planned = trips.filter((t) => String(t.orderId) === String(o.id));
       for (const orphan of orphanLiveTripsAsPlanned(o, dayTrips, planned)) {
@@ -771,11 +772,33 @@ export default function LogisticsPlannerTab({
   const refreshRoadTimes = useCallback(
     async (opts?: { silent?: boolean }) => {
       if (!orders.length) return;
+      const pickupOrders = orders.filter((o) => isPickupOrder(o.address));
       const deliveryOrders = orders.filter((o) => !isPickupOrder(o.address));
+
+      // Самовывоз → 0 мин (и в локальный кэш, и в БД через force).
+      const pickupTimes: Record<string, number> = {};
+      for (const o of pickupOrders) pickupTimes[String(o.id)] = 0;
+
       if (deliveryOrders.length === 0) {
-        if (!opts?.silent) setRoadsNote('Самовывоз — дороги не считаю');
+        setLocalRoadTimes((prev) => ({ ...prev, ...pickupTimes }));
+        onRoadTimesUpdate?.({ ...pickupTimes });
+        if (pickupOrders.length > 0) {
+          void fetch('/api/adminCifra/travel-time', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              force: true,
+              batch: pickupOrders.map((o) => ({
+                orderId: o.id,
+                address: o.address || '',
+              })),
+            }),
+          }).catch(() => {});
+        }
+        if (!opts?.silent) setRoadsNote('Самовывоз — дороги = 0 мин');
         return;
       }
+
       setRoadsRefreshing(true);
       if (!opts?.silent) setRoadsNote('Пересчитываю дороги (сброс кэша)…');
       try {
@@ -784,10 +807,16 @@ export default function LogisticsPlannerTab({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             force: true,
-            batch: deliveryOrders.map((o) => ({
-              orderId: o.id,
-              address: o.address || '',
-            })),
+            batch: [
+              ...deliveryOrders.map((o) => ({
+                orderId: o.id,
+                address: o.address || '',
+              })),
+              ...pickupOrders.map((o) => ({
+                orderId: o.id,
+                address: o.address || '',
+              })),
+            ],
           }),
         });
         if (!res.ok) {
@@ -795,7 +824,7 @@ export default function LogisticsPlannerTab({
           return;
         }
         const data = await res.json();
-        const times = (data.times || {}) as Record<string, number>;
+        const times = { ...pickupTimes, ...((data.times || {}) as Record<string, number>) };
         let changed = 0;
         let next: Record<string, number> = {};
         setLocalRoadTimes((prev) => {
@@ -809,13 +838,16 @@ export default function LogisticsPlannerTab({
           return next;
         });
         onRoadTimesUpdate?.(next);
-        const mins = Object.values(times);
+        const deliveryMins = Object.entries(times)
+          .filter(([id]) => !pickupTimes[id])
+          .map(([, min]) => min);
         const avg =
-          mins.length > 0
-            ? Math.round(mins.reduce((s, n) => s + n, 0) / mins.length)
+          deliveryMins.length > 0
+            ? Math.round(deliveryMins.reduce((s, n) => s + n, 0) / deliveryMins.length)
             : 0;
         setRoadsNote(
-          `Дороги пересчитаны (формула v2): ${mins.length} заявок` +
+          `Дороги пересчитаны (формула v3): ${deliveryMins.length} заявок` +
+            (pickupOrders.length ? `, самовывоз ${pickupOrders.length}` : '') +
             (avg ? `, среднее ~${avg} мин` : '') +
             (changed ? `, изменено ${changed}` : ''),
         );
@@ -847,7 +879,11 @@ export default function LogisticsPlannerTab({
       let changed = false;
       for (const o of orders) {
         const id = String(o.id);
-        const m = o.road_time_min != null ? Number(o.road_time_min) : NaN;
+        const m = isPickupOrder(o.address)
+          ? 0
+          : o.road_time_min != null
+            ? Number(o.road_time_min)
+            : NaN;
         if (!Number.isFinite(m) || prev[id] === m) continue;
         if (!changed) {
           next = { ...prev };
@@ -871,10 +907,11 @@ export default function LogisticsPlannerTab({
           address: String(o.address || '').trim(),
           grade: String(o.grade || ''),
           status: String(o.status || ''),
-          roadMin:
-            localRoadTimes[String(o.id)] ??
-            roadTimes[String(o.id)] ??
-            (o.road_time_min != null ? Number(o.road_time_min) : 30),
+          roadMin: isPickupOrder(o.address)
+            ? 0
+            : localRoadTimes[String(o.id)] ??
+              roadTimes[String(o.id)] ??
+              (o.road_time_min != null ? Number(o.road_time_min) : 30),
         })),
     [orders, localRoadTimes, roadTimes],
   );

@@ -3,6 +3,13 @@
  * (Не тянуть из lib/yandexRoute.ts в API/RSC.)
  */
 
+import {
+  BRYANSK_CITY_AREAS,
+  BRYANSK_LANDMARKS,
+  type BryanskCityArea,
+  type BryanskLandmark,
+} from './bryanskLandmarks';
+
 export const ROUTE_ORIGIN_ADDRESS = 'Брянск, Орловский тупик, 6';
 
 let routeOriginAddressOverride: string | null = null;
@@ -16,9 +23,140 @@ export function getRouteOriginAddress(): string {
   return routeOriginAddressOverride || ROUTE_ORIGIN_ADDRESS;
 }
 
-const KNOWN_LANDMARKS: { keywords: string[]; address: string }[] = [
-  { keywords: ['варяг'], address: 'Брянск, улица Дуки, 56В' },
-];
+/**
+ * Самовывоз: клиент забирает бетон на заводе.
+ * Не геокодировать как адрес доставки (иначе «г. Брянск, Самовывоз» → центр города).
+ * Важно: целое слово — «Самовывозников» / street names не считаем самовывозом.
+ */
+export function isPickupOrder(address?: string | null): boolean {
+  const raw = foldYo(String(address || '').toLowerCase()).trim();
+  if (!raw) return false;
+  // Границы без \\b (в JS плохо с кириллицей).
+  if (/(^|[^а-яa-z0-9])самовывоз([^а-яa-z0-9]|$)/i.test(raw)) return true;
+  if (/(^|[^a-z0-9])self-?pickup([^a-z0-9]|$)/i.test(raw)) return true;
+  // Голое английское pickup — только если адрес без кириллицы (иначе слишком широко).
+  if (!/[а-я]/i.test(raw) && /(^|[^a-z0-9])pickup([^a-z0-9]|$)/i.test(raw)) return true;
+  return false;
+}
+
+/**
+ * Ориентиры (ЖК / КП / мкр / ТЦ): менеджеры пишут коротко («ЖК Рай»),
+ * DaData часто ставит центр города. Справочник — lib/bryanskLandmarks.ts;
+ * один список на десктоп и мобилку через `normalizeDeliveryAddress`.
+ */
+type KnownLandmark = BryanskLandmark;
+
+/** Схлопываем кавычки/ё — чтобы «ЖК «Рай»» матчился по keyword `жк рай`. */
+function foldLandmarkText(value: string): string {
+  return foldYo(value)
+    .toLowerCase()
+    .replace(/[«»„“”"']/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function landmarkToQuery(landmark: KnownLandmark): string {
+  if (
+    typeof landmark.lat === 'number' &&
+    typeof landmark.lon === 'number' &&
+    Number.isFinite(landmark.lat) &&
+    Number.isFinite(landmark.lon)
+  ) {
+    return `${landmark.label}, ${landmark.lat}, ${landmark.lon}`;
+  }
+  return landmark.address || landmark.label;
+}
+
+/** Keyword как целое слово/фраза: «посёлок рай» ≠ «посёлок райский». */
+function landmarkKeywordMatches(hay: string, kw: string): boolean {
+  let from = 0;
+  while (true) {
+    const idx = hay.indexOf(kw, from);
+    if (idx === -1) return false;
+    const before = idx > 0 ? hay[idx - 1] : '';
+    const after = idx + kw.length < hay.length ? hay[idx + kw.length] : '';
+    const beforeOk = !before || !CYRILLIC_LETTER.test(before);
+    const afterOk = !after || !CYRILLIC_LETTER.test(after);
+    if (beforeOk && afterOk) return true;
+    from = idx + 1;
+  }
+}
+
+/** Самое длинное совпадение keyword — чтобы более точная фраза выигрывала. */
+function findKnownLandmark(raw: string): KnownLandmark | null {
+  const hay = foldLandmarkText(raw);
+  if (!hay) return null;
+
+  let best: { landmark: KnownLandmark; len: number } | null = null;
+  for (const landmark of BRYANSK_LANDMARKS) {
+    for (const kwRaw of landmark.keywords) {
+      const kw = foldLandmarkText(kwRaw);
+      if (kw.length < 3) continue;
+      if (!landmarkKeywordMatches(hay, kw)) continue;
+      if (!best || kw.length > best.len) {
+        best = { landmark, len: kw.length };
+      }
+    }
+  }
+  return best?.landmark ?? null;
+}
+
+function cityAreaKeys(area: BryanskCityArea): string[] {
+  return [area.name, ...(area.aliases || [])];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * «Ходаринка, ул. Ольховская 52» → area + rest улицы;
+ * «мкр Ходаринка» / голое «Ходаринка» → area без rest.
+ */
+function matchCityArea(
+  trimmed: string,
+): { area: BryanskCityArea; rest: string } | null {
+  let best: { area: BryanskCityArea; rest: string; keyLen: number } | null = null;
+
+  for (const area of BRYANSK_CITY_AREAS) {
+    for (const keyRaw of cityAreaKeys(area)) {
+      const key = foldLandmarkText(keyRaw);
+      if (key.length < 3) continue;
+      const keyRe = escapeRegExp(keyRaw).replace(/ё/gi, '[её]');
+
+      // префикс: «Ходаринка, …» / «мкр Ходаринка, …»
+      const prefixRe = new RegExp(
+        `^(?:мкр\\.?\\s+|микрорайон\\s+|район\\s+|р-н\\.?\\s+)?${keyRe}\\s*(?:,\\s*|\\s+|$)`,
+        'i',
+      );
+      const prefixHit = trimmed.match(prefixRe);
+      if (prefixHit) {
+        const rest = trimmed.slice(prefixHit[0].length).trim();
+        if (!best || key.length > best.keyLen) {
+          best = { area, rest, keyLen: key.length };
+        }
+      }
+
+      // суффикс: «ул. Ольховская 52, Ходаринка»
+      const suffixRe = new RegExp(
+        `[,\\s]+(?:мкр\\.?\\s+|микрорайон\\s+|район\\s+|р-н\\.?\\s+)?${keyRe}\\s*$`,
+        'i',
+      );
+      if (suffixRe.test(trimmed)) {
+        const rest = trimmed.replace(suffixRe, '').trim();
+        if (rest && (!best || key.length > best.keyLen)) {
+          best = { area, rest, keyLen: key.length };
+        }
+      }
+    }
+  }
+
+  return best ? { area: best.area, rest: best.rest } : null;
+}
+
+function cityAreaToQuery(area: BryanskCityArea): string {
+  return `Брянск, ${area.name}, ${area.lat}, ${area.lon}`;
+}
 
 /**
  * Маркер населённого пункта вне «голой» улицы Брянска.
@@ -100,6 +238,7 @@ const KNOWN_SETTLEMENTS: KnownSettlement[] = [
 
   // Частые сёла / деревни / посёлки (особенно вокруг Брянска)
   { name: 'Толмачево', type: 'с.' },
+  { name: 'Толвинка', type: 'п.' },
   { name: 'Супонево', type: 'п.' },
   { name: 'Путёвка', type: 'п.', aliases: ['Путевка'] },
   { name: 'Глинищево', type: 'с.' },
@@ -200,8 +339,9 @@ export function isOutsideBryansk(rawAddress: string | null | undefined): boolean
   const trimmed = (rawAddress || '').trim();
   if (!trimmed) return false;
 
-  const lower = trimmed.toLowerCase();
-  if (KNOWN_LANDMARKS.some((l) => l.keywords.some((kw) => lower.includes(kw)))) return false;
+  if (isPickupOrder(trimmed)) return false;
+  if (findKnownLandmark(trimmed)) return false;
+  if (matchCityArea(trimmed)) return false;
 
   if (mentionsBryanskCity(trimmed)) return false;
   if (mentionsBryanskRegion(trimmed)) return true;
@@ -217,13 +357,36 @@ export function normalizeDeliveryAddress(rawAddress: string | null | undefined):
   const trimmed = (rawAddress || '').trim();
   if (!trimmed) return ROUTE_ORIGIN_ADDRESS;
 
-  const lower = trimmed.toLowerCase();
+  // Самовывоз = точка завода, не «г. Брянск, Самовывоз» (центр города).
+  if (isPickupOrder(trimmed)) return getRouteOriginAddress();
 
-  const landmark = KNOWN_LANDMARKS.find((l) => l.keywords.some((kw) => lower.includes(kw)));
-  if (landmark) return landmark.address;
+  const landmark = findKnownLandmark(trimmed);
+  if (landmark) return landmarkToQuery(landmark);
+
+  // Городской район/слобода: с улицей — геокодим улицу; без — точку района.
+  // Иначе DaData на «Ходаринка, ул. …» ставит центр Брянска.
+  const cityArea = matchCityArea(trimmed);
+  if (cityArea) {
+    if (cityArea.rest) {
+      return normalizeDeliveryAddress(cityArea.rest);
+    }
+    return cityAreaToQuery(cityArea.area);
+  }
+
+  // Уже с «г. Брянск, …» — всё равно выкидываем «Ходаринка» из середины.
+  if (mentionsBryanskCity(trimmed)) {
+    const afterCity = trimmed
+      .replace(/^(?:г\.?\s*)?брянск\.?\s*,?\s*/i, '')
+      .trim();
+    const nested = matchCityArea(afterCity);
+    if (nested) {
+      if (nested.rest) return `г. Брянск, ${nested.rest}`;
+      return cityAreaToQuery(nested.area);
+    }
+    return trimmed;
+  }
 
   if (mentionsBryanskRegion(trimmed)) return trimmed;
-  if (mentionsBryanskCity(trimmed)) return trimmed;
 
   if (SETTLEMENT_MARKER.test(trimmed) || DISTRICT_MARKER.test(trimmed)) {
     return `${trimmed}, Брянская область`;

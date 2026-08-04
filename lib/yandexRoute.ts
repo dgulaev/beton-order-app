@@ -10,11 +10,13 @@ import { useEffect, useMemo, useState } from 'react';
 export {
   ROUTE_ORIGIN_ADDRESS,
   isOutsideBryansk,
+  isPickupOrder,
   normalizeDeliveryAddress,
 } from './bryanskAddress';
 
 import {
   getRouteOriginAddress,
+  isPickupOrder,
   mentionsBryanskCity,
   normalizeDeliveryAddress,
 } from './bryanskAddress';
@@ -76,6 +78,19 @@ import { getRouteOriginCoords, extractCoordsFromAddress, type Coords } from './g
 /** Ссылка на построение маршрута в Яндекс.Картах по КООРДИНАТАМ — работает
  * одинаково надёжно и в обычном браузере, и в Яндекс.Браузере (открывает
  * приложение и сразу строит маршрут). */
+/** Точка завода на карте (без маршрута) — для самовывоза. */
+function buildPlantPlaceUrl(service: 'yandex' | 'google' | '2gis'): string {
+  const o = getRouteOriginCoords();
+  const addr = getRouteOriginAddress();
+  if (service === 'yandex') {
+    return `https://yandex.ru/maps/?pt=${o.lon},${o.lat}&z=16&l=map&text=${encodeURIComponent(addr)}`;
+  }
+  if (service === 'google') {
+    return `https://www.google.com/maps/search/?api=1&query=${o.lat},${o.lon}`;
+  }
+  return `https://2gis.ru/bryansk/geo/${o.lon}%2C${o.lat}`;
+}
+
 function buildYandexMapsRouteUrlByCoords(destLat: number, destLon: number): string {
   const o = getRouteOriginCoords();
   const params = new URLSearchParams({
@@ -97,7 +112,8 @@ function buildYandexMapsRouteUrlByCoords(destLat: number, destLon: number): stri
 //   не шлём дублирующие запросы, а ждём один общий promise.
 const geocodeMemoryCache = new Map<string, Coords | null>();
 const geocodeInFlight = new Map<string, Promise<Coords | null>>();
-const SESSION_CACHE_PREFIX = 'yandexGeocode:';
+// v8 — самовывоз → завод, не центр города.
+const SESSION_CACHE_PREFIX = 'yandexGeocode:v8:';
 
 function readSessionCache(key: string): Coords | null | undefined {
   if (typeof window === 'undefined') return undefined;
@@ -212,13 +228,15 @@ export function useYandexRouteHref(rawAddress: string | null | undefined): Yande
   // Быстрый путь: если в адресе уже есть координаты — сразу строим ссылку,
   // без запроса к DaData. Это точнее геокодирования и не требует ожидания.
   const embeddedCoords = useMemo(() => extractCoordsFromAddress(rawAddress), [rawAddress]);
+  const pickup = isPickupOrder(rawAddress);
 
   const fallbackHref = useMemo(() => {
+    if (pickup) return buildPlantPlaceUrl('yandex');
     if (embeddedCoords) {
       return buildYandexMapsRouteUrlByCoords(embeddedCoords.lat, embeddedCoords.lon);
     }
     return buildYandexMapsRouteUrl(rawAddress);
-  }, [rawAddress, embeddedCoords]);
+  }, [rawAddress, embeddedCoords, pickup]);
 
   // Результат геокодирования — храним вместе с адресом, для которого он
   // получен: если rawAddress уже сменился, а старый результат ещё "летит",
@@ -232,7 +250,7 @@ export function useYandexRouteHref(rawAddress: string | null | undefined): Yande
   const [timedOutAddress, setTimedOutAddress] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
-    if (!rawAddress) return;
+    if (!rawAddress || pickup) return;
 
     // Координаты уже извлечены из текста — DaData не нужна, ссылка уже готова
     if (embeddedCoords) return;
@@ -253,10 +271,10 @@ export function useYandexRouteHref(rawAddress: string | null | undefined): Yande
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [rawAddress, embeddedCoords]);
+  }, [rawAddress, embeddedCoords, pickup]);
 
-  // Если координаты найдены в тексте — ссылка готова сразу, без ожидания
-  if (embeddedCoords) {
+  // Самовывоз / координаты в тексте — ссылка готова сразу, без DaData
+  if (pickup || embeddedCoords) {
     return { href: fallbackHref, ready: true };
   }
 
@@ -317,6 +335,8 @@ export interface MapRouteLinks {
   twoGisHref: string;
   /** true — координаты подтянуты (или геокодирование гарантированно не удастся/истёк таймаут) — ссылки на все три сервиса безопасно открывать. */
   ready: boolean;
+  /** Адрес = самовывоз: ссылки ведут на завод, без маршрута «в центр». */
+  pickup: boolean;
 }
 
 /**
@@ -327,13 +347,26 @@ export interface MapRouteLinks {
  * работает одинаково для всех сервисов, а не только для Яндекса.
  */
 export function useMapRouteLinks(rawAddress: string | null | undefined): MapRouteLinks {
+  const pickup = isPickupOrder(rawAddress);
   const { href: yandexHref, ready: yandexReady } = useYandexRouteHref(rawAddress);
   const { coords, ready: coordsReady } = useDeliveryCoords(rawAddress);
 
-  const googleHref = useMemo(() => buildGoogleMapsRouteUrl(rawAddress, coords), [rawAddress, coords]);
-  const twoGisHref = useMemo(() => buildTwoGisRouteUrl(rawAddress, coords), [rawAddress, coords]);
+  const googleHref = useMemo(
+    () => (pickup ? buildPlantPlaceUrl('google') : buildGoogleMapsRouteUrl(rawAddress, coords)),
+    [rawAddress, coords, pickup],
+  );
+  const twoGisHref = useMemo(
+    () => (pickup ? buildPlantPlaceUrl('2gis') : buildTwoGisRouteUrl(rawAddress, coords)),
+    [rawAddress, coords, pickup],
+  );
 
-  return { yandexHref, googleHref, twoGisHref, ready: yandexReady && coordsReady };
+  return {
+    yandexHref,
+    googleHref,
+    twoGisHref,
+    ready: yandexReady && coordsReady,
+    pickup,
+  };
 }
 
 export interface DeliveryCoordsResult {
@@ -353,12 +386,13 @@ export interface DeliveryCoordsResult {
  */
 export function useDeliveryCoords(rawAddress: string | null | undefined): DeliveryCoordsResult {
   const embeddedCoords = useMemo(() => extractCoordsFromAddress(rawAddress), [rawAddress]);
+  const pickup = isPickupOrder(rawAddress);
 
   const [resolved, setResolved] = useState<{ address: string | null | undefined; coords: Coords | null } | null>(null);
   const [timedOutAddress, setTimedOutAddress] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
-    if (!rawAddress || embeddedCoords) return;
+    if (!rawAddress || embeddedCoords || pickup) return;
 
     let cancelled = false;
     const destination = normalizeDeliveryAddress(rawAddress);
@@ -376,7 +410,12 @@ export function useDeliveryCoords(rawAddress: string | null | undefined): Delive
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [rawAddress, embeddedCoords]);
+  }, [rawAddress, embeddedCoords, pickup]);
+
+  // Самовывоз: точка завода (карта покажет завод без маршрута «в центр»).
+  if (pickup) {
+    return { coords: getRouteOriginCoords(), ready: true };
+  }
 
   if (embeddedCoords) {
     return { coords: embeddedCoords, ready: true };

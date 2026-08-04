@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, MapPin, Navigation, ChevronDown, Clock } from 'lucide-react';
 import { Order } from '../../adminCifra/hooks/useCalendarOrders';
-import { useYandexRouteHref } from '@/lib/yandexRoute';
+import { useMapRouteLinks } from '@/lib/yandexRoute';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
@@ -81,7 +81,12 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
   const questionableSavingRef = useRef(false);
   // Не помечаем прочитанным, пока пользователь не зашёл в блок комментариев
   const [commentsActive, setCommentsActive] = useState(false);
-  const { href: yandexRouteHref, ready: yandexRouteReady } = useYandexRouteHref(order?.address);
+  // Единая нормализация (пгт Выгоничи + область), без «Брянск, …» для чужих НП.
+  const {
+    yandexHref: yandexRouteHref,
+    googleHref: googleMapsHref,
+    ready: yandexRouteReady,
+  } = useMapRouteLinks(order?.address);
 
   const role = (currentUser?.role || '').toLowerCase().trim();
   const isAdmin = role === 'admin';
@@ -223,9 +228,6 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
       setQuestionableSaving(false);
     }
   };
-
-  const getFullAddress = (a: string) => (!a ? 'Брянск' : /брянск/i.test(a) ? a : `Брянск, ${a}`);
-  const googleMapsHref = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent('Брянск, туп. Орловский, 6А')}&destination=${encodeURIComponent(getFullAddress(order.address || ''))}&travelmode=driving`;
 
   return (
     <div

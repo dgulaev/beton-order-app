@@ -2,10 +2,11 @@
 // Геокодирование адреса в координаты через DaData (для построения маршрутов
 // в Яндекс.Картах). Ключ держим только на сервере.
 import { NextRequest, NextResponse } from 'next/server';
-import { normalizeDeliveryAddress } from '@/lib/bryanskAddress';
+import { isPickupOrder, normalizeDeliveryAddress } from '@/lib/bryanskAddress';
 import {
   extractCoordsFromAddress,
   geocodeAddressWithFallback,
+  getRouteOriginCoords,
 } from '@/lib/geocodeAddress';
 
 export async function POST(req: NextRequest) {
@@ -13,11 +14,17 @@ export async function POST(req: NextRequest) {
     const { address } = await req.json();
     const raw = (address || '').trim();
 
-    if (!raw || !process.env.DADATA_API_KEY) {
+    if (!raw) {
       return NextResponse.json({ lat: null, lon: null });
     }
 
+    // Самовывоз → координаты завода, не центр Брянска.
+    if (isPickupOrder(raw)) {
+      return NextResponse.json(getRouteOriginCoords());
+    }
+
     // Уже нормализованные вызовы (UI) не ломаем; сырой «д. Заречная» → область.
+    // Landmark («ЖК Рай») может подставить lat/lon — тогда DaData не нужен.
     const query = extractCoordsFromAddress(raw)
       ? raw
       : normalizeDeliveryAddress(raw);

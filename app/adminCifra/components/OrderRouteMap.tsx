@@ -6,27 +6,18 @@
 // полноценно интерактивна (зум колесом/пинчем, перетаскивание) и умеет
 // переключать вид (схема/спутник/светлая/тёмная/топографическая).
 //
-// ⚠️ 18.07.2026: раньше здесь были Яндекс.Карты (JS API), но выяснилось, что
-// наша админка — закрытая система для коммерческого использования, а значит
-// НЕ подходит под условия бесплатного тарифа Яндекса (он только для открытых
-// некоммерческих сайтов). Из-за этого ключ получил урезанный тестовый лимит
-// 100 запросов/сутки, которого реальному бизнесу хватает на полчаса работы,
-// а при регулярном превышении ключ блокируется навсегда без восстановления.
-// Заменили на OpenStreetMap через Leaflet — открытые данные, без API-ключа
-// и договорных ограничений.
-//
-// ⚠️ Раньше вся карточка была одной большой ссылкой (клик в любом месте
-// открывал маршрут во внешнем приложении) — карта была чисто декоративной,
-// жесты (драг/зум) специально отключались, чтобы не мешать этому клику.
-// Теперь карта интерактивна сама по себе, поэтому переход во внешнее
-// приложение вынесен в отдельную кнопку в углу (см. `RouteButton` ниже) —
-// иначе перетаскивание карты конфликтовало бы с переходом по ссылке.
+// Самовывоз: только точка завода, без маршрута «в центр города».
 
 import React, { useEffect, useRef, useState } from 'react';
 import type { Map as LeafletMap, Polyline, Control } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { ExternalLink } from 'lucide-react';
-import { getRouteOriginCoords, useDeliveryCoords, getShortDeliveryLabel } from '@/lib/yandexRoute';
+import {
+  getRouteOriginCoords,
+  useDeliveryCoords,
+  getShortDeliveryLabel,
+  isPickupOrder,
+} from '@/lib/yandexRoute';
 import { useRouteGeometry } from '@/lib/routeGeometry';
 
 interface OrderRouteMapProps {
@@ -43,9 +34,6 @@ function makeDivIcon(L: typeof import('leaflet'), color: string) {
   });
 }
 
-// Несколько бесплатных подложек без API-ключа — переключаются штатным
-// контролом Leaflet (иконка слоёв в углу карты). У каждой — своя атрибуция,
-// Leaflet сам показывает её только для активного слоя.
 function makeBaseLayers(L: typeof import('leaflet')) {
   const osmAttr = '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>';
   return {
@@ -82,19 +70,14 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const routeLineRef = useRef<Polyline | null>(null);
   const layersControlRef = useRef<Control.Layers | null>(null);
-  // Точки, под которые сейчас подогнан автомасштаб — либо просто [завод,
-  // адрес], либо (когда подгрузится) вся геометрия маршрута по дорогам —
-  // читается и при ресайзе контейнера, и при появлении линии маршрута.
   const boundsPointsRef = useRef<[number, number][]>([]);
   const fitBothPointsRef = useRef<() => void>(() => {});
-  // Статус карты (Leaflet создан, точки добавлены).
   const [mapStatus, setMapStatus] = useState<'pending' | 'ready' | 'unavailable'>('pending');
 
+  const pickup = isPickupOrder(address);
   const { coords: destCoords, ready: coordsReady } = useDeliveryCoords(address);
-  // Реальный маршрут по дорогам через бесплатный OSRM — необязательное
-  // украшение: пока грузится или если не удалось построить, карта работает
-  // как раньше (просто две точки), см. `lib/routeGeometry.ts`.
-  const routeGeometry = useRouteGeometry(destCoords);
+  // Для самовывоза маршрут по дорогам не нужен — только точка завода.
+  const routeGeometry = useRouteGeometry(pickup ? null : destCoords);
 
   const status: 'loading' | 'ready' | 'unavailable' =
     !coordsReady ? 'loading' :
@@ -112,10 +95,14 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
       const o = getRouteOriginCoords();
       const origin: [number, number] = [o.lat, o.lon];
       const destination: [number, number] = [destCoords.lat, destCoords.lon];
+      const samePoint =
+        pickup
+        || (Math.abs(origin[0] - destination[0]) < 1e-5
+          && Math.abs(origin[1] - destination[1]) < 1e-5);
 
       const map = L.map(containerRef.current, {
         center: origin,
-        zoom: 9,
+        zoom: samePoint ? 14 : 9,
         zoomControl: true,
         attributionControl: true,
       });
@@ -125,43 +112,33 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
       baseLayers['Схема'].addTo(map);
       layersControlRef.current = L.control.layers(baseLayers, undefined, { position: 'topright' }).addTo(map);
 
-      L.marker(origin, { icon: makeDivIcon(L, '#2563EB') }).addTo(map).bindTooltip('Завод');
-      // Короткая подпись: в Брянске — только улица/дом, в другом населённом
-      // пункте области — населённый пункт + улица/дом (см. getShortDeliveryLabel).
-      L.marker(destination, { icon: makeDivIcon(L, '#DC2626') }).addTo(map).bindTooltip(getShortDeliveryLabel(address));
+      L.marker(origin, { icon: makeDivIcon(L, '#2563EB') })
+        .addTo(map)
+        .bindTooltip(pickup ? 'Завод · самовывоз' : 'Завод');
 
-      // Автомасштаб под обе точки (или под всю линию маршрута, если она уже
-      // подгрузилась — см. эффект с полилинией ниже): если адрес рядом с
-      // заводом — карта приближается, чтобы не показывать пустое
-      // пространство; если далеко — отдаляется, чтобы всё поместилось в
-      // кадр. Вынесено в функцию (и сохранено в ref), чтобы пересчитывать и
-      // при изменении размера контейнера, и при появлении линии маршрута.
-      // Срабатывает только один раз при построении — дальше карта в руках
-      // пользователя (можно свободно зумировать/двигать).
+      if (!samePoint) {
+        L.marker(destination, { icon: makeDivIcon(L, '#DC2626') })
+          .addTo(map)
+          .bindTooltip(getShortDeliveryLabel(address));
+      }
+
       const fitBothPoints = () => {
         map.fitBounds(boundsPointsRef.current, { padding: [32, 32], animate: false });
-        // Если точки совпадают/очень близко — fitBounds может зазумить почти
-        // до предела (дом/подъезд). Для превью этого слишком близко — не
-        // даём приближаться больше "квартала" при автоподгонке.
         if (map.getZoom() > 15) {
           map.setZoom(15, { animate: false });
         }
       };
       fitBothPointsRef.current = fitBothPoints;
 
-      boundsPointsRef.current = [origin, destination];
-      fitBothPoints();
+      boundsPointsRef.current = samePoint ? [origin] : [origin, destination];
+      if (samePoint) {
+        map.setView(origin, 14, { animate: false });
+      } else {
+        fitBothPoints();
+      }
 
       if (!cancelled) setMapStatus('ready');
 
-      // ⚠️ Leaflet при создании фиксирует внутренний размер canvas по размеру
-      // контейнера НА ТОТ МОМЕНТ и сам не отслеживает его изменение. Модалка
-      // растягивает колонку карты на всю высоту правой колонки
-      // (миксеры/история), а та часто досчитывается/дозагружается ПОСЛЕ
-      // создания карты — контейнер вырастает, а карта остаётся маленькой,
-      // оставляя пустое пространство внизу (особенно заметно на 4K, где
-      // модалка выше). invalidateSize() подгоняет карту под текущий размер
-      // контейнера при каждом изменении.
       const resizeObserver = new ResizeObserver(() => {
         if (!mapRef.current) return;
         mapRef.current.invalidateSize();
@@ -181,19 +158,14 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
         mapRef.current = null;
       }
     };
-  }, [coordsReady, destCoords, address]);
+  }, [coordsReady, destCoords, address, pickup]);
 
-  // Линия маршрута по дорогам — отдельным эффектом, потому что геометрия от
-  // OSRM почти всегда подгружается ПОСЛЕ того, как карта с маркерами уже
-  // отрисована (второй сетевой запрос, параллельно геокодированию). Как
-  // только (и если) она готова — добавляем полилинию и расширяем автомасштаб
-  // под всю трассу маршрута, а не только под две конечные точки.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || mapStatus !== 'ready') return;
+    if (!map || mapStatus !== 'ready' || pickup) return;
 
     import('leaflet').then((L) => {
-      if (mapRef.current !== map) return; // карта уже сменилась/размонтирована
+      if (mapRef.current !== map) return;
 
       routeLineRef.current?.remove();
       routeLineRef.current = null;
@@ -208,7 +180,7 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
         fitBothPointsRef.current();
       }
     });
-  }, [routeGeometry, mapStatus]);
+  }, [routeGeometry, mapStatus, pickup]);
 
   if (status === 'unavailable') return null;
 
@@ -241,12 +213,33 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
         </div>
       )}
 
+      {status === 'ready' && pickup && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 12,
+            left: 12,
+            zIndex: 1000,
+            padding: '6px 10px',
+            borderRadius: 8,
+            background: 'rgba(15,23,42,0.88)',
+            border: '1px solid rgba(96,165,250,0.45)',
+            color: '#93C5FD',
+            fontSize: 12,
+            fontWeight: 700,
+            pointerEvents: 'none',
+          }}
+        >
+          Самовывоз · завод
+        </div>
+      )}
+
       {status === 'ready' && (
         <a
           href={routeHref}
           target="_blank"
           rel="noopener noreferrer"
-          title="Открыть маршрут в приложении карт"
+          title={pickup ? 'Открыть завод на карте' : 'Открыть маршрут в приложении карт'}
           onClick={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
@@ -266,7 +259,7 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
             boxShadow: '0 2px 8px rgba(0,0,0,0.35)',
           }}
         >
-          Открыть маршрут <ExternalLink size={13} />
+          {pickup ? 'Завод на карте' : 'Открыть маршрут'} <ExternalLink size={13} />
         </a>
       )}
     </div>

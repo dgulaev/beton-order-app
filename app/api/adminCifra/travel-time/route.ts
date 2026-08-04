@@ -2,7 +2,7 @@
 // Рассчитывает время в пути от завода до адреса доставки.
 // Результат сохраняется в orders.road_time_min (кэш в БД).
 //
-// Формула v2 — см. lib/travelTime.ts.
+// Формула v3 — см. lib/travelTime.ts (самовывоз = 0, ЖК/Ходаринка через normalize).
 // После смены формулы кэш сбрасывают через force: true или batch+force.
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';

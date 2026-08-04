@@ -5,7 +5,7 @@ import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders, useRealtimeOrderMixers } from '../../../hooks/useRealtimeOrders';
 import NewOrderModal from '@/app/adminCifra/components/NewOrderModal';
 import { useMapRouteLinks } from '@/lib/yandexRoute';
-import { Package, Save, Trash2, Send, Share2, Copy, X, Search } from 'lucide-react';
+import { Package, Save, Trash2, Send, Share2, Copy, X, Search, MapPin } from 'lucide-react';
 import { OrderHistoryTimeline } from '@/lib/orderHistoryDisplay';
 import OrderRouteMap from '@/app/adminCifra/components/OrderRouteMap';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
@@ -44,6 +44,7 @@ import QuestionableToggle from '@/app/adminCifra/components/QuestionableToggle';
 import OrderCommentsPanel, { CommentUnreadBadge, orderModalTabStyle } from '@/app/adminCifra/components/OrderCommentsPanel';
 import { useOrderCommentUnreadCounts } from '@/hooks/useOrderCommentUnreadCounts';
 import FleetOpsTabs, { OPS_TABS } from '@/app/adminCifra/components/FleetOpsTabs';
+import DarkHoverTip from '@/app/adminCifra/components/DarkHoverTip';
 import type { VehicleKind } from '@/lib/fleetCatalog';
 import {
   bulkVolumeUnitLabel,
@@ -2793,8 +2794,48 @@ ${order.customer_type?.includes('Юридическое')
             #{order.id} — {order.organization_name || order.full_name || '—'}
             <CommentUnreadBadge count={commentUnreadCounts[String(order.id)] || 0} />
           </div>
-          <div style={{ color: '#94A3B8', fontSize: '13px' }}>
-            {order.grade} • {order.volume} м³
+          <div
+            style={{
+              color: '#94A3B8',
+              fontSize: '13px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              minWidth: 0,
+            }}
+          >
+            <span style={{ flexShrink: 0 }}>
+              {order.grade} • {order.volume} м³
+            </span>
+            {Boolean(String(order.address || '').trim()) && (
+              <DarkHoverTip
+                tip={String(order.address).trim()}
+                maxWidth={360}
+                display="inline-flex"
+                style={{
+                  // Не растягивать на всю строку — иначе tip всплывает при наведении
+                  // куда угодно справа от марки/объёма.
+                  alignItems: 'center',
+                  gap: 4,
+                  minWidth: 0,
+                  flex: '0 1 auto',
+                  maxWidth: '100%',
+                  color: '#94A3B8',
+                }}
+              >
+                <MapPin size={13} strokeWidth={2.25} style={{ flexShrink: 0, opacity: 0.9 }} />
+                <span
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    minWidth: 0,
+                  }}
+                >
+                  {String(order.address).trim()}
+                </span>
+              </DarkHoverTip>
+            )}
           </div>
         </div>
 
@@ -2921,6 +2962,23 @@ ${order.customer_type?.includes('Юридическое')
               (см. useMapRouteLinks) — город/область достраиваются одинаково
               для всех трёх сервисов. */}
           <div style={{ display: 'flex', gap: '8px' }}>
+            <a
+              href={yandexRouteHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={volumeCardSoftStyle({
+                flex: 1,
+                padding: '9px 8px',
+                color: '#93C5FD',
+                textAlign: 'center',
+                borderRadius: 10,
+                textDecoration: 'none',
+                fontWeight: 600,
+                fontSize: '13px',
+              })}
+            >
+              Яндекс
+            </a>
             <a 
               href={twoGisRouteHref}
               target="_blank"
@@ -2953,7 +3011,7 @@ ${order.customer_type?.includes('Юридическое')
                 fontSize: '13px',
               })}
             >
-              🗺️ Google
+              Google
             </a>
           </div>
         </div>

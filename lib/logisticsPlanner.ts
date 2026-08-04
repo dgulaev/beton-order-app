@@ -6,7 +6,9 @@
  * Режимы: full_day | stage (не затирает locked/done).
  */
 
-import { isOutsideBryansk } from '@/lib/bryanskAddress';
+import { isOutsideBryansk, isPickupOrder } from '@/lib/bryanskAddress';
+
+export { isPickupOrder } from '@/lib/bryanskAddress';
 import { formatTimeHHMM, pluralRu } from '@/lib/ruLocale';
 import {
   applyRoadCalibrationFactor,
@@ -334,22 +336,6 @@ export const PICKUP_MIXER_NUMBER = 'самовывоз';
 
 /** Макс. кусок на соске для самовывоза, если парк не выбран (м³). */
 const PICKUP_DEFAULT_CHUNK_M3 = 12;
-
-/**
- * Самовывоз: клиент забирает бетон сам.
- * В плане — только занятость соски, без рейсов миксеров на объект.
- */
-export function isPickupOrder(address?: string | null): boolean {
-  const raw = String(address || '')
-    .toLowerCase()
-    .replace(/ё/g, 'е');
-  const compact = raw.replace(/[\s._\-–—]+/g, '');
-  return (
-    compact.includes('самовывоз') ||
-    compact.includes('selfpickup') ||
-    compact.includes('pickup')
-  );
-}
 
 export type PlannerMode = 'full_day' | 'stage';
 

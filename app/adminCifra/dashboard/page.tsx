@@ -28,6 +28,7 @@ import {
   orderMatchesFleetTab,
 } from '@/lib/orderLogistics';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { isPickupOrder } from '@/lib/bryanskAddress';
 import PageHelpButton from '../components/help/PageHelpButton';
 
 export default function AdminCifraDashboard() {
@@ -431,6 +432,11 @@ const selectedDateStr = `${selectedYear}-${selectedMonth}-${selectedDay}`;
         if (controller.signal.aborted) break;
         const orderId = String(order.id);
         if (roadTimes[orderId] !== undefined) continue;
+        // Самовывоз — дороги нет (не тащим кэш 10 мин / не дергаем DaData).
+        if (isPickupOrder((order as any).address)) {
+          setRoadTimes((prev) => ({ ...prev, [orderId]: 0 }));
+          continue;
+        }
         if ((order as any).road_time_min !== null && (order as any).road_time_min !== undefined) {
           setRoadTimes(prev => ({ ...prev, [orderId]: (order as any).road_time_min }));
           continue;
@@ -601,9 +607,14 @@ const delayedOrders = selectedDateStr !== today ? [] : todayOrders
     const volume = Number(order.volume || 0);
     // Завод: подъезд + заливка + промывка ≈ 15 мин на рейс (было volume×2 ≈ 20)
     const loadingTime = 15;
-    // Время в пути: из кэша road_time_min, иначе fallback 30 мин
-    const travelTime = roadTimes[String(order.id)] ?? (order as any).road_time_min ?? 30;
-    const travelTimeIsEstimate = !(String(order.id) in roadTimes) && !(order as any).road_time_min;
+    // Время в пути: самовывоз = 0; иначе кэш road_time_min, иначе fallback 30 мин
+    const travelTime = isPickupOrder((order as any).address)
+      ? 0
+      : roadTimes[String(order.id)] ?? (order as any).road_time_min ?? 30;
+    const travelTimeIsEstimate =
+      !isPickupOrder((order as any).address)
+      && !(String(order.id) in roadTimes)
+      && !(order as any).road_time_min;
 
     // Ожидаемое время начала загрузки = delivery_time − путь − загрузка
     // Чтобы доставить в 09:00 при 30 мин пути и 20 мин загрузки — грузить с 08:10.

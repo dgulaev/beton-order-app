@@ -25,6 +25,7 @@ import {
   formatDailyReportDateLabel,
 } from '@/lib/dailyMixerReport';
 import { normalizePlanDateKey } from '@/lib/dailyLogisticsPlan';
+import { isPickupOrder } from '@/lib/bryanskAddress';
 import { mergeFetchedOrderMixers } from '@/lib/orderLogistics';
 import { formatRuDateWithWeekday } from '@/lib/ruLocale';
 import {
@@ -203,6 +204,10 @@ function PlanningPageInner() {
         if (controller.signal.aborted) break;
         const orderId = String(order.id);
         if (roadTimes[orderId] !== undefined) continue;
+        if (isPickupOrder(order.address)) {
+          setRoadTimes((prev) => ({ ...prev, [orderId]: 0 }));
+          continue;
+        }
         if (order.road_time_min != null) {
           setRoadTimes((prev) => ({ ...prev, [orderId]: Number(order.road_time_min) }));
           continue;
