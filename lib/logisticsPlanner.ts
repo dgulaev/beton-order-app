@@ -9,6 +9,12 @@
 import { isOutsideBryansk, isPickupOrder } from '@/lib/bryanskAddress';
 
 export { isPickupOrder } from '@/lib/bryanskAddress';
+import { getRouteOriginCoords } from '@/lib/geocodeAddress';
+import {
+  estimateRoadMinutesBetween,
+  isNearPlant,
+  type TravelCoords,
+} from '@/lib/travelTime';
 import { formatTimeHHMM, pluralRu } from '@/lib/ruLocale';
 import {
   applyRoadCalibrationFactor,
@@ -466,6 +472,20 @@ export type PlanLogisticsInput = {
    */
   useTraffic?: boolean;
   /**
+   * Учитывать свежий online GPS миксеров: доезд до завода и уточнение возврата.
+   */
+  useLiveGps?: boolean;
+  /**
+   * Снимки GPS по mixer.id (строковый ключ).
+   * Учитывать только online + валидные lat/lon.
+   */
+  mixerGps?: Record<string, PlannerMixerGps>;
+  /**
+   * Координаты объектов заявок (для уточнения «в пути» → объект).
+   * Ключ — String(orderId).
+   */
+  siteCoordsByOrderId?: Record<string, TravelCoords>;
+  /**
    * Переопределение цели прибытия по заявке (HH:MM) — для варианта B со сдвигами.
    * Ключ — String(orderId).
    */
@@ -482,6 +502,14 @@ export type PlanLogisticsInput = {
   nowMinutes?: number | null;
   /** V2: нормы из истории план↔факт (load/road/unload/join). */
   calibration?: PlannerCalibration | null;
+};
+
+/** Online GPS миксера для опции «Учесть GPS». */
+export type PlannerMixerGps = {
+  lat: number;
+  lon: number;
+  lastMessageAt?: string | null;
+  isOnline?: boolean;
 };
 
 export type PlanLogisticsResult = {
@@ -1179,6 +1207,147 @@ export function planLogistics(input: PlanLogisticsInput): PlanLogisticsResult {
   return withPlannerCalibration(input.calibration, () => planLogisticsInner(input));
 }
 
+function isFreshMixerGps(gps: PlannerMixerGps | null | undefined): gps is PlannerMixerGps {
+  if (!gps) return false;
+  if (!Number.isFinite(gps.lat) || !Number.isFinite(gps.lon)) return false;
+  if (gps.lat === 0 && gps.lon === 0) return false;
+  if (gps.isOnline === false) return false;
+  if (gps.lastMessageAt) {
+    const ageMs = Date.now() - new Date(gps.lastMessageAt).getTime();
+    if (!Number.isFinite(ageMs) || ageMs > 15 * 60_000) return false;
+  } else if (gps.isOnline !== true) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Сдвигает mixerBusy по свежему GPS: доезд до завода (и уточнение возврата).
+ * Не уменьшает busy — только max с уже известным returnAt из locked.
+ */
+function applyLiveGpsToMixerBusy(opts: {
+  mixers: PlannerMixer[];
+  mixerBusy: Map<string, number>;
+  warnings: PlannerWarning[];
+  useLiveGps: boolean;
+  mixerGps?: Record<string, PlannerMixerGps>;
+  siteCoordsByOrderId?: Record<string, TravelCoords>;
+  locked: PlannedTrip[];
+  useTraffic: boolean;
+  nowMinutes?: number | null;
+}): void {
+  if (!opts.useLiveGps) return;
+  if (!opts.mixerGps || Object.keys(opts.mixerGps).length === 0) {
+    opts.warnings.push({
+      level: 'warn',
+      message: 'Учесть GPS: нет свежих снимков телематики — расчёт как без GPS.',
+    });
+    return;
+  }
+
+  const nowMin =
+    opts.nowMinutes != null && Number.isFinite(opts.nowMinutes)
+      ? Number(opts.nowMinutes)
+      : null;
+  if (nowMin == null) {
+    opts.warnings.push({
+      level: 'warn',
+      message:
+        'Учесть GPS: для этого дня «сейчас» не задано (план на другой день) — GPS не сдвигает готовность.',
+    });
+    return;
+  }
+
+  const plant = getRouteOriginCoords();
+
+  // Активный locked-рейс миксера (ещё не вернулся) — для remainOut к объекту.
+  const activeLockedByMixer = new Map<string, PlannedTrip>();
+  for (const t of opts.locked) {
+    if (t.pickup || t.mixerNumber === PICKUP_MIXER_NUMBER) continue;
+    const ret = t.returnAtMin ?? parseHhMm(t.returnTime);
+    const load = t.loadAtMin ?? parseHhMm(t.loadTime);
+    if (ret == null || load == null) continue;
+    if (ret <= nowMin) continue;
+    const prev = activeLockedByMixer.get(t.mixerNumber);
+    if (!prev) {
+      activeLockedByMixer.set(t.mixerNumber, t);
+      continue;
+    }
+    const prevRet = prev.returnAtMin ?? parseHhMm(prev.returnTime) ?? -Infinity;
+    if (ret > prevRet) activeLockedByMixer.set(t.mixerNumber, t);
+  }
+
+  for (const mixer of opts.mixers) {
+    if (mixer.number === PICKUP_MIXER_NUMBER) continue;
+    const gps = opts.mixerGps[String(mixer.id)];
+    if (!isFreshMixerGps(gps)) continue;
+    if (isNearPlant(gps.lat, gps.lon)) continue;
+
+    const baseToPlant = estimateRoadMinutesBetween(
+      { lat: gps.lat, lon: gps.lon },
+      plant,
+    );
+    const travelToPlant = roadWithTraffic(baseToPlant, nowMin, opts.useTraffic);
+    let gpsReady = nowMin + travelToPlant;
+    let reason = `+${travelToPlant} мин до БСУ`;
+
+    // Живой locked-рейс: уточняем хвост (ещё едет / уже на объекте).
+    const active = activeLockedByMixer.get(mixer.number);
+    if (active) {
+      const arrive = active.arriveAtMin ?? parseHhMm(active.arriveTime);
+      const unloadMin = Math.max(5, Number(active.unloadMin) || 35);
+      const site = opts.siteCoordsByOrderId?.[String(active.orderId)];
+      const siteOk =
+        site && Number.isFinite(site.lat) && Number.isFinite(site.lon) ? site : null;
+
+      if (arrive != null && arrive > nowMin && siteOk) {
+        // Ещё в пути на объект
+        const remainOut = roadWithTraffic(
+          estimateRoadMinutesBetween({ lat: gps.lat, lon: gps.lon }, siteOk),
+          nowMin,
+          opts.useTraffic,
+        );
+        const unloadDone = nowMin + remainOut + unloadMin;
+        const roadBack = roadWithTraffic(
+          estimateRoadMinutesBetween(siteOk, plant),
+          unloadDone,
+          opts.useTraffic,
+        );
+        const viaSite = unloadDone + roadBack;
+        if (viaSite > gpsReady) {
+          gpsReady = viaSite;
+          reason = `в пути на объект, готов ~${formatMinutes(gpsReady)}`;
+        }
+      } else if (arrive != null && arrive <= nowMin) {
+        // Уже прибыл / разгружается — не считаем только «домой отсюда»,
+        // оставляем остаток разгрузки + дорога на завод.
+        const remainUnload = Math.max(5, arrive + unloadMin - nowMin);
+        const unloadDone = nowMin + remainUnload;
+        const backFrom = siteOk || { lat: gps.lat, lon: gps.lon };
+        const roadBack = roadWithTraffic(
+          estimateRoadMinutesBetween(backFrom, plant),
+          unloadDone,
+          opts.useTraffic,
+        );
+        const viaUnload = unloadDone + roadBack;
+        if (viaUnload > gpsReady) {
+          gpsReady = viaUnload;
+          reason = `на объекте, +~${remainUnload + roadBack} мин до БСУ`;
+        }
+      }
+    }
+
+    const prev = opts.mixerBusy.get(mixer.number) ?? -Infinity;
+    if (gpsReady > prev) {
+      opts.mixerBusy.set(mixer.number, gpsReady);
+      opts.warnings.push({
+        level: 'warn',
+        message: `Миксер ${mixer.number}: GPS вне завода, ${reason} (готов ~${formatMinutes(gpsReady)}).`,
+      });
+    }
+  }
+}
+
 function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
   const locked = [...(input.lockedTrips || [])];
   const doneSet = new Set((input.doneOrderIds || []).map(String));
@@ -1356,6 +1525,20 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
       );
     }
   }
+
+  // Опция «Учесть GPS»: доезд до БСУ / уточнение возврата по свежему online.
+  applyLiveGpsToMixerBusy({
+    mixers: input.mixers,
+    mixerBusy,
+    warnings,
+    useLiveGps: Boolean(input.useLiveGps),
+    mixerGps: input.mixerGps,
+    siteCoordsByOrderId: input.siteCoordsByOrderId,
+    locked,
+    useTraffic,
+    nowMinutes: input.nowMinutes,
+  });
+
   nozzle.sort((a, b) => a.start - b.start);
 
   const newTrips: PlannedTrip[] = [];
@@ -2890,6 +3073,9 @@ type ReplanTailInput = {
   doneOrderIds?: Array<number | string>;
   allowNight?: boolean;
   useTraffic?: boolean;
+  useLiveGps?: boolean;
+  mixerGps?: Record<string, PlannerMixerGps>;
+  siteCoordsByOrderId?: Record<string, TravelCoords>;
   factDelayMin?: number;
   dayTrips?: LiveTripFact[];
   nowMinutes?: number | null;
@@ -2915,6 +3101,9 @@ function replanTailAfterTripMutate(input: ReplanTailInput): {
         doneOrderIds: input.doneOrderIds,
         allowNight: input.allowNight,
         useTraffic: input.useTraffic,
+        useLiveGps: input.useLiveGps,
+        mixerGps: input.mixerGps,
+        siteCoordsByOrderId: input.siteCoordsByOrderId,
         factDelayMin: input.factDelayMin,
         nowMinutes: input.nowMinutes,
         calibration: input.calibration,
@@ -2949,6 +3138,9 @@ function replanTailAfterTripMutate(input: ReplanTailInput): {
     doneOrderIds: input.doneOrderIds,
     allowNight: input.allowNight,
     useTraffic: input.useTraffic,
+    useLiveGps: input.useLiveGps,
+    mixerGps: input.mixerGps,
+    siteCoordsByOrderId: input.siteCoordsByOrderId,
     factDelayMin: input.factDelayMin,
     nowMinutes: input.nowMinutes,
     calibration: input.calibration,
@@ -2969,6 +3161,9 @@ export function replanAfterManualTripShift(input: {
   doneOrderIds?: Array<number | string>;
   allowNight?: boolean;
   useTraffic?: boolean;
+  useLiveGps?: boolean;
+  mixerGps?: Record<string, PlannerMixerGps>;
+  siteCoordsByOrderId?: Record<string, TravelCoords>;
   factDelayMin?: number;
   dayTrips?: LiveTripFact[];
   nowMinutes?: number | null;
@@ -2996,6 +3191,9 @@ export function replanAfterTripDelay(input: {
   doneOrderIds?: Array<number | string>;
   allowNight?: boolean;
   useTraffic?: boolean;
+  useLiveGps?: boolean;
+  mixerGps?: Record<string, PlannerMixerGps>;
+  siteCoordsByOrderId?: Record<string, TravelCoords>;
   factDelayMin?: number;
   dayTrips?: LiveTripFact[];
   nowMinutes?: number | null;
@@ -3068,6 +3266,9 @@ export function replanAfterTripVolumeChange(input: {
   doneOrderIds?: Array<number | string>;
   allowNight?: boolean;
   useTraffic?: boolean;
+  useLiveGps?: boolean;
+  mixerGps?: Record<string, PlannerMixerGps>;
+  siteCoordsByOrderId?: Record<string, TravelCoords>;
   factDelayMin?: number;
   dayTrips?: LiveTripFact[];
   nowMinutes?: number | null;
@@ -3095,6 +3296,9 @@ export function replanAfterTripVolumesChange(input: {
   doneOrderIds?: Array<number | string>;
   allowNight?: boolean;
   useTraffic?: boolean;
+  useLiveGps?: boolean;
+  mixerGps?: Record<string, PlannerMixerGps>;
+  siteCoordsByOrderId?: Record<string, TravelCoords>;
   factDelayMin?: number;
   dayTrips?: LiveTripFact[];
   nowMinutes?: number | null;
@@ -3122,7 +3326,11 @@ export function replanAfterTripVolumesChange(input: {
         doneOrderIds: input.doneOrderIds,
         allowNight: input.allowNight,
         useTraffic: input.useTraffic,
+        useLiveGps: input.useLiveGps,
+        mixerGps: input.mixerGps,
+        siteCoordsByOrderId: input.siteCoordsByOrderId,
         factDelayMin: input.factDelayMin,
+        nowMinutes: input.nowMinutes,
         calibration: input.calibration,
       }),
       locked: [],
@@ -3149,7 +3357,11 @@ export function replanAfterTripVolumesChange(input: {
         doneOrderIds: input.doneOrderIds,
         allowNight: input.allowNight,
         useTraffic: input.useTraffic,
+        useLiveGps: input.useLiveGps,
+        mixerGps: input.mixerGps,
+        siteCoordsByOrderId: input.siteCoordsByOrderId,
         factDelayMin: input.factDelayMin,
+        nowMinutes: input.nowMinutes,
         calibration: input.calibration,
       }),
       locked: [],
@@ -3165,6 +3377,9 @@ export function replanAfterTripVolumesChange(input: {
     doneOrderIds: input.doneOrderIds,
     allowNight: input.allowNight,
     useTraffic: input.useTraffic,
+    useLiveGps: input.useLiveGps,
+    mixerGps: input.mixerGps,
+    siteCoordsByOrderId: input.siteCoordsByOrderId,
     factDelayMin: input.factDelayMin,
     dayTrips: input.dayTrips,
     nowMinutes: input.nowMinutes,
@@ -3189,6 +3404,9 @@ export function replanAfterTripReorder(input: {
   doneOrderIds?: Array<number | string>;
   allowNight?: boolean;
   useTraffic?: boolean;
+  useLiveGps?: boolean;
+  mixerGps?: Record<string, PlannerMixerGps>;
+  siteCoordsByOrderId?: Record<string, TravelCoords>;
   factDelayMin?: number;
   dayTrips?: LiveTripFact[];
   nowMinutes?: number | null;
@@ -3222,7 +3440,11 @@ export function replanAfterTripReorder(input: {
         doneOrderIds: input.doneOrderIds,
         allowNight: input.allowNight,
         useTraffic: input.useTraffic,
+        useLiveGps: input.useLiveGps,
+        mixerGps: input.mixerGps,
+        siteCoordsByOrderId: input.siteCoordsByOrderId,
         factDelayMin: input.factDelayMin,
+        nowMinutes: input.nowMinutes,
         calibration: input.calibration,
       }),
       locked: [],
@@ -3300,7 +3522,11 @@ export function replanAfterTripReorder(input: {
     doneOrderIds: input.doneOrderIds,
     allowNight: input.allowNight,
     useTraffic: input.useTraffic,
+    useLiveGps: input.useLiveGps,
+    mixerGps: input.mixerGps,
+    siteCoordsByOrderId: input.siteCoordsByOrderId,
     factDelayMin: input.factDelayMin,
+    nowMinutes: input.nowMinutes,
     calibration: input.calibration,
   });
 

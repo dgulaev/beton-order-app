@@ -45,6 +45,15 @@ export function getScoutConfigFromEnv(): ScoutConfig | null {
   return { serverUrl, login, password };
 }
 
+/** Какие SCOUT_* пустые на сервере (без значений — для диагностики). */
+export function getMissingScoutEnvKeys(): string[] {
+  const missing: string[] = [];
+  if (!process.env.SCOUT_SERVER_URL?.trim()) missing.push('SCOUT_SERVER_URL');
+  if (!process.env.SCOUT_LOGIN?.trim()) missing.push('SCOUT_LOGIN');
+  if (!process.env.SCOUT_PASSWORD?.trim()) missing.push('SCOUT_PASSWORD');
+  return missing;
+}
+
 export function isScoutConfigured(): boolean {
   return getScoutConfigFromEnv() != null;
 }

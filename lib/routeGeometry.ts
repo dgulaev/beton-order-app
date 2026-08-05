@@ -2,25 +2,14 @@
 // lib/routeGeometry.ts
 // Реальный маршрут по дорогам (не "воздушная" прямая) для превью-карты в
 // модалках заявки — строится через бесплатный публичный демо-сервер OSRM
-// (Open Source Routing Machine, router.project-osrm.org), без API-ключа.
-//
-// ⚠️ Это публичный демо-сервер проекта OSRM, а не наш собственный —
-// официально он предназначен для лёгкого/умеренного использования, без
-// гарантий SLA и без объявленного точного лимита запросов. Если он окажется
-// перегружен, недоступен или временно заблокирует наши запросы — функция
-// ниже просто вернёт null, и карта останется как раньше (только маркеры
-// завода/адреса без линии маршрута), без ошибок в интерфейсе. Если объём
-// использования вырастет — можно поднять свой сервер OSRM с картой
-// Брянской области (данные занимают буквально десятки МБ) для маршрутов
-// без каких-либо лимитов.
+// (см. lib/osrmRoute.ts).
 
 import { useEffect, useState } from 'react';
 import { getRouteOriginCoords, type Coords } from './geocodeAddress';
-
-const OSRM_TIMEOUT_MS = 6000;
+import { fetchOsrmRouteGeometry, type OsrmRouteGeometry } from './osrmRoute';
 
 /** [широта, долгота] — формат, который понимает Leaflet (L.Polyline). */
-export type RouteGeometry = [number, number][];
+export type RouteGeometry = OsrmRouteGeometry;
 
 const memoryCache = new Map<string, RouteGeometry | null>();
 const inFlight = new Map<string, Promise<RouteGeometry | null>>();
@@ -51,28 +40,6 @@ function writeSessionCache(key: string, value: RouteGeometry) {
   }
 }
 
-async function fetchRouteGeometry(dest: Coords, origin?: Coords | null): Promise<RouteGeometry | null> {
-  try {
-    const o = origin || getRouteOriginCoords();
-    const url = `https://router.project-osrm.org/route/v1/driving/${o.lon},${o.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), OSRM_TIMEOUT_MS);
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-
-    const data = await res.json();
-    const coords: [number, number][] | undefined = data?.routes?.[0]?.geometry?.coordinates;
-    if (!Array.isArray(coords) || coords.length < 2) return null;
-
-    // OSRM отдаёт [lon, lat] (GeoJSON), Leaflet ждёт [lat, lon].
-    return coords.map(([lon, lat]) => [lat, lon] as [number, number]);
-  } catch {
-    // Таймаут, сеть, перегруженный/заблокировавший нас сервер — просто нет линии.
-    return null;
-  }
-}
-
 async function getRouteGeometryCached(dest: Coords, origin?: Coords | null): Promise<RouteGeometry | null> {
   const key = cacheKey(dest, origin);
   if (memoryCache.has(key)) return memoryCache.get(key) ?? null;
@@ -85,15 +52,18 @@ async function getRouteGeometryCached(dest: Coords, origin?: Coords | null): Pro
 
   let promise = inFlight.get(key);
   if (!promise) {
-    promise = fetchRouteGeometry(dest, origin).finally(() => inFlight.delete(key));
+    promise = fetchOsrmRouteGeometry(dest, origin).finally(() => inFlight.delete(key));
     inFlight.set(key, promise);
   }
 
   const result = await promise;
-  memoryCache.set(key, result);
-  // Как и с геокодированием — неудачу в sessionStorage не сохраняем, чтобы
-  // временный сбой OSRM не "залипал" на весь сеанс браузера.
-  if (result) writeSessionCache(key, result);
+  // Неудачу не кэшируем навсегда — временный сбой OSRM не должен «залипать».
+  if (result) {
+    memoryCache.set(key, result);
+    writeSessionCache(key, result);
+  } else {
+    memoryCache.delete(key);
+  }
   return result;
 }
 

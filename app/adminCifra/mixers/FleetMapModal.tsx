@@ -279,8 +279,8 @@ export default function FleetMapModal({
                   color: '#F8FAFC',
                 }}
               >
-                <FleetMapLegendIcon online size={36} />
-                На связи
+                <FleetMapLegendIcon online size={36} vehicleKind="mixer" />
+                Миксер · на связи
               </span>
               <span
                 style={{
@@ -291,9 +291,23 @@ export default function FleetMapModal({
                   color: '#CBD5E1',
                 }}
               >
-                <FleetMapLegendIcon online={false} size={36} />
+                <FleetMapLegendIcon online={false} size={36} vehicleKind="mixer" />
                 Offline
               </span>
+              {markers.some((m) => m.vehicleKind === 'dump_truck') && (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    fontSize: 16,
+                    fontWeight: 700,
+                    color: '#F8FAFC',
+                  }}
+                >
+                  <FleetMapLegendIcon online size={36} vehicleKind="dump_truck" />
+                  Самосвал
+                </span>
+              )}
             </div>
             {markers.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>

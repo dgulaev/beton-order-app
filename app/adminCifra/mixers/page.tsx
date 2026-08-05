@@ -356,7 +356,7 @@ export default function MixersPage() {
   const [couplePickId, setCouplePickId] = useState('');
   const [coupleSaving, setCoupleSaving] = useState(false);
 
-  const [filter, setFilter] = useState<'all' | 'own' | 'rented'>('all');
+  const [filter, setFilter] = useState<'all' | 'own' | 'rented'>('own');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [showModal, setShowModal] = useState(false);
   const [editingMixer, setEditingMixer] = useState<FleetUnit | null>(null);
@@ -642,6 +642,8 @@ export default function MixersPage() {
           speedKmh: tel?.speed_kmh != null ? Number(tel.speed_kmh) : null,
           address: tel?.address ?? null,
           lastMessageAt: tel?.last_message_at ?? null,
+          // dump_truck → /icons/samosval.png на карте
+          vehicleKind: m.vehicle_kind || 'mixer',
         },
       ];
     });

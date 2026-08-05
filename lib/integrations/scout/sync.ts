@@ -2,6 +2,7 @@ import { normalizePlate, scoutIsOnline } from '@/lib/fleetLifecycle';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import {
   clearScoutSessionCache,
+  getMissingScoutEnvKeys,
   getScoutConfigFromEnv,
   scoutGetAllUnits,
   scoutGetOnlineData,
@@ -18,8 +19,13 @@ export type ScoutSyncResult = {
   unitsInScout?: number;
   mapped?: number;
   snapshotsUpdated?: number;
+  trailPointsInserted?: number;
   errors?: string[];
 };
+
+const TRAIL_RETENTION_DAYS = 90;
+/** Не писать точку, если сдвинулась меньше ~15 м и скорость ≈0 (стоянка). */
+const TRAIL_MIN_MOVE_DEG = 0.00015;
 
 type MixerRow = {
   id: number;
@@ -72,7 +78,12 @@ let syncInFlight: Promise<ScoutSyncResult> | null = null;
 async function syncScoutTelemetryOnce(): Promise<ScoutSyncResult> {
   const config = getScoutConfigFromEnv();
   if (!config) {
-    return { ok: true, skipped: true, reason: 'SCOUT_* env not configured' };
+    const missing = getMissingScoutEnvKeys();
+    return {
+      ok: true,
+      skipped: true,
+      reason: `SCOUT_* env not configured (нет: ${missing.join(', ') || 'все'}). Проверь Environment = Production на Vercel и Redeploy.`,
+    };
   }
 
   const errors: string[] = [];
@@ -161,6 +172,15 @@ async function syncScoutTelemetryOnce(): Promise<ScoutSyncResult> {
     !(lat === 0 && lon === 0);
 
   let snapshotsUpdated = 0;
+  const trailRows: Array<{
+    mixer_id: number;
+    scout_unit_id: number;
+    lat: number;
+    lon: number;
+    speed_kmh: number | null;
+    recorded_at: string;
+    source: string;
+  }> = [];
 
   for (let i = 0; i < targets.length; i++) {
     const unitId = targets[i]!;
@@ -174,6 +194,11 @@ async function syncScoutTelemetryOnce(): Promise<ScoutSyncResult> {
     const speed = point.Navigation?.Speed ?? null;
     let address = point.Address ?? null;
     const isOnline = scoutIsOnline(lastAt);
+    const freshLat = lat;
+    const freshLon = lon;
+    const freshCoordsValid =
+      point.IsNavigationValid !== false && isValidCoord(freshLat, freshLon);
+    const prevSnap = prevByMixer.get(mixerId);
 
     // Битая навигация: координаты есть, но СКАУТ помечает их невалидными
     if (point.IsNavigationValid === false) {
@@ -183,11 +208,10 @@ async function syncScoutTelemetryOnce(): Promise<ScoutSyncResult> {
 
     // Offline / битая навигация: оставляем последнюю точку на карте
     if (!isValidCoord(lat, lon)) {
-      const prev = prevByMixer.get(mixerId);
-      if (prev && isValidCoord(prev.lat, prev.lon)) {
-        lat = prev.lat;
-        lon = prev.lon;
-        if (!address) address = prev.address;
+      if (prevSnap && isValidCoord(prevSnap.lat, prevSnap.lon)) {
+        lat = prevSnap.lat;
+        lon = prevSnap.lon;
+        if (!address) address = prevSnap.address;
       }
     }
 
@@ -213,6 +237,64 @@ async function syncScoutTelemetryOnce(): Promise<ScoutSyncResult> {
       snapshotsUpdated += 1;
       prevByMixer.set(mixerId, { lat, lon, address });
     }
+
+    // Trail: только свежие валидные координаты (не last-known offline)
+    if (
+      freshCoordsValid &&
+      isOnline &&
+      freshLat != null &&
+      freshLon != null &&
+      lastAt
+    ) {
+      const moved =
+        !prevSnap ||
+        !isValidCoord(prevSnap.lat, prevSnap.lon) ||
+        Math.abs((prevSnap.lat as number) - freshLat) > TRAIL_MIN_MOVE_DEG ||
+        Math.abs((prevSnap.lon as number) - freshLon) > TRAIL_MIN_MOVE_DEG ||
+        (speed != null && Number(speed) >= 3);
+      if (moved) {
+        trailRows.push({
+          mixer_id: mixerId,
+          scout_unit_id: unitId,
+          lat: freshLat,
+          lon: freshLon,
+          speed_kmh: speed,
+          recorded_at: lastAt,
+          source: 'scout_sync',
+        });
+      }
+    }
+  }
+
+  let trailPointsInserted = 0;
+  if (trailRows.length) {
+    const { error: trailErr, count } = await supabaseAdmin
+      .from('fleet_telemetry_points')
+      .insert(trailRows, { count: 'exact' });
+    if (trailErr) {
+      if (/fleet_telemetry_points/i.test(trailErr.message)) {
+        errors.push('Выполните scripts/fleet-telemetry-points.sql');
+      } else {
+        errors.push(`trail: ${trailErr.message}`);
+      }
+    } else {
+      trailPointsInserted = count ?? trailRows.length;
+    }
+  }
+
+  // Retention: подчистка старых точек (лёгкий delete, парк маленький)
+  if (trailPointsInserted > 0 || trailRows.length === 0) {
+    const cutoff = new Date(
+      Date.now() - TRAIL_RETENTION_DAYS * 24 * 60 * 60_000,
+    ).toISOString();
+    const { error: pruneErr } = await supabaseAdmin
+      .from('fleet_telemetry_points')
+      .delete()
+      .lt('recorded_at', cutoff);
+    // Таблица ещё не создана — не шумим, если insert уже сообщил про sql
+    if (pruneErr && !/fleet_telemetry_points|does not exist|schema cache/i.test(pruneErr.message)) {
+      errors.push(`trail prune: ${pruneErr.message}`);
+    }
   }
 
   return {
@@ -220,6 +302,7 @@ async function syncScoutTelemetryOnce(): Promise<ScoutSyncResult> {
     unitsInScout: units.length,
     mapped: unitToMixer.size,
     snapshotsUpdated,
+    trailPointsInserted,
     errors: errors.length ? errors : undefined,
   };
 }

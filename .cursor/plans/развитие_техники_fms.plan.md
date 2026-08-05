@@ -35,6 +35,9 @@ todos:
   - id: phase1-scout-ui
     content: "Фаза 1: СКАУТ — badge online/offline в списке + блок телематики в drawer"
     status: pending
+  - id: phase1-scout-tracks
+    content: "Фаза 1: история поездок — трек на карте (СПИК NavigationFiltration + локальный trail, retention)"
+    status: completed
   - id: phase2-schedule
     content: "Фаза 2: график ТО — шаблоны по пробегу/моточасам/календарю"
     status: pending
@@ -230,6 +233,7 @@ isProject: true
 | **СКАУТ — sync** | Vercel Cron каждые **2 мин** (`*/2`) → `fleet_telemetry_snapshots`; env: `SCOUT_SERVER_URL`, `SCOUT_LOGIN`, `SCOUT_PASSWORD` |
 | **СКАУТ — маппинг** | Колонка `mixers.scout_unit_id`; первичная привязка по `Name` (СКАУТ) ≈ `mixers.number`; UI ручной override |
 | **СКАУТ — UI** | Badge 🟢/🔴 в списке техники; вкладка «Телематика»: lat/lon, скорость, адрес, время последнего сигнала, мини-карта |
+| **СКАУТ — история поездок** | Трек на карте за период (день/смена): предпочтительно из СПИК; локальный trail как запасной слой — см. ниже |
 
 ### СКАУТ — проверенное подключение (04.08.2026)
 
@@ -270,15 +274,79 @@ isProject: true
 | 3649 | О 285 ЕХ |
 | 3743 | Р 961 АК |
 
-**MVP Фазы 1 (только online):**
+**MVP Фазы 1 (online + история поездок):**
 1. Последняя точка: lat, lon, speed, `last_message_at`, адрес
 2. Статус online/offline (>15 мин без данных)
 3. Badge в списке mixers
+4. **История поездок** — линия маршрута на карте за выбранный период (день / смена / произвольный from–to)
 
 **Отложено на Фазу 3 (из INT-2 v2):**
 - Одометр из `StatisticsController` → автообновление `odometer_km`
 - Топливо из `FuelEvent` / датчиков → `fuel_entries`
 - ETA в планировщике
+
+### СКАУТ — история поездок (Фаза 1, добавлено 05.08.2026)
+
+#### 1) Можно ли забирать историю из СКАУТ?
+
+**Да.** OnlineData даёт только «сейчас»; история — через другие сервисы СПИК (и опционально TrackService).
+
+| Источник | Что даёт | Статус у нас |
+|---|---|---|
+| `OnlineDataService` | Только текущая точка | ✅ уже используем |
+| **`SpicTrackPeriodsStatisticsService`** (`/spic/TrackPeriod/rest/…`) | Статистика / точки трека за период | ✅ endpoint на `724033.ru:8081` отвечает **401 без токена** (= сервис жив) |
+| **`SpicTrackPeriodsMileageStatisticsService`** (`/spic/trackPeriodsMileage/rest/…`) | Пробег по периодам | ✅ тоже 401 без токена |
+| `SpicReportsService` (`reports`) | Отчёты движения/стоянок | в документации СПИК |
+| **TrackService** (отдельная SOAP-служба, часто порт 6667) | Готовый трек / набор точек / отчёт стоянок за период; «не храня точки в учётке» | Нужна установка/доступ у интегратора — **не обязателен**, если хватит TrackPeriod в СПИК |
+
+**Вывод по п.1:** забирать историю из СКАУТ **можно и предпочтительно**. Следующий шаг реализации — Login → вызов методов TrackPeriod / trackPeriodsMileage (по доке СПИК / локальной «Документации СПИК») → отрисовка polyline. Если метод окажется «статистика без сырых точек» — смотреть NavigationFiltration / reports или запросить у ТП пакет TrackService.
+
+#### 2) Писать трек у себя (каждые N минут)
+
+**Да, как запасной слой и кэш для UI.**
+
+Идея: при каждом уже существующем scout-sync (раз в **2 мин**) дописывать точку в `fleet_telemetry_points`, если координаты валидны и машина online (или сдвинулась >X метров). UI: выбор периода → polyline из своей таблицы; при наличии СПИК-трека — приоритет у СКАУТ, локальный trail как fallback / быстрый превью.
+
+```sql
+-- дополнение к scripts/fleet-lifecycle.sql (или отдельный scripts/fleet-telemetry-points.sql)
+CREATE TABLE IF NOT EXISTS fleet_telemetry_points (
+  id BIGSERIAL PRIMARY KEY,
+  mixer_id BIGINT NOT NULL REFERENCES mixers(id) ON DELETE CASCADE,
+  scout_unit_id INT,
+  lat NUMERIC NOT NULL,
+  lon NUMERIC NOT NULL,
+  speed_kmh NUMERIC,
+  recorded_at TIMESTAMPTZ NOT NULL,
+  source TEXT NOT NULL DEFAULT 'scout_sync', -- scout_sync | scout_track_api
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS fleet_telemetry_points_mixer_time_idx
+  on fleet_telemetry_points (mixer_id, recorded_at DESC);
+-- RLS deny-all как у остальных fleet_* таблиц
+```
+
+**Retention:** cron/SQL job раз в сутки — `DELETE WHERE recorded_at < now() - interval '90 days'` (настраиваемо 30/90).
+
+#### 3) Нагрузка и объём — забьёт ли хранилище?
+
+Оценка для парка **~5–13 ТС**, sync **каждые 2 мин**, смена ~**10 ч/сутки**, строка ~**100–200 байт** с индексами:
+
+| Сценарий | Точек / сутки | Точек / 90 дней | Объём ~90 дней |
+|---|---:|---:|---:|
+| 5 машин, 2 мин | ~1 500 | ~135 000 | **~15–30 МБ** |
+| 13 машин, 2 мин | ~3 900 | ~350 000 | **~40–70 МБ** |
+| 13 машин, 1 мин | ~7 800 | ~700 000 | **~80–140 МБ** |
+
+Нагрузка на сервер: **+0** отдельных cron — пишем в том же scout-sync (один upsert snapshot + batch insert points). Запрос трека за день: `WHERE mixer_id=? AND recorded_at BETWEEN …` по индексу — тысячи точек, для Leaflet нормально; при необходимости прореживание (каждая N-я / Douglas-Peucker).
+
+**Вывод по хранилищу:** при retention **90 дней** объём **десятки МБ**, не гигабайты. Supabase / локальный Postgres **не забьёт**. Без retention за год при 13 ТС — порядка сотен МБ (всё ещё терпимо, но retention обязателен в DoD).
+
+#### Рекомендуемая схема реализации (Фаза 1)
+
+1. **A (основной путь):** по запросу UI → API → СПИК `TrackPeriod` / аналог → polyline (история хранится у СКАУТ, у нас только кэш ответа на сессию опционально).
+2. **B (всегда включён тонкий trail):** при sync писать точку в `fleet_telemetry_points` + retention 90 дней.
+3. UI: вкладка Телематика / модалка карты — переключатель «Сейчас» / «За день» / период; линия маршрута + маркеры старт/финиш.
+4. Sync истории с Vercel по-прежнему упирается в доступность `724033.ru:8081` из облака — **запись trail и запросы TrackPeriod надёжнее с Mac mini / localCron** (как текущий GPS sync).
 
 ### Схема БД — Фаза 1
 
@@ -661,6 +729,7 @@ CREATE TABLE weighbridge_events (
 | `auth/rest/Login` | Авторизация → SessionId в заголовке `ScoutAuthorization` |
 | `OnlineDataService` | Координаты, скорость, время последнего сообщения |
 | `OnlineDataWithSensorsService` | + датчики (топливо, одометр) |
+| **`TrackPeriod` / `trackPeriodsMileage`** | **Трек / статистика за период (история поездок)** |
 | `StatisticsController` + `AnalogSensor` | История пробега, расход за период |
 | `FuelEvent` / `fdstat` | Заправки / сливы |
 | `units/rest/getAllUnitsPaged` | Список объектов → маппинг на `mixers.number` |
@@ -670,6 +739,7 @@ CREATE TABLE weighbridge_events (
 2. Статус «на связи / offline» (>15 мин без данных)
 3. Badge в списке + вкладка «Телематика» в drawer
 4. Маппинг `scout_unit_id` ↔ mixers (авто по Name + ручной override)
+5. **История поездок на карте** — см. «СКАУТ — история поездок» (TrackPeriod + локальный trail)
 
 **v2 — Фаза 3+:**
 - Пробег за день → обновление `mixers.odometer_km` (`StatisticsController`)
@@ -712,6 +782,8 @@ Realtime → карточка ТС, дашборд, планировщик
 - [ ] Badge 🟢/🔴 в списке mixers
 - [ ] Маппинг scout_unit_id ↔ mixers настроен (13 объектов)
 - [ ] Offline >24 ч — визуальный алерт (пример: 3310 ЕМ 32)
+- [ ] История поездок: polyline за день/период (СПИК TrackPeriod и/или `fleet_telemetry_points`)
+- [ ] Retention локального trail ≤ 90 дней (хранилище не растёт бесконечно)
 
 **DoD (Фаза 3, расширение):**
 - [ ] Одометр обновляется из СКАУТ Statistics раз в сутки
@@ -955,6 +1027,7 @@ flowchart TB
 - [ ] Удаление техники работает из UI с подтверждением
 - [ ] СКАУТ: cron sync, badge online/offline в списке, точка на вкладке «Телематика»
 - [ ] Все 13 объектов СКАУТ привязаны к mixers через `scout_unit_id`
+- [ ] История поездок: маршрут на карте за выбранный период (СКАУТ TrackPeriod +/или свой trail, retention 90 дн.)
 
 ### Фаза 2
 - [ ] Механик создаёт сервисную запись; водитель может подать заявку на ремонт из mobile

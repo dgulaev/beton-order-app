@@ -23,6 +23,8 @@ export type DailyLogisticsPlanPayload = {
   trips: PlannedTrip[];
   allowNight?: boolean;
   useTraffic?: boolean;
+  /** Учитывать online GPS миксеров при расчёте готовности / ETA */
+  useLiveGps?: boolean;
   orderShifts?: PlannerOrderShift[];
   warnings?: PlannerWarning[];
   /** Фаза 4: история волн дня */
@@ -127,6 +129,16 @@ export function loadLocalLogisticsPlanDraft(
       if (!raw) continue;
       const parsed = JSON.parse(raw) as DailyLogisticsPlanPayload;
       if (!parsed || typeof parsed !== 'object') continue;
+      const volRaw = (parsed as DailyLogisticsPlanPayload).mixerVolumeOverrides;
+      let mixerVolumeOverrides: Record<string, number> | undefined;
+      if (volRaw && typeof volRaw === 'object' && !Array.isArray(volRaw)) {
+        const out: Record<string, number> = {};
+        for (const [k, v] of Object.entries(volRaw)) {
+          const n = Number(v);
+          if (Number.isFinite(n) && n > 0) out[String(k)] = Math.round(n * 10) / 10;
+        }
+        if (Object.keys(out).length) mixerVolumeOverrides = out;
+      }
       return {
         selectedMixerIds: Array.isArray(parsed.selectedMixerIds)
           ? parsed.selectedMixerIds.map(String)
@@ -138,9 +150,11 @@ export function loadLocalLogisticsPlanDraft(
         trips: Array.isArray(parsed.trips) ? parsed.trips : [],
         allowNight: Boolean(parsed.allowNight),
         useTraffic: Boolean(parsed.useTraffic),
+        useLiveGps: Boolean(parsed.useLiveGps),
         orderShifts: Array.isArray(parsed.orderShifts) ? parsed.orderShifts : [],
         warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
         waves: Array.isArray(parsed.waves) ? parsed.waves : [],
+        mixerVolumeOverrides,
       };
     } catch {
       /* next key */

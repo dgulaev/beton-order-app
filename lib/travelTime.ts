@@ -20,7 +20,11 @@ const AVG_SPEED_KMH = 55;
 const MIN_TRAVEL_MIN = 10;
 /** Ближе этого — считаем «на заводе» (самовывоз / точка БСУ). */
 const PLANT_EPS_KM = 0.25;
+/** Порог «у ворот завода» для GPS-шума в планировщике. */
+export const GPS_NEAR_PLANT_KM = 0.8;
 export const FALLBACK_TRAVEL_MIN = 30;
+
+export type TravelCoords = { lat: number; lon: number };
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371;
@@ -31,6 +35,41 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** Прямое расстояние между точками (км). */
+export function haversineKmBetween(a: TravelCoords, b: TravelCoords): number {
+  return haversineKm(a.lat, a.lon, b.lat, b.lon);
+}
+
+/**
+ * Оценка минут дороги между двумя координатами (формула v3: ×1.3 / 55 км/ч).
+ * Ближе plantEpsKm → 0; иначе не меньше MIN_TRAVEL_MIN.
+ */
+export function estimateRoadMinutesBetween(
+  a: TravelCoords,
+  b: TravelCoords,
+  opts?: { plantEpsKm?: number; minTravelMin?: number },
+): number {
+  const plantEps = opts?.plantEpsKm ?? PLANT_EPS_KM;
+  const minTravel = opts?.minTravelMin ?? MIN_TRAVEL_MIN;
+  const straightKm = haversineKm(a.lat, a.lon, b.lat, b.lon);
+  if (straightKm < plantEps) return 0;
+  const roadKm = straightKm * ROUTING_FACTOR;
+  const estimatedMin = Math.round((roadKm / AVG_SPEED_KMH) * 60);
+  return Math.max(minTravel, estimatedMin);
+}
+
+/** GPS/точка у завода (с запасом на шум). */
+export function isNearPlant(
+  lat: number,
+  lon: number,
+  epsKm: number = GPS_NEAR_PLANT_KM,
+): boolean {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+  if (lat === 0 && lon === 0) return false;
+  const plant = getRouteOriginCoords();
+  return haversineKm(plant.lat, plant.lon, lat, lon) < epsKm;
 }
 
 /**
@@ -63,15 +102,10 @@ export async function computeRoadMinutes(
   }
 
   const plant = getRouteOriginCoords();
-  const straightKm = haversineKm(plant.lat, plant.lon, coords.lat, coords.lon);
-  if (straightKm < PLANT_EPS_KM) {
-    return { road_time_min: 0, source: 'calculated' };
-  }
-
-  const roadKm = straightKm * ROUTING_FACTOR;
-  const estimatedMin = Math.round((roadKm / AVG_SPEED_KMH) * 60);
   return {
-    road_time_min: Math.max(MIN_TRAVEL_MIN, estimatedMin),
+    road_time_min: estimateRoadMinutesBetween(plant, coords, {
+      plantEpsKm: PLANT_EPS_KM,
+    }),
     source: 'calculated',
   };
 }

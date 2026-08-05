@@ -68,6 +68,7 @@ import {
   uniquifyPlannedTripIds,
   type PlannedTrip,
   type PlannerMixer,
+  type PlannerMixerGps,
   type PlannerOrder,
   type PlannerOrderShift,
   type PlannerScenario,
@@ -92,6 +93,11 @@ import {
   type DailyLogisticsPlanPayload,
   type DailyLogisticsPlanRow,
 } from '@/lib/dailyLogisticsPlan';
+import { extractCoordsFromAddress } from '@/lib/geocodeAddress';
+import {
+  scoutIsOnline,
+  type FleetTelemetrySnapshot,
+} from '@/lib/fleetLifecycle';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { CARD_GRADIENT_SOFT, volumeCardStyle } from '../cardStyles';
 import { useRealtimeProductionLogs } from '@/hooks/useRealtimeOrders';
@@ -180,11 +186,45 @@ type DraftState = {
   trips: PlannedTrip[];
   allowNight?: boolean;
   useTraffic?: boolean;
+  useLiveGps?: boolean;
   orderShifts?: PlannerOrderShift[];
   warnings?: PlannerWarning[];
   waves?: PlannerWave[];
   mixerVolumeOverrides?: Record<string, number>;
 };
+
+/** Свежие online GPS → карта для planLogistics. */
+function mixerGpsFromTelemetry(
+  rows: FleetTelemetrySnapshot[],
+): Record<string, PlannerMixerGps> {
+  const out: Record<string, PlannerMixerGps> = {};
+  for (const row of rows) {
+    const lat = row.lat != null ? Number(row.lat) : NaN;
+    const lon = row.lon != null ? Number(row.lon) : NaN;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    if (lat === 0 && lon === 0) continue;
+    const online = row.is_online || scoutIsOnline(row.last_message_at);
+    if (!online) continue;
+    out[String(row.mixer_id)] = {
+      lat,
+      lon,
+      lastMessageAt: row.last_message_at,
+      isOnline: true,
+    };
+  }
+  return out;
+}
+
+function siteCoordsFromOrders(
+  orders: PlannerOrder[],
+): Record<string, { lat: number; lon: number }> {
+  const out: Record<string, { lat: number; lon: number }> = {};
+  for (const o of orders) {
+    const c = extractCoordsFromAddress(o.address);
+    if (c) out[String(o.id)] = c;
+  }
+  return out;
+}
 
 type SharedPlanMeta = {
   revision: number;
@@ -228,6 +268,7 @@ function payloadFromDraft(
     trips: draft.trips,
     allowNight: draft.allowNight,
     useTraffic: draft.useTraffic,
+    useLiveGps: draft.useLiveGps,
     orderShifts: draft.orderShifts,
     warnings,
     waves: draft.waves,
@@ -261,6 +302,7 @@ function parseSharedPayload(raw: unknown): DailyLogisticsPlanPayload | null {
     trips: Array.isArray(p.trips) ? p.trips : [],
     allowNight: Boolean(p.allowNight),
     useTraffic: Boolean(p.useTraffic),
+    useLiveGps: Boolean(p.useLiveGps),
     orderShifts: Array.isArray(p.orderShifts) ? p.orderShifts : [],
     warnings: Array.isArray(p.warnings) ? p.warnings : [],
     waves: Array.isArray(p.waves) ? p.waves : [],
@@ -321,6 +363,7 @@ export default function LogisticsPlannerTab({
   const [autoStageNote, setAutoStageNote] = useState('');
   const [allowNight, setAllowNight] = useState(false);
   const [useTraffic, setUseTraffic] = useState(false);
+  const [useLiveGps, setUseLiveGps] = useState(false);
   const [scenarios, setScenarios] = useState<PlannerScenario[]>([]);
   const [activeScenarioId, setActiveScenarioId] = useState<string | null>(null);
   const [orderShifts, setOrderShifts] = useState<PlannerOrderShift[]>([]);
@@ -1001,6 +1044,7 @@ export default function LogisticsPlannerTab({
         }
         setAllowNight(Boolean(draft?.allowNight));
         setUseTraffic(Boolean(draft?.useTraffic));
+        setUseLiveGps(Boolean(draft?.useLiveGps));
         setOrderShifts(Array.isArray(draft?.orderShifts) ? draft.orderShifts : []);
         setWaves(Array.isArray(draft?.waves) ? draft.waves : []);
         const volOv = parseMixerVolumeOverrides(draft?.mixerVolumeOverrides) || {};
@@ -1032,6 +1076,7 @@ export default function LogisticsPlannerTab({
               trips: onlyToday(sharedPayload.trips),
               allowNight: sharedPayload.allowNight,
               useTraffic: sharedPayload.useTraffic,
+              useLiveGps: sharedPayload.useLiveGps,
               orderShifts: sharedPayload.orderShifts,
               warnings: sharedPayload.warnings,
               waves: sharedPayload.waves,
@@ -1201,6 +1246,8 @@ export default function LogisticsPlannerTab({
       mixers: plannerMixers,
       allowNight,
       useTraffic,
+      // Превью без live fetch — GPS только при полном расчёте
+      useLiveGps: false,
     });
     const plantOpen =
       preview.plantOpenMinutes ??
@@ -1352,6 +1399,7 @@ export default function LogisticsPlannerTab({
         trips: next.trips ?? trips,
         allowNight: next.allowNight ?? allowNight,
         useTraffic: next.useTraffic ?? useTraffic,
+        useLiveGps: next.useLiveGps ?? useLiveGps,
         orderShifts: next.orderShifts ?? orderShifts,
         warnings: next.warnings ?? warningsRef.current,
         waves: next.waves ?? wavesRef.current,
@@ -1363,7 +1411,7 @@ export default function LogisticsPlannerTab({
       saveDraft(dateKey, draft);
       return draft;
     },
-    [dateKey, selectedIds, lockedTrips, manualDone, trips, allowNight, useTraffic, orderShifts],
+    [dateKey, selectedIds, lockedTrips, manualDone, trips, allowNight, useTraffic, useLiveGps, orderShifts],
   );
 
   const applyRemotePlan = useCallback(
@@ -1429,6 +1477,7 @@ export default function LogisticsPlannerTab({
         setActiveWaveId(null);
         setAllowNight(false);
         setUseTraffic(false);
+        setUseLiveGps(false);
         setMixerVolumeOverrides({});
         mixerVolumeOverridesRef.current = {};
         setScenarios([]);
@@ -1490,6 +1539,7 @@ export default function LogisticsPlannerTab({
       );
       setAllowNight(Boolean(payload.allowNight));
       setUseTraffic(Boolean(payload.useTraffic));
+      setUseLiveGps(Boolean(payload.useLiveGps));
       setOrderShifts(payload.orderShifts || []);
       setWaves(payload.waves || []);
       wavesRef.current = payload.waves || [];
@@ -1530,6 +1580,7 @@ export default function LogisticsPlannerTab({
           trips,
           allowNight,
           useTraffic,
+          useLiveGps,
           orderShifts,
           warnings: warningsRef.current,
           waves: wavesRef.current,
@@ -1609,6 +1660,7 @@ export default function LogisticsPlannerTab({
       trips,
       allowNight,
       useTraffic,
+      useLiveGps,
       orderShifts,
     ],
   );
@@ -1743,6 +1795,7 @@ export default function LogisticsPlannerTab({
     manualDone,
     allowNight,
     useTraffic,
+    useLiveGps,
     orderShifts,
     waves,
     warnings,
@@ -1855,6 +1908,7 @@ export default function LogisticsPlannerTab({
         trips: stamped,
         allowNight,
         useTraffic,
+        useLiveGps,
         orderShifts: opts?.orderShifts ?? orderShifts,
         warnings: nextWarnings,
         waves: nextWaves,
@@ -1900,6 +1954,33 @@ export default function LogisticsPlannerTab({
       summary: `вариант ${sc.id}`,
       orderShifts: sc.orderShifts,
     });
+  };
+
+  /** Подтянуть online GPS для опции «Учесть GPS». */
+  const loadLiveGpsForPlan = async (
+    ordersForSites: PlannerOrder[] = plannerOrders,
+  ): Promise<{
+    mixerGps?: Record<string, PlannerMixerGps>;
+    siteCoordsByOrderId?: Record<string, { lat: number; lon: number }>;
+  }> => {
+    if (!useLiveGps) return {};
+    let mixerGps: Record<string, PlannerMixerGps> = {};
+    try {
+      const telRes = await fetch('/api/adminCifra/fleet/telemetry', {
+        headers: adminCifraAuthHeaders(),
+        cache: 'no-store',
+      });
+      const telData = await telRes.json().catch(() => ({}));
+      if (telRes.ok && telData.success && Array.isArray(telData.telemetry)) {
+        mixerGps = mixerGpsFromTelemetry(telData.telemetry as FleetTelemetrySnapshot[]);
+      }
+    } catch {
+      /* пустая карта — движок покажет info-warning */
+    }
+    return {
+      mixerGps,
+      siteCoordsByOrderId: siteCoordsFromOrders(ordersForSites),
+    };
   };
 
   const runPlan = async (
@@ -2040,6 +2121,8 @@ export default function LogisticsPlannerTab({
         return;
       }
 
+      const gpsOpts = await loadLiveGpsForPlan(ordersForPlan);
+
       const baseInput = {
         mode,
         orders: ordersForPlan,
@@ -2048,9 +2131,12 @@ export default function LogisticsPlannerTab({
         doneOrderIds,
         allowNight,
         useTraffic,
+        useLiveGps,
+        ...gpsOpts,
         factDelayMin: delayFactMin || undefined,
-        // Этап: новые соски не раньше «сейчас» (иначе JIT к утренней цели → 09:00).
-        nowMinutes: mode === 'stage' ? nowMin : undefined,
+        // Этап: новые соски не раньше «сейчас». Для GPS — и full_day сегодня.
+        nowMinutes:
+          mode === 'stage' || (useLiveGps && nowMin != null) ? nowMin : undefined,
         calibration: calibrationRef.current || calibration,
       };
 
@@ -2142,6 +2228,7 @@ export default function LogisticsPlannerTab({
         })
         .map((o) => o.id);
 
+      const gpsOpts = await loadLiveGpsForPlan();
       const { result, locked, shifted } = replanAfterManualTripShift({
         allTrips: trips,
         tripId,
@@ -2151,6 +2238,8 @@ export default function LogisticsPlannerTab({
         doneOrderIds,
         allowNight,
         useTraffic,
+        useLiveGps,
+        ...gpsOpts,
         factDelayMin: delayFactMin || undefined,
         dayTrips,
         nowMinutes: nowMin,
@@ -2206,6 +2295,7 @@ export default function LogisticsPlannerTab({
         })
         .map((o) => o.id);
 
+      const gpsOpts = await loadLiveGpsForPlan();
       const { result, locked, shifted } = replanAfterTripDelay({
         allTrips: trips,
         tripId,
@@ -2215,6 +2305,8 @@ export default function LogisticsPlannerTab({
         doneOrderIds,
         allowNight,
         useTraffic,
+        useLiveGps,
+        ...gpsOpts,
         factDelayMin: delayFactMin || undefined,
         dayTrips,
         nowMinutes: nowMin,
@@ -2286,6 +2378,7 @@ export default function LogisticsPlannerTab({
         })
         .map((o) => o.id);
 
+      const gpsOpts = await loadLiveGpsForPlan();
       const { result, locked, shifted } = replanAfterTripVolumeChange({
         allTrips: trips,
         tripId,
@@ -2295,6 +2388,8 @@ export default function LogisticsPlannerTab({
         doneOrderIds,
         allowNight,
         useTraffic,
+        useLiveGps,
+        ...gpsOpts,
         factDelayMin: delayFactMin || undefined,
         dayTrips,
         nowMinutes: nowMin,
@@ -2382,6 +2477,7 @@ export default function LogisticsPlannerTab({
         })
         .map((o) => o.id);
 
+      const gpsOpts = await loadLiveGpsForPlan();
       const { result, locked, shifted } = replanAfterTripReorder({
         allTrips: trips,
         tripId,
@@ -2392,6 +2488,8 @@ export default function LogisticsPlannerTab({
         doneOrderIds,
         allowNight,
         useTraffic,
+        useLiveGps,
+        ...gpsOpts,
         factDelayMin: delayFactMin || undefined,
         dayTrips,
         nowMinutes: nowMin,
@@ -2446,6 +2544,7 @@ export default function LogisticsPlannerTab({
         trips: nextTrips,
         allowNight,
         useTraffic,
+        useLiveGps,
         orderShifts,
         warnings: warningsRef.current,
         waves: wavesRef.current,
@@ -2480,6 +2579,7 @@ export default function LogisticsPlannerTab({
         trips: nextTrips,
         allowNight,
         useTraffic,
+        useLiveGps,
         orderShifts,
         warnings: warningsRef.current,
         waves: wavesRef.current,
@@ -2815,6 +2915,7 @@ export default function LogisticsPlannerTab({
           })
           .map((o) => o.id);
 
+        const gpsOpts = await loadLiveGpsForPlan();
         const { result, locked, shifted } = replanAfterTripVolumesChange({
           allTrips: trips,
           changes: toSync.map((c) => ({ tripId: c.tripId, volume: c.volume })),
@@ -2823,6 +2924,8 @@ export default function LogisticsPlannerTab({
           doneOrderIds,
           allowNight,
           useTraffic,
+          useLiveGps,
+          ...gpsOpts,
           factDelayMin: delayFactMin || undefined,
           dayTrips,
           nowMinutes: nowMin,
@@ -3043,6 +3146,7 @@ export default function LogisticsPlannerTab({
     setFleetGrowNote('');
     setAllowNight(false);
     setUseTraffic(false);
+    setUseLiveGps(false);
     setMixerVolumeOverrides({});
     mixerVolumeOverridesRef.current = {};
     clearTripDrag();
@@ -3523,6 +3627,7 @@ export default function LogisticsPlannerTab({
         roads: 'Обновить дороги',
         traffic: 'Учитывать пробки',
         night: 'Включая ночь',
+        gps: 'Учесть GPS',
         applyScopeOn: 'Только выбранные',
         applyScopeOff: 'Ко всем заявкам',
         overwrite: 'Заменить ручные «Загрузка»',
@@ -3540,6 +3645,7 @@ export default function LogisticsPlannerTab({
         roads: 'Дороги',
         traffic: 'Пробки',
         night: 'Ночь',
+        gps: 'GPS',
         applyScopeOn: 'Выбранные',
         applyScopeOff: 'Все заявки',
         overwrite: 'Ручные загрузки',
@@ -3557,6 +3663,7 @@ export default function LogisticsPlannerTab({
         roads: 'Дороги',
         traffic: 'Пробки',
         night: 'Ночь',
+        gps: 'GPS',
         applyScopeOn: 'Выбранные',
         applyScopeOff: 'Все',
         overwrite: 'Ручные',
@@ -3576,6 +3683,7 @@ export default function LogisticsPlannerTab({
       roads: roadsRefreshing ? (labelTier === 0 ? 'Дороги…' : '…') : base.roads,
       traffic: base.traffic,
       night: base.night,
+      gps: base.gps,
       applyScope: applyOnlySelected ? base.applyScopeOn : base.applyScopeOff,
       overwrite: base.overwrite,
       publish: publishing ? (labelTier === 0 ? 'Публикую…' : '…') : base.publish,
@@ -3773,6 +3881,23 @@ export default function LogisticsPlannerTab({
               label={actionLabels.night}
               onChange={(next) => {
                 setAllowNight(next);
+                setScenarios([]);
+                setActiveScenarioId(null);
+              }}
+            />
+          </DarkHoverTip>
+          <DarkHoverTip
+            tip="Свежий online GPS миксеров: доезд до завода и уточнение возврата. Без сигнала — как раньше. Для другого дня GPS не сдвигает готовность."
+            maxWidth={360}
+          >
+            <PlannerSwitch
+              checked={useLiveGps}
+              disabled={!canMutatePlan}
+              accent="emerald"
+              size={switchSize}
+              label={actionLabels.gps}
+              onChange={(next) => {
+                setUseLiveGps(next);
                 setScenarios([]);
                 setActiveScenarioId(null);
               }}

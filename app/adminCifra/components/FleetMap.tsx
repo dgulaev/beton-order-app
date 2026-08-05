@@ -5,6 +5,15 @@ import type { Map as LeafletMap, Marker as LeafletMarker } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { ExternalLink } from 'lucide-react';
 
+/** Тип ТС для иконки на карте (как VehicleKind, без лишней зависимости UI→каталог). */
+export type FleetMapVehicleKind =
+  | 'mixer'
+  | 'dump_truck'
+  | 'tonar'
+  | 'cement_truck'
+  | 'tractor_unit'
+  | 'special';
+
 export type FleetMapMarker = {
   id: number | string;
   lat: number;
@@ -15,6 +24,28 @@ export type FleetMapMarker = {
   speedKmh?: number | null;
   address?: string | null;
   lastMessageAt?: string | null;
+  /** vehicle — ТС; plant/destination — круги на карте маршрутов */
+  kind?: 'vehicle' | 'plant' | 'destination';
+  /** Вид техники: mixer → mixer-truck.png, dump_truck → samosval.png */
+  vehicleKind?: FleetMapVehicleKind | string | null;
+  color?: string;
+};
+
+export type FleetMapPathPoint = {
+  lat: number;
+  lon: number;
+};
+
+export type FleetMapRoute = {
+  id: number | string;
+  points: FleetMapPathPoint[];
+  color?: string;
+  label?: string;
+  /** Приглушить, если выбран другой маршрут */
+  dimmed?: boolean;
+  /** Пунктир (факт GPS / сравнение с планом) */
+  dashed?: boolean;
+  weight?: number;
 };
 
 type PlacedMarker = FleetMapMarker & {
@@ -25,7 +56,14 @@ type PlacedMarker = FleetMapMarker & {
 
 interface FleetMapProps {
   markers: FleetMapMarker[];
+  /** Одна полилиния (совместимость) */
+  path?: FleetMapPathPoint[];
+  pathColor?: string;
+  /** Несколько маршрутов (рейсы) */
+  routes?: FleetMapRoute[];
   highlightId?: number | string | null;
+  /** Tooltip машин по hover. В карточке ТС обычно false — данные уже под картой. */
+  markerTooltips?: boolean;
   height?: number | string;
   externalHref?: string | null;
   externalLabel?: string;
@@ -41,6 +79,15 @@ function escapeHtml(value: string): string {
 }
 
 const MIXER_TRUCK_ICON = '/icons/mixer-truck.png';
+const DUMP_TRUCK_ICON = '/icons/samosval.png';
+
+/** Иконка по виду ТС — самосвалы готовы, остальные пока миксер. */
+export function fleetMapVehicleIconSrc(
+  vehicleKind?: FleetMapVehicleKind | string | null,
+): string {
+  if (vehicleKind === 'dump_truck') return DUMP_TRUCK_ICON;
+  return MIXER_TRUCK_ICON;
+}
 
 function markerStatusStyle(isOnline?: boolean, highlighted?: boolean): {
   imgFilter: string;
@@ -69,16 +116,44 @@ function markerStatusStyle(isOnline?: boolean, highlighted?: boolean): {
   };
 }
 
+function makePointIcon(
+  L: typeof import('leaflet'),
+  marker: FleetMapMarker,
+) {
+  const kind = marker.kind || 'vehicle';
+  const color =
+    marker.color ||
+    (kind === 'plant' ? '#22C55E' : kind === 'destination' ? '#38BDF8' : '#64748B');
+  const label = escapeHtml(marker.label || '');
+  const html = `
+    <div style="display:flex;flex-direction:column;align-items:center;filter:drop-shadow(0 2px 6px rgba(15,23,42,0.45))">
+      <div style="width:14px;height:14px;border-radius:9999px;background:${color};border:2px solid #fff"></div>
+      <div style="margin-top:3px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 6px;border-radius:4px;background:rgba(15,23,42,0.85);color:#F8FAFC;font:700 10px/14px system-ui,-apple-system,sans-serif">${label}</div>
+    </div>
+  `;
+  return L.divIcon({
+    className: 'fleet-map-vehicle-icon',
+    html,
+    iconSize: [104, 36],
+    iconAnchor: [52, 8],
+    tooltipAnchor: [0, -10],
+  });
+}
+
 function makeVehicleIcon(
   L: typeof import('leaflet'),
   marker: FleetMapMarker,
   highlighted?: boolean,
 ) {
+  if (marker.kind === 'plant' || marker.kind === 'destination') {
+    return makePointIcon(L, marker);
+  }
   const status = markerStatusStyle(marker.isOnline, highlighted);
   const size = highlighted ? 56 : 48;
   const badgeH = 16;
   const plate = escapeHtml(marker.label || '');
   const totalH = size + badgeH + 14;
+  const iconSrc = fleetMapVehicleIconSrc(marker.vehicleKind);
 
   const html = `
     <div style="
@@ -92,7 +167,7 @@ function makeVehicleIcon(
         drop-shadow(0 3px 8px rgba(15,23,42,0.5));
     ">
       <img
-        src="${MIXER_TRUCK_ICON}"
+        src="${iconSrc}"
         width="${size}"
         height="${size}"
         draggable="false"
@@ -275,9 +350,35 @@ function makeBaseLayers(L: typeof import('leaflet')) {
   };
 }
 
+function normalizeRoutes(
+  routes: FleetMapRoute[] | undefined,
+  path: FleetMapPathPoint[] | undefined,
+  pathColor: string,
+): FleetMapRoute[] {
+  if (routes?.length) {
+    return routes
+      .map((r) => ({
+        ...r,
+        points: (r.points || [])
+          .map((p) => ({ lat: Number(p.lat), lon: Number(p.lon) }))
+          .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon) && !(p.lat === 0 && p.lon === 0)),
+      }))
+      .filter((r) => r.points.length >= 2);
+  }
+  const single = (path || [])
+    .map((p) => ({ lat: Number(p.lat), lon: Number(p.lon) }))
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon) && !(p.lat === 0 && p.lon === 0));
+  if (single.length < 2) return [];
+  return [{ id: 'path', points: single, color: pathColor }];
+}
+
 export default function FleetMap({
   markers,
+  path = [],
+  pathColor = '#38BDF8',
+  routes,
   highlightId = null,
+  markerTooltips = true,
   height = 220,
   externalHref = null,
   externalLabel = 'Открыть на карте',
@@ -287,6 +388,8 @@ export default function FleetMap({
   const mapRef = useRef<LeafletMap | null>(null);
   const markerRefs = useRef<Map<number | string, LeafletMarker>>(new Map());
   const clusterLayerRef = useRef<import('leaflet').LayerGroup | null>(null);
+  const pathLayerRef = useRef<import('leaflet').LayerGroup | null>(null);
+  const pathEndsRef = useRef<import('leaflet').LayerGroup | null>(null);
   const leafletRef = useRef<typeof import('leaflet') | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const [mapStatus, setMapStatus] = useState<'pending' | 'ready'>('pending');
@@ -294,19 +397,48 @@ export default function FleetMap({
   const validMarkers = markers
     .map((m) => ({ ...m, lat: Number(m.lat), lon: Number(m.lon) }))
     .filter((m) => Number.isFinite(m.lat) && Number.isFinite(m.lon) && !(m.lat === 0 && m.lon === 0));
+  const validRoutes = normalizeRoutes(routes, path, pathColor);
   const validMarkersRef = useRef(validMarkers);
   validMarkersRef.current = validMarkers;
-  /** Remount карты только при смене набора машин, не при каждом GPS-тике */
+  const validRoutesRef = useRef(validRoutes);
+  validRoutesRef.current = validRoutes;
+  const hasContent = validMarkers.length > 0 || validRoutes.length > 0;
+  /** Remount карты только при смене набора машин / маршрутов */
   const idsKey = validMarkers
     .map((m) => String(m.id))
     .sort()
     .join('|');
+  const pathKey = validRoutes
+    .map((r) => {
+      const pts = r.points;
+      const mid = pts[Math.floor(pts.length / 2)];
+      const q1 = pts[Math.floor(pts.length / 4)];
+      const q3 = pts[Math.floor((pts.length * 3) / 4)];
+      return [
+        r.id,
+        r.color,
+        r.dimmed ? 1 : 0,
+        r.dashed ? 1 : 0,
+        pts.length,
+        pts[0]?.lat,
+        pts[0]?.lon,
+        q1?.lat,
+        mid?.lon,
+        q3?.lat,
+        pts[pts.length - 1]?.lat,
+        pts[pts.length - 1]?.lon,
+      ].join(':');
+    })
+    .join('|');
   const markersKey = validMarkers
-    .map((m) => `${m.id}:${m.lat}:${m.lon}:${m.isOnline}:${m.label}:${m.address ?? ''}`)
+    .map(
+      (m) =>
+        `${m.id}:${m.lat}:${m.lon}:${m.isOnline}:${m.label}:${m.address ?? ''}:${m.vehicleKind ?? ''}`,
+    )
     .join('|');
 
   useEffect(() => {
-    if (!containerRef.current || validMarkersRef.current.length === 0) {
+    if (!containerRef.current || !hasContent) {
       setMapStatus('pending');
       return;
     }
@@ -318,9 +450,13 @@ export default function FleetMap({
       leafletRef.current = L;
 
       const { placed } = spreadOverlappingMarkers(validMarkersRef.current);
+      const routeList = validRoutesRef.current;
+      const firstRoutePt = routeList[0]?.points[0];
+      const centerLat = placed[0]?.displayLat ?? firstRoutePt?.lat ?? 53.25;
+      const centerLon = placed[0]?.displayLon ?? firstRoutePt?.lon ?? 34.37;
 
       const map = L.map(containerRef.current, {
-        center: [placed[0].displayLat, placed[0].displayLon],
+        center: [centerLat, centerLon],
         zoom: 14,
         zoomControl: true,
         attributionControl: true,
@@ -332,37 +468,84 @@ export default function FleetMap({
       L.control.layers(baseLayers, undefined, { position: 'topright' }).addTo(map);
 
       clusterLayerRef.current = L.layerGroup().addTo(map);
+      pathLayerRef.current = L.layerGroup().addTo(map);
+      pathEndsRef.current = L.layerGroup().addTo(map);
+
+      const fitPts: [number, number][] = [];
+
+      // Одна точка старта (завод), если несколько рейсов
+      if (routeList.length > 0) {
+        const first = routeList[0]!.points[0]!;
+        L.circleMarker([first.lat, first.lon], {
+          radius: 7,
+          color: '#22C55E',
+          fillColor: '#22C55E',
+          fillOpacity: 1,
+          weight: 2,
+        })
+          .bindTooltip('Завод (Орловский тупик)', {
+            className: 'fleet-map-tooltip-wrap',
+          })
+          .addTo(pathEndsRef.current!);
+      }
+
+      for (const route of routeList) {
+        const latlngs = route.points.map((p) => [p.lat, p.lon] as [number, number]);
+        latlngs.forEach((p) => fitPts.push(p));
+        const color = route.color || pathColor;
+        const dimmed = Boolean(route.dimmed);
+        L.polyline(latlngs, {
+          color,
+          weight: dimmed ? 3 : route.weight ?? (route.dashed ? 4 : 5),
+          opacity: dimmed ? 0.22 : route.dashed ? 0.85 : 0.92,
+          lineJoin: 'round',
+          dashArray: route.dashed ? '10 8' : undefined,
+        }).addTo(pathLayerRef.current!);
+
+        // Конец только у плановых (не пунктирных) линий — иначе дубли
+        if (!route.dashed && (!dimmed || routeList.filter((r) => !r.dashed).length === 1)) {
+          L.circleMarker(latlngs[latlngs.length - 1], {
+            radius: 6,
+            color: color,
+            fillColor: color,
+            fillOpacity: 1,
+            weight: 2,
+          })
+            .bindTooltip(route.label ? `Объект · ${route.label}` : 'Объект', {
+              className: 'fleet-map-tooltip-wrap',
+            })
+            .addTo(pathEndsRef.current!);
+        }
+      }
 
       markerRefs.current.clear();
-      const points: [number, number][] = [];
 
       for (const marker of placed) {
         const highlighted = highlightId != null && String(marker.id) === String(highlightId);
         const point: [number, number] = [marker.displayLat, marker.displayLon];
-        points.push(point);
+        fitPts.push(point);
 
         const mapMarker = L.marker(point, {
           icon: makeVehicleIcon(L, marker, highlighted),
-        })
-          .addTo(map)
-          .bindTooltip(tooltipHtml(marker), {
+        }).addTo(map);
+
+        // Не openTooltip() при highlight — иначе подсказка всегда поверх карты
+        if (markerTooltips) {
+          mapMarker.bindTooltip(tooltipHtml(marker), {
             direction: 'top',
             opacity: 1,
             sticky: true,
             className: 'fleet-map-tooltip-wrap',
           });
-
-        if (highlighted) {
-          mapMarker.openTooltip();
         }
         markerRefs.current.set(marker.id, mapMarker);
       }
 
-      if (points.length === 1) {
-        map.setView(points[0], 15, { animate: false });
-      } else {
-        map.fitBounds(points, { padding: [64, 64], animate: false });
-        if (map.getZoom() > 15) map.setZoom(15, { animate: false });
+      if (fitPts.length === 1) {
+        map.setView(fitPts[0], 15, { animate: false });
+      } else if (fitPts.length > 1) {
+        map.fitBounds(fitPts, { padding: [48, 48], animate: false });
+        if (map.getZoom() > 16) map.setZoom(16, { animate: false });
       }
 
       if (!cancelled) setMapStatus('ready');
@@ -380,6 +563,8 @@ export default function FleetMap({
       resizeObserverRef.current = null;
       markerRefs.current.clear();
       clusterLayerRef.current = null;
+      pathLayerRef.current = null;
+      pathEndsRef.current = null;
       leafletRef.current = null;
       if (mapRef.current) {
         mapRef.current.remove();
@@ -387,7 +572,7 @@ export default function FleetMap({
       }
       setMapStatus('pending');
     };
-  }, [idsKey, highlightId]);
+  }, [idsKey, pathKey, highlightId, pathColor, hasContent, markerTooltips]);
 
   // Live-обновление координат после broadcast (без пересоздания карты)
   useEffect(() => {
@@ -432,24 +617,38 @@ export default function FleetMap({
       if (existing) {
         existing.setLatLng(point);
         existing.setIcon(makeVehicleIcon(L, marker, highlighted));
-        existing.setTooltipContent(tooltipHtml(marker));
+        if (markerTooltips) {
+          if (existing.getTooltip()) {
+            existing.setTooltipContent(tooltipHtml(marker));
+          } else {
+            existing.bindTooltip(tooltipHtml(marker), {
+              direction: 'top',
+              opacity: 1,
+              sticky: true,
+              className: 'fleet-map-tooltip-wrap',
+            });
+          }
+        } else if (existing.getTooltip()) {
+          existing.unbindTooltip();
+        }
       } else {
         const mapMarker = L.marker(point, {
           icon: makeVehicleIcon(L, marker, highlighted),
-        })
-          .addTo(map)
-          .bindTooltip(tooltipHtml(marker), {
+        }).addTo(map);
+        if (markerTooltips) {
+          mapMarker.bindTooltip(tooltipHtml(marker), {
             direction: 'top',
             opacity: 1,
             sticky: true,
             className: 'fleet-map-tooltip-wrap',
           });
+        }
         markerRefs.current.set(marker.id, mapMarker);
       }
     }
-  }, [markersKey, mapStatus, highlightId]);
+  }, [markersKey, mapStatus, highlightId, markerTooltips]);
 
-  if (validMarkers.length === 0) {
+  if (!hasContent) {
     return (
       <div
         style={{
@@ -550,7 +749,15 @@ export default function FleetMap({
   );
 }
 
-export function FleetMapLegendIcon({ online, size = 24 }: { online: boolean; size?: number }) {
+export function FleetMapLegendIcon({
+  online,
+  size = 24,
+  vehicleKind = 'mixer',
+}: {
+  online: boolean;
+  size?: number;
+  vehicleKind?: FleetMapVehicleKind | string | null;
+}) {
   const status = markerStatusStyle(online, false);
   return (
     <span
@@ -567,7 +774,7 @@ export function FleetMapLegendIcon({ online, size = 24 }: { online: boolean; siz
       }}
     >
       <img
-        src={MIXER_TRUCK_ICON}
+        src={fleetMapVehicleIconSrc(vehicleKind)}
         alt=""
         width={size}
         height={size}

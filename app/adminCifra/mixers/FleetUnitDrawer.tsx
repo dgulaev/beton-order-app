@@ -14,6 +14,7 @@ import {
   Pencil,
 } from 'lucide-react';
 import FleetTripsPanel from './FleetTripsPanel';
+import FleetTripRoutesModal from './FleetTripRoutesModal';
 import FleetMap from '../components/FleetMap';
 import { buildYandexPlaceUrl } from '@/lib/fleetMapLinks';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
@@ -117,6 +118,11 @@ export default function FleetUnitDrawer({
   const [localTelemetry, setLocalTelemetry] = useState<FleetTelemetrySnapshot | null>(null);
   const [telemetryLoading, setTelemetryLoading] = useState(false);
   const [syncingGps, setSyncingGps] = useState(false);
+  const [trackDay, setTrackDay] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
+  const [routesModalOpen, setRoutesModalOpen] = useState(false);
 
   const activeTelemetry = pickFresherTelemetry(localTelemetry, telemetry ?? null);
 
@@ -178,6 +184,7 @@ export default function FleetUnitDrawer({
     resetForm();
     setTab('passport');
     setLocalTelemetry(null);
+    setRoutesModalOpen(false);
   }, [unit, resetForm]);
 
   const loadDocuments = useCallback(async () => {
@@ -362,6 +369,7 @@ export default function FleetUnitDrawer({
             speedKmh: activeTelemetry.speed_kmh,
             address: activeTelemetry.address,
             lastMessageAt: activeTelemetry.last_message_at,
+            vehicleKind: unit.vehicle_kind || 'mixer',
           },
         ]
       : [];
@@ -779,6 +787,56 @@ export default function FleetUnitDrawer({
                   {syncingGps ? 'Обновление…' : '↻ Обновить GPS из СКАУТ'}
                 </button>
               )}
+
+              {/* Маршруты рейсов за день */}
+              <div
+                style={{
+                  marginBottom: 14,
+                  padding: 12,
+                  borderRadius: 12,
+                  background: '#1E2937',
+                  border: '1px solid #334155',
+                }}
+              >
+                <div style={{ fontWeight: 700, color: '#E2E8F0', fontSize: 13, marginBottom: 8 }}>
+                  Маршруты рейсов
+                </div>
+                <div style={{ color: '#64748B', fontSize: 12, marginBottom: 10 }}>
+                  От завода (Орловский тупик) до адресов заявок — каждый рейс отдельной линией
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <input
+                    type="date"
+                    value={trackDay}
+                    onChange={(e) => setTrackDay(e.target.value)}
+                    style={{
+                      ...fieldStyle,
+                      padding: '8px 10px',
+                      width: 'auto',
+                      flex: '1 1 140px',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={!unit}
+                    onClick={() => setRoutesModalOpen(true)}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 10,
+                      border: '1px solid rgba(56,189,248,0.4)',
+                      background: 'rgba(56,189,248,0.12)',
+                      color: '#38BDF8',
+                      fontWeight: 600,
+                      fontSize: 13,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Открыть на карте
+                  </button>
+                </div>
+              </div>
+
               {telemetryLoading ? (
                 <div style={{ color: '#64748B', textAlign: 'center', padding: 32 }}>Загрузка…</div>
               ) : !activeTelemetry ? (
@@ -794,52 +852,83 @@ export default function FleetUnitDrawer({
                   {telemetryMarker.length > 0 && (
                     <FleetMap
                       markers={telemetryMarker}
-                      highlightId={unit.id}
+                      highlightId={unit?.id}
+                      markerTooltips={false}
                       height={220}
                       externalHref={mapsUrl}
                       externalLabel="Яндекс.Карты"
+                      emptyMessage="Нет координат"
                     />
                   )}
-                  <div
-                    style={{
-                      padding: 14,
-                      borderRadius: 12,
-                      background: activeTelemetry.is_online ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)',
-                      border: `1px solid ${activeTelemetry.is_online ? 'rgba(74,222,128,0.25)' : 'rgba(248,113,113,0.25)'}`,
-                    }}
-                  >
-                    <div style={{ fontWeight: 700, color: activeTelemetry.is_online ? '#4ADE80' : '#F87171' }}>
-                      {activeTelemetry.is_online ? 'На связи' : stale ? 'Долго offline' : 'Offline'}
-                    </div>
-                    <div style={{ color: '#94A3B8', fontSize: 12, marginTop: 4 }}>
-                      <Clock size={12} style={{ display: 'inline', verticalAlign: 'middle' }} />{' '}
-                      {formatDt(activeTelemetry.last_message_at)}
-                    </div>
-                  </div>
-                  {activeTelemetry.address && (
-                    <div style={{ display: 'flex', gap: 8, color: '#CBD5E1', fontSize: 14 }}>
-                      <MapPin size={16} color="#64748B" style={{ flexShrink: 0, marginTop: 2 }} />
-                      {activeTelemetry.address}
-                    </div>
-                  )}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    <div style={{ background: '#1E2937', borderRadius: 10, padding: 12 }}>
-                      <div style={{ color: '#64748B', fontSize: 11 }}>Скорость</div>
-                      <div style={{ color: '#fff', fontSize: 18, fontWeight: 700 }}>
-                        {activeTelemetry.speed_kmh != null ? `${Math.round(activeTelemetry.speed_kmh)} км/ч` : '—'}
+                  {activeTelemetry && (
+                    <>
+                      <div
+                        style={{
+                          padding: 14,
+                          borderRadius: 12,
+                          background: activeTelemetry.is_online
+                            ? 'rgba(74,222,128,0.08)'
+                            : 'rgba(248,113,113,0.08)',
+                          border: `1px solid ${
+                            activeTelemetry.is_online
+                              ? 'rgba(74,222,128,0.25)'
+                              : 'rgba(248,113,113,0.25)'
+                          }`,
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontWeight: 700,
+                            color: activeTelemetry.is_online ? '#4ADE80' : '#F87171',
+                          }}
+                        >
+                          {activeTelemetry.is_online
+                            ? 'На связи'
+                            : stale
+                              ? 'Долго offline'
+                              : 'Offline'}
+                        </div>
+                        <div style={{ color: '#94A3B8', fontSize: 12, marginTop: 4 }}>
+                          <Clock size={12} style={{ display: 'inline', verticalAlign: 'middle' }} />{' '}
+                          {formatDt(activeTelemetry.last_message_at)}
+                        </div>
                       </div>
-                    </div>
-                    <div style={{ background: '#1E2937', borderRadius: 10, padding: 12 }}>
-                      <div style={{ color: '#64748B', fontSize: 11 }}>UnitId</div>
-                      <div style={{ color: '#fff', fontSize: 18, fontWeight: 700 }}>
-                        {activeTelemetry.scout_unit_id ?? '—'}
+                      {activeTelemetry.address && (
+                        <div style={{ display: 'flex', gap: 8, color: '#CBD5E1', fontSize: 14 }}>
+                          <MapPin size={16} color="#64748B" style={{ flexShrink: 0, marginTop: 2 }} />
+                          {activeTelemetry.address}
+                        </div>
+                      )}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                        <div style={{ background: '#1E2937', borderRadius: 10, padding: 12 }}>
+                          <div style={{ color: '#64748B', fontSize: 11 }}>Скорость</div>
+                          <div style={{ color: '#fff', fontSize: 18, fontWeight: 700 }}>
+                            {activeTelemetry.speed_kmh != null
+                              ? `${Math.round(activeTelemetry.speed_kmh)} км/ч`
+                              : '—'}
+                          </div>
+                        </div>
+                        <div style={{ background: '#1E2937', borderRadius: 10, padding: 12 }}>
+                          <div style={{ color: '#64748B', fontSize: 11 }}>UnitId</div>
+                          <div style={{ color: '#fff', fontSize: 18, fontWeight: 700 }}>
+                            {activeTelemetry.scout_unit_id ?? '—'}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                  {activeTelemetry.lat != null && activeTelemetry.lon != null && (
-                    <div style={{ background: '#1E2937', borderRadius: 10, padding: 12, fontSize: 13, color: '#94A3B8' }}>
-                      {activeTelemetry.lat.toFixed(5)}, {activeTelemetry.lon.toFixed(5)}
-                    </div>
+                      {activeTelemetry.lat != null && activeTelemetry.lon != null && (
+                        <div
+                          style={{
+                            background: '#1E2937',
+                            borderRadius: 10,
+                            padding: 12,
+                            fontSize: 13,
+                            color: '#94A3B8',
+                          }}
+                        >
+                          {activeTelemetry.lat.toFixed(5)}, {activeTelemetry.lon.toFixed(5)}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -898,6 +987,16 @@ export default function FleetUnitDrawer({
           </div>
         )}
       </div>
+
+      <FleetTripRoutesModal
+        open={routesModalOpen}
+        onClose={() => setRoutesModalOpen(false)}
+        mixerId={unit.id}
+        mixerNumber={unit.number}
+        day={trackDay}
+        onDayChange={setTrackDay}
+        liveMarker={telemetryMarker[0] ?? null}
+      />
     </>
   );
 }
