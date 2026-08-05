@@ -44,6 +44,7 @@ import {
   type LifecycleStatus,
 } from '@/lib/fleetLifecycle';
 import { useRealtimeFleetTelemetry } from '@/hooks/useRealtimeFleetTelemetry';
+import { requestScoutSync } from '@/lib/scoutSyncClient';
 import {
   sanitizeFleetSpecs,
   specsAfterSpecialSubtypeChange,
@@ -662,13 +663,9 @@ export default function MixersPage() {
     if (!canMutateFleet) return;
     setGpsRefreshing(true);
     try {
-      const res = await fetch('/api/adminCifra/integrations/scout/sync', {
-        method: 'POST',
-        headers: adminCifraAuthHeaders(),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(json.error || 'Ошибка синхронизации СКАУТ');
+      const result = await requestScoutSync();
+      if (!result.ok) {
+        alert(result.error || 'Ошибка синхронизации СКАУТ');
         return;
       }
       await fetchTelemetry();

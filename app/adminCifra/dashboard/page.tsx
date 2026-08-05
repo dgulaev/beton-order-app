@@ -38,6 +38,7 @@ import {
   type FleetTelemetrySnapshot,
 } from '@/lib/fleetLifecycle';
 import { useRealtimeFleetTelemetry } from '@/hooks/useRealtimeFleetTelemetry';
+import { requestScoutSync } from '@/lib/scoutSyncClient';
 
 export default function AdminCifraDashboard() {
   const router = useRouter();
@@ -990,13 +991,9 @@ useEffect(() => {
     if (!canMutateFleet) return;
     setGpsRefreshing(true);
     try {
-      const res = await fetch('/api/adminCifra/integrations/scout/sync', {
-        method: 'POST',
-        headers: adminCifraAuthHeaders(),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(json.error || 'Ошибка синхронизации СКАУТ');
+      const result = await requestScoutSync();
+      if (!result.ok) {
+        alert(result.error || 'Ошибка синхронизации СКАУТ');
         return;
       }
       await fetchFleetTelemetry();

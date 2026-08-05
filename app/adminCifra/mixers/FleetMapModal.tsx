@@ -15,8 +15,10 @@ interface Props {
 
 function formatUpdatedAgo(iso: string | null | undefined): string {
   if (!iso) return 'данные не загружены';
-  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
-  if (mins <= 0) return 'только что';
+  const sec = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  // До минуты — «только что» (раньше Math.round давал «1 мин» уже с ~30 сек)
+  if (sec < 60) return 'только что';
+  const mins = Math.floor(sec / 60);
   if (mins === 1) return '1 мин назад';
   if (mins < 60) return `${mins} мин назад`;
   const hours = Math.floor(mins / 60);
@@ -38,9 +40,11 @@ export default function FleetMapModal({
 
   useEffect(() => {
     if (!open) return;
-    const timer = setInterval(() => tick((n) => n + 1), 30_000);
+    // Чаще пересчитываем подпись «N мин назад» и сразу после смены lastUpdatedAt
+    tick((n) => n + 1);
+    const timer = setInterval(() => tick((n) => n + 1), 15_000);
     return () => clearInterval(timer);
-  }, [open]);
+  }, [open, lastUpdatedAt]);
 
   if (!open) return null;
 

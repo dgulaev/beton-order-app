@@ -12,7 +12,17 @@ async function runSync(request: NextRequest) {
 
   try {
     const result = await syncScoutTelemetry();
-    return NextResponse.json({ success: result.ok, ...result });
+    // skipped (нет SCOUT_* env) — не «успех»: иначе кнопка на проде молча ничего не делает
+    if (result.skipped) {
+      return NextResponse.json(
+        { success: false, ...result, error: result.reason || 'SCOUT_* env not configured' },
+        { status: 503 },
+      );
+    }
+    return NextResponse.json(
+      { success: result.ok, ...result },
+      { status: result.ok ? 200 : 500 },
+    );
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     console.error('[scout sync]', message);

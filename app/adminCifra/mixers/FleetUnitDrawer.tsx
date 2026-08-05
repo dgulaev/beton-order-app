@@ -17,6 +17,7 @@ import FleetTripsPanel from './FleetTripsPanel';
 import FleetMap from '../components/FleetMap';
 import { buildYandexPlaceUrl } from '@/lib/fleetMapLinks';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import { requestScoutSync } from '@/lib/scoutSyncClient';
 import { appConfirm } from '../components/appDialog';
 import {
   FLEET_DOC_TYPES,
@@ -147,10 +148,11 @@ export default function FleetUnitDrawer({
     if (!unit || !canMutate) return;
     setSyncingGps(true);
     try {
-      await fetch('/api/adminCifra/integrations/scout/sync', {
-        method: 'POST',
-        headers: adminCifraAuthHeaders(),
-      });
+      const result = await requestScoutSync();
+      if (!result.ok) {
+        alert(result.error || 'Не удалось обновить GPS');
+        return;
+      }
       await fetchTelemetryForUnit();
       onUpdated();
     } catch {
