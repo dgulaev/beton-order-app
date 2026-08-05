@@ -1,9 +1,12 @@
 /**
- * Справочник ориентиров Брянска (ЖК / КП / мкр) + городские районы/слободы.
- * Источник координат: OpenStreetMap / Nominatim (скан 2026-08-04).
+ * Справочник ориентиров Брянска (ЖК / КП / мкр / СО) + городские районы/слободы.
+ * Источник координат: OpenStreetMap / Nominatim (скан 2026-08-04);
+ * садовые общества — bryansk.ginfo.ru (скан 2026-08-05).
  * Используется из lib/bryanskAddress.ts — один список на десктоп и мобилку.
  *
  * Как добавить вручную: label + keywords (как пишут в заявке) + lat/lon.
+ * Для СО достаточно keyword вида `со фрунзе` — вариации («садовое общество»,
+ * «сад. общ.», «СНТ», «им./имени») схлопывает normalizeGardenSocietyMarkers.
  */
 
 export type BryanskLandmark = {
@@ -13,6 +16,11 @@ export type BryanskLandmark = {
   lon?: number;
   /** Запасной текстовый адрес, если нет lat/lon. */
   address?: string;
+  /**
+   * Id СО в lib/data/bryanskGardenPlots.json — тогда из адреса
+   * парсится участок (86/1) и подставляются координаты дома.
+   */
+  gardenSocietyId?: string;
 };
 
 /**
@@ -31,6 +39,108 @@ export type BryanskCityArea = {
 export const BRYANSK_CITY_AREAS: BryanskCityArea[] = [
   { name: 'Ходаринка', lat: 53.193375, lon: 34.403393 },
 ];
+
+/** Ядро имени без префикса «СО» — для keywords и label. */
+type BryanskGardenSociety = {
+  /** Ключ в lib/data/bryanskGardenPlots.json (so_im_frunze → im_frunze). */
+  id: string;
+  /** Как в адресе после маркера: «Фрунзе», «Дормаш-1», «Снежка-Фруктовая». */
+  name: string;
+  lat: number;
+  lon: number;
+  /** Доп. написания имени (без СО/СНТ). */
+  aliases?: string[];
+};
+
+function gardenSocietyLandmark(s: BryanskGardenSociety): BryanskLandmark {
+  const names = [s.name, ...(s.aliases || [])];
+  const keywords = new Set<string>();
+  for (const n of names) {
+    const core = n.replace(/^им\.?\s*/i, '').replace(/^имени\s+/i, '').trim();
+    keywords.add(`со ${core}`);
+    keywords.add(`снт ${core}`);
+    if (/^им\.?\s|^имени\s/i.test(n) || core !== n) {
+      keywords.add(`со ${n}`);
+      keywords.add(`снт ${n}`);
+    }
+    // частые полные формы — на случай если нормализация маркеров не сработала
+    keywords.add(`садовое общество ${core}`);
+    keywords.add(`садоводческое общество ${core}`);
+    keywords.add(`садоводческое объединение ${core}`);
+    keywords.add(`сад. общество ${core}`);
+    keywords.add(`сад общ ${core}`);
+  }
+  return {
+    label: `Брянск, СО ${s.name}`,
+    keywords: [...keywords],
+    lat: s.lat,
+    lon: s.lon,
+    gardenSocietyId: s.id,
+  };
+}
+
+/**
+ * Садовые общества Брянска (ginfo.ru).
+ * Участки — lib/data/bryanskGardenPlots.json (id = ключ societies).
+ * Центр СО — fallback, если номер участка не найден.
+ */
+const BRYANSK_GARDEN_SOCIETY_ROWS: BryanskGardenSociety[] = [
+  // Заявка 782: «Садовое общество Фрунзе, участок 86/1»
+  { id: 'im_frunze', name: 'Фрунзе', aliases: ['им. Фрунзе', 'имени Фрунзе'], lat: 53.259193, lon: 34.351955 },
+  { id: 'im_michurina', name: 'Мичурина', aliases: ['им. Мичурина', 'имени Мичурина'], lat: 53.261929, lon: 34.351437 },
+  { id: 'im_kalinina', name: 'Калинина', aliases: ['им. Калинина', 'имени Калинина'], lat: 53.244408, lon: 34.348263 },
+  { id: 'imeni_gagarina', name: 'Гагарина', aliases: ['им. Гагарина', 'имени Гагарина'], lat: 53.245419, lon: 34.439892 },
+  { id: 'imeni_mendeleeva', name: 'Менделеева', aliases: ['им. Менделеева', 'имени Менделеева'], lat: 53.331264, lon: 34.270554 },
+  { id: 'aeroflot', name: 'Аэрофлот', lat: 53.261421, lon: 34.347977 },
+  { id: 'soyuz', name: 'Союз', lat: 53.247433, lon: 34.348625 },
+  { id: 'trud', name: 'Труд', lat: 53.265362, lon: 34.352608 },
+  { id: 'stroitel-3', name: 'Строитель-3', aliases: ['Строитель 3'], lat: 53.261089, lon: 34.346718 },
+  { id: 'dzerzhinec', name: 'Дзержинец', lat: 53.251621, lon: 34.357826 },
+  { id: 'dobraya_nadezhda', name: 'Добрая Надежда', lat: 53.254402, lon: 34.340488 },
+  { id: 'desna-2', name: 'Десна-2', aliases: ['Десна 2'], lat: 53.245712, lon: 34.387207 },
+  { id: 'dormash-1', name: 'Дормаш-1', aliases: ['Дормаш 1'], lat: 53.228786, lon: 34.326515 },
+  { id: 'dormash-2', name: 'Дормаш-2', aliases: ['Дормаш 2'], lat: 53.235249, lon: 34.330528 },
+  { id: 'dormash-3', name: 'Дормаш-3', aliases: ['Дормаш 3'], lat: 53.244057, lon: 34.396641 },
+  { id: 'dormash-4', name: 'Дормаш-4', aliases: ['Дормаш 4'], lat: 53.227886, lon: 34.518448 },
+  { id: 'druzhba-2', name: 'Дружба-2', aliases: ['Дружба 2'], lat: 53.227791, lon: 34.313107 },
+  { id: 'dvureche', name: 'Двуречье', aliases: ['Двуречие'], lat: 53.237614, lon: 34.375359 },
+  { id: 'kommunalnik', name: 'Коммунальник', lat: 53.234661, lon: 34.319160 },
+  { id: 'rassvet', name: 'Рассвет', lat: 53.224522, lon: 34.315983 },
+  { id: 'rodina', name: 'Родина', lat: 53.229843, lon: 34.335018 },
+  { id: 'progress', name: 'Прогресс', lat: 53.221397, lon: 34.327923 },
+  { id: 'malyutka', name: 'Малютка', lat: 53.230705, lon: 34.327374 },
+  { id: 'luch', name: 'Луч', lat: 53.240173, lon: 34.290459 },
+  { id: 'lastochka', name: 'Ласточка', lat: 53.273193, lon: 34.311623 },
+  { id: 'luzhany-1', name: 'Лужаны-1', aliases: ['Лужаны 1'], lat: 53.306976, lon: 34.222710 },
+  { id: 'luzhany-2', name: 'Лужаны-2', aliases: ['Лужаны 2'], lat: 53.305382, lon: 34.225014 },
+  { id: 'michurinec', name: 'Мичуринец', lat: 53.305954, lon: 34.230782 },
+  { id: 'bolva', name: 'Болва', lat: 53.362576, lon: 34.323986 },
+  { id: 'kovshovka', name: 'Ковшовка', lat: 53.191006, lon: 34.411537 },
+  { id: 'zarechnoe', name: 'Заречное', lat: 53.242577, lon: 34.382664 },
+  { id: 'zarya', name: 'Заря', lat: 53.229469, lon: 34.465466 },
+  { id: 'zarya-1', name: 'Заря-1', aliases: ['Заря 1'], lat: 53.217670, lon: 34.381668 },
+  { id: 'voshod', name: 'Восход', lat: 53.226974, lon: 34.467319 },
+  { id: 'avtodorozhnik', name: 'Автодорожник', lat: 53.233410, lon: 34.467186 },
+  { id: 'energetik', name: 'Энергетик', lat: 53.241787, lon: 34.466286 },
+  { id: 'zheleznodorozhnik-2', name: 'Железнодорожник-2', aliases: ['Железнодорожник 2'], lat: 53.239735, lon: 34.448639 },
+  { id: 'snezhka', name: 'Снежка', lat: 53.240929, lon: 34.464977 },
+  { id: 'snezhka-fruktovaya', name: 'Снежка-Фруктовая', aliases: ['Снежка Фруктовая'], lat: 53.229488, lon: 34.424927 },
+  { id: 'snezhet', name: 'Снежеть', lat: 53.233780, lon: 34.419624 },
+  { id: 'berezka', name: 'Березка', aliases: ['Берёзка'], lat: 53.231476, lon: 34.420296 },
+  { id: 'landysh', name: 'Ландыш', lat: 53.233418, lon: 34.420567 },
+  { id: 'lokomotiv', name: 'Локомотив', lat: 53.227470, lon: 34.420242 },
+  { id: 'vishnya-1', name: 'Вишня-1', aliases: ['Вишня 1'], lat: 53.232925, lon: 34.422749 },
+  { id: 'vishnya-2', name: 'Вишня-2', aliases: ['Вишня 2'], lat: 53.235168, lon: 34.428635 },
+  { id: 'metallist', name: 'Металлист', lat: 53.225971, lon: 34.503628 },
+  { id: 'oktyabrskoe', name: 'Октябрьское', lat: 53.233894, lon: 34.530018 },
+  { id: 'shveynik', name: 'Швейник', lat: 53.228081, lon: 34.521797 },
+  { id: 'spartan', name: 'Спартан', lat: 53.228394, lon: 34.524185 },
+  { id: 'fakel', name: 'Факел', lat: 53.224983, lon: 34.486481 },
+  { id: 'fakel-2', name: 'Факел-2', aliases: ['Факел 2'], lat: 53.225056, lon: 34.472015 },
+];
+
+export const BRYANSK_GARDEN_SOCIETIES: BryanskLandmark[] =
+  BRYANSK_GARDEN_SOCIETY_ROWS.map(gardenSocietyLandmark);
 
 export const BRYANSK_LANDMARKS: BryanskLandmark[] = [
   {
@@ -323,4 +433,8 @@ export const BRYANSK_LANDMARKS: BryanskLandmark[] = [
     lat: 53.260729,
     lon: 34.33665,
   },
+
+  // ── Садовые общества / СНТ (Брянск) ──────────────────────────────────────
+  // Координаты — точка внутри территории (ginfo). Заявка №782: участок 86/1 → СО Фрунзе.
+  ...BRYANSK_GARDEN_SOCIETIES,
 ];

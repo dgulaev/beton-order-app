@@ -9,6 +9,10 @@ import {
   type BryanskCityArea,
   type BryanskLandmark,
 } from './bryanskLandmarks';
+import {
+  extractGardenPlotKey,
+  resolveGardenPlotCoords,
+} from './bryanskGardenPlots';
 
 export const ROUTE_ORIGIN_ADDRESS = 'Брянск, Орловский тупик, 6';
 
@@ -40,22 +44,76 @@ export function isPickupOrder(address?: string | null): boolean {
 }
 
 /**
- * Ориентиры (ЖК / КП / мкр / ТЦ): менеджеры пишут коротко («ЖК Рай»),
- * DaData часто ставит центр города. Справочник — lib/bryanskLandmarks.ts;
- * один список на десктоп и мобилку через `normalizeDeliveryAddress`.
+ * Ориентиры (ЖК / КП / мкр / ТЦ / СО·СНТ): менеджеры пишут коротко («ЖК Рай»,
+ * «СО Фрунзе»), DaData часто ставит центр города. Справочник —
+ * lib/bryanskLandmarks.ts; один список на десктоп и мобилку через
+ * `normalizeDeliveryAddress`. Вариации «сад. общество» / «СНТ» / «им.» → «со».
  */
 type KnownLandmark = BryanskLandmark;
 
-/** Схлопываем кавычки/ё — чтобы «ЖК «Рай»» матчился по keyword `жк рай`. */
-function foldLandmarkText(value: string): string {
-  return foldYo(value)
-    .toLowerCase()
-    .replace(/[«»„“”"']/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+/**
+ * Схлопываем написания садовых обществ к маркеру «со …».
+ * Иначе «Садовое общество Фрунзе» / «сад. общ. Фрунзе» / «СНТ Фрунзе»
+ * не матчятся со справочником (keyword `со фрунзе`) и геокодер
+ * кидает точку в центр Брянска.
+ */
+function normalizeGardenSocietyMarkers(value: string): string {
+  let t = value;
+  const toSo = [
+    // длинные формы — раньше коротких
+    /садоводческ[а-яё]*\s+некоммерческ[а-яё]*\s+товариществ[а-яё]*/g,
+    /садов(?:одческ)?[а-яё]*\s+некоммерческ[а-яё]*\s+товариществ[а-яё]*/g,
+    /садоводческ[а-яё]*\s+(?:объединени[а-яё]*|обществ[а-яё]*|товариществ[а-яё]*)/g,
+    /садов(?:ое|ого|ому|ым|ом|ые|ых|ыми)?\s+(?:объединени[а-яё]*|обществ[а-яё]*|товариществ[а-яё]*)/g,
+    /сад\.?\s*общ(?:еств[а-яё]*)?\.?/g,
+    /сад\.?\s*тов(?:ариществ[а-яё]*)?\.?/g,
+    /сад\.?\s*объединен(?:и[а-яё]*)?\.?/g,
+    /\bснт\.?\b/g,
+    /\bдн[тс]\.?\b/g,
+    /\bонт\.?\b/g,
+    /\bс\/о\b/g,
+    /\bс\.о\.\b/g,
+  ];
+  for (const re of toSo) {
+    t = t.replace(re, ' со ');
+  }
+  // «им. Фрунзе» / «имени Фрунзе» после маркера СО
+  t = t.replace(/\bсо\s+(?:им\.?|имени)\s+/g, 'со ');
+  // дефисы в именах: «Дормаш-1» = «Дормаш 1»
+  t = t.replace(/-/g, ' ');
+  return t.replace(/\s+/g, ' ').trim();
 }
 
-function landmarkToQuery(landmark: KnownLandmark): string {
+/** Схлопываем кавычки/ё — чтобы «ЖК «Рай»» матчился по keyword `жк рай`. */
+function foldLandmarkText(value: string): string {
+  return normalizeGardenSocietyMarkers(
+    foldYo(value)
+      .toLowerCase()
+      .replace(/[«»„“”"']/g, '')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  );
+}
+
+function landmarkToQuery(landmark: KnownLandmark, rawAddress?: string): string {
+  // СО/СНТ: если в адресе есть участок — берём координаты дома из справочника
+  // (86/1 → 86, если дроби нет в ginfo). Иначе — центр СО.
+  if (landmark.gardenSocietyId && rawAddress) {
+    const plotKey = extractGardenPlotKey(rawAddress);
+    const plot = resolveGardenPlotCoords(landmark.gardenSocietyId, plotKey);
+    const lat = plot?.lat ?? landmark.lat;
+    const lon = plot?.lon ?? landmark.lon;
+    if (
+      typeof lat === 'number' &&
+      typeof lon === 'number' &&
+      Number.isFinite(lat) &&
+      Number.isFinite(lon)
+    ) {
+      const plotSuffix = plotKey ? `, участок ${plotKey}` : '';
+      return `${landmark.label}${plotSuffix}, ${lat}, ${lon}`;
+    }
+  }
+
   if (
     typeof landmark.lat === 'number' &&
     typeof landmark.lon === 'number' &&
@@ -361,7 +419,7 @@ export function normalizeDeliveryAddress(rawAddress: string | null | undefined):
   if (isPickupOrder(trimmed)) return getRouteOriginAddress();
 
   const landmark = findKnownLandmark(trimmed);
-  if (landmark) return landmarkToQuery(landmark);
+  if (landmark) return landmarkToQuery(landmark, trimmed);
 
   // Городской район/слобода: с улицей — геокодим улицу; без — точку района.
   // Иначе DaData на «Ходаринка, ул. …» ставит центр Брянска.

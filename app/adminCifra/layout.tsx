@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { Home, FlaskConical, Truck, Package, Users, UserCog, Bell, CheckCircle, LogOut, UserX, Globe, Smartphone, Inbox, Store, Radar, Megaphone, ChevronDown, Cable, MapPin, PanelLeftOpen, PanelLeftClose, Settings, X, CircleHelp, Brain } from 'lucide-react';
-import { useEffect, useState, useRef, useLayoutEffect, type CSSProperties } from 'react';
+import { useEffect, useState, useRef, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import Image from 'next/image';
 import { useUserRole } from '../providers/UserRoleProvider';
@@ -1420,36 +1420,40 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
         
         
         {/* ==================== 9. СВОРАЧИВАЕМОЕ МЕНЮ ==================== */}
-        <div 
-          className="sidebar-menu"
+        {/* Внешняя рейка клипает ширину; внутри фиксированные 280px — плавный «выезд». */}
+        <div
+          className={`sidebar-menu${isCollapsed ? ' is-collapsed' : ''}`}
           style={{
-            width: isCollapsed ? 68 : 280,
-            backgroundColor: '#1E2937',
-            color: '#fff',
-            // padding только сверху — низ отдаём подвалу, иначе при content-box
-            // height:100% + padding снизу выталкивает футер за overflow:hidden
-            // (масштаб layout) и строка «Трейдком / v…» пропадает с экрана.
-            padding: '20px 0 0',
-            boxSizing: 'border-box',
-            display: 'flex',
-            flexDirection: 'column',
-            borderRight: '1px solid #334155',
-            transition: `width ${SIDEBAR_TRANSITION}`,
+            width: isCollapsed ? SIDEBAR_COLLAPSED_W : SIDEBAR_EXPANDED_W,
             flexShrink: 0,
             height: '100%',
             overflow: 'hidden',
             overscrollBehavior: 'none',
-          }}>
+            borderRight: '1px solid #334155',
+            backgroundColor: '#1E2937',
+            transition: `width ${SIDEBAR_TRANSITION}`,
+            willChange: 'width',
+            contain: 'layout style',
+          }}
+        >
+          <div
+            className="sidebar-menu-inner"
+            style={{
+              width: SIDEBAR_EXPANDED_W,
+              height: '100%',
+              boxSizing: 'border-box',
+              padding: '20px 0 0',
+              display: 'flex',
+              flexDirection: 'column',
+              color: '#fff',
+              backgroundColor: '#1E2937',
+              overflow: 'hidden',
+              overscrollBehavior: 'none',
+            }}
+          >
 
-          {/* Кнопка сворачивания — центрирована в collapsed, прижата вправо в expanded */}
-          <div style={{ 
-            display: 'flex', 
-            justifyContent: isCollapsed ? 'center' : 'flex-end', 
-            marginBottom: isCollapsed ? 32 : 20,
-            paddingRight: isCollapsed ? 0 : 16,
-            paddingLeft: isCollapsed ? 0 : 16,
-            transition: `padding ${SIDEBAR_TRANSITION}, margin-bottom ${SIDEBAR_TRANSITION}`,
-          }}>
+          {/* Кнопка сворачивания — центр колонки 68px */}
+          <div style={{ ...SIDEBAR_ICON_COL, marginBottom: 20, height: 36 }}>
             <button 
               onClick={() => {
                 setSidebarCollapsed(!isCollapsed);
@@ -1504,60 +1508,62 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                gap: isCollapsed ? 0 : 6,
+                justifyContent: 'flex-start',
+                gap: 0,
                 width: '100%',
                 boxSizing: 'border-box',
-                padding: isCollapsed ? '6px 0' : '4px 12px',
-                marginBottom: isCollapsed ? 10 : 8,
+                padding: '4px 12px 4px 0',
+                marginBottom: 8,
                 cursor: realtimeStatus !== 'SUBSCRIBED' ? 'pointer' : 'default',
-                transition: `padding ${SIDEBAR_TRANSITION}, gap ${SIDEBAR_TRANSITION}`,
               }}
               onClick={() => realtimeStatus !== 'SUBSCRIBED' && reconnectAllBroadcastChannels()}
             >
-              <span style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                flexShrink: 0,
-                display: 'block',
-                background:
-                  realtimeStatus === 'SUBSCRIBED' ? '#4ADE80' :
-                  realtimeStatus === 'CONNECTING' ? '#FACC15' : '#F87171',
-                boxShadow:
-                  realtimeStatus === 'SUBSCRIBED' ? '0 0 6px rgba(74,222,128,0.8)' :
-                  realtimeStatus === 'CONNECTING' ? '0 0 6px rgba(250,204,21,0.8)' : '0 0 6px rgba(248,113,113,0.8)',
-              }} />
-              {!isCollapsed && (
+              <span style={SIDEBAR_ICON_COL}>
                 <span style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  flexShrink: 0,
+                  display: 'block',
+                  background:
+                    realtimeStatus === 'SUBSCRIBED' ? '#4ADE80' :
+                    realtimeStatus === 'CONNECTING' ? '#FACC15' : '#F87171',
+                  boxShadow:
+                    realtimeStatus === 'SUBSCRIBED' ? '0 0 6px rgba(74,222,128,0.8)' :
+                    realtimeStatus === 'CONNECTING' ? '0 0 6px rgba(250,204,21,0.8)' : '0 0 6px rgba(248,113,113,0.8)',
+                }} />
+              </span>
+              <span
+                style={{
                   fontSize: 11,
-                  paddingLeft: 6,
                   color:
                     realtimeStatus === 'SUBSCRIBED' ? '#4ADE80' :
                     realtimeStatus === 'CONNECTING' ? '#FACC15' : '#F87171',
                   letterSpacing: '0.02em',
                   whiteSpace: 'nowrap',
-                }}>
-                  {realtimeStatus === 'SUBSCRIBED' ? 'Уведомления' :
-                   realtimeStatus === 'CONNECTING' ? 'Подключение...' :
-                   'Нет связи — кликни'}
-                </span>
-              )}
+                  ...navTextStyle(isCollapsed),
+                  paddingLeft: 0,
+                }}
+              >
+                {realtimeStatus === 'SUBSCRIBED' ? 'Уведомления' :
+                 realtimeStatus === 'CONNECTING' ? 'Подключение...' :
+                 'Нет связи — кликни'}
+              </span>
             </div>
           )}
 
-          <nav style={{ flex: 1, paddingLeft: '8px', paddingRight: '8px', overflowY: 'auto', minHeight: 0 }}>
+          <nav style={{ flex: 1, paddingLeft: 0, paddingRight: 8, overflowY: 'auto', minHeight: 0 }}>
 
             {navOk('dashboard') && (
             <Link href="/adminCifra/dashboard" style={navLinkStyle(isActive('/adminCifra/dashboard'), isCollapsed)}>
-              <Home size={22} />
+              <SidebarIcon><Home size={22} /></SidebarIcon>
               <span style={navTextStyle(isCollapsed)}>Диспетчерская</span>
             </Link>
             )}
 
             {navOk('planning') && (
             <Link href="/adminCifra/planning" style={navLinkStyle(isActive('/adminCifra/planning'), isCollapsed)}>
-              <Brain size={22} />
+              <SidebarIcon><Brain size={22} /></SidebarIcon>
               <span style={navTextStyle(isCollapsed)}>Планирование</span>
             </Link>
             )}
@@ -1569,7 +1575,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               style={navLinkStyle(isActive('/adminCifra/zayavki'), isCollapsed)}
               onClick={() => setNewOrdersCount(0)}
             >
-              <Package size={22} />
+              <SidebarIcon><Package size={22} /></SidebarIcon>
               <span style={navTextStyle(isCollapsed)}>Заявки</span>
             </Link>
             )}
@@ -1598,44 +1604,45 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   position: 'relative',
                 }}
               >
-                <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
-                  <Megaphone size={22} />
-                  {isCollapsed && salesBadgeCount > 0 && (
-                    <span
-                      aria-label={`Новых: ${salesBadgeCount}`}
-                      style={{
-                        position: 'absolute',
-                        top: -6,
-                        right: -8,
-                        minWidth: 16,
-                        height: 16,
-                        padding: '0 4px',
-                        borderRadius: 9999,
-                        background: '#EAB308',
-                        color: '#0F172A',
-                        fontSize: 10,
-                        fontWeight: 800,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        boxShadow: '0 0 0 2px #0F172A',
-                      }}
-                    >
-                      {salesBadgeCount > 99 ? '99+' : salesBadgeCount}
-                    </span>
-                  )}
-                </span>
-                <span style={{ ...navTextStyle(isCollapsed), flex: isCollapsed ? undefined : 1 }}>
+                <SidebarIcon>
+                  <span style={{ position: 'relative', display: 'inline-flex' }}>
+                    <Megaphone size={22} />
+                    {isCollapsed && salesBadgeCount > 0 && (
+                      <span
+                        aria-label={`Новых: ${salesBadgeCount}`}
+                        style={{
+                          position: 'absolute',
+                          top: -6,
+                          right: -8,
+                          minWidth: 16,
+                          height: 16,
+                          padding: '0 4px',
+                          borderRadius: 9999,
+                          background: '#EAB308',
+                          color: '#0F172A',
+                          fontSize: 10,
+                          fontWeight: 800,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          boxShadow: '0 0 0 2px #0F172A',
+                        }}
+                      >
+                        {salesBadgeCount > 99 ? '99+' : salesBadgeCount}
+                      </span>
+                    )}
+                  </span>
+                </SidebarIcon>
+                <span style={{ ...navTextStyle(isCollapsed), flex: 1 }}>
                   Продажи
                 </span>
                 <span
                   aria-hidden={isCollapsed || salesBadgeCount <= 0}
                   aria-label={!isCollapsed && salesBadgeCount > 0 ? `Новых: ${salesBadgeCount}` : undefined}
                   style={{
-                    minWidth: isCollapsed || salesBadgeCount <= 0 ? 0 : 20,
-                    width: isCollapsed || salesBadgeCount <= 0 ? 0 : 'auto',
+                    minWidth: 20,
                     height: 20,
-                    padding: isCollapsed || salesBadgeCount <= 0 ? 0 : '0 6px',
+                    padding: '0 6px',
                     borderRadius: 9999,
                     background: '#EAB308',
                     color: '#0F172A',
@@ -1645,10 +1652,12 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexShrink: 0,
-                    marginRight: isCollapsed || salesBadgeCount <= 0 ? 0 : 4,
+                    marginRight: 4,
                     opacity: !isCollapsed && salesBadgeCount > 0 ? 1 : 0,
-                    overflow: 'hidden',
-                    transition: `opacity 0.25s ${SIDEBAR_EASE}, min-width ${SIDEBAR_TRANSITION}, margin ${SIDEBAR_TRANSITION}, padding ${SIDEBAR_TRANSITION}`,
+                    transform: !isCollapsed && salesBadgeCount > 0
+                      ? 'translate3d(0, 0, 0)'
+                      : 'translate3d(-6px, 0, 0)',
+                    transition: SIDEBAR_FADE,
                     pointerEvents: 'none',
                   }}
                 >
@@ -1658,13 +1667,14 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   size={16}
                   aria-hidden={isCollapsed}
                   style={{
-                    marginLeft: isCollapsed ? 0 : 4,
-                    width: isCollapsed ? 0 : 16,
+                    marginLeft: 4,
+                    width: 16,
                     flexShrink: 0,
                     opacity: isCollapsed ? 0 : 0.85,
-                    overflow: 'hidden',
-                    transform: salesMenuOpen && !isCollapsed ? 'rotate(180deg)' : 'rotate(0deg)',
-                    transition: `transform 0.28s ${SIDEBAR_EASE}, opacity 0.25s ${SIDEBAR_EASE}, width ${SIDEBAR_TRANSITION}, margin ${SIDEBAR_TRANSITION}`,
+                    transform: salesMenuOpen && !isCollapsed
+                      ? 'rotate(180deg)'
+                      : 'rotate(0deg)',
+                    transition: `transform 0.28s ${SIDEBAR_EASE}, opacity 0.22s ${SIDEBAR_EASE}`,
                   }}
                 />
               </button>
@@ -1959,35 +1969,35 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
             {navOk('recipes') && (
             <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
-              <FlaskConical size={22} />
+              <SidebarIcon><FlaskConical size={22} /></SidebarIcon>
               <span style={navTextStyle(isCollapsed)}>Лаборатория</span>
             </Link>
             )}
 
             {navOk('mixers') && (
             <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers') || isActive('/adminCifra/technika'), isCollapsed)}>
-              <Truck size={22} />
+              <SidebarIcon><Truck size={22} /></SidebarIcon>
               <span style={navTextStyle(isCollapsed)}>Техника</span>
             </Link>
             )}
 
             {navOk('loading_points') && (
             <Link href="/adminCifra/loading-points" style={navLinkStyle(isActive('/adminCifra/loading-points'), isCollapsed)}>
-              <MapPin size={22} />
+              <SidebarIcon><MapPin size={22} /></SidebarIcon>
               <span style={navTextStyle(isCollapsed)}>Точки погрузки</span>
             </Link>
             )}
 
             {navOk('competitors') && (
             <Link href="/adminCifra/competitors" style={navLinkStyle(isActive('/adminCifra/competitors'), isCollapsed)}>
-              <Store size={22} />
+              <SidebarIcon><Store size={22} /></SidebarIcon>
               <span style={navTextStyle(isCollapsed)}>Конкуренты</span>
             </Link>
             )}
 
             {navOk('clients') && (
             <Link href="/adminCifra/clients" style={navLinkStyle(isActive('/adminCifra/clients'), isCollapsed)}>
-              <Users size={22} />
+              <SidebarIcon><Users size={22} /></SidebarIcon>
               <span style={navTextStyle(isCollapsed)}>Клиенты</span>
             </Link>
             )}
@@ -1995,14 +2005,14 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             {/* Операционка: поручения сотрудникам (не путать с Лидами в «Продажи») */}
             {navOk('tasks') && (
             <Link href="/adminCifra/tasks" style={navLinkStyle(isActive('/adminCifra/tasks'), isCollapsed)}>
-              <CheckCircle size={22} />
+              <SidebarIcon><CheckCircle size={22} /></SidebarIcon>
               <span style={navTextStyle(isCollapsed)}>Задачи</span>
             </Link>
             )}
 
             {navOk('operator') && (
             <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
-              <UserCog size={22} />
+              <SidebarIcon><UserCog size={22} /></SidebarIcon>
               <span style={navTextStyle(isCollapsed)}>Оператор БСУ</span>
             </Link>
             )}
@@ -2010,7 +2020,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             {/* ==================== БЛОК 12 ССЫЛКА "КТО В ОНЛАЙН" ==================== */}
             {navOk('online') && (
               <Link href="/adminCifra/online" style={navLinkStyle(false, isCollapsed)}>
-                <Globe size={22} />
+                <SidebarIcon><Globe size={22} /></SidebarIcon>
                 <span style={navTextStyle(isCollapsed)}>Кто в онлайн</span>
               </Link>
             )}
@@ -2035,7 +2045,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                 style={navLinkStyle(isActive('/adminCifra/settings'), isCollapsed)}
                 title={isCollapsed ? 'Настройки' : undefined}
               >
-                <Settings size={22} />
+                <SidebarIcon><Settings size={22} /></SidebarIcon>
                 <span style={navTextStyle(isCollapsed)}>Настройки</span>
               </Link>
             )}
@@ -2053,12 +2063,12 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               }}
               style={navLinkStyle(false, isCollapsed)}
             >
-              <LogOut size={22} />
+              <SidebarIcon><LogOut size={22} /></SidebarIcon>
               <span style={navTextStyle(isCollapsed)}>Выйти</span>
             </Link>
           </nav>
 
-          {/* Блок «лого + подвал» прижат вниз; в свёрнутом меню лого нет */}
+          {/* Блок «лого + подвал» прижат вниз */}
           <div
             style={{
               marginTop: 'auto',
@@ -2067,82 +2077,120 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               flexDirection: 'column',
             }}
           >
-          {!isCollapsed && (
-            <div
-              style={{
-                flexShrink: 0,
-                padding: '8px 20px 12px',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                textAlign: 'center',
-              }}
-            >
-              <Image
-                src="/logo-tradecom-white.png"
-                alt="TRADECOM"
-                width={180}
-                height={86}
-                style={{ objectFit: 'contain', borderRadius: 8 }}
-                priority
-              />
-              <p
+          <div style={sidebarRevealStyle(!isCollapsed)}>
+            <div style={{ overflow: 'hidden', minHeight: 0 }}>
+              <div
                 style={{
-                  fontSize: 11,
-                  color: '#64748B',
-                  marginTop: 4,
-                  marginBottom: 0,
-                  letterSpacing: '0.5px',
-                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                  padding: '8px 20px 12px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  textAlign: 'center',
                 }}
               >
-                ТрейдКом • ДИСПЕТЧЕРИЗАЦИЯ
-              </p>
+                <Image
+                  src="/logo-tradecom-white.png"
+                  alt="TRADECOM"
+                  width={180}
+                  height={86}
+                  style={{ objectFit: 'contain', borderRadius: 8 }}
+                  priority
+                />
+                <p
+                  style={{
+                    fontSize: 11,
+                    color: '#64748B',
+                    marginTop: 4,
+                    marginBottom: 0,
+                    letterSpacing: '0.5px',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  ТрейдКом • ДИСПЕТЧЕРИЗАЦИЯ
+                </p>
+              </div>
             </div>
-          )}
+          </div>
 
           {/* ==================== ПОДВАЛ САЙДБАРА ==================== */}
           <div
             style={{
-              padding: isCollapsed ? '10px 6px 12px' : '10px 14px 12px',
+              padding: '10px 0 12px',
               borderTop: '1px solid #334155',
               display: 'flex',
               flexDirection: 'column',
-              alignItems: isCollapsed ? 'center' : 'stretch',
+              alignItems: 'stretch',
               gap: 8,
               flexShrink: 0,
               boxSizing: 'border-box',
-              transition: `padding ${SIDEBAR_TRANSITION}`,
             }}
           >
             <div
+              style={{
+                display: 'flex',
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'flex-start',
+                flexWrap: 'nowrap',
+                width: '100%',
+                overflow: 'hidden',
+              }}
+            >
+              <button
+                type="button"
+                onClick={goToMobileVersion}
+                title="Мобильная версия"
+                aria-label="Мобильная версия"
                 style={{
-                  display: 'flex',
-                  flexDirection: 'row',
+                  display: 'inline-flex',
                   alignItems: 'center',
-                  justifyContent: isCollapsed ? 'center' : 'flex-start',
-                  flexWrap: 'nowrap',
-                  gap: isCollapsed ? 0 : 4,
-                  width: '100%',
-                  overflow: 'hidden',
-                  transition: `justify-content ${SIDEBAR_TRANSITION}, gap ${SIDEBAR_TRANSITION}`,
+                  justifyContent: 'flex-start',
+                  gap: 0,
+                  padding: 0,
+                  boxSizing: 'border-box',
+                  borderRadius: 8,
+                  border: '1px solid transparent',
+                  background: 'transparent',
+                  color: '#94A3B8',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  fontWeight: 500,
+                  lineHeight: 1,
+                  flexShrink: 0,
+                  transition: 'color 0.15s, background 0.15s, border-color 0.15s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = '#E2E8F0';
+                  e.currentTarget.style.background = 'rgba(148,163,184,0.1)';
+                  e.currentTarget.style.borderColor = '#475569';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = '#94A3B8';
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.borderColor = 'transparent';
                 }}
               >
+                <SidebarIcon>
+                  <Smartphone size={14} strokeWidth={1.75} style={{ display: 'block', flexShrink: 0 }} />
+                </SidebarIcon>
+                <span style={{ whiteSpace: 'nowrap', ...navTextStyle(isCollapsed), paddingLeft: 4 }}>
+                  Мобильная
+                </span>
+              </button>
+              {userRole === 'admin' ? (
                 <button
                   type="button"
-                  onClick={goToMobileVersion}
-                  title="Мобильная версия"
-                  aria-label="Мобильная версия"
+                  onClick={() => { void forceLogoutAll(); }}
+                  title="Разлогинить всех"
+                  aria-label="Разлогинить всех"
+                  tabIndex={isCollapsed ? -1 : 0}
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    // В collapsed gap/подпись дают сдвиг иконки влево от центра
-                    gap: isCollapsed ? 0 : 6,
-                    width: isCollapsed ? 32 : 'auto',
-                    height: isCollapsed ? 32 : 'auto',
-                    padding: isCollapsed ? 0 : '4px 8px',
-                    boxSizing: 'border-box',
+                    gap: 6,
+                    padding: '4px 8px',
                     borderRadius: 8,
                     border: '1px solid transparent',
                     background: 'transparent',
@@ -2151,8 +2199,11 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                     fontSize: 11,
                     fontWeight: 500,
                     lineHeight: 1,
-                    flexShrink: 0,
-                    transition: `color 0.15s, background 0.15s, border-color 0.15s, padding ${SIDEBAR_TRANSITION}, width ${SIDEBAR_TRANSITION}, height ${SIDEBAR_TRANSITION}, gap ${SIDEBAR_TRANSITION}`,
+                    whiteSpace: 'nowrap',
+                    transition: `color 0.15s, background 0.15s, border-color 0.15s, ${SIDEBAR_FADE}`,
+                    opacity: isCollapsed ? 0 : 1,
+                    transform: isCollapsed ? 'translate3d(-8px, 0, 0)' : 'translate3d(0, 0, 0)',
+                    pointerEvents: isCollapsed ? 'none' : 'auto',
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.color = '#E2E8F0';
@@ -2165,92 +2216,55 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                     e.currentTarget.style.borderColor = 'transparent';
                   }}
                 >
-                  <Smartphone size={14} strokeWidth={1.75} style={{ display: 'block', flexShrink: 0 }} />
-                  {!isCollapsed && (
-                    <span style={{ whiteSpace: 'nowrap' }}>Мобильная</span>
-                  )}
+                  <UserX size={14} strokeWidth={1.75} />
+                  <span>Разлогинить всех</span>
                 </button>
-                {userRole === 'admin' && !isCollapsed && (
-                  <button
-                    type="button"
-                    onClick={() => { void forceLogoutAll(); }}
-                    title="Разлогинить всех"
-                    aria-label="Разлогинить всех"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6,
-                      padding: '4px 8px',
-                      borderRadius: 8,
-                      border: '1px solid transparent',
-                      background: 'transparent',
-                      color: '#94A3B8',
-                      cursor: 'pointer',
-                      fontSize: 11,
-                      fontWeight: 500,
-                      lineHeight: 1,
-                      whiteSpace: 'nowrap',
-                      transition: 'color 0.15s, background 0.15s, border-color 0.15s',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.color = '#E2E8F0';
-                      e.currentTarget.style.background = 'rgba(148,163,184,0.1)';
-                      e.currentTarget.style.borderColor = '#475569';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.color = '#94A3B8';
-                      e.currentTarget.style.background = 'transparent';
-                      e.currentTarget.style.borderColor = 'transparent';
-                    }}
-                  >
-                    <UserX size={14} strokeWidth={1.75} />
-                    <span>Разлогинить всех</span>
-                  </button>
-                )}
-              </div>
+              ) : null}
+            </div>
             <div
               title={isCollapsed ? `ООО «Трейдком» · ${formatBuildLabelFull()}` : formatBuildLabelFull()}
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: isCollapsed ? 'center' : 'space-between',
-                gap: isCollapsed ? 0 : 8,
+                justifyContent: 'flex-start',
+                gap: 0,
                 width: '100%',
                 fontSize: 10,
                 lineHeight: 1.2,
                 letterSpacing: '0.01em',
                 minWidth: 0,
                 color: '#94A3B8',
-                transition: `gap ${SIDEBAR_TRANSITION}, justify-content ${SIDEBAR_TRANSITION}`,
+                boxSizing: 'border-box',
+                paddingRight: 8,
               }}
             >
-              {!isCollapsed && (
-                <span
-                  style={{
-                    color: '#94A3B8',
-                    whiteSpace: 'nowrap',
-                    flexShrink: 0,
-                  }}
-                >
-                  © ООО «Трейдком»
-                </span>
-              )}
+              {/* В свёрнутом виде версия по центру рейки; © выезжает справа */}
               <span
                 style={{
+                  ...SIDEBAR_ICON_COL,
                   color: '#94A3B8',
                   fontWeight: 500,
                   whiteSpace: 'nowrap',
-                  textAlign: 'center',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
-                  minWidth: 0,
-                  width: isCollapsed ? '100%' : 'auto',
+                  fontSize: 10,
                 }}
               >
                 {formatBuildVersion()}
               </span>
+              <span
+                style={{
+                  color: '#94A3B8',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                  ...navTextStyle(isCollapsed),
+                  paddingLeft: 4,
+                }}
+              >
+                © ООО «Трейдком»
+              </span>
             </div>
+          </div>
           </div>
           </div>
         </div>
@@ -2363,7 +2377,7 @@ function HelpNavButton({
       style={navLinkStyle(false, isCollapsed)}
       title={isCollapsed ? 'Инструкции' : undefined}
     >
-      <CircleHelp size={22} />
+      <SidebarIcon><CircleHelp size={22} /></SidebarIcon>
       <span style={navTextStyle(isCollapsed)}>Инструкции</span>
     </Link>
   );
@@ -2396,52 +2410,75 @@ function salesMenuItemVisible(
 // ==================== 15. СТИЛИ ДЛЯ ССЫЛОК ====================
 const ACCENT = '#4ADE80'; // Tailwind green-400 — «салатовый» акцент
 
-/** Единый easing для ширины сайдбара и сопутствующих анимаций. */
-const SIDEBAR_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
-const SIDEBAR_MS = '0.42s';
+/**
+ * Сайдбар: внешняя «рейка» анимирует только width (clip),
+ * внутри всегда SIDEBAR_EXPANDED_W — без перестройки padding/max-width на каждом кадре.
+ */
+const SIDEBAR_EXPANDED_W = 280;
+const SIDEBAR_COLLAPSED_W = 68;
+/** Колонка 68px: иконка строго по центру свёрнутой рейки. */
+const SIDEBAR_ICON_COL: CSSProperties = {
+  width: SIDEBAR_COLLAPSED_W,
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  boxSizing: 'border-box',
+};
+const SIDEBAR_EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
+const SIDEBAR_MS = '0.34s';
 const SIDEBAR_TRANSITION = `${SIDEBAR_MS} ${SIDEBAR_EASE}`;
+const SIDEBAR_FADE = `opacity 0.22s ${SIDEBAR_EASE}, transform 0.34s ${SIDEBAR_EASE}`;
 
-const navLinkStyle = (active: boolean, collapsed: boolean): React.CSSProperties => ({
+const navLinkStyle = (active: boolean, _collapsed?: boolean): React.CSSProperties => ({
   display: 'flex',
   alignItems: 'center',
   gap: 0,
-  padding: collapsed ? '13px 0' : '13px 14px',
+  // Слева 0 — центрирование даёт SIDEBAR_ICON_COL у иконки
+  padding: '13px 14px 13px 0',
   borderRadius: '12px',
-  // Активный пункт: прозрачный фон с лёгким зелёным оттенком + контур + мягкое свечение
+  boxSizing: 'border-box',
   backgroundColor: active ? 'rgba(74,222,128,0.12)' : 'transparent',
   color: active ? ACCENT : '#94A3B8',
-  border: active ? `1px solid rgba(74,222,128,0.45)` : '1px solid transparent',
-  boxShadow: active ? `0 0 14px rgba(74,222,128,0.22)` : 'none',
+  // Без border — иначе 1px съедает контент и сдвигает иконки относительно тогла/подвала
+  border: 'none',
+  boxShadow: active
+    ? `inset 0 0 0 1px rgba(74,222,128,0.45), 0 0 14px rgba(74,222,128,0.22)`
+    : 'none',
   marginBottom: '4px',
   textDecoration: 'none',
   fontSize: '15px',
   fontWeight: active ? '600' : '500',
-  justifyContent: collapsed ? 'center' : 'flex-start',
-  transition: `background-color 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s, padding ${SIDEBAR_TRANSITION}`,
+  justifyContent: 'flex-start',
+  transition: 'background-color 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s',
   overflow: 'hidden',
   whiteSpace: 'nowrap',
   flexShrink: 0,
 });
 
-// Текстовая метка пункта меню — всегда в DOM, но плавно скрывается через
-// max-width + opacity, чтобы не было резкого «мигания» при сворачивании.
+/** Подпись пункта: только opacity + translate (GPU), ширина не трогаем. */
 const navTextStyle = (collapsed: boolean): React.CSSProperties => ({
-  maxWidth: collapsed ? 0 : '200px',
-  paddingLeft: collapsed ? 0 : '14px',
+  paddingLeft: 4,
   opacity: collapsed ? 0 : 1,
-  overflow: 'hidden',
+  transform: collapsed ? 'translate3d(-10px, 0, 0)' : 'translate3d(0, 0, 0)',
   whiteSpace: 'nowrap',
-  transition: `max-width ${SIDEBAR_TRANSITION}, padding-left ${SIDEBAR_TRANSITION}, opacity 0.28s ${SIDEBAR_EASE}`,
-  transitionDelay: collapsed ? '0s, 0s, 0s' : '0.05s, 0.05s, 0.08s',
+  transition: SIDEBAR_FADE,
+  transitionDelay: collapsed ? '0s' : '0.05s',
   flexShrink: 0,
+  pointerEvents: collapsed ? 'none' : 'auto',
+  willChange: 'opacity, transform',
 });
+
+function SidebarIcon({ children }: { children: ReactNode }) {
+  return <span style={SIDEBAR_ICON_COL}>{children}</span>;
+}
 
 /** Плавное скрытие блока по высоте (лого, подменю) — без mount/unmount. */
 const sidebarRevealStyle = (open: boolean): React.CSSProperties => ({
   display: 'grid',
   gridTemplateRows: open ? '1fr' : '0fr',
   opacity: open ? 1 : 0,
-  transition: `grid-template-rows ${SIDEBAR_TRANSITION}, opacity 0.28s ${SIDEBAR_EASE}`,
-  transitionDelay: open ? '0.04s, 0.1s' : '0s, 0s',
+  transition: `grid-template-rows ${SIDEBAR_TRANSITION}, opacity 0.22s ${SIDEBAR_EASE}`,
+  transitionDelay: open ? '0.02s, 0.06s' : '0s, 0s',
   pointerEvents: open ? 'auto' : 'none',
 });
