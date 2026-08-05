@@ -2,8 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
-/** Кто видит пункт «Задачи» в меню (не laborant / не operator). */
-const TASKS_ROLES = ['admin', 'manager', 'dispatcher', 'guest'] as const;
+/** Кто может работать с задачами (матрица UI может расширить laborant/operator/mehanik). */
+const TASKS_ROLES = [
+  'admin',
+  'manager',
+  'dispatcher',
+  'guest',
+  'laborant',
+  'operator',
+  'mehanik',
+] as const;
 
 function displayName(u: { full_name?: string | null; organization_name?: string | null } | null | undefined) {
   return u?.organization_name || u?.full_name || null;

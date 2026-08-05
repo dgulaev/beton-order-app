@@ -367,6 +367,8 @@ export type PlannerMixer = {
   tripCount?: number;
   /** Сумма м³ за окно истории */
   volumeSum?: number;
+  /** lifecycle_status из mixers — repair/conservation/sold исключаются */
+  lifecycle_status?: string | null;
 };
 
 export type PlannedTrip = {
@@ -648,9 +650,25 @@ export function unloadMinutesForMixer(_m: PlannerMixer): number {
   return resolveUnloadMinutes(activePlannerCalibration);
 }
 
+/** ТС недоступны для планирования: ремонт, консервация, проданы. */
+const PLANNER_BLOCKED_LIFECYCLE = new Set(['repair', 'conservation', 'sold']);
+
+export function isMixerAvailableForPlanner(
+  m: Pick<PlannerMixer, 'volume' | 'lifecycle_status'>,
+): boolean {
+  if (!(Number(m.volume) > 0)) return false;
+  const lc = String(m.lifecycle_status || 'active');
+  return !PLANNER_BLOCKED_LIFECYCLE.has(lc);
+}
+
+/** Отфильтровать парк перед ранжированием / планом. */
+export function filterFleetForPlanner(mixers: PlannerMixer[]): PlannerMixer[] {
+  return mixers.filter(isMixerAvailableForPlanner);
+}
+
 /** Ранг парка: свои → история → объём бочки. */
 export function rankFleetForDay(mixers: PlannerMixer[]): PlannerMixer[] {
-  return [...mixers].sort((a, b) => {
+  return [...filterFleetForPlanner(mixers)].sort((a, b) => {
     const ownA = a.type === 'own' ? 1 : 0;
     const ownB = b.type === 'own' ? 1 : 0;
     if (ownB !== ownA) return ownB - ownA;
@@ -692,7 +710,7 @@ export function buildFleetHint(
   // Парк считаем только по доставке — самовывоз занимает соску, не миксеры.
   const deliveryVolume =
     Math.round((totalVolume - pickupVolume) * 10) / 10;
-  const ranked = rankFleetForDay(mixers.filter((m) => Number(m.volume) > 0));
+  const ranked = rankFleetForDay(mixers);
   const volumes: number[] = [];
   const used: PlannerMixer[] = [];
   const tripsByMixer = new Map<string, number>();
@@ -1391,9 +1409,7 @@ function planLogisticsInner(input: PlanLogisticsInput): PlanLogisticsResult {
       return ta - tb;
     });
 
-  const selectedMixers = rankFleetForDay(
-    input.mixers.filter((m) => Number(m.volume) > 0),
-  );
+  const selectedMixers = rankFleetForDay(input.mixers);
   // Открытие БСУ под ранние доставки (к 06:00 → грузим с 05:xx).
   const plantOpen = resolvePlantOpenMinutes(activeOrders, {
     useTraffic,
@@ -2268,7 +2284,7 @@ export function estimateDayFleetNeed(
   const active = orders.filter((o) => o.status !== 'cancelled');
   const totalVolume =
     Math.round(active.reduce((s, o) => s + (Number(o.volume) || 0), 0) * 10) / 10;
-  const ranked = rankFleetForDay(allMixers.filter((m) => Number(m.volume) > 0));
+  const ranked = rankFleetForDay(allMixers);
   if (!active.length || totalVolume <= 0) {
     return {
       neededCount: 0,

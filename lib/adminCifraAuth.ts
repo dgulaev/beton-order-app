@@ -7,6 +7,7 @@ export const ADMIN_CIFRA_STAFF_ROLES = [
   'dispatcher',
   'operator',
   'laborant',
+  'mehanik',
   'guest',
 ] as const;
 
@@ -85,6 +86,7 @@ export const FLEET_MUTATION_ROLES = [
   'dispatcher',
   'operator',
   'laborant',
+  'mehanik',
 ] as const;
 
 /** Мутации склада / заявок: без guest и laborant. */

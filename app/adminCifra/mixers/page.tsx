@@ -327,8 +327,8 @@ type PageTab = VehicleKind | 'delivery';
 export default function MixersPage() {
   const { isAdmin, user } = useUserRole();
   const role = (user?.role || '').toLowerCase();
-  const canEditCouples = ['admin', 'manager', 'dispatcher'].includes(role);
-  const canMutateFleet = ['admin', 'manager', 'dispatcher'].includes(role);
+  const canEditCouples = ['admin', 'manager', 'dispatcher', 'mehanik'].includes(role);
+  const canMutateFleet = ['admin', 'manager', 'dispatcher', 'laborant', 'mehanik'].includes(role);
 
   const openOwnFleetCard = (unit: FleetUnit) => {
     if (unit.type === 'own') setDrawerUnit(unit);
@@ -356,12 +356,14 @@ export default function MixersPage() {
   const [couplePickId, setCouplePickId] = useState('');
   const [coupleSaving, setCoupleSaving] = useState(false);
 
-  const [filter, setFilter] = useState<'all' | 'own' | 'rented'>('own');
+  const [filter, setFilter] = useState<'all' | 'own' | 'rented' | 'repair'>('own');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [showModal, setShowModal] = useState(false);
   const [editingMixer, setEditingMixer] = useState<FleetUnit | null>(null);
   const [drawerUnit, setDrawerUnit] = useState<FleetUnit | null>(null);
   const [telemetryMap, setTelemetryMap] = useState<Map<number, FleetTelemetrySnapshot>>(new Map());
+  /** mixer_id → urgency 'soon' | 'overdue' (Фаза 2 — скоро ТО) */
+  const [serviceDueMap, setServiceDueMap] = useState<Map<number, 'soon' | 'overdue'>>(new Map());
   const [showFleetMap, setShowFleetMap] = useState(false);
   const [gpsRefreshing, setGpsRefreshing] = useState(false);
 
@@ -417,10 +419,33 @@ export default function MixersPage() {
         setMixers(Array.isArray(data) ? data : []);
       }
       void fetchTelemetry();
+      void fetchServiceDue();
     } catch (err) {
       console.error('Ошибка загрузки техники:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchServiceDue = async () => {
+    try {
+      const res = await fetch('/api/adminCifra/fleet/service/due', {
+        headers: adminCifraAuthHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.success || !data.byMixer) return;
+      const next = new Map<number, 'soon' | 'overdue'>();
+      for (const [idStr, items] of Object.entries(data.byMixer as Record<string, { urgency: string }[]>)) {
+        const id = Number(idStr);
+        if (!Number.isFinite(id)) continue;
+        const urgencies = items.map((i) => i.urgency);
+        if (urgencies.includes('overdue')) next.set(id, 'overdue');
+        else if (urgencies.includes('soon')) next.set(id, 'soon');
+      }
+      setServiceDueMap(next);
+    } catch {
+      /* optional until fleet-service.sql applied */
     }
   };
 
@@ -617,9 +642,11 @@ export default function MixersPage() {
     }
   };
 
-  const filteredMixers = mixers.filter(m => 
-    filter === 'all' || m.type === filter
-  );
+  const filteredMixers = mixers.filter((m) => {
+    if (filter === 'repair') return m.lifecycle_status === 'repair';
+    if (filter === 'all') return true;
+    return m.type === filter;
+  });
 
   const fleetMapMarkers = useMemo((): FleetMapMarker[] => {
     return mixers.flatMap((m) => {
@@ -1084,6 +1111,25 @@ export default function MixersPage() {
           >
             Наемные
           </button>
+          <button
+            type="button"
+            onClick={() => setFilter('repair')}
+            style={{
+              padding: '10px 20px',
+              background: 'transparent',
+              border: 'none',
+              color: filter === 'repair' ? '#F97316' : '#64748B',
+              fontSize: '17px',
+              fontWeight: '600',
+              transition: 'color 0.25s ease',
+              cursor: 'pointer',
+            }}
+          >
+            На ремонте
+            {mixers.filter((m) => m.lifecycle_status === 'repair').length > 0
+              ? ` (${mixers.filter((m) => m.lifecycle_status === 'repair').length})`
+              : ''}
+          </button>
         </div>
         <button
           type="button"
@@ -1177,6 +1223,34 @@ export default function MixersPage() {
                         {mixer.type === 'own' ? 'Свой' : 'Наемный'}
                       </div>
                     </div>
+                    {(() => {
+                      const lc = lifecycleMeta(mixer.lifecycle_status);
+                      const due = serviceDueMap.get(mixer.id);
+                      if ((!mixer.lifecycle_status || mixer.lifecycle_status === 'active') && !due) {
+                        return null;
+                      }
+                      return (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                          {mixer.lifecycle_status && mixer.lifecycle_status !== 'active' && (
+                            <span style={{ fontSize: 11, fontWeight: 600, color: lc.color, padding: '2px 8px', borderRadius: 9999, background: lc.bg }}>
+                              {lc.label}
+                            </span>
+                          )}
+                          {due && (
+                            <span style={{
+                              fontSize: 11,
+                              fontWeight: 600,
+                              color: due === 'overdue' ? '#F87171' : '#FBBF24',
+                              padding: '2px 8px',
+                              borderRadius: 9999,
+                              background: due === 'overdue' ? 'rgba(248,113,113,0.15)' : 'rgba(251,191,36,0.15)',
+                            }}>
+                              {due === 'overdue' ? 'ТО просрочено' : 'Скоро ТО'}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* Модель + параметры */}
                     <div style={{ color: '#E2E8F0', fontSize: '16px', fontWeight: 600, marginBottom: specsChips.length || coupleLine ? 0 : 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1490,11 +1564,24 @@ export default function MixersPage() {
                         {(() => {
                           const tel = telemetryMap.get(mixer.id);
                           const lc = lifecycleMeta(mixer.lifecycle_status);
+                          const due = serviceDueMap.get(mixer.id);
                           return (
                             <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
                               {mixer.lifecycle_status && mixer.lifecycle_status !== 'active' && (
                                 <span style={{ fontSize: 10, fontWeight: 600, color: lc.color, padding: '1px 6px', borderRadius: 9999, background: lc.bg }}>
                                   {lc.label}
+                                </span>
+                              )}
+                              {due && (
+                                <span style={{
+                                  fontSize: 10,
+                                  fontWeight: 600,
+                                  color: due === 'overdue' ? '#F87171' : '#FBBF24',
+                                  padding: '1px 6px',
+                                  borderRadius: 9999,
+                                  background: due === 'overdue' ? 'rgba(248,113,113,0.15)' : 'rgba(251,191,36,0.15)',
+                                }}>
+                                  {due === 'overdue' ? 'ТО просрочено' : 'Скоро ТО'}
                                 </span>
                               )}
                               {tel && (

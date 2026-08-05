@@ -4,7 +4,7 @@ export const zayavkiArticle: HelpArticle = {
   id: 'zayavki',
   title: 'Заявки',
   summary: 'Создание заказов, миксеры, статусы и логистика дня',
-  roles: ['dispatcher', 'manager', 'admin'],
+  roles: ['dispatcher', 'manager', 'admin', 'laborant'],
   route: '/adminCifra/zayavki',
   body: [
     {

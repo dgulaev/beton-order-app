@@ -152,6 +152,7 @@ type FleetRow = {
   model?: string | null;
   driver?: string | null;
   driverPhone?: string | null;
+  lifecycle_status?: string | null;
 };
 
 type Props = {
@@ -980,6 +981,11 @@ export default function LogisticsPlannerTab({
         if (cancelled) return;
         const rows: FleetRow[] = (Array.isArray(mixers) ? mixers : [])
           .filter((m: any) => m.status !== 'inactive' && m.status !== 'archived')
+          // Фаза 2: ремонт / консервация / проданы — не в планировщике
+          .filter((m: any) => {
+            const lc = String(m.lifecycle_status || 'active');
+            return lc !== 'repair' && lc !== 'conservation' && lc !== 'sold';
+          })
           .map((m: any) => {
             const drivers = Array.isArray(m.mixer_drivers) ? m.mixer_drivers : [];
             const primary = drivers[0] || null;
@@ -996,6 +1002,7 @@ export default function LogisticsPlannerTab({
               model: String(m.model || '').trim() || null,
               driver: driverName,
               driverPhone,
+              lifecycle_status: String(m.lifecycle_status || 'active'),
             };
           })
           .filter((m: FleetRow) => m.number && m.volume > 0);
@@ -1019,8 +1026,17 @@ export default function LogisticsPlannerTab({
         const sharedPayload = shared ? parseSharedPayload(shared.payload) : null;
         const draft = sharedPayload || loadDraft(dateKey);
 
+        // Убираем из выбора ТС, которых уже нет в парке (repair/conservation/sold)
+        const availableIds = new Set(rows.map((r) => String(r.id)));
         if (draft?.selectedMixerIds?.length) {
-          setSelectedIds(new Set(draft.selectedMixerIds));
+          const pruned = draft.selectedMixerIds.filter((id) => availableIds.has(String(id)));
+          setSelectedIds(
+            new Set(
+              pruned.length
+                ? pruned.map(String)
+                : rows.filter((r) => r.type === 'own').map((r) => String(r.id)),
+            ),
+          );
         } else {
           setSelectedIds(
             new Set(rows.filter((r) => r.type === 'own').map((r) => String(r.id))),
@@ -1173,6 +1189,7 @@ export default function LogisticsPlannerTab({
           unloadMin: f.unload_allowance_min,
           tripCount: st.tripCount,
           volumeSum: st.volumeSum,
+          lifecycle_status: f.lifecycle_status ?? 'active',
         };
       });
   }, [fleet, selectedIds, stats, mixerVolumeOverrides]);
@@ -1189,6 +1206,7 @@ export default function LogisticsPlannerTab({
           unloadMin: f.unload_allowance_min,
           tripCount: st.tripCount,
           volumeSum: st.volumeSum,
+          lifecycle_status: f.lifecycle_status ?? 'active',
         };
       }),
     );

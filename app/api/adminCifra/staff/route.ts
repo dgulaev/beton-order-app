@@ -10,7 +10,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-const ALLOWED_STAFF_ROLES = ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'guest'];
+const ALLOWED_STAFF_ROLES = ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'mehanik', 'guest'];
 
 export async function GET(request: NextRequest) {
   try {
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     const { data: staffList, error } = await supabase
       .from('users')
       .select('user_id, full_name, username, phone, role, created_at, can_process_tenders')
-      .in('role', ['admin', 'manager', 'dispatcher', 'operator', 'logist'])
+      .in('role', ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'mehanik', 'guest', 'logist'])
       .order('full_name');
 
     if (error) throw error;

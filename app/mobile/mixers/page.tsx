@@ -1,15 +1,34 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Phone, Plus, X, Save, Truck, DollarSign, Trash2, RotateCcw, MapPin, ExternalLink, Link2, Unlink } from 'lucide-react';
+import {
+  Phone, Plus, X, Save, Truck, DollarSign, Trash2, RotateCcw, MapPin,
+  ExternalLink, Link2, Unlink, Navigation,
+} from 'lucide-react';
 import Link from 'next/link';
 import MobileExitButton from '../components/MobileExitButton';
 import { useUserRole } from '../../providers/UserRoleProvider';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import ModalActionButton from '@/app/adminCifra/components/ModalActionButton';
 import { appConfirm } from '@/app/adminCifra/components/appDialog';
+import FleetMap, { type FleetMapMarker } from '@/app/adminCifra/components/FleetMap';
+import FleetMapModal from '@/app/adminCifra/mixers/FleetMapModal';
+import FleetTripRoutesModal from '@/app/adminCifra/mixers/FleetTripRoutesModal';
+import FleetServicePanel from '@/app/adminCifra/mixers/FleetServicePanel';
+import FleetFuelPanel from '@/app/adminCifra/mixers/FleetFuelPanel';
+import FleetExpensesPanel from '@/app/adminCifra/mixers/FleetExpensesPanel';
+import FleetDocumentsPanel from '@/app/adminCifra/mixers/FleetDocumentsPanel';
 import { DEFAULT_DELIVERY_SETTINGS, type DeliverySettings } from '@/lib/deliveryPricing';
 import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
+import {
+  lifecycleMeta,
+  mergeTelemetryIntoMap,
+  scoutIsOnline,
+  type FleetTelemetrySnapshot,
+} from '@/lib/fleetLifecycle';
+import { requestScoutSync } from '@/lib/scoutSyncClient';
+import { buildYandexPlaceUrl } from '@/lib/fleetMapLinks';
+import { useRealtimeFleetTelemetry } from '@/hooks/useRealtimeFleetTelemetry';
 import { useRealtimeOrderMixers } from '@/hooks/useRealtimeOrders';
 import { shouldDeferWakeNetworkWork, useWakeRefresh } from '@/hooks/useWakeReload';
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
@@ -86,7 +105,12 @@ interface FleetUnit {
   unload_allowance_min?: number | null;
   vehicle_kind?: VehicleKind | string | null;
   specs?: Record<string, any> | null;
+  lifecycle_status?: string | null;
+  odometer_km?: number | null;
+  engine_hours?: number | null;
 }
+
+type CardDetailTab = 'info' | 'service' | 'fuel' | 'expenses' | 'documents';
 
 type CoupleInfo = {
   id: number;
@@ -96,7 +120,7 @@ type CoupleInfo = {
   label: string;
 };
 
-type FilterType = 'all' | 'own' | 'rented';
+type FilterType = 'all' | 'own' | 'rented' | 'repair';
 type PageTab = VehicleKind | 'tariffs';
 type FormData = {
   number: string;
@@ -393,8 +417,8 @@ function TariffsTab() {
 export default function MobileMixersPage() {
   const { isAdmin, user } = useUserRole();
   const role = (user?.role || '').toLowerCase();
-  const canEditFleet = ['admin', 'manager', 'dispatcher', 'operator', 'laborant'].includes(role);
-  const canEditCouples = role === 'admin' || role === 'manager' || role === 'dispatcher';
+  const canEditFleet = ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'mehanik'].includes(role);
+  const canEditCouples = ['admin', 'manager', 'dispatcher', 'mehanik'].includes(role);
 
   const [tab, setTab] = useState<PageTab>('mixer');
   const vehicleKind: VehicleKind = tab === 'tariffs' ? 'mixer' : tab;
@@ -404,12 +428,13 @@ export default function MobileMixersPage() {
 
   const [units, setUnits] = useState<FleetUnit[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<FilterType>('all');
+  const [filter, setFilter] = useState<FilterType>('own');
   const [couples, setCouples] = useState<CoupleInfo[]>([]);
   const [tractors, setTractors] = useState<FleetUnit[]>([]);
   const [trailerPickList, setTrailerPickList] = useState<FleetUnit[]>([]);
 
   const [sheet, setSheet] = useState<'add' | 'edit' | 'view' | 'couple' | null>(null);
+  const [cardTab, setCardTab] = useState<CardDetailTab>('info');
   const [selected, setSelected] = useState<FleetUnit | null>(null);
   const [form, setForm] = useState<FormData>(() => emptyForm('mixer'));
   const [saving, setSaving] = useState(false);
@@ -420,7 +445,16 @@ export default function MobileMixersPage() {
   const [activeTrips, setActiveTrips] = useState<any[]>([]);
   const [showTripSheet, setShowTripSheet] = useState(false);
 
-  useBodyScrollLock(!!sheet || showTripSheet);
+  const [telemetryMap, setTelemetryMap] = useState<Map<number, FleetTelemetrySnapshot>>(new Map());
+  const [mapOpen, setMapOpen] = useState(false);
+  const [gpsRefreshing, setGpsRefreshing] = useState(false);
+  const [routesModalOpen, setRoutesModalOpen] = useState(false);
+  const [trackDay, setTrackDay] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
+
+  useBodyScrollLock(!!sheet || showTripSheet || mapOpen || routesModalOpen);
 
   const coupleByTrailerId = useMemo(() => {
     const m = new Map<number, CoupleInfo>();
@@ -474,11 +508,31 @@ export default function MobileMixersPage() {
     }
   }, [fetchCouples]);
 
+  const fetchTelemetry = useCallback(async () => {
+    try {
+      const res = await fetchWithTimeout('/api/adminCifra/fleet/telemetry', {
+        headers: adminCifraAuthHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success && Array.isArray(data.telemetry)) {
+        setTelemetryMap((prev) =>
+          mergeTelemetryIntoMap(prev, data.telemetry as FleetTelemetrySnapshot[]),
+        );
+      }
+    } catch {
+      /* telemetry optional */
+    }
+  }, []);
+
   useEffect(() => {
     if (tab === 'tariffs') return;
-    setFilter('all');
+    setFilter('own');
     void fetchUnits(tab);
-  }, [tab, fetchUnits]);
+    void fetchTelemetry();
+  }, [tab, fetchUnits, fetchTelemetry]);
+
+  useRealtimeFleetTelemetry(setTelemetryMap, { enabled: tab !== 'tariffs' });
 
   useRealtimeOrderMixers(setActiveTrips, {
     activeOnly: true,
@@ -494,12 +548,89 @@ export default function MobileMixersPage() {
 
   useWakeRefresh(() => {
     if (shouldDeferWakeNetworkWork()) return;
+    void fetchTelemetry();
     if (vehicleKind !== 'mixer') return;
     void safeFetch('/api/adminCifra/active-mixers')
       .then((res) => (res?.ok ? res.json() : null))
       .then((trips) => { if (Array.isArray(trips)) setActiveTrips(trips); })
       .catch(() => {});
   });
+
+  const fleetMapMarkers = useMemo((): FleetMapMarker[] => {
+    return units.flatMap((m) => {
+      if (m.type !== 'own') return [];
+      const tel = telemetryMap.get(m.id);
+      const lat = tel?.lat != null ? Number(tel.lat) : NaN;
+      const lon = tel?.lon != null ? Number(tel.lon) : NaN;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [];
+      if (lat === 0 && lon === 0) return [];
+      return [
+        {
+          id: m.id,
+          lat,
+          lon,
+          label: m.number,
+          subtitle: [m.driver, m.model].filter(Boolean).join(' · ') || undefined,
+          isOnline: scoutIsOnline(tel?.last_message_at),
+          speedKmh: tel?.speed_kmh != null ? Number(tel.speed_kmh) : null,
+          address: tel?.address ?? null,
+          lastMessageAt: tel?.last_message_at ?? null,
+          vehicleKind: (m.vehicle_kind as string) || vehicleKind,
+        },
+      ];
+    });
+  }, [units, telemetryMap, vehicleKind]);
+
+  const fleetTelemetryUpdatedAt = useMemo(() => {
+    let latest: string | null = null;
+    for (const m of units) {
+      if (m.type !== 'own') continue;
+      const tel = telemetryMap.get(m.id);
+      if (tel?.updated_at && (!latest || tel.updated_at > latest)) {
+        latest = tel.updated_at;
+      }
+    }
+    return latest;
+  }, [units, telemetryMap]);
+
+  const refreshAllGps = async () => {
+    if (!canEditFleet) return;
+    setGpsRefreshing(true);
+    try {
+      const result = await requestScoutSync();
+      if (!result.ok) {
+        alert(result.error || 'Ошибка синхронизации СКАУТ');
+        return;
+      }
+      await fetchTelemetry();
+    } catch {
+      alert('Не удалось обновить GPS');
+    } finally {
+      setGpsRefreshing(false);
+    }
+  };
+
+  const selectedTelemetry = selected ? telemetryMap.get(selected.id) ?? null : null;
+  const selectedLiveMarker: FleetMapMarker | null =
+    selected &&
+    selectedTelemetry?.lat != null &&
+    selectedTelemetry?.lon != null &&
+    Number.isFinite(Number(selectedTelemetry.lat)) &&
+    Number.isFinite(Number(selectedTelemetry.lon))
+      ? {
+          id: selected.id,
+          lat: Number(selectedTelemetry.lat),
+          lon: Number(selectedTelemetry.lon),
+          label: selected.number,
+          subtitle: [selected.model, selected.driver].filter(Boolean).join(' · ') || undefined,
+          isOnline: scoutIsOnline(selectedTelemetry.last_message_at),
+          speedKmh:
+            selectedTelemetry.speed_kmh != null ? Number(selectedTelemetry.speed_kmh) : null,
+          address: selectedTelemetry.address,
+          lastMessageAt: selectedTelemetry.last_message_at,
+          vehicleKind: (selected.vehicle_kind as string) || vehicleKind,
+        }
+      : null;
 
   const coupleStatusLine = (unit: FleetUnit): string | null => {
     if (vehicleKind === 'tractor_unit') {
@@ -520,26 +651,39 @@ export default function MobileMixersPage() {
     setSheet('add');
   };
 
+  const fillFormFromUnit = (unit: FleetUnit) => {
+    const kind = isVehicleKind(unit.vehicle_kind) ? unit.vehicle_kind : vehicleKind;
+    setForm({
+      number: unit.number || '',
+      model: unit.model || '',
+      driver: unit.driver || '',
+      phone: unit.phone || '',
+      volume: Number(unit.volume) || 0,
+      type: unit.type === 'rented' ? 'rented' : 'own',
+      unload_allowance_min: unit.unload_allowance_min ?? 50,
+      vehicle_kind: kind,
+      specs: unit.specs && typeof unit.specs === 'object' ? { ...unit.specs } : {},
+    });
+  };
+
   const openCard = (unit: FleetUnit) => {
     setSelected(unit);
     setConfirmDelete(false);
-    if (canEditFleet) {
-      const kind = isVehicleKind(unit.vehicle_kind) ? unit.vehicle_kind : vehicleKind;
-      setForm({
-        number: unit.number || '',
-        model: unit.model || '',
-        driver: unit.driver || '',
-        phone: unit.phone || '',
-        volume: Number(unit.volume) || 0,
-        type: unit.type === 'rented' ? 'rented' : 'own',
-        unload_allowance_min: unit.unload_allowance_min ?? 50,
-        vehicle_kind: kind,
-        specs: unit.specs && typeof unit.specs === 'object' ? { ...unit.specs } : {},
-      });
-      setSheet('edit');
-    } else {
+    setCardTab('info');
+    // Свои — сначала карточка с телематикой; наёмные при праве редактирования — сразу форма
+    if (unit.type === 'own' || !canEditFleet) {
       setSheet('view');
+      return;
     }
+    fillFormFromUnit(unit);
+    setSheet('edit');
+  };
+
+  const openEditFromView = () => {
+    if (!selected || !canEditFleet) return;
+    fillFormFromUnit(selected);
+    setConfirmDelete(false);
+    setSheet('edit');
   };
 
   const closeSheet = () => {
@@ -547,6 +691,7 @@ export default function MobileMixersPage() {
     setSelected(null);
     setConfirmDelete(false);
     setCouplePickId('');
+    setCardTab('info');
   };
 
   const applyModel = (modelName: string) => {
@@ -728,7 +873,11 @@ export default function MobileMixersPage() {
     await fetchCouples();
   };
 
-  const filtered = units.filter((m) => filter === 'all' || m.type === filter);
+  const filtered = units.filter((m) => {
+    if (filter === 'repair') return m.lifecycle_status === 'repair';
+    if (filter === 'all') return true;
+    return m.type === filter;
+  });
 
   // ── Активные рейсы (только миксеры) ─────────────────────────────────────────
   const _now = new Date();
@@ -876,10 +1025,33 @@ export default function MobileMixersPage() {
           })()}
 
           {/* Filters */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '14px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '14px 16px', flexWrap: 'wrap' }}>
             <FilterBtn active={filter === 'all'} onClick={() => setFilter('all')} label="Все" />
             <FilterBtn active={filter === 'own'} onClick={() => setFilter('own')} label="Свои" />
             <FilterBtn active={filter === 'rented'} onClick={() => setFilter('rented')} label="Наёмные" />
+            <FilterBtn active={filter === 'repair'} onClick={() => setFilter('repair')} label="Ремонт" />
+            <button
+              type="button"
+              onClick={() => setMapOpen(true)}
+              style={{
+                marginLeft: 'auto',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '7px 12px',
+                borderRadius: 9999,
+                border: '1px solid rgba(74,222,128,0.35)',
+                background: 'rgba(74,222,128,0.1)',
+                color: '#4ADE80',
+                fontWeight: 600,
+                fontSize: 12,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <MapPin size={14} />
+              Карта{fleetMapMarkers.length > 0 ? ` (${fleetMapMarkers.length})` : ''}
+            </button>
           </div>
 
           {/* List */}
@@ -906,6 +1078,9 @@ export default function MobileMixersPage() {
               const coupled = coupleByTrailerId.has(unit.id) || coupleByTractorId.has(unit.id);
               const specsChips = formatSpecsChips(vehicleKind, unit.specs);
               const tariffTotal = unitShiftOrTripTotal(vehicleKind, unit.specs);
+              const tel = isOwn ? telemetryMap.get(unit.id) : undefined;
+              const gpsOnline = tel ? scoutIsOnline(tel.last_message_at) : false;
+              const lc = lifecycleMeta(unit.lifecycle_status);
 
               return (
                 <div
@@ -938,13 +1113,37 @@ export default function MobileMixersPage() {
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px', gap: 8 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flexWrap: 'wrap' }}>
                           <span style={{ fontSize: '16px', fontWeight: 700, color: '#E2E8F0', whiteSpace: 'nowrap' }}>
                             {unit.number}
                           </span>
                           <span style={{ fontSize: '13px', color: '#CBD5E1', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {unit.model || ''}
                           </span>
+                          {unit.lifecycle_status && unit.lifecycle_status !== 'active' && (
+                            <span style={{
+                              fontSize: 10,
+                              fontWeight: 600,
+                              color: lc.color,
+                              padding: '1px 6px',
+                              borderRadius: 9999,
+                              background: lc.bg,
+                            }}>
+                              {lc.label}
+                            </span>
+                          )}
+                          {tel && (
+                            <span style={{
+                              fontSize: 10,
+                              fontWeight: 600,
+                              color: gpsOnline ? '#4ADE80' : '#94A3B8',
+                              padding: '1px 6px',
+                              borderRadius: 9999,
+                              background: gpsOnline ? 'rgba(74,222,128,0.12)' : 'rgba(148,163,184,0.12)',
+                            }}>
+                              {gpsOnline ? 'GPS' : 'offline'}
+                            </span>
+                          )}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <span style={{ fontSize: '11px', fontWeight: 600, color: isOwn ? '#10B981' : '#FACC15' }}>
@@ -1120,19 +1319,76 @@ export default function MobileMixersPage() {
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 10000 }} onClick={closeSheet} />
           <div style={volumeModalStyle({
             position: 'fixed', bottom: '74px', left: 0, right: 0, zIndex: 10001,
-            borderRadius: '20px 20px 0 0', maxHeight: 'calc(80vh - 74px)',
+            borderRadius: '20px 20px 0 0', maxHeight: 'calc(90vh - 74px)',
             overflow: 'hidden', display: 'flex', flexDirection: 'column',
           })}>
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 0', flexShrink: 0 }}>
               <div style={{ width: '40px', height: '4px', background: '#334155', borderRadius: '9999px' }} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', flexShrink: 0 }}>
               <div style={{ fontSize: '18px', fontWeight: 700, color: '#E2E8F0' }}>{selected.number}</div>
               <button type="button" onClick={closeSheet} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>
                 <X size={20} color="#64748B" />
               </button>
             </div>
-            <div style={{ padding: '0 20px 24px', overflowY: 'auto' }}>
+            <div style={{
+              display: 'flex', gap: 6, padding: '0 16px 12px', overflowX: 'auto', flexShrink: 0,
+              WebkitOverflowScrolling: 'touch',
+            }}>
+              {([
+                ['info', 'Паспорт'],
+                ['service', 'Сервис'],
+                ['fuel', 'Топливо'],
+                ['expenses', 'Расходы'],
+                ['documents', 'Документы'],
+              ] as const).map(([key, label]) => {
+                const active = cardTab === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setCardTab(key)}
+                    style={{
+                      flexShrink: 0,
+                      padding: '7px 12px',
+                      borderRadius: 999,
+                      border: `1px solid ${active ? '#3B82F6' : '#334155'}`,
+                      background: active ? 'rgba(59,130,246,0.18)' : 'transparent',
+                      color: active ? '#93C5FD' : '#94A3B8',
+                      fontSize: 12,
+                      fontWeight: 650,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ padding: '0 20px 24px', overflowY: 'auto', flex: 1 }}>
+              {cardTab === 'service' && (
+                <FleetServicePanel
+                  mixerId={selected.id}
+                  odometerKm={selected.odometer_km}
+                  engineHours={selected.engine_hours}
+                  canMutate={canEditFleet}
+                />
+              )}
+              {cardTab === 'fuel' && (
+                <FleetFuelPanel
+                  mixerId={selected.id}
+                  odometerKm={selected.odometer_km}
+                  canMutate={canEditFleet}
+                />
+              )}
+              {cardTab === 'expenses' && (
+                <FleetExpensesPanel mixerId={selected.id} canMutate={canEditFleet} />
+              )}
+              {cardTab === 'documents' && (
+                <FleetDocumentsPanel mixerId={selected.id} canMutate={canEditFleet} />
+              )}
+              {cardTab === 'info' && (
+              <>
               <InfoRow label="Вид" value={kindMeta.singular} />
               {vehicleKind === 'special' && (
                 <InfoRow label="Тип техники" value={specialSubtypeLabel(String(selected.specs?.subtype || ''))} />
@@ -1188,17 +1444,182 @@ export default function MobileMixersPage() {
                     : `${selected.unload_allowance_min ?? '—'} мин`}
                 />
               )}
-              {selected.phone && (
-                <a
-                  href={`tel:${selected.phone}`}
-                  style={{
-                    marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-                    padding: '14px', background: '#10B981', color: '#fff', borderRadius: '12px',
-                    fontWeight: 700, fontSize: '15px', textDecoration: 'none',
-                  }}
-                >
-                  <Phone size={18} /> Позвонить
-                </a>
+
+              {selected.type === 'own' && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{
+                    fontSize: 12, fontWeight: 700, color: '#94A3B8', letterSpacing: '0.04em',
+                    marginBottom: 10, textTransform: 'uppercase',
+                  }}>
+                    Телематика
+                  </div>
+                  {selectedLiveMarker ? (
+                    <>
+                      <FleetMap
+                        markers={[selectedLiveMarker]}
+                        highlightId={selected.id}
+                        markerTooltips={false}
+                        height={180}
+                        externalHref={buildYandexPlaceUrl(
+                          selectedLiveMarker.lat,
+                          selectedLiveMarker.lon,
+                          selected.number,
+                        )}
+                        externalLabel="Яндекс.Карты"
+                        emptyMessage="Нет координат"
+                      />
+                      <div style={{
+                        marginTop: 10,
+                        padding: 12,
+                        borderRadius: 12,
+                        background: selectedLiveMarker.isOnline
+                          ? 'rgba(74,222,128,0.08)'
+                          : 'rgba(148,163,184,0.08)',
+                        border: `1px solid ${selectedLiveMarker.isOnline
+                          ? 'rgba(74,222,128,0.25)'
+                          : 'rgba(148,163,184,0.25)'}`,
+                      }}>
+                        <div style={{
+                          fontWeight: 700,
+                          color: selectedLiveMarker.isOnline ? '#4ADE80' : '#94A3B8',
+                          fontSize: 14,
+                        }}>
+                          {selectedLiveMarker.isOnline ? 'На связи' : 'Offline'}
+                        </div>
+                        {selectedTelemetry?.address && (
+                          <div style={{ color: '#CBD5E1', fontSize: 13, marginTop: 6 }}>
+                            {selectedTelemetry.address}
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 16, marginTop: 8, color: '#94A3B8', fontSize: 12 }}>
+                          <span>
+                            {selectedLiveMarker.speedKmh != null
+                              ? `${Math.round(selectedLiveMarker.speedKmh)} км/ч`
+                              : '— км/ч'}
+                          </span>
+                          {selectedTelemetry?.lat != null && selectedTelemetry?.lon != null && (
+                            <span>
+                              {Number(selectedTelemetry.lat).toFixed(5)}, {Number(selectedTelemetry.lon).toFixed(5)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{
+                      padding: 20, textAlign: 'center', color: '#64748B', fontSize: 13,
+                      background: '#1E2937', borderRadius: 12, border: '1px solid #334155',
+                    }}>
+                      <Navigation size={28} style={{ opacity: 0.4, marginBottom: 8 }} />
+                      <div>Нет данных телематики</div>
+                    </div>
+                  )}
+                  {canEditFleet && (
+                    <button
+                      type="button"
+                      disabled={gpsRefreshing}
+                      onClick={() => void refreshAllGps()}
+                      style={{
+                        marginTop: 10,
+                        width: '100%',
+                        padding: '10px 12px',
+                        borderRadius: 10,
+                        border: '1px solid rgba(74,222,128,0.35)',
+                        background: 'rgba(74,222,128,0.1)',
+                        color: '#4ADE80',
+                        fontWeight: 600,
+                        fontSize: 13,
+                        cursor: gpsRefreshing ? 'wait' : 'pointer',
+                      }}
+                    >
+                      {gpsRefreshing ? 'Обновление…' : '↻ Обновить GPS из СКАУТ'}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {vehicleKind === 'mixer' && selected.type === 'own' && (
+                <div style={{
+                  marginTop: 14,
+                  padding: 12,
+                  borderRadius: 12,
+                  background: '#1E2937',
+                  border: '1px solid #334155',
+                }}>
+                  <div style={{ fontWeight: 700, color: '#E2E8F0', fontSize: 13, marginBottom: 8 }}>
+                    Маршруты рейсов
+                  </div>
+                  <div style={{ color: '#64748B', fontSize: 12, marginBottom: 10 }}>
+                    От завода до адресов заявок — каждый рейс отдельной линией
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <input
+                      type="date"
+                      value={trackDay}
+                      onChange={(e) => setTrackDay(e.target.value)}
+                      style={{
+                        flex: '1 1 140px',
+                        padding: '10px 12px',
+                        borderRadius: 10,
+                        border: '1px solid #334155',
+                        background: '#0F172A',
+                        color: '#E2E8F0',
+                        fontSize: 14,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSheet(null);
+                        setRoutesModalOpen(true);
+                      }}
+                      style={{
+                        padding: '10px 14px',
+                        borderRadius: 10,
+                        border: '1px solid rgba(56,189,248,0.4)',
+                        background: 'rgba(56,189,248,0.12)',
+                        color: '#38BDF8',
+                        fontWeight: 600,
+                        fontSize: 13,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      Открыть на карте
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
+                {selected.phone && (
+                  <a
+                    href={`tel:${selected.phone}`}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                      padding: '14px', background: '#10B981', color: '#fff', borderRadius: '12px',
+                      fontWeight: 700, fontSize: '15px', textDecoration: 'none',
+                    }}
+                  >
+                    <Phone size={18} /> Позвонить
+                  </a>
+                )}
+                {canEditFleet && (
+                  <button
+                    type="button"
+                    onClick={openEditFromView}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                      padding: '14px', borderRadius: 12, border: 'none',
+                      background: '#334155', color: '#E2E8F0',
+                      fontWeight: 700, fontSize: 15, cursor: 'pointer',
+                    }}
+                  >
+                    Редактировать
+                  </button>
+                )}
+              </div>
+              </>
               )}
             </div>
           </div>
@@ -1687,6 +2108,30 @@ export default function MobileMixersPage() {
           </>
         );
       })()}
+
+      <FleetMapModal
+        open={mapOpen}
+        markers={fleetMapMarkers}
+        onClose={() => setMapOpen(false)}
+        lastUpdatedAt={fleetTelemetryUpdatedAt}
+        onRefreshAll={canEditFleet ? refreshAllGps : undefined}
+        refreshing={gpsRefreshing}
+      />
+
+      {selected && (
+        <FleetTripRoutesModal
+          open={routesModalOpen}
+          onClose={() => {
+            setRoutesModalOpen(false);
+            setSelected(null);
+          }}
+          mixerId={selected.id}
+          mixerNumber={selected.number}
+          day={trackDay}
+          onDayChange={setTrackDay}
+          liveMarker={selectedLiveMarker}
+        />
+      )}
     </div>
   );
 }

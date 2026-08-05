@@ -73,7 +73,12 @@ export async function driverFetch(url: string, options: FetchWithTimeoutInit = {
     headers.set('x-driver-mixer-number', encodeURIComponent(session.number));
     headers.set('x-driver-phone', encodeURIComponent(session.phone));
   }
-  if (options.body && !headers.has('Content-Type')) {
+  // FormData сам ставит multipart boundary — Content-Type не трогаем
+  if (
+    options.body &&
+    !(options.body instanceof FormData) &&
+    !headers.has('Content-Type')
+  ) {
     headers.set('Content-Type', 'application/json');
   }
   // 12 с по умолчанию — без таймаута Samsung мог крутить «Загрузка...» 60–70 с.

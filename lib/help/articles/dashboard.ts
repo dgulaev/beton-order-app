@@ -4,7 +4,7 @@ export const dashboardArticle: HelpArticle = {
   id: 'dashboard',
   title: 'Диспетчерская',
   summary: 'KPI дня, таймлайн рейсов, быстрый доступ к заказам',
-  roles: ['dispatcher', 'manager', 'admin'],
+  roles: ['dispatcher', 'manager', 'admin', 'laborant'],
   route: '/adminCifra/dashboard',
   body: [
     {

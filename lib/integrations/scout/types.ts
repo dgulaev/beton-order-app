@@ -97,3 +97,58 @@ export type ScoutNavigationFiltrationResult = {
     }>;
   } | null;
 };
+
+/** Событие заправки/слива из SpicFuelingDefuelingStatisticsEvent */
+export type ScoutFuelingEvent = {
+  timestamp: string;
+  eventType: 'Fueling' | 'Defueling' | 'None';
+  beginLiters: number | null;
+  endLiters: number | null;
+  /** End − Begin (для заправки > 0, для слива < 0) */
+  deltaLiters: number | null;
+  lat: number | null;
+  lon: number | null;
+};
+
+export type ScoutFuelingStats = {
+  beginFuelVolumeL: number | null;
+  endFuelVolumeL: number | null;
+  fuelingTotalVolumeL: number | null;
+  defuelingTotalVolumeL: number | null;
+  /** Расход по ДУТ за период, л */
+  totalFuelConsumptionL: number | null;
+  fuelingCount: number;
+  defuelingCount: number;
+  events: ScoutFuelingEvent[];
+};
+
+export type ScoutFuelingDefuelingResult = {
+  ChunkInfo?: {
+    ChunkNumber?: number;
+    ErrorText?: string | null;
+    IsFinalChunk?: boolean;
+    Status?: { Value?: string };
+  };
+  Statistics?: {
+    BeginFuelVolumeL?: number | null;
+    EndFuelVolumeL?: number | null;
+    MinFuelVolumeL?: number | null;
+    MaxFuelVolumeL?: number | null;
+    FuelingTotalVolumeL?: number | null;
+    DefuelingTotalVolumeL?: number | null;
+    TotalFuelConsumptionL?: number | null;
+    FuelingCount?: number;
+    DefuelingCount?: number;
+    Events?: Array<{
+      Period?: { Begin?: string; End?: string };
+      OriginalPeriod?: { Begin?: string; End?: string };
+      Timestamp?: string;
+      EventType?: { Value?: string } | string;
+      BeginFuelVolumeL?: number;
+      EndFuelVolumeL?: number;
+      OriginalBeginFuelVolumeL?: number | null;
+      OriginalEndFuelVolumeL?: number | null;
+      Location?: { Latitude?: number; Longitude?: number };
+    }>;
+  } | null;
+};

@@ -14,7 +14,10 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
-const COUPLE_ROLES = WAREHOUSE_MUTATION_ROLES.filter((r) => r !== 'operator');
+const COUPLE_ROLES = [
+  ...WAREHOUSE_MUTATION_ROLES.filter((r) => r !== 'operator'),
+  'mehanik',
+] as const;
 
 type MixerRow = {
   id: number;

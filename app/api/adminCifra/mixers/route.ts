@@ -134,13 +134,17 @@ export async function POST(request: NextRequest) {
         }
       }
       if (rawSpecs != null && typeof rawSpecs === 'object' && !Array.isArray(rawSpecs)) {
+        const merged: Record<string, unknown> = {
+          ...(existing.specs && typeof existing.specs === 'object' ? existing.specs : {}),
+          ...rawSpecs,
+        };
+        // null в патче = сбросить поле (норма расхода и т.п.)
+        for (const [k, v] of Object.entries(rawSpecs as Record<string, unknown>)) {
+          if (v === null) delete merged[k];
+        }
         patch.specs = sanitizeFleetSpecs(
           kind,
-          syncVolumeIntoSpecs(
-            kind,
-            existing.volume,
-            { ...(existing.specs && typeof existing.specs === 'object' ? existing.specs : {}), ...rawSpecs },
-          ),
+          syncVolumeIntoSpecs(kind, existing.volume, merged),
         );
       }
       const { data, error } = await supabase.from('mixers').update(patch).eq('id', id).select().single();

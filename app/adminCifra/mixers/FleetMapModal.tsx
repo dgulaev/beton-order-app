@@ -61,7 +61,7 @@ export default function FleetMapModal({
         .fleet-map-modal-shell {
           position: fixed;
           inset: 0;
-          z-index: 951;
+          z-index: 10050;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -111,6 +111,60 @@ export default function FleetMapModal({
           }
         }
 
+        @media (max-width: 768px) {
+          .fleet-map-modal-shell {
+            padding: 0;
+            align-items: stretch;
+            justify-content: stretch;
+          }
+          .fleet-map-modal-panel {
+            width: 100%;
+            height: 100%;
+            max-height: 100dvh;
+            border-radius: 0;
+            border: none;
+            box-shadow: none;
+          }
+          .fleet-map-modal-header {
+            padding: max(10px, env(safe-area-inset-top, 0px)) 12px 10px !important;
+            flex-wrap: wrap;
+            gap: 8px !important;
+          }
+          .fleet-map-modal-header-title {
+            font-size: 16px !important;
+          }
+          .fleet-map-modal-stats {
+            gap: 6px !important;
+          }
+          .fleet-map-modal-stats > span {
+            padding: 4px 8px !important;
+            font-size: 11px !important;
+          }
+          .fleet-map-modal-refresh-label {
+            display: none;
+          }
+          .fleet-map-modal-body {
+            padding: 6px 8px !important;
+          }
+          .fleet-map-modal-footer {
+            padding: 10px 12px max(12px, env(safe-area-inset-bottom, 0px)) !important;
+            gap: 8px !important;
+          }
+          .fleet-map-modal-legend {
+            gap: 12px !important;
+          }
+          .fleet-map-modal-legend > span {
+            font-size: 12px !important;
+          }
+          .fleet-map-modal-units {
+            max-height: 72px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            flex-wrap: nowrap !important;
+            -webkit-overflow-scrolling: touch;
+          }
+        }
+
         @keyframes fleet-map-spin {
           from { transform: rotate(0deg); }
           to { transform: rotate(360deg); }
@@ -118,13 +172,14 @@ export default function FleetMapModal({
       `}</style>
 
       <div
-        style={{ position: 'fixed', inset: 0, zIndex: 950, background: 'rgba(0,0,0,0.72)' }}
+        style={{ position: 'fixed', inset: 0, zIndex: 10049, background: 'rgba(0,0,0,0.72)' }}
         onClick={onClose}
       />
 
       <div className="fleet-map-modal-shell" onClick={onClose}>
         <div className="fleet-map-modal-panel" onClick={(e) => e.stopPropagation()}>
           <div
+            className="fleet-map-modal-header"
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -135,8 +190,9 @@ export default function FleetMapModal({
               flexShrink: 0,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '12px 16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '12px 16px', minWidth: 0, flex: 1 }}>
               <div
+                className="fleet-map-modal-header-title"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -147,10 +203,10 @@ export default function FleetMapModal({
                   whiteSpace: 'nowrap',
                 }}
               >
-                <MapPin size={24} color="#4ADE80" />
+                <MapPin size={22} color="#4ADE80" />
                 Парк на карте
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+              <div className="fleet-map-modal-stats" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
                 <span
                   style={{
                     padding: '6px 12px',
@@ -207,7 +263,7 @@ export default function FleetMapModal({
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  Обновлено {updatedLabel}
+                  {updatedLabel}
                 </span>
               </div>
             </div>
@@ -217,6 +273,7 @@ export default function FleetMapModal({
                   type="button"
                   disabled={refreshing}
                   onClick={() => void onRefreshAll()}
+                  aria-label="Обновить GPS"
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -237,12 +294,15 @@ export default function FleetMapModal({
                     size={16}
                     style={refreshing ? { animation: 'fleet-map-spin 0.8s linear infinite' } : undefined}
                   />
-                  {refreshing ? 'Обновление…' : 'Обновить все GPS'}
+                  <span className="fleet-map-modal-refresh-label">
+                    {refreshing ? 'Обновление…' : 'Обновить все GPS'}
+                  </span>
                 </button>
               )}
               <button
                 type="button"
                 onClick={onClose}
+                aria-label="Закрыть"
                 style={{ background: 'transparent', border: 'none', color: '#64748B', cursor: 'pointer' }}
               >
                 <X size={22} />
@@ -250,7 +310,7 @@ export default function FleetMapModal({
             </div>
           </div>
 
-          <div style={{ flex: 1, minHeight: 0, padding: '12px 14px 14px' }}>
+          <div className="fleet-map-modal-body" style={{ flex: 1, minHeight: 0, padding: '12px 14px 14px' }}>
             <FleetMap
               markers={markers}
               height="100%"
@@ -259,6 +319,7 @@ export default function FleetMapModal({
           </div>
 
           <div
+            className="fleet-map-modal-footer"
             style={{
               padding: '14px 18px 18px',
               borderTop: '1px solid #1E2937',
@@ -269,7 +330,7 @@ export default function FleetMapModal({
               flexShrink: 0,
             }}
           >
-            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div className="fleet-map-modal-legend" style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'center' }}>
               <span
                 style={{
                   display: 'inline-flex',
@@ -279,8 +340,8 @@ export default function FleetMapModal({
                   color: '#F8FAFC',
                 }}
               >
-                <FleetMapLegendIcon online size={36} vehicleKind="mixer" />
-                Миксер · на связи
+                <FleetMapLegendIcon online size={28} vehicleKind="mixer" />
+                На связи
               </span>
               <span
                 style={{
@@ -291,7 +352,7 @@ export default function FleetMapModal({
                   color: '#CBD5E1',
                 }}
               >
-                <FleetMapLegendIcon online={false} size={36} vehicleKind="mixer" />
+                <FleetMapLegendIcon online={false} size={28} vehicleKind="mixer" />
                 Offline
               </span>
               {markers.some((m) => m.vehicleKind === 'dump_truck') && (
@@ -304,13 +365,13 @@ export default function FleetMapModal({
                     color: '#F8FAFC',
                   }}
                 >
-                  <FleetMapLegendIcon online size={36} vehicleKind="dump_truck" />
+                  <FleetMapLegendIcon online size={28} vehicleKind="dump_truck" />
                   Самосвал
                 </span>
               )}
             </div>
             {markers.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <div className="fleet-map-modal-units" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {[...markers]
                   .sort((a, b) => Number(b.isOnline) - Number(a.isOnline) || a.label.localeCompare(b.label, 'ru'))
                   .map((m) => (

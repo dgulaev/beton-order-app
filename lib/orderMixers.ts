@@ -26,6 +26,7 @@ import {
 import { maybeRetrySkippedMekaCompensation } from '@/lib/mekaCementCompensate';
 import { getFreshActiveSiloId } from '@/lib/operatorShiftSilo';
 import { isPickupOrder } from '@/lib/logisticsPlanner';
+import { applyFleetTariffOnUnload } from '@/lib/fleetTripTariff';
 
 const FINAL_ORDER_STATUSES = ['completed', 'cancelled'];
 const STATUS_LABELS_RU: Record<string, string> = {
@@ -418,6 +419,16 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
         message: `Не удалось обновить статус — миксер уже изменён кем-то другим (сейчас: "${freshStatus}"). Обновите страницу и попробуйте снова.`,
       },
     };
+  }
+
+  // Фаза 3: тариф non-mixer (самосвал/тонара/…) в order_mixers при закрытии рейса
+  if (effectiveStatus === 'Разгружен' && oldStatus !== 'Разгружен') {
+    void applyFleetTariffOnUnload({
+      orderMixerId: id,
+      mixerName: mixer.mixer_name,
+      previousStatus: oldStatus,
+      newStatus: effectiveStatus,
+    });
   }
 
   // ==================== РЕАЛЬНОЕ СПИСАНИЕ ДОБАВКИ СО СКЛАДА ====================

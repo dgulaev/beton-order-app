@@ -45,6 +45,7 @@ const ROLE_LABELS: Record<string, string> = {
   dispatcher: 'Диспетчер',
   operator: 'Оператор',
   laborant: 'Лаборант',
+  mehanik: 'Механик',
   logist: 'Логист',
 };
 

@@ -4,7 +4,7 @@ export const salesArticle: HelpArticle = {
   id: 'sales',
   title: 'Продажи: лиды, спрос, обзвон',
   summary: 'Цепочка от площадки до заявки',
-  roles: ['dispatcher', 'manager', 'admin'],
+  roles: ['dispatcher', 'manager', 'admin', 'laborant'],
   route: '/adminCifra/leads',
   routes: [
     '/adminCifra/leads',

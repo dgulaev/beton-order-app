@@ -368,9 +368,20 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   // ==================== 1.2 АВТОМАТИЧЕСКИЙ РЕДИРЕКТ НА МОБИЛЬНУЮ ВЕРСИЮ ====================
   useEffect(() => {
     const redirectToMobile = () => {
-      // Лаборант работает только на десктопной странице «Лаборатория»
-      // (в мобильной версии этого раздела нет) — не уводим его на /mobile.
-      if (userRole === 'laborant') return;
+      // Лаборант без mobile-секций в матрице (только Лаборатория) — остаётся на десктопе.
+      if (userRole === 'laborant') {
+        const mobileFriendly: NavSection[] = [
+          'dashboard',
+          'zayavki',
+          'sales',
+          'mixers',
+          'clients',
+        ];
+        const hasMobile = mobileFriendly.some((s) =>
+          canAccessNavSection(userRole, s, systemSettings.roleAccess),
+        );
+        if (!hasMobile) return;
+      }
 
       // Ручной выбор «Основная версия» в меню — не уводим обратно на /mobile.
       // Также уважаем ?desktop=true (одноразовый вход с мобилки).
@@ -405,7 +416,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     const timer = setTimeout(redirectToMobile, 700);
 
     return () => clearTimeout(timer);
-  }, [userRole]);
+  }, [userRole, systemSettings.roleAccess]);
 
   const goToMobileVersion = () => {
     try { localStorage.setItem('adminViewPref', 'mobile'); } catch { /* ignore */ }
@@ -1043,7 +1054,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
   useLeadChangeNotifications({
     // Тосты по лидам — только у ролей с доступом к «Продажи».
-    enabled: !!userRole && canAccessSales(userRole),
+    enabled: !!userRole && canAccessSales(userRole, systemSettings.roleAccess),
     currentUserId,
     onTakeRequired: (lead) => {
       setNewLeadsCount((prev) => prev + 1);
@@ -1098,7 +1109,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   });
 
   useDemandChangeNotifications({
-    enabled: !!userRole && canAccessSales(userRole),
+    enabled: !!userRole && canAccessSales(userRole, systemSettings.roleAccess),
     onNewDemand: (item) => {
       setNewDemandCount((prev) => prev + 1);
       const isAvito = item.source === 'avito';
@@ -1148,25 +1159,51 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   }, [pathname]);
 
   // ==================== 6.0 ОГРАНИЧЕНИЕ ДОСТУПА ПО РОЛЯМ ====================
-  // Матрица из Настроек + наследие laborant/operator.
+  // Матрица из Настроек. Ждём settingsHydrated — иначе дефолты выкинут со страницы,
+  // которую админ уже открыл в матрице, до прихода JSON из API.
   useEffect(() => {
-    if (!userRole || !pathname) return;
+    if (!userRole || !pathname || !settingsHydrated) return;
 
     const firstAllowedPath = (): string => {
-      if (userRole === 'laborant') return '/adminCifra/recipes';
-      const candidates: Array<[NavSection, string]> = [
+      // Предпочитаем «домашнюю» секцию роли, но только если она реально в матрице
+      const preferred: NavSection | null =
+        userRole === 'laborant'
+          ? 'recipes'
+          : userRole === 'mehanik'
+            ? 'mixers'
+            : userRole === 'operator'
+              ? 'operator'
+              : null;
+      const rest: Array<[NavSection, string]> = [
         ['dashboard', '/adminCifra/dashboard'],
         ['zayavki', '/adminCifra/zayavki'],
+        ['planning', '/adminCifra/planning'],
         ['operator', '/adminCifra/operator'],
         ['recipes', '/adminCifra/recipes'],
         ['mixers', '/adminCifra/mixers'],
         ['clients', '/adminCifra/clients'],
         ['tasks', '/adminCifra/tasks'],
+        ['loading_points', '/adminCifra/loading-points'],
+        ['competitors', '/adminCifra/competitors'],
       ];
+      const pathBySection: Partial<Record<NavSection, string>> = Object.fromEntries(rest);
+      pathBySection.recipes = '/adminCifra/recipes';
+      pathBySection.mixers = '/adminCifra/mixers';
+      pathBySection.operator = '/adminCifra/operator';
+      const candidates: Array<[NavSection, string]> = [];
+      if (preferred && pathBySection[preferred]) {
+        candidates.push([preferred, pathBySection[preferred]!]);
+      }
+      for (const item of rest) {
+        if (item[0] === preferred) continue;
+        candidates.push(item);
+      }
       for (const [section, path] of candidates) {
         if (canAccessNavSection(userRole, section, systemSettings.roleAccess)) return path;
       }
-      return '/adminCifra/dashboard';
+      return preferred && pathBySection[preferred]
+        ? pathBySection[preferred]!
+        : '/adminCifra/dashboard';
     };
 
     const redirectSafe = (target: string) => {
@@ -1174,11 +1211,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
       router.replace(target);
     };
 
-    if (userRole === 'laborant' && pathname !== '/adminCifra/recipes') {
-      redirectSafe('/adminCifra/recipes');
-      return;
-    }
-    if (!canAccessSales(userRole) && isSalesPath(pathname)) {
+    if (!canAccessSales(userRole, systemSettings.roleAccess) && isSalesPath(pathname)) {
       redirectSafe(firstAllowedPath());
       return;
     }
@@ -1186,7 +1219,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     if (section && !canAccessNavSection(userRole, section, systemSettings.roleAccess)) {
       redirectSafe(firstAllowedPath());
     }
-  }, [userRole, pathname, router, systemSettings.roleAccess]);
+  }, [userRole, pathname, router, systemSettings.roleAccess, settingsHydrated]);
 
   // ==================== 6.1 ЗАГРУЗКА ====================
   if (roleLoading) {
@@ -1515,17 +1548,6 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
 
           <nav style={{ flex: 1, paddingLeft: '8px', paddingRight: '8px', overflowY: 'auto', minHeight: 0 }}>
 
-            {/* ==================== БЛОК 9.5: ЛАБОРАНТ — ТОЛЬКО «ЛАБОРАТОРИЯ» ==================== */}
-            {userRole === 'laborant' ? (
-              <>
-              <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
-                <FlaskConical size={22} />
-                <span style={navTextStyle(isCollapsed)}>Лаборатория</span>
-              </Link>
-              <HelpNavButton isCollapsed={isCollapsed} navLinkStyle={navLinkStyle} navTextStyle={navTextStyle} />
-              </>
-            ) : (
-            <>
             {navOk('dashboard') && (
             <Link href="/adminCifra/dashboard" style={navLinkStyle(isActive('/adminCifra/dashboard'), isCollapsed)}>
               <Home size={22} />
@@ -1552,8 +1574,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             </Link>
             )}
 
-            {/* ==================== ПРОДАЖИ: без operator / laborant ==================== */}
-            {navOk('sales') && canAccessSales(userRole) && (
+            {/* ==================== ПРОДАЖИ: по матрице roleAccess.sales ==================== */}
+            {navOk('sales') && canAccessSales(userRole, systemSettings.roleAccess) && (
             <>
             <div ref={salesMenuRef} style={{ position: 'relative', marginBottom: 4 }}>
               <button
@@ -1935,94 +1957,77 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
             </>
             )}
 
-            {/* ==================== БЛОК 11: ОГРАНИЧЕНИЕ МЕНЮ ==================== */}
-            {userRole === 'operator' ? (
-              <>
-              {navOk('operator') && (
-              <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
-                <UserCog size={22} />
-                <span style={navTextStyle(isCollapsed)}>Оператор БСУ</span>
+            {navOk('recipes') && (
+            <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
+              <FlaskConical size={22} />
+              <span style={navTextStyle(isCollapsed)}>Лаборатория</span>
+            </Link>
+            )}
+
+            {navOk('mixers') && (
+            <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers') || isActive('/adminCifra/technika'), isCollapsed)}>
+              <Truck size={22} />
+              <span style={navTextStyle(isCollapsed)}>Техника</span>
+            </Link>
+            )}
+
+            {navOk('loading_points') && (
+            <Link href="/adminCifra/loading-points" style={navLinkStyle(isActive('/adminCifra/loading-points'), isCollapsed)}>
+              <MapPin size={22} />
+              <span style={navTextStyle(isCollapsed)}>Точки погрузки</span>
+            </Link>
+            )}
+
+            {navOk('competitors') && (
+            <Link href="/adminCifra/competitors" style={navLinkStyle(isActive('/adminCifra/competitors'), isCollapsed)}>
+              <Store size={22} />
+              <span style={navTextStyle(isCollapsed)}>Конкуренты</span>
+            </Link>
+            )}
+
+            {navOk('clients') && (
+            <Link href="/adminCifra/clients" style={navLinkStyle(isActive('/adminCifra/clients'), isCollapsed)}>
+              <Users size={22} />
+              <span style={navTextStyle(isCollapsed)}>Клиенты</span>
+            </Link>
+            )}
+
+            {/* Операционка: поручения сотрудникам (не путать с Лидами в «Продажи») */}
+            {navOk('tasks') && (
+            <Link href="/adminCifra/tasks" style={navLinkStyle(isActive('/adminCifra/tasks'), isCollapsed)}>
+              <CheckCircle size={22} />
+              <span style={navTextStyle(isCollapsed)}>Задачи</span>
+            </Link>
+            )}
+
+            {navOk('operator') && (
+            <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
+              <UserCog size={22} />
+              <span style={navTextStyle(isCollapsed)}>Оператор БСУ</span>
+            </Link>
+            )}
+
+            {/* ==================== БЛОК 12 ССЫЛКА "КТО В ОНЛАЙН" ==================== */}
+            {navOk('online') && (
+              <Link href="/adminCifra/online" style={navLinkStyle(false, isCollapsed)}>
+                <Globe size={22} />
+                <span style={navTextStyle(isCollapsed)}>Кто в онлайн</span>
               </Link>
-              )}
-              <HelpNavButton isCollapsed={isCollapsed} navLinkStyle={navLinkStyle} navTextStyle={navTextStyle} />
-              </>
-            ) : (
-              <>
-                {navOk('recipes') && (
-                <Link href="/adminCifra/recipes" style={navLinkStyle(isActive('/adminCifra/recipes'), isCollapsed)}>
-                  <FlaskConical size={22} />
-                  <span style={navTextStyle(isCollapsed)}>Лаборатория</span>
-                </Link>
-                )}
-
-                {navOk('mixers') && (
-                <Link href="/adminCifra/mixers" style={navLinkStyle(isActive('/adminCifra/mixers') || isActive('/adminCifra/technika'), isCollapsed)}>
-                  <Truck size={22} />
-                  <span style={navTextStyle(isCollapsed)}>Техника</span>
-                </Link>
-                )}
-
-                {navOk('loading_points') && (
-                <Link href="/adminCifra/loading-points" style={navLinkStyle(isActive('/adminCifra/loading-points'), isCollapsed)}>
-                  <MapPin size={22} />
-                  <span style={navTextStyle(isCollapsed)}>Точки погрузки</span>
-                </Link>
-                )}
-
-                {navOk('competitors') && (
-                <Link href="/adminCifra/competitors" style={navLinkStyle(isActive('/adminCifra/competitors'), isCollapsed)}>
-                  <Store size={22} />
-                  <span style={navTextStyle(isCollapsed)}>Конкуренты</span>
-                </Link>
-                )}
-
-                {navOk('clients') && (
-                <Link href="/adminCifra/clients" style={navLinkStyle(isActive('/adminCifra/clients'), isCollapsed)}>
-                  <Users size={22} />
-                  <span style={navTextStyle(isCollapsed)}>Клиенты</span>
-                </Link>
-                )}
-
-                {/* Операционка: поручения сотрудникам (не путать с Лидами в «Продажи») */}
-                {navOk('tasks') && (
-                <Link href="/adminCifra/tasks" style={navLinkStyle(isActive('/adminCifra/tasks'), isCollapsed)}>
-                  <CheckCircle size={22} />
-                  <span style={navTextStyle(isCollapsed)}>Задачи</span>
-                </Link>
-                )}
-
-                {navOk('operator') && (
-                <Link href="/adminCifra/operator" style={navLinkStyle(isActive('/adminCifra/operator'), isCollapsed)}>
-                  <UserCog size={22} />
-                  <span style={navTextStyle(isCollapsed)}>Оператор БСУ</span>
-                </Link>
-                )}
-
-                {/* ==================== БЛОК 12 ССЫЛКА "КТО В ОНЛАЙН" ==================== */}
-                {navOk('online') && (
-                  <Link href="/adminCifra/online" style={navLinkStyle(false, isCollapsed)}>
-                    <Globe size={22} />
-                    <span style={navTextStyle(isCollapsed)}>Кто в онлайн</span>
-                  </Link>
-                )}
-
-                {/*
-                  =====================================================================
-                  AUDIT KEEP — НЕ УДАЛЯТЬ пункт «Вывод баллов» и страницу /adminCifra/withdrawals.
-                  Скрыто из меню по запросу (временно не используем UI), страница оставлена —
-                  позже снова включим в меню. Сам маршрут и page.tsx должны остаться в проекте.
-                  =====================================================================
-                {(userRole === 'admin') && (
-                  <Link href="/adminCifra/withdrawals" style={navLinkStyle(isActive('/adminCifra/withdrawals'), isCollapsed)}>
-                    <DollarSign size={22} />
-                    <span style={navTextStyle(isCollapsed)}>Вывод баллов</span>
-                  </Link>
-                )}
-                */}
-              </>
             )}
-            </>
+
+            {/*
+              =====================================================================
+              AUDIT KEEP — НЕ УДАЛЯТЬ пункт «Вывод баллов» и страницу /adminCifra/withdrawals.
+              Скрыто из меню по запросу (временно не используем UI), страница оставлена —
+              позже снова включим в меню. Сам маршрут и page.tsx должны остаться в проекте.
+              =====================================================================
+            {(userRole === 'admin') && (
+              <Link href="/adminCifra/withdrawals" style={navLinkStyle(isActive('/adminCifra/withdrawals'), isCollapsed)}>
+                <DollarSign size={22} />
+                <span style={navTextStyle(isCollapsed)}>Вывод баллов</span>
+              </Link>
             )}
+            */}
 
             {userRole === 'admin' && (
               <Link
@@ -2035,9 +2040,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               </Link>
             )}
 
-            {/* Инструкции: dispatcher / manager / admin (laborant и operator — в своих ветках меню) */}
-            {(userRole === 'admin' || userRole === 'manager' || userRole === 'dispatcher') &&
-              isHelpEnabledForRole(userRole) && (
+            {isHelpEnabledForRole(userRole) && (
               <HelpNavButton isCollapsed={isCollapsed} navLinkStyle={navLinkStyle} navTextStyle={navTextStyle} />
             )}
 
@@ -2112,8 +2115,7 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
               transition: `padding ${SIDEBAR_TRANSITION}`,
             }}
           >
-            {userRole !== 'laborant' && (
-              <div
+            <div
                 style={{
                   display: 'flex',
                   flexDirection: 'row',
@@ -2207,7 +2209,6 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
                   </button>
                 )}
               </div>
-            )}
             <div
               title={isCollapsed ? `ООО «Трейдком» · ${formatBuildLabelFull()}` : formatBuildLabelFull()}
               style={{

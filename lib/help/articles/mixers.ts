@@ -4,7 +4,7 @@ export const mixersArticle: HelpArticle = {
   id: 'mixers',
   title: 'Техника',
   summary: 'Автопарк, головы, сцепки — десктоп и мобилка',
-  roles: ['dispatcher', 'manager', 'admin'],
+  roles: ['dispatcher', 'manager', 'admin', 'mehanik', 'laborant'],
   route: '/adminCifra/mixers',
   body: [
     {
@@ -25,7 +25,7 @@ export const mixersArticle: HelpArticle = {
       type: 'ul',
       items: [
         'Голова (Ситрак/Volvo) сцепляется с бочкой или тоннаром-прицепом',
-        'Кнопки «Сцепка» / «Отцепить» — у admin, manager, dispatcher',
+        'Кнопки «Сцепка» / «Отцепить» — у admin, manager, dispatcher, механик',
         'Чистая бочка/тоннар без водителя в заявку попадает только через сцепку',
         'Моноблок — цементовоз/тоннар «целиком» со своим водителем',
       ],
@@ -39,6 +39,11 @@ export const mixersArticle: HelpArticle = {
         'Открой карточку: госномер, водитель, телефон, объём, тип (свой/наёмный).',
         '«+» — новая единица (admin). На десктопе в карточке миксера можно добавить доп. водителей.',
       ],
+    },
+    {
+      type: 'callout',
+      tone: 'tip',
+      text: 'В карточке единицы (десктоп и мобилка): вкладки Сервис, Топливо, Расходы, Документы — учёт ТО и затрат. Механик по умолчанию видит только раздел «Техника».',
     },
     {
       type: 'callout',

@@ -5,7 +5,7 @@
 // доставки, статусы "На объекте"/"Разгружен" отправляются на сервер.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { LogOut, Clock, MapPin, Package, ChevronRight, Bell, Phone, CircleHelp } from 'lucide-react';
+import { LogOut, Clock, MapPin, Package, ChevronRight, Bell, Phone, CircleHelp, Wrench, X, Fuel } from 'lucide-react';
 import { useHelp } from '@/app/adminCifra/components/help/HelpProvider';
 import { useRealtimeBroadcast } from '@/hooks/useRealtimeBroadcast';
 import { shouldDeferWakeNetworkWork, useWakeRefresh } from '@/hooks/useWakeReload';
@@ -115,6 +115,22 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
   const [offlineQueue, setOfflineQueue] = useState<OfflineAction[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  // Заявка на ремонт (Фаза 2 FMS)
+  const [repairOpen, setRepairOpen] = useState(false);
+  const [repairText, setRepairText] = useState('');
+  const [repairPhoto, setRepairPhoto] = useState<File | null>(null);
+  const [repairSending, setRepairSending] = useState(false);
+  const [repairDoneMsg, setRepairDoneMsg] = useState<string | null>(null);
+
+  // Заправка (Фаза 3 FMS)
+  const [fuelOpen, setFuelOpen] = useState(false);
+  const [fuelLiters, setFuelLiters] = useState('');
+  const [fuelAmount, setFuelAmount] = useState('');
+  const [fuelOdo, setFuelOdo] = useState('');
+  const [fuelPhoto, setFuelPhoto] = useState<File | null>(null);
+  const [fuelSending, setFuelSending] = useState(false);
+  const [fuelDoneMsg, setFuelDoneMsg] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | 'unsupported'>('default');
@@ -433,6 +449,94 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
     const h = Math.floor(m / 60);
     const rem = m % 60;
     return rem > 0 ? `${h}ч ${rem}м` : `${h}ч`;
+  };
+
+  const submitRepairRequest = async () => {
+    if (readOnly || repairSending) return;
+    const text = repairText.trim();
+    if (text.length < 3) {
+      alert('Опишите неисправность');
+      return;
+    }
+    setRepairSending(true);
+    try {
+      let res: Response;
+      if (repairPhoto) {
+        const form = new FormData();
+        form.append('description', text);
+        form.append('photo', repairPhoto);
+        res = await driverFetch('/api/driver/repair-request', {
+          method: 'POST',
+          body: form,
+        });
+      } else {
+        res = await driverFetch('/api/driver/repair-request', {
+          method: 'POST',
+          body: JSON.stringify({ description: text }),
+        });
+      }
+      const data = await res.json();
+      if (!data.success) {
+        alert(data.message || 'Не удалось отправить заявку');
+        return;
+      }
+      setRepairDoneMsg(data.message || 'Заявка отправлена');
+      setRepairOpen(false);
+      setRepairText('');
+      setRepairPhoto(null);
+    } catch {
+      alert('Нет связи — попробуй позже');
+    } finally {
+      setRepairSending(false);
+    }
+  };
+
+  const submitFuelEntry = async () => {
+    if (readOnly || fuelSending) return;
+    const L = Number(fuelLiters);
+    if (!(L > 0)) {
+      alert('Укажите литры');
+      return;
+    }
+    setFuelSending(true);
+    try {
+      let res: Response;
+      if (fuelPhoto) {
+        const form = new FormData();
+        form.append('liters', String(L));
+        if (fuelAmount) form.append('amount_rub', fuelAmount);
+        if (fuelOdo) form.append('odometer_km', fuelOdo);
+        form.append('receipt', fuelPhoto);
+        res = await driverFetch('/api/driver/fuel-entry', {
+          method: 'POST',
+          body: form,
+        });
+      } else {
+        res = await driverFetch('/api/driver/fuel-entry', {
+          method: 'POST',
+          body: JSON.stringify({
+            liters: L,
+            amount_rub: fuelAmount || null,
+            odometer_km: fuelOdo || null,
+          }),
+        });
+      }
+      const data = await res.json();
+      if (!data.success) {
+        alert(data.message || 'Не удалось сохранить заправку');
+        return;
+      }
+      setFuelDoneMsg(data.message || 'Заправка сохранена');
+      setFuelOpen(false);
+      setFuelLiters('');
+      setFuelAmount('');
+      setFuelOdo('');
+      setFuelPhoto(null);
+    } catch {
+      alert('Нет связи — попробуй позже');
+    } finally {
+      setFuelSending(false);
+    }
   };
 
   // Карточка активного рейса (вкладка «Сегодня») — полная информация
@@ -836,6 +940,71 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
         </div>
       )}
 
+      {!readOnly && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button
+            type="button"
+            onClick={() => setFuelOpen(true)}
+            style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              padding: '12px 8px',
+              borderRadius: 12,
+              border: '1px solid rgba(251,191,36,0.4)',
+              background: 'rgba(251,191,36,0.12)',
+              color: '#FBBF24',
+              fontWeight: 700,
+              fontSize: 13,
+              cursor: 'pointer',
+            }}
+          >
+            <Fuel size={16} />
+            Заправка
+          </button>
+          <button
+            type="button"
+            onClick={() => setRepairOpen(true)}
+            style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              padding: '12px 8px',
+              borderRadius: 12,
+              border: '1px solid rgba(249,115,22,0.4)',
+              background: 'rgba(249,115,22,0.12)',
+              color: '#F97316',
+              fontWeight: 700,
+              fontSize: 13,
+              cursor: 'pointer',
+            }}
+          >
+            <Wrench size={16} />
+            Ремонт
+          </button>
+        </div>
+      )}
+
+      {(repairDoneMsg || fuelDoneMsg) && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: '10px 12px',
+            borderRadius: 10,
+            background: 'rgba(74,222,128,0.1)',
+            border: '1px solid rgba(74,222,128,0.3)',
+            color: '#4ADE80',
+            fontSize: 13,
+          }}
+        >
+          {fuelDoneMsg || repairDoneMsg}
+        </div>
+      )}
+
       {!readOnly && notifPermission === 'default' && (
           <button
             onClick={requestNotifPermission}
@@ -1044,6 +1213,208 @@ export default function DriverDashboard({ mixer, onLogout, readOnly = false, onB
               }}
             >
               Отмена
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Заправка */}
+      {fuelOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            background: 'rgba(0,0,0,0.75)',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+          }}
+          onClick={() => !fuelSending && setFuelOpen(false)}
+        >
+          <div
+            style={volumeModalStyle({
+              borderRadius: '20px 20px 0 0',
+              padding: '20px',
+              paddingBottom: 'max(24px, env(safe-area-inset-bottom, 24px))',
+              width: '100%',
+              maxWidth: 480,
+            })}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Fuel size={18} color="#FBBF24" />
+                <span style={{ color: '#F8FAFC', fontWeight: 700, fontSize: 17 }}>Заправка</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFuelOpen(false)}
+                style={{ background: 'none', border: 'none', color: '#64748B', cursor: 'pointer' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <input
+              type="number"
+              inputMode="decimal"
+              placeholder="Литры *"
+              value={fuelLiters}
+              onChange={(e) => setFuelLiters(e.target.value)}
+              style={{
+                width: '100%', padding: 12, borderRadius: 12, border: '1px solid #334155',
+                background: '#0F172A', color: '#E2E8F0', fontSize: 15, marginBottom: 10, boxSizing: 'border-box',
+              }}
+            />
+            <input
+              type="number"
+              inputMode="decimal"
+              placeholder="Сумма, ₽"
+              value={fuelAmount}
+              onChange={(e) => setFuelAmount(e.target.value)}
+              style={{
+                width: '100%', padding: 12, borderRadius: 12, border: '1px solid #334155',
+                background: '#0F172A', color: '#E2E8F0', fontSize: 15, marginBottom: 10, boxSizing: 'border-box',
+              }}
+            />
+            <input
+              type="number"
+              inputMode="decimal"
+              placeholder="Одометр, км"
+              value={fuelOdo}
+              onChange={(e) => setFuelOdo(e.target.value)}
+              style={{
+                width: '100%', padding: 12, borderRadius: 12, border: '1px solid #334155',
+                background: '#0F172A', color: '#E2E8F0', fontSize: 15, marginBottom: 10, boxSizing: 'border-box',
+              }}
+            />
+            <label
+              style={{
+                display: 'block', marginBottom: 16, padding: 12, borderRadius: 12,
+                border: '1px dashed #334155', color: '#94A3B8', fontSize: 13, textAlign: 'center', cursor: 'pointer',
+              }}
+            >
+              {fuelPhoto ? `📷 ${fuelPhoto.name}` : '📷 Фото чека (необязательно)'}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                style={{ display: 'none' }}
+                onChange={(e) => setFuelPhoto(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={fuelSending}
+              onClick={() => void submitFuelEntry()}
+              style={{
+                width: '100%', padding: 15, borderRadius: 14, border: 'none',
+                background: '#FBBF24', color: '#0F172A', fontWeight: 700, fontSize: 16,
+                cursor: fuelSending ? 'wait' : 'pointer', opacity: fuelSending ? 0.75 : 1,
+              }}
+            >
+              {fuelSending ? 'Сохранение…' : 'Сохранить заправку'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Заявка на ремонт */}
+      {repairOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            background: 'rgba(0,0,0,0.75)',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+          }}
+          onClick={() => !repairSending && setRepairOpen(false)}
+        >
+          <div
+            style={volumeModalStyle({
+              borderRadius: '20px 20px 0 0',
+              padding: '20px',
+              paddingBottom: 'max(24px, env(safe-area-inset-bottom, 24px))',
+              width: '100%',
+              maxWidth: 480,
+            })}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Wrench size={18} color="#F97316" />
+                <span style={{ color: '#F8FAFC', fontWeight: 700, fontSize: 17 }}>Заявка на ремонт</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRepairOpen(false)}
+                style={{ background: 'none', border: 'none', color: '#64748B', cursor: 'pointer' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div style={{ color: '#64748B', fontSize: 12, marginBottom: 12, lineHeight: 1.4 }}>
+              Машина будет отмечена «На ремонте» и не попадёт в планировщик, пока механик не закроет заявку.
+            </div>
+            <textarea
+              value={repairText}
+              onChange={(e) => setRepairText(e.target.value)}
+              placeholder="Что случилось? (например: не крутится бочка, течёт гидравлика…)"
+              rows={4}
+              style={{
+                width: '100%',
+                padding: 12,
+                borderRadius: 12,
+                border: '1px solid #334155',
+                background: '#0F172A',
+                color: '#E2E8F0',
+                fontSize: 15,
+                resize: 'vertical',
+                marginBottom: 12,
+                boxSizing: 'border-box',
+              }}
+            />
+            <label
+              style={{
+                display: 'block',
+                marginBottom: 16,
+                padding: '12px',
+                borderRadius: 12,
+                border: '1px dashed #334155',
+                color: '#94A3B8',
+                fontSize: 13,
+                textAlign: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              {repairPhoto ? `📷 ${repairPhoto.name}` : '📷 Фото (необязательно)'}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                style={{ display: 'none' }}
+                onChange={(e) => setRepairPhoto(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={repairSending}
+              onClick={() => void submitRepairRequest()}
+              style={{
+                width: '100%',
+                padding: 15,
+                borderRadius: 14,
+                border: 'none',
+                background: '#F97316',
+                color: '#fff',
+                fontWeight: 700,
+                fontSize: 16,
+                cursor: repairSending ? 'wait' : 'pointer',
+                opacity: repairSending ? 0.75 : 1,
+              }}
+            >
+              {repairSending ? 'Отправка…' : 'Отправить заявку'}
             </button>
           </div>
         </div>

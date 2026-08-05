@@ -62,6 +62,12 @@ const STAFF_ROLE_BADGE: Record<string, { label: string; bg: string; color: strin
     color: '#99F6E4',
     border: 'rgba(45, 212, 191, 0.6)',
   },
+  mehanik: {
+    label: 'Механик',
+    bg: 'rgba(245, 158, 11, 0.32)',
+    color: '#FDE68A',
+    border: 'rgba(251, 191, 36, 0.6)',
+  },
   accountant: {
     label: 'Бухгалтер',
     bg: 'rgba(234, 179, 8, 0.3)',
@@ -502,7 +508,7 @@ export default function ClientsPage() {
         // Фильтр + сортировка с Гостем
         staffList = staffList
           .filter((u: any) => 
-            ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'guest'].includes((u.role || '').toLowerCase())
+            ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'mehanik', 'guest'].includes((u.role || '').toLowerCase())
           )
           .sort((a: any, b: any) => {
             const roleOrder: { [key: string]: number } = {
@@ -511,7 +517,8 @@ export default function ClientsPage() {
               dispatcher: 3,
               operator: 4,
               laborant: 5,
-              guest: 6
+              mehanik: 6,
+              guest: 7,
             };
             return (roleOrder[a.role] || 999) - (roleOrder[b.role] || 999) || 
                    (a.full_name || '').localeCompare(b.full_name || '');
@@ -768,7 +775,7 @@ const handleSelectProfile = async (profile: any) => {
 
   let selected = { ...profile };
 
-  if (['admin', 'manager', 'dispatcher', 'operator', 'laborant'].includes((profile.role || '').toLowerCase())) {
+  if (['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'mehanik', 'guest'].includes((profile.role || '').toLowerCase())) {
     selected.isStaff = true;
     selected.role = profile.role;
 
@@ -1763,7 +1770,7 @@ const clients = profiles.filter((item: any) => item.groupId);
 // Стафф — пользователи с ролью (без groupId)
 const staff = profiles.filter((item: any) => 
   !item.groupId && 
-  ['admin', 'manager', 'dispatcher', 'operator', 'laborant'].includes((item.role || '').toLowerCase())
+  ['admin', 'manager', 'dispatcher', 'operator', 'laborant', 'mehanik', 'guest'].includes((item.role || '').toLowerCase())
 );
 
 const currentList = activeTab === 'clients' ? clients : staff;
@@ -4395,6 +4402,7 @@ const changeStaffPassword = async (staffMember: any) => {
               { value: 'dispatcher', label: 'Диспетчер', text: 'Диспетчер' },
               { value: 'operator', label: 'Оператор', text: 'Оператор' },
               { value: 'laborant', label: 'Лаборант', text: 'Лаборант' },
+              { value: 'mehanik', label: 'Механик', text: 'Механик' },
               { value: 'guest', label: 'Гость (демо-доступ)', text: 'Гость (демо-доступ)' },
             ]}
           />

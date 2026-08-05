@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import {
   DEFAULT_SYSTEM_SETTINGS,
+  ROLE_ACCESS_SCHEMA_VERSION,
   mergeSystemSettings,
   type SystemSettingsData,
 } from '@/lib/systemSettings';
@@ -23,7 +24,31 @@ async function loadMerged(): Promise<SystemSettingsData> {
   if (error || !data) {
     return DEFAULT_SYSTEM_SETTINGS;
   }
-  return mergeSystemSettings(data.data);
+  const merged = mergeSystemSettings(data.data);
+  const raw = data.data && typeof data.data === 'object' ? (data.data as Record<string, unknown>) : {};
+  const rawSchema = Number(raw.roleAccessSchemaVersion);
+  const needsSeedPersist =
+    !Number.isFinite(rawSchema) || rawSchema < ROLE_ACCESS_SCHEMA_VERSION;
+  // Одноразово зафиксировать seed новых ролей (mehanik → Техника), иначе версия
+  // останется 0 в БД и галочки будут «возвращаться» после каждого GET.
+  if (needsSeedPersist) {
+    void supabase
+      .from('system_settings')
+      .upsert(
+        {
+          id: 1,
+          data: merged,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'id' },
+      )
+      .then(({ error: upsertError }) => {
+        if (upsertError) {
+          console.warn('system_settings seed persist failed:', upsertError.message);
+        }
+      });
+  }
+  return merged;
 }
 
 export async function GET(request: NextRequest) {

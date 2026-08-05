@@ -1,6 +1,8 @@
 /**
  * Тарифы единиц техники (кроме миксеров — у них delivery_settings).
- * Хранятся в mixers.specs; расчёт в рейсах/отгрузках — этап 2.
+ * Хранятся в mixers.specs.
+ * Этап 2 (Фаза 3 FMS): при статусе «Разгружен» итог пишется в order_mixers
+ * (fleet_tariff_*) через lib/fleetTripTariff.ts.
  *
  * Денежные ставки — пара нал / безнал.
  * Старые ключи без суффикса (`hour_rate_rub` и т.п.) = нал (обратная совместимость).
@@ -321,7 +323,9 @@ export function sanitizeFleetSpecs(
   const out: Record<string, any> = {};
   if (!specs || typeof specs !== 'object') return out;
   for (const [k, v] of Object.entries(specs)) {
-    if (v === '' || v === undefined || v === null) continue;
+    // null — явное удаление ключа при мерже паспорта (норма расхода и т.п.)
+    if (v === null) continue;
+    if (v === '' || v === undefined) continue;
     if (typeof v === 'number' && !Number.isFinite(v)) continue;
     out[k] = v;
   }

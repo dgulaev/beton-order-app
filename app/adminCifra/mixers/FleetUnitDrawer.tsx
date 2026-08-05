@@ -14,6 +14,9 @@ import {
   Pencil,
 } from 'lucide-react';
 import FleetTripsPanel from './FleetTripsPanel';
+import FleetServicePanel from './FleetServicePanel';
+import FleetFuelPanel from './FleetFuelPanel';
+import FleetExpensesPanel from './FleetExpensesPanel';
 import FleetTripRoutesModal from './FleetTripRoutesModal';
 import FleetMap from '../components/FleetMap';
 import { buildYandexPlaceUrl } from '@/lib/fleetMapLinks';
@@ -51,7 +54,7 @@ export type FleetDrawerUnit = {
   scout_unit_id?: number | null;
 };
 
-type Tab = 'passport' | 'trips' | 'documents' | 'telemetry';
+type Tab = 'passport' | 'trips' | 'service' | 'fuel' | 'expenses' | 'documents' | 'telemetry';
 
 interface Props {
   unit: FleetDrawerUnit | null;
@@ -65,9 +68,12 @@ interface Props {
 
 const TAB_LABELS: Record<Tab, string> = {
   passport: 'Паспорт',
-  trips: 'Рейсы',
-  documents: 'Документы',
   telemetry: 'Телематика',
+  trips: 'Рейсы',
+  service: 'Сервис',
+  fuel: 'Топливо',
+  expenses: 'Расходы',
+  documents: 'Документы',
 };
 
 function formatDt(iso: string | null | undefined): string {
@@ -112,6 +118,7 @@ export default function FleetUnitDrawer({
   const [year, setYear] = useState('');
   const [fuelType, setFuelType] = useState('');
   const [tankVolume, setTankVolume] = useState('');
+  const [fuelNorm, setFuelNorm] = useState('');
   const [scoutUnitId, setScoutUnitId] = useState('');
   const [docType, setDocType] = useState('sts');
   const [docExpires, setDocExpires] = useState('');
@@ -177,6 +184,7 @@ export default function FleetUnitDrawer({
     setYear(String(unit.specs?.year ?? ''));
     setFuelType(String(unit.specs?.fuel_type ?? ''));
     setTankVolume(String(unit.specs?.tank_volume_l ?? ''));
+    setFuelNorm(String(unit.specs?.fuel_norm_l_per_100km ?? ''));
     setScoutUnitId(unit.scout_unit_id != null ? String(unit.scout_unit_id) : '');
   }, [unit]);
 
@@ -255,6 +263,7 @@ export default function FleetUnitDrawer({
             year: year || undefined,
             fuel_type: fuelType || undefined,
             tank_volume_l: tankVolume === '' ? undefined : Number(tankVolume),
+            fuel_norm_l_per_100km: fuelNorm === '' ? null : Number(fuelNorm),
           },
         }),
       });
@@ -567,21 +576,34 @@ export default function FleetUnitDrawer({
                   />
                 </div>
               </div>
-              <div>
-                <label style={labelStyle}>Топливо</label>
-                <select
-                  value={fuelType}
-                  disabled={!canMutate}
-                  onChange={(e) => setFuelType(e.target.value)}
-                  style={fieldStyle}
-                >
-                  <option value="">—</option>
-                  {FUEL_TYPE_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <label style={labelStyle}>Топливо</label>
+                  <select
+                    value={fuelType}
+                    disabled={!canMutate}
+                    onChange={(e) => setFuelType(e.target.value)}
+                    style={fieldStyle}
+                  >
+                    <option value="">—</option>
+                    {FUEL_TYPE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>Норма, л/100 км</label>
+                  <input
+                    type="number"
+                    value={fuelNorm}
+                    disabled={!canMutate}
+                    onChange={(e) => setFuelNorm(e.target.value)}
+                    style={fieldStyle}
+                    placeholder="напр. 35"
+                  />
+                </div>
               </div>
               <div>
                 <label style={labelStyle}>СКАУТ UnitId</label>
@@ -620,6 +642,29 @@ export default function FleetUnitDrawer({
           )}
 
           {tab === 'trips' && <FleetTripsPanel unitNumber={unit.number} />}
+
+          {tab === 'service' && (
+            <FleetServicePanel
+              mixerId={unit.id}
+              odometerKm={odometer === '' ? unit.odometer_km : Number(odometer)}
+              engineHours={engineHours === '' ? unit.engine_hours : Number(engineHours)}
+              canMutate={canMutate}
+              onLifecycleMaybeChanged={onUpdated}
+            />
+          )}
+
+          {tab === 'fuel' && (
+            <FleetFuelPanel
+              mixerId={unit.id}
+              odometerKm={odometer === '' ? unit.odometer_km : Number(odometer)}
+              canMutate={canMutate}
+              onUpdated={onUpdated}
+            />
+          )}
+
+          {tab === 'expenses' && (
+            <FleetExpensesPanel mixerId={unit.id} canMutate={canMutate} />
+          )}
 
           {tab === 'documents' && (
             <div>

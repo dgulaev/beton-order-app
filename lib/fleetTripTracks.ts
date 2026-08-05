@@ -42,17 +42,18 @@ export type FleetTripRoute = {
   destination: { lat: number; lon: number } | null;
 };
 
+/** Насыщенные цвета — читаются на светлой OSM «Схеме». */
 const TRIP_COLORS = [
-  '#38BDF8',
-  '#A78BFA',
-  '#F472B6',
-  '#FBBF24',
-  '#34D399',
-  '#FB923C',
-  '#60A5FA',
-  '#E879F9',
-  '#4ADE80',
-  '#F87171',
+  '#2563EB',
+  '#7C3AED',
+  '#DB2777',
+  '#D97706',
+  '#059669',
+  '#EA580C',
+  '#1D4ED8',
+  '#C026D3',
+  '#16A34A',
+  '#DC2626',
 ];
 
 /** Не ждать СКАУТ вечно на serverless — иначе trip-tracks падает по maxDuration. */

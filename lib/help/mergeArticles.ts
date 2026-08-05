@@ -18,6 +18,7 @@ const HELP_ROLES = new Set([
   'dispatcher',
   'operator',
   'laborant',
+  'mehanik',
   'guest',
   'driver',
 ]);

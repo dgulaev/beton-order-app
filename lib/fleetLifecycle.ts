@@ -92,6 +92,8 @@ export type FleetPassportSpecs = {
   photo_url?: string;
   fuel_type?: string;
   tank_volume_l?: number | string;
+  /** Норма расхода л/100км (Фаза 3) */
+  fuel_norm_l_per_100km?: number | string;
 };
 
 export const FUEL_TYPE_OPTIONS = [

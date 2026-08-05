@@ -40,28 +40,28 @@ todos:
     status: completed
   - id: phase2-schedule
     content: "Фаза 2: график ТО — шаблоны по пробегу/моточасам/календарю"
-    status: pending
+    status: completed
   - id: phase2-service-records
     content: "Фаза 2: сервисные записи — CRUD работ, запчастей, стоимости"
-    status: pending
+    status: completed
   - id: phase2-repair-request
     content: "Фаза 2: заявка на ремонт из мобилки водителя → статус repair"
-    status: pending
+    status: completed
   - id: phase2-planner-block
     content: "Фаза 2: ТС на ремонте не попадает в планировщик"
-    status: pending
+    status: completed
   - id: phase3-fuel
     content: "Фаза 3: заправки (fuel_entries) — литры, ₽, пробег, фото чека"
-    status: pending
+    status: completed
   - id: phase3-expenses
     content: "Фаза 3: доп. расходы (fleet_expenses) с категориями"
-    status: pending
+    status: completed
   - id: phase3-tariffs-trips
     content: "Фаза 3: расчёт тарифов в рейсах — этап 2 fleetTariffs.ts"
-    status: pending
+    status: completed
   - id: phase3-cost-per-km
     content: "Фаза 3: стоимость 1 км / 1 рейса — агрегация затрат"
-    status: pending
+    status: completed
   - id: phase4-inspections
     content: "Фаза 4: шаблоны и предрейсовые осмотры в mobile/driver"
     status: pending
@@ -97,9 +97,9 @@ isProject: true
 
 # План: Развитие раздела «Техника» (FMS)
 
-## Статус: Обсуждён, не начат
+## Статус: Фазы 1–3 в коде (SQL Фазы 3 — scripts/fleet-fuel-expenses.sql)
 
-Дата фиксации: 03.08.2026  
+Дата фиксации: 03.08.2026 · Фаза 2: 05.08.2026 · Фаза 3: 05.08.2026  
 Источник анализа: [Завгар Онлайн](https://zavgar.online/), [документация модуля «Автопарк»](https://docs.zavgar.online/ru/wiki/fleet-control-system/)
 
 ---
@@ -1030,12 +1030,14 @@ flowchart TB
 - [ ] История поездок: маршрут на карте за выбранный период (СКАУТ TrackPeriod +/или свой trail, retention 90 дн.)
 
 ### Фаза 2
-- [ ] Механик создаёт сервисную запись; водитель может подать заявку на ремонт из mobile
-- [ ] ТС на ремонте не попадает в планировщик логистики
+- [x] Механик создаёт сервисную запись; водитель может подать заявку на ремонт из mobile
+- [x] ТС на ремонте не попадает в планировщик логистики
+- [ ] Применить `scripts/fleet-service.sql` в Supabase (обязательно перед продом)
 
 ### Фаза 3
-- [ ] Заправка фиксируется из mobile; на карточке ТС видна стоимость 1 км за месяц
-- [ ] Тариф non-mixer автоматически считается при закрытии рейса
+- [x] Заправка фиксируется из mobile; на карточке ТС видна стоимость 1 км за месяц
+- [x] Тариф non-mixer автоматически считается при закрытии рейса
+- [ ] Применить `scripts/fleet-fuel-expenses.sql` в Supabase
 
 ### Фаза 4
 - [ ] Водитель проходит предрейсовый осмотр; наёмный может отказаться от рейса (accept_status)

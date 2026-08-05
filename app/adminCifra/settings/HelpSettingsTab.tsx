@@ -29,6 +29,7 @@ const ROLE_LABEL: Record<HelpRole, string> = {
   dispatcher: 'Dispatcher',
   operator: 'Operator',
   laborant: 'Laborant',
+  mehanik: 'Mehanik',
   guest: 'Guest',
   driver: 'Водитель',
 };

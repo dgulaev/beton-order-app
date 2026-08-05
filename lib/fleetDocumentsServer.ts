@@ -94,7 +94,16 @@ export async function deleteFleetDocument(doc: FleetDocument): Promise<void> {
 }
 
 export function fleetTableMissingMessage(message: string, table: string): string {
-  if (message.includes(table)) {
+  if (
+    message.includes(table) ||
+    /does not exist|schema cache|Could not find the table/i.test(message)
+  ) {
+    if (table.startsWith('fleet_service')) {
+      return `Таблица ${table} не найдена — выполните scripts/fleet-service.sql`;
+    }
+    if (table === 'fuel_entries' || table === 'fleet_expenses') {
+      return `Таблица ${table} не найдена — выполните scripts/fleet-fuel-expenses.sql`;
+    }
     return `Таблица ${table} не найдена — выполните scripts/fleet-lifecycle.sql`;
   }
   return message;

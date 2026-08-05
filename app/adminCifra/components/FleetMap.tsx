@@ -375,7 +375,7 @@ function normalizeRoutes(
 export default function FleetMap({
   markers,
   path = [],
-  pathColor = '#38BDF8',
+  pathColor = '#2563EB',
   routes,
   highlightId = null,
   markerTooltips = true,
@@ -483,7 +483,7 @@ export default function FleetMap({
           fillOpacity: 1,
           weight: 2,
         })
-          .bindTooltip('Завод (Орловский тупик)', {
+          .bindTooltip('Завод', {
             className: 'fleet-map-tooltip-wrap',
           })
           .addTo(pathEndsRef.current!);
@@ -491,19 +491,24 @@ export default function FleetMap({
 
       for (const route of routeList) {
         const latlngs = route.points.map((p) => [p.lat, p.lon] as [number, number]);
+        if (latlngs.length < 2) continue;
         latlngs.forEach((p) => fitPts.push(p));
         const color = route.color || pathColor;
         const dimmed = Boolean(route.dimmed);
+        const dashed = Boolean(route.dashed);
+        // Толщина как раньше; яркость — за счёт насыщенного цвета и opacity 1
+        const weight = dimmed ? 3 : route.weight ?? (dashed ? 4 : 5);
         L.polyline(latlngs, {
           color,
-          weight: dimmed ? 3 : route.weight ?? (route.dashed ? 4 : 5),
-          opacity: dimmed ? 0.22 : route.dashed ? 0.85 : 0.92,
+          weight,
+          opacity: dimmed ? 0.28 : 1,
           lineJoin: 'round',
-          dashArray: route.dashed ? '10 8' : undefined,
+          lineCap: 'round',
+          dashArray: dashed ? '10 8' : undefined,
         }).addTo(pathLayerRef.current!);
 
         // Конец только у плановых (не пунктирных) линий — иначе дубли
-        if (!route.dashed && (!dimmed || routeList.filter((r) => !r.dashed).length === 1)) {
+        if (!dashed && (!dimmed || routeList.filter((r) => !r.dashed).length === 1)) {
           L.circleMarker(latlngs[latlngs.length - 1], {
             radius: 6,
             color: color,

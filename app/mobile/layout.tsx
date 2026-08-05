@@ -36,8 +36,24 @@ import { hardResetBroadcastSocket, useGlobalBroadcastStatus, reconnectAllBroadca
 import { CARD_BORDER, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '@/app/adminCifra/cardStyles';
 import AppDialogHost, { appConfirm } from '@/app/adminCifra/components/appDialog';
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from '@/lib/fetchWithTimeout';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
+import {
+  DEFAULT_SYSTEM_SETTINGS,
+  canAccessNavSection,
+  type NavSection,
+  type SystemSettingsData,
+} from '@/lib/systemSettings';
 
 type DriverMixerOption = { number: string; model: string | null; driver: string };
+
+/** Мобильные разделы ↔ секции матрицы (лаборатории на mobile нет). */
+const MOBILE_NAV: Array<{ section: NavSection; href: string; match: (path: string) => boolean }> = [
+  { section: 'dashboard', href: '/mobile/', match: (p) => p === '/mobile' || p === '/mobile/' },
+  { section: 'zayavki', href: '/mobile/zayavki', match: (p) => p.startsWith('/mobile/zayavki') },
+  { section: 'sales', href: '/mobile/leads', match: (p) => p.startsWith('/mobile/leads') },
+  { section: 'mixers', href: '/mobile/mixers', match: (p) => p.startsWith('/mobile/mixers') },
+  { section: 'clients', href: '/mobile/clients', match: (p) => p.startsWith('/mobile/clients') },
+];
 type LoginStep = 'phone' | 'password' | 'driver-mixer' | 'choose-role';
 
 function BroadcastDot({ status }: { status: string }) {
@@ -118,14 +134,45 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
   useStaffHeartbeat(isStaffLoggedIn && user?.role !== 'guest');
 
   const staffRole = (user?.role || '').toLowerCase();
-  const isLaborant = staffRole === 'laborant';
   const isGuest = staffRole === 'guest';
+  const [roleAccess, setRoleAccess] = useState(DEFAULT_SYSTEM_SETTINGS.roleAccess);
+  const [accessReady, setAccessReady] = useState(false);
 
-  // Лаборант работает только в десктопной «Лаборатории» — с мобилки уводим туда.
   useEffect(() => {
-    if (!isStaffLoggedIn || !isLaborant) return;
-    window.location.replace('/adminCifra/recipes');
-  }, [isStaffLoggedIn, isLaborant]);
+    if (!isStaffLoggedIn || isGuest) {
+      setAccessReady(true);
+      return;
+    }
+    let cancelled = false;
+    setAccessReady(false);
+    (async () => {
+      try {
+        const res = await fetch('/api/adminCifra/system-settings', {
+          headers: adminCifraAuthHeaders(),
+        });
+        if (!cancelled && res.ok) {
+          const data = (await res.json()) as SystemSettingsData;
+          if (data.roleAccess) setRoleAccess(data.roleAccess);
+        }
+      } catch {
+        /* дефолты */
+      } finally {
+        if (!cancelled) setAccessReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isStaffLoggedIn, isGuest, staffRole]);
+
+  const navOk = (section: NavSection) => canAccessNavSection(staffRole, section, roleAccess);
+
+  const firstMobilePath = (): string | null => {
+    for (const item of MOBILE_NAV) {
+      if (navOk(item.section)) return item.href;
+    }
+    return null;
+  };
 
   // ==================== 2. СЕССИЯ ВОДИТЕЛЯ ====================
   // /mobile/driver остаётся рабочей ссылкой (редиректим на /mobile, см. её page.tsx),
@@ -387,12 +434,42 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
 
   // Guest не должен сидеть на складе и миксерах
   useEffect(() => {
-    if (!isStaffLoggedIn || isLaborant || !isGuest) return;
+    if (!isStaffLoggedIn || !isGuest) return;
     const path = pathname || '';
     if (path.startsWith('/mobile/warehouse') || path.startsWith('/mobile/mixers')) {
       router.replace('/mobile/');
     }
-  }, [isStaffLoggedIn, isGuest, isLaborant, pathname, router]);
+  }, [isStaffLoggedIn, isGuest, pathname, router]);
+
+  // Матрица доступа на мобилке; если нет ни одной mobile-секции → десктоп (лаборатория и т.п.).
+  useEffect(() => {
+    if (!isStaffLoggedIn || isGuest || !accessReady) return;
+    const path = pathname || '';
+    if (path.startsWith('/mobile/warehouse')) {
+      // Склада нет в матрице — доступен staff с операционкой (см. навбар).
+      return;
+    }
+    const matched = MOBILE_NAV.find((item) => item.match(path));
+    if (matched) {
+      if (!canAccessNavSection(staffRole, matched.section, roleAccess)) {
+        const fallback =
+          MOBILE_NAV.find((item) => canAccessNavSection(staffRole, item.section, roleAccess))?.href ??
+          null;
+        if (fallback) router.replace(fallback);
+        else window.location.replace('/adminCifra/recipes');
+      }
+      return;
+    }
+    if (path === '/mobile' || path === '/mobile/' || path.startsWith('/mobile/')) {
+      if (!canAccessNavSection(staffRole, 'dashboard', roleAccess)) {
+        const fallback =
+          MOBILE_NAV.find((item) => canAccessNavSection(staffRole, item.section, roleAccess))?.href ??
+          null;
+        if (fallback) router.replace(fallback);
+        else window.location.replace('/adminCifra/recipes');
+      }
+    }
+  }, [isStaffLoggedIn, isGuest, accessReady, pathname, router, roleAccess, staffRole]);
 
   // ==================== BROADCAST ИНДИКАТОР ====================
   const broadcastStatus = useGlobalBroadcastStatus();
@@ -677,16 +754,35 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
         transform: navVisible ? 'translateY(0)' : 'translateY(100%)',
         transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
       })}>
-        <NavLink href="/mobile/" icon={<Home size={24} />} label="Дашборд" pathname={pathname} />
-        <NavLink href="/mobile/zayavki" icon={<Package size={24} />} label="Заявки" pathname={pathname} />
-        <NavLink href="/mobile/leads" icon={<Inbox size={24} />} label="Лиды" pathname={pathname} />
-        {!isGuest && (
-          <NavLink href="/mobile/mixers" icon={<Truck size={24} />} label="Техника" pathname={pathname} />
+        {isGuest ? (
+          <>
+            <NavLink href="/mobile/" icon={<Home size={24} />} label="Дашборд" pathname={pathname} />
+            <NavLink href="/mobile/zayavki" icon={<Package size={24} />} label="Заявки" pathname={pathname} />
+            <NavLink href="/mobile/leads" icon={<Inbox size={24} />} label="Лиды" pathname={pathname} />
+            <NavLink href="/mobile/clients" icon={<Users size={24} />} label="Клиенты" pathname={pathname} />
+          </>
+        ) : (
+          <>
+            {navOk('dashboard') && (
+              <NavLink href="/mobile/" icon={<Home size={24} />} label="Дашборд" pathname={pathname} />
+            )}
+            {navOk('zayavki') && (
+              <NavLink href="/mobile/zayavki" icon={<Package size={24} />} label="Заявки" pathname={pathname} />
+            )}
+            {navOk('sales') && (
+              <NavLink href="/mobile/leads" icon={<Inbox size={24} />} label="Лиды" pathname={pathname} />
+            )}
+            {navOk('mixers') && (
+              <NavLink href="/mobile/mixers" icon={<Truck size={24} />} label="Техника" pathname={pathname} />
+            )}
+            {(navOk('dashboard') || navOk('operator') || navOk('zayavki') || navOk('mixers')) && (
+              <NavLink href="/mobile/warehouse" icon={<Factory size={24} />} label="Склад" pathname={pathname} />
+            )}
+            {navOk('clients') && (
+              <NavLink href="/mobile/clients" icon={<Users size={24} />} label="Клиенты" pathname={pathname} />
+            )}
+          </>
         )}
-        {!isGuest && (
-          <NavLink href="/mobile/warehouse" icon={<Factory size={24} />} label="Склад" pathname={pathname} />
-        )}
-        <NavLink href="/mobile/clients" icon={<Users size={24} />} label="Клиенты" pathname={pathname} />
 
         {/* Broadcast-индикатор: правый нижний угол навбара */}
         <BroadcastDot status={broadcastStatus} />

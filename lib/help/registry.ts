@@ -2,10 +2,11 @@ import { DEFAULT_HELP_ARTICLES } from './defaultArticles';
 import type { HelpArticle, HelpRole } from './types';
 
 const ONBOARDING_BY_ROLE: Partial<Record<HelpRole, string[]>> = {
-  laborant: ['laborant-intro', 'recipes'],
+  laborant: ['laborant-intro', 'recipes', 'mixers', 'dashboard', 'zayavki'],
   operator: ['operator-intro', 'operator'],
   dispatcher: ['ops-intro', 'dashboard', 'zayavki', 'planning', 'sales', 'mixers'],
   manager: ['ops-intro', 'dashboard', 'zayavki', 'planning', 'sales', 'mixers'],
+  mehanik: ['mixers'],
   driver: ['driver-intro', 'driver'],
 };
 
@@ -15,6 +16,7 @@ export const HELP_ENABLED_ROLES: HelpRole[] = [
   'dispatcher',
   'manager',
   'admin',
+  'mehanik',
   'driver',
 ];
 

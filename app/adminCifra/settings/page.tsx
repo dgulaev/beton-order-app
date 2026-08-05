@@ -77,6 +77,7 @@ const ROLE_LABEL: Record<StaffRoleKey, string> = {
   dispatcher: 'Dispatcher',
   operator: 'Operator',
   laborant: 'Laborant',
+  mehanik: 'Mehanik',
 };
 
 const inputStyle: React.CSSProperties = {
@@ -1053,7 +1054,7 @@ export default function SettingsPage() {
           {active === 'roles' && (
             <SectionCard
               title="Права по ролям (меню)"
-              hint="Управляет видимостью пунктов сайдбара и клиентскими редиректами. «Настройки» — только admin. У laborant/operator часть меню по-прежнему жёстко задана в коде (лаборатория / оператор БСУ). Серверные проверки API не отключаются."
+              hint="Управляет видимостью пунктов сайдбара, мобильного меню и клиентскими редиректами. «Настройки» — только admin. Дефолты: лаборант — Лаборатория, механик — Техника, оператор — Оператор БСУ; другие страницы включаются галочками здесь. Серверные проверки API не отключаются полностью (мутации заявок и т.п. могут оставаться уже)."
             >
               <div className="scroll-hidden" style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>

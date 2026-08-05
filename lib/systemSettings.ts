@@ -52,6 +52,7 @@ export const STAFF_ROLES_FOR_ACCESS = [
   'dispatcher',
   'operator',
   'laborant',
+  'mehanik',
 ] as const;
 
 export type StaffRoleKey = (typeof STAFF_ROLES_FOR_ACCESS)[number];
@@ -63,7 +64,7 @@ export const DEFAULT_ROLE_ACCESS: Record<NavSection, StaffRoleKey[]> = {
   zayavki: ['admin', 'manager', 'dispatcher'],
   sales: ['admin', 'manager', 'dispatcher'],
   recipes: ['admin', 'manager', 'dispatcher', 'laborant'],
-  mixers: ['admin', 'manager', 'dispatcher'],
+  mixers: ['admin', 'manager', 'dispatcher', 'mehanik'],
   loading_points: ['admin', 'manager', 'dispatcher'],
   competitors: ['admin', 'manager', 'dispatcher'],
   clients: ['admin', 'manager', 'dispatcher'],
@@ -80,6 +81,9 @@ export type SystemBannerSettings = {
   /** YYYY-MM-DD или пусто */
   expiresAt: string | null;
 };
+
+/** Бамп при добавлении ролей с дефолтами в матрице — одноразовый seed в merge. */
+export const ROLE_ACCESS_SCHEMA_VERSION = 2;
 
 export type SystemSettingsData = {
   notifications: {
@@ -111,6 +115,8 @@ export type SystemSettingsData = {
     banner: SystemBannerSettings;
   };
   roleAccess: Record<NavSection, StaffRoleKey[]>;
+  /** Версия матрицы ролей (миграции дефолтов новых ролей). */
+  roleAccessSchemaVersion: number;
 };
 
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettingsData = {
@@ -149,6 +155,7 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettingsData = {
     },
   },
   roleAccess: { ...DEFAULT_ROLE_ACCESS },
+  roleAccessSchemaVersion: ROLE_ACCESS_SCHEMA_VERSION,
 };
 
 function isStaffRole(v: unknown): v is StaffRoleKey {
@@ -158,6 +165,7 @@ function isStaffRole(v: unknown): v is StaffRoleKey {
 function mergeRoleAccess(
   raw: unknown,
   base: Record<NavSection, StaffRoleKey[]> = DEFAULT_ROLE_ACCESS,
+  schemaVersion = 0,
 ): Record<NavSection, StaffRoleKey[]> {
   const out = { ...base };
   if (!raw || typeof raw !== 'object') {
@@ -175,6 +183,17 @@ function mergeRoleAccess(
     if (!Array.isArray(list)) continue;
     out[section] = list.filter(isStaffRole);
   }
+
+  // v2: роль mehanik — по умолчанию только «Техника» (одноразово, пока schema < 2).
+  if (schemaVersion < 2) {
+    for (const section of NAV_SECTIONS) {
+      if (section === 'settings') continue;
+      if (DEFAULT_ROLE_ACCESS[section].includes('mehanik') && !out[section].includes('mehanik')) {
+        out[section] = [...out[section], 'mehanik'];
+      }
+    }
+  }
+
   return out;
 }
 
@@ -217,6 +236,22 @@ export function mergeSystemSettings(
   const orderToastRoles = Array.isArray(n.orderToastRoles)
     ? n.orderToastRoles.filter(isStaffRole)
     : d.notifications.orderToastRoles;
+
+  // Версия: из raw (БД / полный PUT). Если в partial PUT версии нет — из base
+  // (уже загруженные settings). При merge(DB, DEFAULT) base === DEFAULT → 0,
+  // чтобы одноразовый seed новых ролей всё ещё сработал на старой БД.
+  const rawSchema = r.roleAccessSchemaVersion;
+  const parsedSchema = Number(rawSchema);
+  const hasRawSchema =
+    rawSchema !== undefined && rawSchema !== null && rawSchema !== '' && Number.isFinite(parsedSchema);
+  const baseSchema = Number(d.roleAccessSchemaVersion);
+  const schemaVersion = hasRawSchema
+    ? parsedSchema
+    : base === DEFAULT_SYSTEM_SETTINGS
+      ? 0
+      : Number.isFinite(baseSchema)
+        ? baseSchema
+        : 0;
 
   return {
     notifications: {
@@ -273,7 +308,9 @@ export function mergeSystemSettings(
             : d.interface.banner.expiresAt,
       },
     },
-    roleAccess: mergeRoleAccess(r.roleAccess, d.roleAccess),
+    roleAccess: mergeRoleAccess(r.roleAccess, d.roleAccess, schemaVersion),
+    // После seed всегда фиксируем актуальную версию — снятие галочек больше не откатывается.
+    roleAccessSchemaVersion: Math.max(schemaVersion, ROLE_ACCESS_SCHEMA_VERSION),
   };
 }
 

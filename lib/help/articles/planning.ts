@@ -6,7 +6,7 @@ export const planningArticle: HelpArticle = {
   title: 'Планирование (интеллект)',
   summary:
     'Как собрать план на завтра, применить рейсы в заявки, вести день и отгрузить всё до конца смены',
-  roles: ['dispatcher', 'manager', 'admin'],
+  roles: ['dispatcher', 'manager', 'admin', 'laborant'],
   route: '/adminCifra/planning',
   body: [
     {

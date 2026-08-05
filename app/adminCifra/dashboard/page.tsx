@@ -944,7 +944,7 @@ useEffect(() => {
     void fetchFleetTelemetry();
   }, [fetchFleetTelemetry]);
 
-  const canMutateFleet = ['admin', 'manager', 'dispatcher'].includes(
+  const canMutateFleet = ['admin', 'manager', 'dispatcher', 'laborant', 'mehanik'].includes(
     (userRole || '').toLowerCase(),
   );
 

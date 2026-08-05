@@ -5,6 +5,7 @@ export type HelpRole =
   | 'dispatcher'
   | 'operator'
   | 'laborant'
+  | 'mehanik'
   | 'guest'
   | 'driver';
 
