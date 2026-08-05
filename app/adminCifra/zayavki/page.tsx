@@ -1630,11 +1630,12 @@ ${order.customer_type?.includes('Юридическое')
           const linomix = Number(adds.find((a: any) => Number(a.additive_id) === 2)?.current ?? 0);
           setWarehouseAdditives({ pfm, linomix });
           const silos: any[] = data.silos || [];
+          // Доступный склад: минус в силосе не учитываем; точность до кг.
           const cementTons = silos.reduce(
-            (sum: number, s: any) => sum + Number(s?.current || 0),
+            (sum: number, s: any) => sum + Math.max(0, Number(s?.current || 0)),
             0,
           );
-          setWarehouseCementTons(Math.round(cementTons * 10) / 10);
+          setWarehouseCementTons(Math.round(cementTons * 1000) / 1000);
         }
         if (labRes.ok) {
           setAdditiveDensities(densitiesFromLabSettings(await labRes.json()));
@@ -1813,47 +1814,63 @@ ${order.customer_type?.includes('Юридическое')
     };
   }, [allOrders, selectedDate, recipes, warehouseAdditives, additiveDensities]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Прогноз цемента на 7 дней (для бейджа на карточке; детальный разбор — в модалке)
-  const weekCementForecast = useMemo(() => {
+  // Прогноз цемента на СЛЕДУЮЩИЙ день (бейдж на карточке; день/неделя — в модалке).
+  // Склад = текущий доступный минус неразгруженный цемент выбранного дня.
+  const nextDayCementForecast = useMemo(() => {
     if (!recipes.length) return null;
-    const forecastDates: string[] = [];
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(selectedDate);
-      d.setDate(d.getDate() + i);
-      forecastDates.push(getLocalDateString(d));
-    }
-    const forecastDateSet = new Set(forecastDates);
+    const selectedKey = getLocalDateString(selectedDate);
+    const tomorrow = new Date(selectedDate);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowKey = getLocalDateString(tomorrow);
+
+    let dayNeededKg = 0;
     let neededKg = 0;
     let orderCount = 0;
+    let remainingM3 = 0;
     for (const order of allOrders as any[]) {
       if (order.status === 'cancelled' || !order.delivery_date) continue;
       const ds =
         typeof order.delivery_date === 'string'
           ? order.delivery_date.substring(0, 10)
           : getLocalDateString(new Date(order.delivery_date));
-      if (!forecastDateSet.has(ds)) continue;
-      const volume = Number(order.volume || 0);
-      if (volume <= 0) continue;
+      if (ds !== tomorrowKey && ds !== selectedKey) continue;
+      const planVol = Number(order.volume || 0);
+      if (planVol <= 0) continue;
+      const unloaded =
+        order.status === 'completed'
+          ? planVol
+          : Math.min(planVol, unloadedByOrderIdWeek.get(String(order.id)) || 0);
+      const remaining = Math.max(0, planVol - unloaded);
+      if (remaining <= 0) continue;
       const recipe = findRecipeByGrade(recipes, order.grade);
-      const kg = calculateCementUsageKg(recipe, volume);
+      const kg = calculateCementUsageKg(recipe, remaining);
       if (!(kg > 0)) continue;
+      if (ds === selectedKey) {
+        dayNeededKg += kg;
+        continue;
+      }
       neededKg += kg;
+      remainingM3 += remaining;
       orderCount += 1;
     }
-    const neededTons = Math.round((neededKg / 1000) * 10) / 10;
-    const stock = warehouseCementTons;
+    const neededTons = Math.round((neededKg / 1000) * 1000) / 1000;
+    const dayNeededTons = Math.round((dayNeededKg / 1000) * 1000) / 1000;
+    const stock =
+      warehouseCementTons != null
+        ? Math.round(Math.max(0, warehouseCementTons - dayNeededTons) * 1000) / 1000
+        : null;
     const bringTons =
-      stock != null ? Math.max(0, Math.round((neededTons - stock) * 10) / 10) : null;
+      stock != null ? Math.max(0, Math.round((neededTons - stock) * 1000) / 1000) : null;
     return {
       neededTons,
       stockTons: stock,
       bringTons,
-      shortage: stock != null && bringTons != null && bringTons > 0,
+      shortage: stock != null && bringTons != null && bringTons > 1e-9,
       orderCount,
-      dateFrom: forecastDates[0],
-      dateTo: forecastDates[6],
+      remainingM3: Math.round(remainingM3 * 1000) / 1000,
+      dateKey: tomorrowKey,
     };
-  }, [allOrders, selectedDate, recipes, warehouseCementTons]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allOrders, selectedDate, recipes, warehouseCementTons, unloadedByOrderIdWeek]);
 
   return (
     <div style={{ 
@@ -1969,7 +1986,7 @@ ${order.customer_type?.includes('Юридическое')
             minWidth: 0,
             cursor: 'pointer',
             transition: 'filter 0.15s ease, transform 0.15s ease',
-            ...(weekCementForecast?.shortage
+            ...(nextDayCementForecast?.shortage
               ? { border: '1px solid rgba(248,113,113,0.45)' }
               : {}),
           })}
@@ -1991,7 +2008,7 @@ ${order.customer_type?.includes('Юридическое')
           >
             <div style={{ color: '#E2E8F0', fontSize: '14px', fontWeight: 600, letterSpacing: '0.02em' }}>
               Цемент
-              {weekCementForecast?.shortage ? (
+              {nextDayCementForecast?.shortage ? (
                 <span style={{ marginLeft: 6, fontSize: 11, color: '#F87171', fontWeight: 700 }}>
                   нехватка
                 </span>
@@ -2019,49 +2036,74 @@ ${order.customer_type?.includes('Юридическое')
           <div
             style={{
               display: 'flex',
-              flexWrap: 'wrap',
+              flexWrap: 'nowrap',
               gap: 6,
               alignItems: 'center',
-              fontSize: 12,
-              fontWeight: 600,
+              fontSize: 11,
+              fontWeight: 700,
+              minWidth: 0,
             }}
           >
-            <span style={{ color: '#94A3B8' }}>от разгруженного</span>
             {warehouseCementTons != null ? (
               <span
+                title={`${Math.round(warehouseCementTons * 1000).toLocaleString('ru-RU')} кг (силосы без минуса)`}
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  padding: '2px 8px',
+                  padding: '2px 7px',
                   borderRadius: 9999,
                   background: 'rgba(96,165,250,0.15)',
                   border: '1px solid rgba(96,165,250,0.35)',
                   color: '#93C5FD',
-                  fontWeight: 700,
                   whiteSpace: 'nowrap',
+                  flexShrink: 0,
                 }}
               >
-                склад {warehouseCementTons % 1 === 0 ? warehouseCementTons : warehouseCementTons.toFixed(1)} т
+                склад{' '}
+                {warehouseCementTons.toLocaleString('ru-RU', {
+                  maximumFractionDigits: 3,
+                  minimumFractionDigits: 0,
+                })}
               </span>
             ) : null}
-            {weekCementForecast?.shortage && weekCementForecast.bringTons != null ? (
+            {nextDayCementForecast ? (
               <span
+                title={
+                  `Завтра ${nextDayCementForecast.dateKey}: нужно ${nextDayCementForecast.neededTons} т` +
+                  (nextDayCementForecast.stockTons != null
+                    ? `, доступно ${nextDayCementForecast.stockTons} т`
+                    : '') +
+                  (nextDayCementForecast.shortage && nextDayCementForecast.bringTons != null
+                    ? `, привезти ${nextDayCementForecast.bringTons} т`
+                    : '')
+                }
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  padding: '2px 8px',
+                  padding: '2px 7px',
                   borderRadius: 9999,
-                  background: 'rgba(239,68,68,0.15)',
-                  border: '1px solid rgba(248,113,113,0.4)',
-                  color: '#FCA5A5',
-                  fontWeight: 700,
+                  background: nextDayCementForecast.shortage
+                    ? 'rgba(239,68,68,0.15)'
+                    : 'rgba(148,163,184,0.12)',
+                  border: nextDayCementForecast.shortage
+                    ? '1px solid rgba(248,113,113,0.4)'
+                    : '1px solid rgba(148,163,184,0.35)',
+                  color: nextDayCementForecast.shortage ? '#FCA5A5' : '#CBD5E1',
                   whiteSpace: 'nowrap',
+                  flexShrink: 0,
                 }}
               >
-                +{weekCementForecast.bringTons % 1 === 0
-                  ? weekCementForecast.bringTons
-                  : weekCementForecast.bringTons.toFixed(1)}{' '}
-                т на неделю
+                завтра{' '}
+                {nextDayCementForecast.neededTons.toLocaleString('ru-RU', {
+                  maximumFractionDigits: 3,
+                  minimumFractionDigits: 0,
+                })}
+                {nextDayCementForecast.shortage && nextDayCementForecast.bringTons != null
+                  ? ` · +${nextDayCementForecast.bringTons.toLocaleString('ru-RU', {
+                      maximumFractionDigits: 3,
+                      minimumFractionDigits: 0,
+                    })}`
+                  : ''}
               </span>
             ) : null}
           </div>
@@ -2142,7 +2184,6 @@ ${order.customer_type?.includes('Юридическое')
               fontWeight: 600,
             }}
           >
-            <span style={{ color: '#94A3B8' }}>от разгруженного</span>
             {warehouseAdditives ? (
               <span
                 style={{
@@ -2255,7 +2296,6 @@ ${order.customer_type?.includes('Юридическое')
               fontWeight: 600,
             }}
           >
-            <span style={{ color: '#94A3B8' }}>от разгруженного</span>
             {warehouseAdditives ? (
               <span
                 style={{

@@ -21,7 +21,7 @@ todos:
     content: "Удалённое управление: SSH + Screen Sharing в LAN; снаружи — Tailscale; шпаргалка launchctl/docker/логи"
     status: pending
   - id: local-crons
-    content: macOS crontab на 3 cron-URL + ручная проверка Authorization Bearer
+    content: "macOS crontab: dismiss/avito/demand + scout-sync */2; ENABLE_LOCAL_CRONS=0; curl-проверка"
     status: pending
   - id: local-backups-github
     content: Локальный pg_dump → скрипт → git push в GitHub; отключить облачный db-backup.yml после cutover
@@ -102,6 +102,11 @@ isProject: false
   - `/api/cron/dismiss-notifications` — `1 21 * * *` UTC (= **00:01 МСК**)
   - `/api/cron/avito-sync` — `15 5 * * *` UTC (= **08:15 МСК**)
   - `/api/cron/demand-radar` — `0 6 * * *` UTC (= **09:00 МСК**)
+  - `/api/cron/callout-winners` — несколько раз в день UTC
+  - `/api/cron/competitor-prices` — `0 7 * * *` UTC
+  - `/api/cron/planner-learn` — `20 20 * * *` UTC
+  - **`/api/cron/scout-sync` — `*/2 * * * *` (каждые 2 мин)** — телематика СКАУТ → `fleet_telemetry_snapshots` → broadcast карта парка
+- **Локально (ноутбук / до cutover):** Vercel Cron не работает. Пока крутится `next dev` / `next start` **не на Vercel**, СКАУТ-синк поднимает `instrumentation.ts` → `[lib/localCrons.ts](lib/localCrons.ts)` (каждые 2 мин). Выключить: `ENABLE_LOCAL_CRONS=0`. Ручной вызов: `npm run cron:scout` (= `[scripts/cron-curl.sh](scripts/cron-curl.sh) scout-sync`).
 - БД: **Supabase Cloud**; ежедневный дамп в `[db-backups/](db-backups/)` (workflow `[.github/workflows/db-backup.yml](.github/workflows/db-backup.yml)`).
 - Свежий снимок уже в репо: `db-backups/backup-2026-07-28.sql.gz` (~500 КБ) — нормальный размер, не «пустой» 20-байтный gzip.
 - Приложение ходит в Supabase URL + anon/service_role + Realtime (`[lib/supabaseClient.ts](lib/supabaseClient.ts)`, `[lib/supabaseAdmin.ts](lib/supabaseAdmin.ts)`) — **голый Postgres в Docker недостаточен**. В Docker Desktop поднимаем **локальный стек Supabase** (`npx supabase start`).
@@ -208,7 +213,9 @@ M4 для этого стека избыточен в хорошем смысл�
     curl -s -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/dismiss-notifications
     curl -s -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/avito-sync
     curl -s -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/demand-radar
+    npm run cron:scout   # или: bash scripts/cron-curl.sh scout-sync
     ```
+  - убедиться, что в логе `next dev` есть `[local-cron] включены` и через ~2 мин `[local-cron scout-sync] ok=…` (нужны `SCOUT_*` + `CRON_SECRET` в `.env.local`).
 3. **Свежий дамп перед cutover** — в GitHub Actions вручную запусти workflow **Database Backup**, дождись коммита `backup-YYYY-MM-DD.sql.gz`, проверь размер файла **> 1 КБ** (лучше сотни КБ, как у сегодняшнего).
 4. **Дисциплина по ресурсам на 16/256** (см. оценку железа выше):
   - Docker: Memory **8 ГБ**, Swap 1–2 ГБ; регулярно `docker system prune`.
@@ -891,6 +898,15 @@ npm run start
 
 Vercel Cron на Mac mini не работает. Оставляем обычный `next start`, расписание — **системный crontab** (часовой пояс Mac = МСК).
 
+**СКАУТ / карта парка:** эндпоинт `[/api/cron/scout-sync](app/api/cron/scout-sync/route.ts)`, интервал **каждые 2 минуты**. На ноутбуке до cutover тот же sync уже крутит `lib/localCrons.ts` через `instrumentation.ts`. На Mac mini после cutover — **crontab** (надёжнее логов и не зависит от hot-reload), а in-process выключить:
+
+```bash
+# в .env.local на Mac mini:
+ENABLE_LOCAL_CRONS=0
+```
+
+Иначе СКАУТ будут дергать и crontab, и процесс Next — лишняя нагрузка.
+
 ```bash
 crontab -e
 ```
@@ -901,11 +917,29 @@ crontab -e
 1 0 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/dismiss-notifications >> /tmp/cron-dismiss.log 2>&1
 15 8 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/avito-sync >> /tmp/cron-avito.log 2>&1
 0 9 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/demand-radar >> /tmp/cron-demand.log 2>&1
+# Телематика СКАУТ → карта парка (каждые 2 мин, МСК)
+*/2 * * * * /Users/ИМЯ/concrete-beton-app/scripts/cron-curl.sh scout-sync >> /tmp/cron-scout.log 2>&1
 ```
 
-Проверка сразу (не ждать расписания) — те же три `curl`, что в «Рекомендациях». Ожидание: HTTP 200 и JSON без `Unauthorized`.
+Либо без скрипта (секрет прямо в crontab — хуже для утечек):
 
-Секцию `"crons"` в `[vercel.json](vercel.json)` на Mac mini можно не трогать (файл просто не используется без Vercel); после окончательного ухода с Vercel — убрать, чтобы не путать.
+```cron
+*/2 * * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/scout-sync >> /tmp/cron-scout.log 2>&1
+```
+
+Проверка сразу (не ждать расписания):
+
+```bash
+npm run cron:scout
+# или
+bash scripts/cron-curl.sh scout-sync
+```
+
+Ожидание: HTTP 200, JSON с `success`, `mapped`, `snapshotsUpdated`. В UI «Парк на карте» бейдж **«Обновлено N мин назад»** уходит к 0–2 мин.
+
+Остальные `curl` — как в «Рекомендациях». Ожидание: HTTP 200 и JSON без `Unauthorized`.
+
+Секцию `"crons"` в `[vercel.json](vercel.json)` на Mac mini можно не трогать (файл просто не используется без Vercel); после окончательного ухода с Vercel — убрать, чтобы не путать. **Строку scout-sync из vercel.json при уходе с Vercel тоже удалить** — на mini источник правды crontab.
 
 ---
 
@@ -1310,8 +1344,9 @@ https://tradecom.keenetic.link/api/webhooks/avito?secret=...
 - [ ] `.env.local` с локальными Supabase-ключами
 - [ ] `npm run build` + `npm run start` без ошибок
 - [ ] Логин, склад, отгрузки, мобилка в LAN
-- [ ] Три cron-эндпоинта отвечают 200 с `CRON_SECRET`
-- [ ] crontab записан (МСК-времена)
+- [ ] Cron-эндпоинты (dismiss / avito / demand / **scout-sync**) отвечают 200 с `CRON_SECRET`
+- [ ] crontab записан (МСК-времена), включая **`*/2` scout-sync**; на mini `ENABLE_LOCAL_CRONS=0`
+- [ ] Карта парка: после 2–4 мин без ручной кнопки бейдж «Обновлено» свежий; broadcast двигает маркеры
 - [ ] Nightly `backup-db-to-github.sh`: дамп + push в `db-backups/` на GitHub
 - [ ] Облачный `db-backup.yml` отключён после cutover
 - [ ] Mac mini не уходит в sleep; `autorestart 1`; автологин

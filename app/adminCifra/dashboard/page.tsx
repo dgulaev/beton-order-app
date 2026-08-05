@@ -8,7 +8,7 @@ import { useRealtimeOrders, useRealtimeOrderMixers, formatOrderMixer } from '../
 import OrderDetailModal from '../components/OrderDetailModal';
 import NewOrderModal from '../components/NewOrderModal';
 import Image from 'next/image';
-import { Home, LayoutList, AlignJustify, X, User, CalendarDays, Truck, Brain } from 'lucide-react';
+import { Home, LayoutList, AlignJustify, X, User, CalendarDays, Truck, Brain, MapPin } from 'lucide-react';
 import VerticalTimelinePanel from '../components/VerticalTimelinePanel';
 import { sortMixersByLogisticsTime } from '@/lib/mixerTimeSort';
 import { formatRuDateWithWeekday, formatTimeHHMM, pluralRu, pluralWord } from '@/lib/ruLocale';
@@ -30,6 +30,14 @@ import {
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { isPickupOrder } from '@/lib/bryanskAddress';
 import PageHelpButton from '../components/help/PageHelpButton';
+import FleetMapModal from '../mixers/FleetMapModal';
+import type { FleetMapMarker } from '../components/FleetMap';
+import {
+  mergeTelemetryIntoMap,
+  scoutIsOnline,
+  type FleetTelemetrySnapshot,
+} from '@/lib/fleetLifecycle';
+import { useRealtimeFleetTelemetry } from '@/hooks/useRealtimeFleetTelemetry';
 
 export default function AdminCifraDashboard() {
   const router = useRouter();
@@ -46,6 +54,11 @@ export default function AdminCifraDashboard() {
   const [fleetTab, setFleetTab] = useState<VehicleKind>('mixer');
   const [dashboardNarrow, setDashboardNarrow] = useState(false);
   const [delayMinutesThreshold, setDelayMinutesThreshold] = useState(15);
+
+  // Карта парка (СКАУТ) — та же модалка, что на /adminCifra/mixers
+  const [showFleetMap, setShowFleetMap] = useState(false);
+  const [telemetryMap, setTelemetryMap] = useState<Map<number, FleetTelemetrySnapshot>>(new Map());
+  const [gpsRefreshing, setGpsRefreshing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -891,6 +904,26 @@ useEffect(() => {
     }
   }, [userId, userRole, userFullName]);
 
+  const fetchFleetTelemetry = useCallback(async () => {
+    try {
+      const res = await fetch('/api/adminCifra/fleet/telemetry', {
+        headers: adminCifraAuthHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success && Array.isArray(data.telemetry)) {
+        setTelemetryMap((prev) =>
+          mergeTelemetryIntoMap(prev, data.telemetry as FleetTelemetrySnapshot[]),
+        );
+      }
+    } catch {
+      /* telemetry optional */
+    }
+  }, []);
+
+  // Broadcast: GPS-маркеры обновляются после cron/sync СКАУТ без polling
+  useRealtimeFleetTelemetry(setTelemetryMap);
+
 // ==================== 15. ЗАГРУЗКА МИКСЕРОВ ====================
   useEffect(() => {
     const fetchMixers = async () => {
@@ -907,7 +940,72 @@ useEffect(() => {
     };
 
     fetchMixers();
-  }, []);
+    void fetchFleetTelemetry();
+  }, [fetchFleetTelemetry]);
+
+  const canMutateFleet = ['admin', 'manager', 'dispatcher'].includes(
+    (userRole || '').toLowerCase(),
+  );
+
+  const fleetMapMarkers = useMemo((): FleetMapMarker[] => {
+    return (allMixers || []).flatMap((m: any) => {
+      if (m.type !== 'own') return [];
+      // На дашборде кнопка про миксеры — не тянем прицепы/тягачи на карту
+      if (m.vehicle_kind && m.vehicle_kind !== 'mixer') return [];
+      const tel = telemetryMap.get(m.id);
+      const lat = tel?.lat != null ? Number(tel.lat) : NaN;
+      const lon = tel?.lon != null ? Number(tel.lon) : NaN;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [];
+      if (lat === 0 && lon === 0) return [];
+      return [
+        {
+          id: m.id,
+          lat,
+          lon,
+          label: m.number,
+          subtitle: [m.driver, m.model].filter(Boolean).join(' · ') || undefined,
+          isOnline: scoutIsOnline(tel?.last_message_at),
+          speedKmh: tel?.speed_kmh != null ? Number(tel.speed_kmh) : null,
+          address: tel?.address ?? null,
+          lastMessageAt: tel?.last_message_at ?? null,
+        },
+      ];
+    });
+  }, [allMixers, telemetryMap]);
+
+  const fleetTelemetryUpdatedAt = useMemo(() => {
+    let latest: string | null = null;
+    for (const m of allMixers || []) {
+      if (m.type !== 'own') continue;
+      if (m.vehicle_kind && m.vehicle_kind !== 'mixer') continue;
+      const tel = telemetryMap.get(m.id);
+      if (tel?.updated_at && (!latest || tel.updated_at > latest)) {
+        latest = tel.updated_at;
+      }
+    }
+    return latest;
+  }, [allMixers, telemetryMap]);
+
+  const refreshAllGps = async () => {
+    if (!canMutateFleet) return;
+    setGpsRefreshing(true);
+    try {
+      const res = await fetch('/api/adminCifra/integrations/scout/sync', {
+        method: 'POST',
+        headers: adminCifraAuthHeaders(),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json.error || 'Ошибка синхронизации СКАУТ');
+        return;
+      }
+      await fetchFleetTelemetry();
+    } catch {
+      alert('Не удалось обновить GPS');
+    } finally {
+      setGpsRefreshing(false);
+    }
+  };
 
       // ==================== 17. СМЕНА СТАТУСА МИКСЕРА ====================
   const handleStatusChange = async (mixerId: number | string, newStatus: string) => {
@@ -2264,40 +2362,80 @@ const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVo
   overflow: 'hidden',
 })}>
   
-  {/* Заголовок + счётчик */}
+  {/* Заголовок + карта + счётчик — одна строка */}
   <div style={{ 
     display: 'flex', 
     justifyContent: 'space-between', 
     alignItems: 'center', 
     marginBottom: '24px',
-    flexWrap: 'wrap',
-    gap: '12px'
+    gap: 10,
+    minWidth: 0,
   }}>
     
     <h3 style={{ 
-      fontSize: '24px', 
+      fontSize: 20, 
       margin: 0, 
       display: 'flex', 
       alignItems: 'center', 
-      gap: '12px',
-      color: 'white'
+      gap: 8,
+      color: 'white',
+      minWidth: 0,
+      flex: '1 1 auto',
+      overflow: 'hidden',
+      whiteSpace: 'nowrap',
+      textOverflow: 'ellipsis',
     }}>
-      <Truck size={26} color="#E2E8F0" strokeWidth={2} />
-      {fleetInWorkLabel(fleetTab)}
+      <Truck size={22} color="#E2E8F0" strokeWidth={2} style={{ flexShrink: 0 }} />
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {fleetInWorkLabel(fleetTab)}
+      </span>
     </h3>
 
-    {/* Отдельный блок со счётчиком */}
-    <div style={{ 
-      background: 'rgba(255,255,255,0.1)', 
-      padding: '8px 16px',
-      borderRadius: '9999px',
-      fontSize: '17px',
-      fontWeight: '600',
-      color: '#60A5FA',
-      whiteSpace: 'nowrap',
-      marginTop: '5px'
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexShrink: 0,
     }}>
-      {activeMixersToday.length} на линии
+      <button
+        type="button"
+        title="Миксеры на карте"
+        onClick={() => {
+          void fetchFleetTelemetry();
+          setShowFleetMap(true);
+        }}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '6px 12px',
+          borderRadius: 9999,
+          border: '1px solid rgba(74,222,128,0.35)',
+          background: 'rgba(74,222,128,0.1)',
+          color: '#4ADE80',
+          fontWeight: 600,
+          fontSize: 13,
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <MapPin size={14} />
+        Карта
+        {fleetMapMarkers.length > 0 ? ` (${fleetMapMarkers.length})` : ''}
+      </button>
+
+      <div style={{ 
+        background: 'rgba(96,165,250,0.1)', 
+        border: '1px solid rgba(96,165,250,0.35)',
+        padding: '6px 12px',
+        borderRadius: '9999px',
+        fontSize: 13,
+        fontWeight: 600,
+        color: '#60A5FA',
+        whiteSpace: 'nowrap',
+      }}>
+        {activeMixersToday.length} на линии
+      </div>
     </div>
   </div>
 
@@ -2485,6 +2623,15 @@ const dispatchedPercent = orderVolume > 0 ? Math.min(100, Math.round((assignedVo
 
 </div>
 </div>
+
+      <FleetMapModal
+        open={showFleetMap}
+        markers={fleetMapMarkers}
+        onClose={() => setShowFleetMap(false)}
+        lastUpdatedAt={fleetTelemetryUpdatedAt}
+        onRefreshAll={canMutateFleet ? refreshAllGps : undefined}
+        refreshing={gpsRefreshing}
+      />
 
      {/* ==================== 48. МОДАЛЬНОЕ ОКНО ЗАКАЗА ==================== */}
 {selectedOrder && (

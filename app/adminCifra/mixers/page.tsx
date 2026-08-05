@@ -3,10 +3,12 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
-import MixerHistoryDrawer from './MixerHistoryDrawer';
+import FleetUnitDrawer from './FleetUnitDrawer';
+import FleetMapModal from './FleetMapModal';
+import type { FleetMapMarker } from '../components/FleetMap';
 import DeliverySettingsTab from './DeliverySettingsTab';
 import { useUserRole } from '../../providers/UserRoleProvider';
-import { Truck } from 'lucide-react';
+import { Truck, MapPin } from 'lucide-react';
 import { modalFieldStyle, volumeCardSoftStyle, volumeCardStyle, volumeModalStyle } from '../cardStyles';
 import { appConfirm } from '../components/appDialog';
 import PageHelpButton from '../components/help/PageHelpButton';
@@ -34,6 +36,14 @@ import {
   type VehicleKind,
   type Ownership,
 } from '@/lib/fleetCatalog';
+import {
+  lifecycleMeta,
+  mergeTelemetryIntoMap,
+  scoutIsOnline,
+  type FleetTelemetrySnapshot,
+  type LifecycleStatus,
+} from '@/lib/fleetLifecycle';
+import { useRealtimeFleetTelemetry } from '@/hooks/useRealtimeFleetTelemetry';
 import {
   sanitizeFleetSpecs,
   specsAfterSpecialSubtypeChange,
@@ -305,6 +315,10 @@ interface FleetUnit {
   vehicle_kind?: VehicleKind;
   specs?: Record<string, any>;
   mixer_drivers?: MixerDriver[];
+  lifecycle_status?: LifecycleStatus | string | null;
+  odometer_km?: number | null;
+  engine_hours?: number | null;
+  scout_unit_id?: number | null;
 }
 
 type PageTab = VehicleKind | 'delivery';
@@ -313,6 +327,11 @@ export default function MixersPage() {
   const { isAdmin, user } = useUserRole();
   const role = (user?.role || '').toLowerCase();
   const canEditCouples = ['admin', 'manager', 'dispatcher'].includes(role);
+  const canMutateFleet = ['admin', 'manager', 'dispatcher'].includes(role);
+
+  const openOwnFleetCard = (unit: FleetUnit) => {
+    if (unit.type === 'own') setDrawerUnit(unit);
+  };
 
   // Вкладки видов техники + «Тарифы доставки» (admin)
   const [activeTab, setActiveTab] = useState<PageTab>('mixer');
@@ -340,7 +359,15 @@ export default function MixersPage() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [showModal, setShowModal] = useState(false);
   const [editingMixer, setEditingMixer] = useState<FleetUnit | null>(null);
-  const [historyMixer, setHistoryMixer] = useState<FleetUnit | null>(null);
+  const [drawerUnit, setDrawerUnit] = useState<FleetUnit | null>(null);
+  const [telemetryMap, setTelemetryMap] = useState<Map<number, FleetTelemetrySnapshot>>(new Map());
+  const [showFleetMap, setShowFleetMap] = useState(false);
+  const [gpsRefreshing, setGpsRefreshing] = useState(false);
+
+  // Broadcast: после cron/sync СКАУТ маркеры и GPS-бейджи обновляются без polling
+  useRealtimeFleetTelemetry(setTelemetryMap, {
+    enabled: activeTab !== 'delivery',
+  });
 
   // Список: число строк под высоту экрана (как в отчётах)
   const mixerListRef = useRef<HTMLDivElement>(null);
@@ -388,10 +415,28 @@ export default function MixersPage() {
         const data = await res.json();
         setMixers(Array.isArray(data) ? data : []);
       }
+      void fetchTelemetry();
     } catch (err) {
       console.error('Ошибка загрузки техники:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchTelemetry = async () => {
+    try {
+      const res = await fetch('/api/adminCifra/fleet/telemetry', {
+        headers: adminCifraAuthHeaders(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success && Array.isArray(data.telemetry)) {
+        setTelemetryMap((prev) =>
+          mergeTelemetryIntoMap(prev, data.telemetry as FleetTelemetrySnapshot[]),
+        );
+      }
+    } catch {
+      /* telemetry optional */
     }
   };
 
@@ -574,6 +619,65 @@ export default function MixersPage() {
   const filteredMixers = mixers.filter(m => 
     filter === 'all' || m.type === filter
   );
+
+  const fleetMapMarkers = useMemo((): FleetMapMarker[] => {
+    return mixers.flatMap((m) => {
+      if (m.type !== 'own') return [];
+      const tel = telemetryMap.get(m.id);
+      const lat = tel?.lat != null ? Number(tel.lat) : NaN;
+      const lon = tel?.lon != null ? Number(tel.lon) : NaN;
+      // На карте — и online, и offline, если есть последняя GPS-точка
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [];
+      if (lat === 0 && lon === 0) return [];
+      return [
+        {
+          id: m.id,
+          lat,
+          lon,
+          label: m.number,
+          subtitle: [m.driver, m.model].filter(Boolean).join(' · ') || undefined,
+          // Пересчитываем по last_message_at — stored is_online может устареть
+          isOnline: scoutIsOnline(tel?.last_message_at),
+          speedKmh: tel?.speed_kmh != null ? Number(tel.speed_kmh) : null,
+          address: tel?.address ?? null,
+          lastMessageAt: tel?.last_message_at ?? null,
+        },
+      ];
+    });
+  }, [mixers, telemetryMap]);
+
+  const fleetTelemetryUpdatedAt = useMemo(() => {
+    let latest: string | null = null;
+    for (const m of mixers) {
+      if (m.type !== 'own') continue;
+      const tel = telemetryMap.get(m.id);
+      if (tel?.updated_at && (!latest || tel.updated_at > latest)) {
+        latest = tel.updated_at;
+      }
+    }
+    return latest;
+  }, [mixers, telemetryMap]);
+
+  const refreshAllGps = async () => {
+    if (!canMutateFleet) return;
+    setGpsRefreshing(true);
+    try {
+      const res = await fetch('/api/adminCifra/integrations/scout/sync', {
+        method: 'POST',
+        headers: adminCifraAuthHeaders(),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(json.error || 'Ошибка синхронизации СКАУТ');
+        return;
+      }
+      await fetchTelemetry();
+    } catch {
+      alert('Не удалось обновить GPS');
+    } finally {
+      setGpsRefreshing(false);
+    }
+  };
 
   const totalPages = Math.max(1, Math.ceil(filteredMixers.length / itemsPerPage));
   const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -982,6 +1086,29 @@ export default function MixersPage() {
             Наемные
           </button>
         </div>
+        <button
+          type="button"
+          onClick={() => setShowFleetMap(true)}
+          style={{
+            marginLeft: 'auto',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '9px 16px',
+            borderRadius: 9999,
+            border: '1px solid rgba(74,222,128,0.35)',
+            background: 'rgba(74,222,128,0.1)',
+            color: '#4ADE80',
+            fontWeight: 600,
+            fontSize: 14,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <MapPin size={16} />
+          Карта парка
+          {fleetMapMarkers.length > 0 ? ` (${fleetMapMarkers.length})` : ''}
+        </button>
       </div>
 
       {/* ==================== ОСНОВНОЙ КОНТЕНТ (СПИСОК / ПЛИТКА) ==================== */}
@@ -1145,27 +1272,6 @@ export default function MixersPage() {
 
                     {/* Тонкие кнопки в стиле списка */}
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                      {vehicleKind === 'mixer' && (
-                        <button
-                          onClick={() => setHistoryMixer(mixer)}
-                          style={{
-                            flex: 1,
-                            padding: '8px 12px',
-                            background: 'rgba(74,222,128,0.1)',
-                            color: '#4ADE80',
-                            border: '1px solid rgba(74,222,128,0.3)',
-                            borderRadius: '9999px',
-                            fontWeight: '500',
-                            fontSize: '13.5px',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          📋 История
-                        </button>
-                      )}
                       {canEditCouples && (vehicleKind === 'tractor_unit' || isTrailerKind(vehicleKind)) && (
                         <button
                           type="button"
@@ -1205,33 +1311,64 @@ export default function MixersPage() {
                           Отцепить
                         </button>
                       )}
-                      <button 
-                        onClick={() => openEditModal(mixer)} 
-                        style={{ 
-                          flex: 1, 
-                          padding: '8px 12px',
-                          background: '#334155',
-                          color: '#E2E8F0',
-                          border: 'none', 
-                          borderRadius: '9999px', 
-                          fontWeight: '500',
-                          fontSize: '13.5px',
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          transition: 'all 0.2s ease'
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = '#3B82F6';
-                          e.currentTarget.style.color = 'white';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = '#334155';
-                          e.currentTarget.style.color = '#E2E8F0';
-                        }}
-                      >
-                        ✏️ Редактировать
-                      </button>
+                      {mixer.type === 'own' ? (
+                        <button
+                          onClick={() => openOwnFleetCard(mixer)}
+                          style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            background: '#334155',
+                            color: '#E2E8F0',
+                            border: 'none',
+                            borderRadius: '9999px',
+                            fontWeight: '500',
+                            fontSize: '13.5px',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = '#3B82F6';
+                            e.currentTarget.style.color = 'white';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = '#334155';
+                            e.currentTarget.style.color = '#E2E8F0';
+                          }}
+                        >
+                          📋 Карточка
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => openEditModal(mixer)}
+                          style={{
+                            flex: 1,
+                            padding: '8px 12px',
+                            background: '#334155',
+                            color: '#E2E8F0',
+                            border: 'none',
+                            borderRadius: '9999px',
+                            fontWeight: '500',
+                            fontSize: '13.5px',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            transition: 'all 0.2s ease',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = '#3B82F6';
+                            e.currentTarget.style.color = 'white';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = '#334155';
+                            e.currentTarget.style.color = '#E2E8F0';
+                          }}
+                        >
+                          ✏️ Редактировать
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -1338,7 +1475,44 @@ export default function MixersPage() {
                       onMouseLeave={(e) => { e.currentTarget.style.filter = 'none'; }}
                     >
                       <div style={{ fontWeight: 700, fontSize: 15, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {mixer.number}
+                        {mixer.type === 'own' ? (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openOwnFleetCard(mixer)}
+                          onKeyDown={(e) => e.key === 'Enter' && openOwnFleetCard(mixer)}
+                          style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(148,163,184,0.35)' }}
+                        >
+                          {mixer.number}
+                        </span>
+                        ) : (
+                          mixer.number
+                        )}
+                        {(() => {
+                          const tel = telemetryMap.get(mixer.id);
+                          const lc = lifecycleMeta(mixer.lifecycle_status);
+                          return (
+                            <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+                              {mixer.lifecycle_status && mixer.lifecycle_status !== 'active' && (
+                                <span style={{ fontSize: 10, fontWeight: 600, color: lc.color, padding: '1px 6px', borderRadius: 9999, background: lc.bg }}>
+                                  {lc.label}
+                                </span>
+                              )}
+                              {tel && (
+                                <span style={{
+                                  fontSize: 10,
+                                  fontWeight: 600,
+                                  color: scoutIsOnline(tel.last_message_at) ? '#4ADE80' : '#94A3B8',
+                                  padding: '1px 6px',
+                                  borderRadius: 9999,
+                                  background: scoutIsOnline(tel.last_message_at) ? 'rgba(74,222,128,0.12)' : 'rgba(148,163,184,0.12)',
+                                }}>
+                                  {scoutIsOnline(tel.last_message_at) ? 'GPS' : 'offline'}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       <div style={{ minWidth: 0, overflow: 'hidden' }}>
@@ -1432,24 +1606,6 @@ export default function MixersPage() {
                       </div>
 
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                        {vehicleKind === 'mixer' && (
-                          <button
-                            onClick={() => setHistoryMixer(mixer)}
-                            style={{
-                              padding: '6px 12px',
-                              background: 'rgba(74,222,128,0.1)',
-                              color: '#4ADE80',
-                              border: '1px solid rgba(74,222,128,0.3)',
-                              borderRadius: 10,
-                              fontWeight: 600,
-                              fontSize: '12.5px',
-                              whiteSpace: 'nowrap',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            История
-                          </button>
-                        )}
                         {canEditCouples && (vehicleKind === 'tractor_unit' || isTrailerKind(vehicleKind)) && (
                           <button
                             type="button"
@@ -1487,30 +1643,57 @@ export default function MixersPage() {
                             Отцепить
                           </button>
                         )}
-                        <button
-                          onClick={() => openEditModal(mixer)}
-                          style={{
-                            padding: '6px 12px',
-                            background: '#334155',
-                            color: '#E2E8F0',
-                            border: 'none',
-                            borderRadius: 10,
-                            fontWeight: 600,
-                            fontSize: '12.5px',
-                            whiteSpace: 'nowrap',
-                            cursor: 'pointer',
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = '#3B82F6';
-                            e.currentTarget.style.color = 'white';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = '#334155';
-                            e.currentTarget.style.color = '#E2E8F0';
-                          }}
-                        >
-                          Редактировать
-                        </button>
+                        {mixer.type === 'own' ? (
+                          <button
+                            onClick={() => openOwnFleetCard(mixer)}
+                            style={{
+                              padding: '6px 12px',
+                              background: '#334155',
+                              color: '#E2E8F0',
+                              border: 'none',
+                              borderRadius: 10,
+                              fontWeight: 600,
+                              fontSize: '12.5px',
+                              whiteSpace: 'nowrap',
+                              cursor: 'pointer',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.background = '#3B82F6';
+                              e.currentTarget.style.color = 'white';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = '#334155';
+                              e.currentTarget.style.color = '#E2E8F0';
+                            }}
+                          >
+                            Карточка
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => openEditModal(mixer)}
+                            style={{
+                              padding: '6px 12px',
+                              background: '#334155',
+                              color: '#E2E8F0',
+                              border: 'none',
+                              borderRadius: 10,
+                              fontWeight: 600,
+                              fontSize: '12.5px',
+                              whiteSpace: 'nowrap',
+                              cursor: 'pointer',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.background = '#3B82F6';
+                              e.currentTarget.style.color = 'white';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = '#334155';
+                              e.currentTarget.style.color = '#E2E8F0';
+                            }}
+                          >
+                            Редактировать
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -1533,10 +1716,31 @@ export default function MixersPage() {
       </>
       )}
 
-      {/* ==================== ИСТОРИЯ РЕЙСОВ МИКСЕРА ==================== */}
-      <MixerHistoryDrawer
-        mixer={historyMixer}
-        onClose={() => setHistoryMixer(null)}
+      <FleetUnitDrawer
+        unit={drawerUnit}
+        telemetry={drawerUnit ? telemetryMap.get(drawerUnit.id) ?? null : null}
+        onClose={() => setDrawerUnit(null)}
+        onUpdated={() => {
+          fetchMixers();
+        }}
+        onDeleted={() => {
+          fetchMixers();
+        }}
+        onEdit={
+          drawerUnit
+            ? () => openEditModal(drawerUnit)
+            : undefined
+        }
+        canMutate={canMutateFleet}
+      />
+
+      <FleetMapModal
+        open={showFleetMap}
+        markers={fleetMapMarkers}
+        onClose={() => setShowFleetMap(false)}
+        lastUpdatedAt={fleetTelemetryUpdatedAt}
+        onRefreshAll={canMutateFleet ? refreshAllGps : undefined}
+        refreshing={gpsRefreshing}
       />
 
       {/* ==================== МОДАЛЬНОЕ ОКНО ==================== */}

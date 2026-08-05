@@ -3,9 +3,13 @@
 // Возвращает order_mixers + orders JOIN, статистику, фильтр по дате.
 
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAdminCifraStaff } from '@/lib/adminCifraAuth';
 import { supabaseAdmin as supabase } from '@/lib/supabaseAdmin';
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAdminCifraStaff(request);
+  if (auth.error) return auth.error;
+
   try {
     const { searchParams } = request.nextUrl;
     const mixerName = searchParams.get('mixer_name');
@@ -54,10 +58,11 @@ export async function GET(request: NextRequest) {
 
     const rows = data || [];
 
-    // Фильтр по дате доставки на стороне сервера (delivery_date из orders)
+    // Фильтр по дате доставки на стороне сервера (delivery_date из orders).
+    // Без даты — не попадают в периодный фильтр (раньше всегда проходили).
     const filtered = rows.filter((row: any) => {
       const d = row.orders?.delivery_date;
-      if (!d) return true;
+      if (!d) return !from && !to;
       const dateStr = String(d).slice(0, 10);
       if (from && dateStr < from) return false;
       if (to && dateStr > to) return false;

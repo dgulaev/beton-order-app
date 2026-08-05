@@ -8,6 +8,7 @@ import {
   vehicleRequiresDriver,
   type VehicleKind,
 } from '@/lib/fleetCatalog';
+import { isLifecycleStatus } from '@/lib/fleetLifecycle';
 import { mergeTariffIntoSpecs, sanitizeFleetSpecs } from '@/lib/fleetTariffs';
 
 const supabase = createClient(
@@ -88,7 +89,71 @@ export async function POST(request: NextRequest) {
       vehicle_kind: rawKind,
       specs: rawSpecs,
       tariff_patch: tariffPatch,
+      lifecycle_status: rawLifecycle,
+      odometer_km: rawOdometer,
+      engine_hours: rawEngineHours,
+      scout_unit_id: rawScoutUnitId,
     } = body;
+
+    // Частичное обновление паспорта / lifecycle из drawer
+    if (id && (rawLifecycle != null || rawOdometer != null || rawEngineHours != null || rawScoutUnitId != null || (rawSpecs != null && !number))) {
+      const { data: existing, error: exErr } = await supabase
+        .from('mixers')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (exErr) throw exErr;
+      if (!existing) {
+        return NextResponse.json({ error: 'Единица не найдена' }, { status: 404 });
+      }
+      const kind: VehicleKind = isVehicleKind(existing.vehicle_kind)
+        ? existing.vehicle_kind
+        : 'mixer';
+      const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (rawLifecycle != null && isLifecycleStatus(rawLifecycle)) {
+        patch.lifecycle_status = rawLifecycle;
+      }
+      if (rawOdometer !== undefined) {
+        patch.odometer_km = rawOdometer === '' || rawOdometer == null ? null : Number(rawOdometer);
+      }
+      if (rawEngineHours !== undefined) {
+        patch.engine_hours = rawEngineHours === '' || rawEngineHours == null ? null : Number(rawEngineHours);
+      }
+      if (rawScoutUnitId !== undefined) {
+        if (rawScoutUnitId === '' || rawScoutUnitId == null) {
+          patch.scout_unit_id = null;
+        } else {
+          const n = Number(rawScoutUnitId);
+          if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
+            return NextResponse.json(
+              { error: 'scout_unit_id должен быть целым положительным числом' },
+              { status: 400 },
+            );
+          }
+          patch.scout_unit_id = n;
+        }
+      }
+      if (rawSpecs != null && typeof rawSpecs === 'object' && !Array.isArray(rawSpecs)) {
+        patch.specs = sanitizeFleetSpecs(
+          kind,
+          syncVolumeIntoSpecs(
+            kind,
+            existing.volume,
+            { ...(existing.specs && typeof existing.specs === 'object' ? existing.specs : {}), ...rawSpecs },
+          ),
+        );
+      }
+      const { data, error } = await supabase.from('mixers').update(patch).eq('id', id).select().single();
+      if (error) {
+        if (/lifecycle_status|odometer_km|scout_unit_id/i.test(error.message)) {
+          return NextResponse.json({
+            error: 'Выполните scripts/fleet-lifecycle.sql',
+          }, { status: 400 });
+        }
+        throw error;
+      }
+      return NextResponse.json({ success: true, data });
+    }
 
     // Частичное обновление только тарифов — не затирает физику/ФИО из устаревшего UI.
     if (id && tariffPatch != null && typeof tariffPatch === 'object' && !Array.isArray(tariffPatch)) {

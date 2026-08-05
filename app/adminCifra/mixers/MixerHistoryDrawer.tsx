@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { X, Clock, MapPin, Package, Phone, Calendar, BarChart3, ChevronDown, ChevronUp } from 'lucide-react';
 import { pluralWord } from '@/lib/ruLocale';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 interface MixerTrip {
   id: number;
@@ -102,14 +103,20 @@ function formatMin(min: number): string {
   return m > 0 ? `${h}ч ${m}м` : `${h}ч`;
 }
 
+function fmtLocalDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function getPeriodDates(period: Period): { from: string; to: string } | null {
   if (period === 'all') return null;
   const days = period === '7d' ? 7 : period === '30d' ? 30 : 90;
   const from = new Date();
   from.setDate(from.getDate() - days);
   const to = new Date();
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  return { from: fmt(from), to: fmt(to) };
+  return { from: fmtLocalDate(from), to: fmtLocalDate(to) };
 }
 
 export default function MixerHistoryDrawer({ mixer, onClose }: Props) {
@@ -132,7 +139,9 @@ export default function MixerHistoryDrawer({ mixer, onClose }: Props) {
       params.set('to', dates.to);
     }
 
-    fetch(`/api/adminCifra/mixer-history?${params}`)
+    fetch(`/api/adminCifra/mixer-history?${params}`, {
+      headers: adminCifraAuthHeaders(),
+    })
       .then((r) => r.json())
       .then((data) => {
         if (data.success) {

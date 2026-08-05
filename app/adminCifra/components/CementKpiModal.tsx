@@ -12,6 +12,18 @@ import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { formatRuDateWithWeekday, pluralWord } from '@/lib/ruLocale';
 
+type HorizonBlock = {
+  dateFrom: string;
+  dateTo: string;
+  neededTons: number;
+  stockTons: number;
+  bringTons: number;
+  shortage: boolean;
+  orderCount: number;
+  remainingVolumeM3: number;
+  remainingStockTons?: number;
+};
+
 export type CementOverviewPayload = {
   date: string;
   asOf: string;
@@ -23,39 +35,24 @@ export type CementOverviewPayload = {
     maxTons: number;
     startTons: number;
     currentTons: number;
+    usableTons?: number;
     consumedTons: number;
     refillTons: number;
+    isNegative?: boolean;
   }>;
   totals: {
     startTons: number;
     currentTons: number;
+    usableTons?: number;
     consumedTons: number;
     maxTons: number;
     refillTons: number;
+    negativeSilosTons?: number;
   };
   day: { planTons: number; unloadedTons: number };
-  week: {
-    dateFrom: string;
-    dateTo: string;
-    neededTons: number;
-    stockTons: number;
-    bringTons: number;
-    shortage: boolean;
-    orderCount: number;
-    remainingVolumeM3: number;
-  };
-  shortfallOrders: Array<{
-    id: number;
-    grade: string;
-    client: string | null;
-    deliveryDate: string;
-    deliveryTime: string | null;
-    volumeM3: number;
-    remainingM3: number;
-    cementTons: number;
-    stockBeforeTons: number;
-    deficitTons: number;
-  }>;
+  dayAhead?: HorizonBlock;
+  tomorrow?: HorizonBlock;
+  week: HorizonBlock;
 };
 
 type Props = {
@@ -69,10 +66,21 @@ function parseLocalDate(dateKey: string): Date {
   return new Date(y, (m || 1) - 1, d || 1);
 }
 
+/** Точность до кг: 63.863 т; без лишних нулей. */
 function fmtTons(n: number): string {
   if (!Number.isFinite(n)) return '—';
-  const r = Math.round(n * 10) / 10;
-  return r % 1 === 0 ? String(Math.round(r)) : r.toFixed(1);
+  const r = Math.round(n * 1000) / 1000;
+  if (Math.abs(r) < 1e-9) return '0';
+  return r.toLocaleString('ru-RU', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3,
+  });
+}
+
+function fmtKgFromTons(tons: number): string {
+  if (!Number.isFinite(tons)) return '—';
+  const kg = Math.round(tons * 1000);
+  return kg.toLocaleString('ru-RU');
 }
 
 function fmtDateShort(ymd: string): string {
@@ -80,11 +88,126 @@ function fmtDateShort(ymd: string): string {
   return `${d}.${m}.${y}`;
 }
 
-function fmtTime(raw: string | null): string {
-  if (!raw) return '';
-  const s = String(raw);
-  if (/^\d{2}:\d{2}/.test(s)) return s.slice(0, 5);
-  return s;
+function HorizonCard({
+  title,
+  subtitle,
+  horizon,
+  fs,
+  sp,
+  stockLabel = 'Доступно на складе',
+}: {
+  title: string;
+  subtitle: string;
+  horizon: HorizonBlock;
+  fs: (n: number) => number;
+  sp: (n: number) => number;
+  stockLabel?: string;
+}) {
+  const shortage = horizon.shortage;
+  return (
+    <div
+      style={volumeCardSoftStyle({
+        borderRadius: 16,
+        padding: sp(14),
+        height: '100%',
+        border: shortage
+          ? '1px solid rgba(239,68,68,0.4)'
+          : '1px solid rgba(52,211,153,0.3)',
+      })}
+    >
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'space-between',
+          gap: sp(8),
+          marginBottom: sp(12),
+          alignItems: 'flex-start',
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: fs(17), fontWeight: 800, color: '#F1F5F9' }}>{title}</div>
+          <div
+            style={{
+              color: '#94A3B8',
+              fontSize: fs(13),
+              fontWeight: 600,
+              marginTop: 3,
+              lineHeight: 1.35,
+            }}
+          >
+            {subtitle}
+          </div>
+        </div>
+        {shortage ? (
+          <span
+            style={{
+              background: '#EF444425',
+              color: '#FCA5A5',
+              fontSize: fs(13),
+              fontWeight: 800,
+              borderRadius: 10,
+              padding: `${sp(5)}px ${sp(10)}px`,
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+            }}
+          >
+            −{fmtTons(horizon.bringTons)} т
+          </span>
+        ) : (
+          <span
+            style={{
+              background: '#10B98125',
+              color: '#34D399',
+              fontSize: fs(13),
+              fontWeight: 800,
+              borderRadius: 10,
+              padding: `${sp(5)}px ${sp(10)}px`,
+              flexShrink: 0,
+            }}
+          >
+            Хватает
+          </span>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr 1fr',
+          gap: sp(8),
+        }}
+      >
+        <div>
+          <div style={{ color: '#94A3B8', fontSize: fs(12), fontWeight: 600 }}>Нужно</div>
+          <div style={{ fontSize: fs(20), fontWeight: 800, color: '#E2E8F0', lineHeight: 1.2 }}>
+            {fmtTons(horizon.neededTons)}
+          </div>
+        </div>
+        <div>
+          <div style={{ color: '#94A3B8', fontSize: fs(12), fontWeight: 600, lineHeight: 1.25 }}>
+            {stockLabel}
+          </div>
+          <div style={{ fontSize: fs(20), fontWeight: 800, color: '#60A5FA', lineHeight: 1.2 }}>
+            {fmtTons(horizon.stockTons)}
+          </div>
+        </div>
+        <div>
+          <div style={{ color: '#94A3B8', fontSize: fs(12), fontWeight: 600 }}>Привезти</div>
+          <div
+            style={{
+              fontSize: fs(20),
+              fontWeight: 800,
+              color: shortage ? '#F87171' : '#34D399',
+              lineHeight: 1.2,
+            }}
+          >
+            {fmtTons(horizon.bringTons)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function CementKpiModal({ open, onClose, dateKey }: Props) {
@@ -162,9 +285,16 @@ export default function CementKpiModal({ open, onClose, dateKey }: Props) {
 
   if (!open || !mounted) return null;
 
-  const week = data?.week;
-  const shortage = Boolean(week?.shortage);
-  const shortList = data?.shortfallOrders || [];
+  const usable =
+    data?.totals.usableTons ??
+    data?.silos.reduce((s, x) => s + Math.max(0, x.currentTons), 0) ??
+    data?.totals.currentTons ??
+    0;
+  const anyShortage = Boolean(
+    data?.dayAhead?.shortage || data?.tomorrow?.shortage || data?.week?.shortage,
+  );
+
+  const weekBlock: HorizonBlock | null = data?.week ?? null;
 
   return createPortal(
     <div
@@ -189,23 +319,21 @@ export default function CementKpiModal({ open, onClose, dateKey }: Props) {
         className="scroll-hidden"
         style={volumeModalStyle({
           width: 'min(1280px, max(640px, 72vw), calc(100vw - 32px))',
-          maxHeight: 'min(92vh, calc(100vh - 32px))',
-          overflowY: 'auto',
+          overflow: 'visible',
           borderRadius: sp(22),
-          padding: `clamp(${sp(20)}px, 2.2vw, ${sp(36)}px)`,
-          border: shortage
+          padding: `clamp(${sp(16)}px, 1.8vw, ${sp(28)}px)`,
+          border: anyShortage
             ? '1.5px solid rgba(239,68,68,0.45)'
             : '1.5px solid rgba(96,165,250,0.35)',
         })}
       >
-        {/* Шапка */}
         <div
           style={{
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'flex-start',
             gap: sp(16),
-            marginBottom: sp(22),
+            marginBottom: sp(16),
           }}
         >
           <div style={{ minWidth: 0 }}>
@@ -218,7 +346,7 @@ export default function CementKpiModal({ open, onClose, dateKey }: Props) {
                 flexWrap: 'wrap',
               }}
             >
-              {shortage ? (
+              {anyShortage ? (
                 <AlertTriangle size={fs(26)} color="#F87171" />
               ) : (
                 <CheckCircle2 size={fs(26)} color="#34D399" />
@@ -226,7 +354,7 @@ export default function CementKpiModal({ open, onClose, dateKey }: Props) {
               <h2
                 style={{
                   margin: 0,
-                  fontSize: fs(28),
+                  fontSize: fs(24),
                   fontWeight: 800,
                   color: '#F1F5F9',
                   lineHeight: 1.15,
@@ -309,77 +437,131 @@ export default function CementKpiModal({ open, onClose, dateKey }: Props) {
 
         {data ? (
           <>
-            {/* Сводка дня */}
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                gap: sp(14),
-                marginBottom: sp(22),
+                gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                gap: sp(10),
+                marginBottom: sp(14),
               }}
             >
               {[
                 {
                   label: 'На начало дня',
                   value: `${fmtTons(data.totals.startTons)} т`,
+                  sub: `${fmtKgFromTons(data.totals.startTons)} кг`,
                   color: '#E2E8F0',
                 },
                 {
-                  label: data.isToday ? 'Сейчас (live)' : 'Остаток на день',
-                  value: `${fmtTons(data.totals.currentTons)} т`,
+                  label: data.isToday ? 'Доступно сейчас' : 'Доступный остаток',
+                  value: `${fmtTons(usable)} т`,
+                  sub: `${fmtKgFromTons(usable)} кг · без минусов в силосах`,
                   color: '#60A5FA',
                 },
                 {
                   label: 'Израсходовано',
                   value: `${fmtTons(data.totals.consumedTons)} т`,
+                  sub: `${fmtKgFromTons(data.totals.consumedTons)} кг`,
                   color: '#FBBF24',
-                },
-                {
-                  label: 'План дня / факт',
-                  value: `${fmtTons(data.day.unloadedTons)} / ${fmtTons(data.day.planTons)} т`,
-                  color: '#A5B4FC',
                 },
               ].map((card) => (
                 <div
                   key={card.label}
                   style={volumeCardSoftStyle({
-                    borderRadius: 16,
-                    padding: `${sp(16)}px ${sp(18)}px`,
+                    borderRadius: 14,
+                    padding: `${sp(12)}px ${sp(14)}px`,
                     minWidth: 0,
                   })}
                 >
                   <div
                     style={{
                       color: '#94A3B8',
-                      fontSize: fs(14),
+                      fontSize: fs(13),
                       fontWeight: 600,
-                      marginBottom: sp(8),
+                      marginBottom: sp(4),
                     }}
                   >
                     {card.label}
                   </div>
                   <div
                     style={{
-                      fontSize: fs(28),
+                      fontSize: fs(22),
                       fontWeight: 800,
                       color: card.color,
-                      lineHeight: 1.1,
-                      whiteSpace: 'nowrap',
+                      lineHeight: 1.15,
                     }}
                   >
                     {card.value}
                   </div>
+                  <div
+                    style={{
+                      marginTop: sp(4),
+                      color: '#64748B',
+                      fontSize: fs(12),
+                      fontWeight: 600,
+                    }}
+                  >
+                    {card.sub}
+                  </div>
                 </div>
               ))}
+              <div
+                style={volumeCardSoftStyle({
+                  borderRadius: 14,
+                  padding: `${sp(12)}px ${sp(14)}px`,
+                  minWidth: 0,
+                })}
+              >
+                <div
+                  style={{
+                    color: '#94A3B8',
+                    fontSize: fs(13),
+                    fontWeight: 600,
+                    marginBottom: sp(4),
+                  }}
+                >
+                  Факт / план
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    gap: sp(6),
+                    flexWrap: 'nowrap',
+                    whiteSpace: 'nowrap',
+                    fontSize: fs(20),
+                    fontWeight: 800,
+                    color: '#A5B4FC',
+                    lineHeight: 1.15,
+                  }}
+                >
+                  <span>{fmtTons(data.day.unloadedTons)}</span>
+                  <span style={{ color: '#64748B', fontWeight: 700 }}>/</span>
+                  <span>
+                    {fmtTons(data.day.planTons)}
+                    <span style={{ fontSize: fs(14), color: '#94A3B8', fontWeight: 700 }}> т</span>
+                  </span>
+                </div>
+                <div
+                  style={{
+                    marginTop: sp(4),
+                    color: '#64748B',
+                    fontSize: fs(12),
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  разгружено · план дня
+                </div>
+              </div>
             </div>
 
-            {/* Силосы */}
             <div
               style={{
-                fontSize: fs(20),
+                fontSize: fs(16),
                 fontWeight: 800,
                 color: '#F1F5F9',
-                marginBottom: sp(12),
+                marginBottom: sp(8),
               }}
             >
               По силосам
@@ -387,23 +569,27 @@ export default function CementKpiModal({ open, onClose, dateKey }: Props) {
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                gap: sp(14),
-                marginBottom: sp(24),
+                gridTemplateColumns: `repeat(${Math.max(1, data.silos.length)}, minmax(0, 1fr))`,
+                gap: sp(10),
+                marginBottom: sp(14),
               }}
             >
               {data.silos.map((s) => {
+                const usableSilo = s.usableTons ?? Math.max(0, s.currentTons);
                 const fillPct =
                   s.maxTons > 0
-                    ? Math.min(100, Math.round((Math.max(0, s.currentTons) / s.maxTons) * 100))
+                    ? Math.min(100, Math.round((usableSilo / s.maxTons) * 100))
                     : 0;
+                const neg = Boolean(s.isNegative || s.currentTons < 0);
                 return (
                   <div
                     key={s.siloId}
                     style={volumeCardSoftStyle({
-                      borderRadius: 18,
-                      padding: sp(18),
-                      border: '1px solid rgba(96,165,250,0.22)',
+                      borderRadius: 14,
+                      padding: sp(12),
+                      border: neg
+                        ? '1px solid rgba(248,113,113,0.4)'
+                        : '1px solid rgba(96,165,250,0.22)',
                     })}
                   >
                     <div
@@ -411,39 +597,50 @@ export default function CementKpiModal({ open, onClose, dateKey }: Props) {
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'baseline',
-                        marginBottom: sp(10),
-                        gap: sp(8),
+                        marginBottom: sp(6),
+                        gap: sp(6),
                       }}
                     >
-                      <span style={{ fontSize: fs(20), fontWeight: 800, color: '#F8FAFC' }}>
+                      <span style={{ fontSize: fs(16), fontWeight: 800, color: '#F8FAFC' }}>
                         {s.name}
                       </span>
-                      <span style={{ fontSize: fs(14), color: '#64748B', fontWeight: 600 }}>
-                        max {fmtTons(s.maxTons)} т
+                      <span style={{ fontSize: fs(12), color: '#64748B', fontWeight: 600 }}>
+                        max {fmtTons(s.maxTons)}
                       </span>
                     </div>
                     <div
                       style={{
-                        fontSize: fs(32),
+                        fontSize: fs(24),
                         fontWeight: 800,
-                        color: '#60A5FA',
+                        color: neg ? '#F87171' : '#60A5FA',
                         lineHeight: 1,
-                        marginBottom: sp(10),
+                        marginBottom: sp(4),
                       }}
                     >
                       {fmtTons(s.currentTons)}
-                      <span style={{ fontSize: fs(18), color: '#94A3B8', fontWeight: 700 }}>
+                      <span style={{ fontSize: fs(14), color: '#94A3B8', fontWeight: 700 }}>
                         {' '}
                         т
                       </span>
                     </div>
                     <div
                       style={{
-                        height: sp(12),
+                        fontSize: fs(11),
+                        color: '#64748B',
+                        fontWeight: 600,
+                        marginBottom: sp(6),
+                      }}
+                    >
+                      {fmtKgFromTons(s.currentTons)} кг
+                      {neg ? ' · в прогнозе 0' : ''}
+                    </div>
+                    <div
+                      style={{
+                        height: sp(8),
                         borderRadius: 9999,
                         background: '#334155',
                         overflow: 'hidden',
-                        marginBottom: sp(12),
+                        marginBottom: sp(8),
                       }}
                     >
                       <div
@@ -457,26 +654,24 @@ export default function CementKpiModal({ open, onClose, dateKey }: Props) {
                     </div>
                     <div
                       style={{
-                        display: 'grid',
-                        gridTemplateColumns: '1fr 1fr',
-                        gap: sp(8),
-                        fontSize: fs(15),
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: `${sp(4)}px ${sp(10)}px`,
+                        fontSize: fs(12),
                         fontWeight: 600,
+                        color: '#94A3B8',
                       }}
                     >
-                      <div style={{ color: '#94A3B8' }}>
-                        Начало дня:{' '}
-                        <span style={{ color: '#E2E8F0' }}>{fmtTons(s.startTons)} т</span>
-                      </div>
-                      <div style={{ color: '#94A3B8' }}>
-                        Расход:{' '}
-                        <span style={{ color: '#FBBF24' }}>{fmtTons(s.consumedTons)} т</span>
-                      </div>
+                      <span>
+                        нач. <span style={{ color: '#E2E8F0' }}>{fmtTons(s.startTons)}</span>
+                      </span>
+                      <span>
+                        расх. <span style={{ color: '#FBBF24' }}>{fmtTons(s.consumedTons)}</span>
+                      </span>
                       {s.refillTons > 0 ? (
-                        <div style={{ color: '#94A3B8', gridColumn: '1 / -1' }}>
-                          Внесено:{' '}
-                          <span style={{ color: '#34D399' }}>{fmtTons(s.refillTons)} т</span>
-                        </div>
+                        <span>
+                          + <span style={{ color: '#34D399' }}>{fmtTons(s.refillTons)}</span>
+                        </span>
                       ) : null}
                     </div>
                   </div>
@@ -484,213 +679,53 @@ export default function CementKpiModal({ open, onClose, dateKey }: Props) {
               })}
             </div>
 
-            {/* Неделя */}
-            <div
-              style={volumeCardSoftStyle({
-                borderRadius: 18,
-                padding: sp(20),
-                marginBottom: sp(22),
-                border: shortage
-                  ? '1px solid rgba(239,68,68,0.4)'
-                  : '1px solid rgba(52,211,153,0.3)',
-              })}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  justifyContent: 'space-between',
-                  gap: sp(12),
-                  marginBottom: sp(16),
-                  alignItems: 'center',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: fs(20), fontWeight: 800, color: '#F1F5F9' }}>
-                    Неделя вперёд
-                  </div>
-                  <div style={{ color: '#94A3B8', fontSize: fs(15), fontWeight: 600, marginTop: 4 }}>
-                    {fmtDateShort(data.week.dateFrom)} — {fmtDateShort(data.week.dateTo)}
-                    {' · '}
-                    {pluralWord(data.week.orderCount, 'заявка', 'заявки', 'заявок')}
-                    {' · '}
-                    {fmtTons(data.week.remainingVolumeM3)} м³ осталось закрыть
-                  </div>
-                </div>
-                {shortage ? (
-                  <span
-                    style={{
-                      background: '#EF444425',
-                      color: '#FCA5A5',
-                      fontSize: fs(16),
-                      fontWeight: 800,
-                      borderRadius: 12,
-                      padding: `${sp(8)}px ${sp(14)}px`,
-                    }}
-                  >
-                    Не хватает {fmtTons(data.week.bringTons)} т
-                  </span>
-                ) : (
-                  <span
-                    style={{
-                      background: '#10B98125',
-                      color: '#34D399',
-                      fontSize: fs(16),
-                      fontWeight: 800,
-                      borderRadius: 12,
-                      padding: `${sp(8)}px ${sp(14)}px`,
-                    }}
-                  >
-                    Хватает на неделю
-                  </span>
-                )}
-              </div>
-
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-                  gap: sp(14),
-                }}
-              >
-                <div>
-                  <div style={{ color: '#94A3B8', fontSize: fs(14), fontWeight: 600 }}>Нужно</div>
-                  <div style={{ fontSize: fs(30), fontWeight: 800, color: '#E2E8F0' }}>
-                    {fmtTons(data.week.neededTons)} т
-                  </div>
-                </div>
-                <div>
-                  <div style={{ color: '#94A3B8', fontSize: fs(14), fontWeight: 600 }}>На складе</div>
-                  <div style={{ fontSize: fs(30), fontWeight: 800, color: '#60A5FA' }}>
-                    {fmtTons(data.week.stockTons)} т
-                  </div>
-                </div>
-                <div>
-                  <div style={{ color: '#94A3B8', fontSize: fs(14), fontWeight: 600 }}>
-                    Привезти
-                  </div>
-                  <div
-                    style={{
-                      fontSize: fs(30),
-                      fontWeight: 800,
-                      color: shortage ? '#F87171' : '#34D399',
-                    }}
-                  >
-                    {fmtTons(data.week.bringTons)} т
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Заявки с нехваткой */}
             <div
               style={{
-                fontSize: fs(20),
+                fontSize: fs(16),
                 fontWeight: 800,
                 color: '#F1F5F9',
-                marginBottom: sp(12),
+                marginBottom: sp(8),
               }}
             >
-              Заявки, на которые цемента не хватит
+              Прогноз: день → завтра → неделя
             </div>
-            {shortList.length === 0 ? (
-              <div
-                style={volumeCardSoftStyle({
-                  borderRadius: 16,
-                  padding: sp(20),
-                  color: '#34D399',
-                  fontSize: fs(18),
-                  fontWeight: 700,
-                })}
-              >
-                При текущем остатке все открытые заявки на 7 дней закрываются.
-              </div>
-            ) : (
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: sp(10),
-                }}
-              >
-                {shortList.map((o) => (
-                  <div
-                    key={o.id}
-                    style={volumeCardSoftStyle({
-                      borderRadius: 14,
-                      padding: `${sp(14)}px ${sp(16)}px`,
-                      border: '1px solid rgba(239,68,68,0.3)',
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                      gap: sp(10),
-                      alignItems: 'center',
-                    })}
-                  >
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: fs(18), fontWeight: 800, color: '#F8FAFC' }}>
-                        #{o.id}
-                        <span style={{ color: '#94A3B8', fontWeight: 600 }}>
-                          {' · '}
-                          {fmtDateShort(o.deliveryDate)}
-                          {o.deliveryTime ? ` ${fmtTime(o.deliveryTime)}` : ''}
-                        </span>
-                      </div>
-                      <div
-                        style={{
-                          fontSize: fs(15),
-                          color: '#CBD5E1',
-                          fontWeight: 600,
-                          marginTop: 2,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {o.grade}
-                        {o.client ? ` · ${o.client}` : ''}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ color: '#64748B', fontSize: fs(13), fontWeight: 600 }}>
-                        Осталось
-                      </div>
-                      <div style={{ fontSize: fs(20), fontWeight: 800, color: '#E2E8F0' }}>
-                        {fmtTons(o.remainingM3)} м³
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ color: '#64748B', fontSize: fs(13), fontWeight: 600 }}>
-                        Нужно цемента
-                      </div>
-                      <div style={{ fontSize: fs(20), fontWeight: 800, color: '#60A5FA' }}>
-                        {fmtTons(o.cementTons)} т
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ color: '#64748B', fontSize: fs(13), fontWeight: 600 }}>
-                        Дефицит
-                      </div>
-                      <div style={{ fontSize: fs(20), fontWeight: 800, color: '#F87171' }}>
-                        {fmtTons(o.deficitTons)} т
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
             <div
               style={{
-                marginTop: sp(20),
-                color: '#64748B',
-                fontSize: fs(14),
-                fontWeight: 500,
-                lineHeight: 1.45,
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                gap: sp(10),
               }}
             >
-              Расход «live» — фактические списания со склада за выбранный день. Прогноз недели —
-              по остатку силосов сейчас и неразгруженным объёмам заявок. Симуляция идёт по дате и
-              времени доставки.
+              {data.dayAhead ? (
+                <HorizonCard
+                  title="Выбранный день"
+                  subtitle={`${fmtDateShort(data.dayAhead.dateFrom)} · ${pluralWord(data.dayAhead.orderCount, 'заявка', 'заявки', 'заявок')} · ${fmtTons(data.dayAhead.remainingVolumeM3)} м³`}
+                  horizon={data.dayAhead}
+                  fs={fs}
+                  sp={sp}
+                />
+              ) : null}
+
+              {data.tomorrow ? (
+                <HorizonCard
+                  title="Следующий день"
+                  subtitle={`${fmtDateShort(data.tomorrow.dateFrom)} · ${pluralWord(data.tomorrow.orderCount, 'заявка', 'заявки', 'заявок')} · ${fmtTons(data.tomorrow.remainingVolumeM3)} м³`}
+                  horizon={data.tomorrow}
+                  fs={fs}
+                  sp={sp}
+                  stockLabel="После дня"
+                />
+              ) : null}
+
+              {weekBlock ? (
+                <HorizonCard
+                  title="Неделя"
+                  subtitle={`${fmtDateShort(weekBlock.dateFrom)} — ${fmtDateShort(weekBlock.dateTo)} · ${pluralWord(weekBlock.orderCount, 'заявка', 'заявки', 'заявок')} · ${fmtTons(weekBlock.remainingVolumeM3)} м³`}
+                  horizon={weekBlock}
+                  fs={fs}
+                  sp={sp}
+                />
+              ) : null}
             </div>
           </>
         ) : null}

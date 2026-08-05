@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "cron:scout": "bash scripts/cron-curl.sh scout-sync"
   },
   "dependencies": {
     "@maxhub/max-ui": "^0.1.14",

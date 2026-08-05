@@ -1,6 +1,9 @@
 /**
  * Обзор цемента для KPI на «Заявках»:
- * силосы на начало дня, live-остаток/расход, заявки с нехваткой, сколько привезти на 7 дней.
+ * силосы (live), прогноз на выбранный день / завтра / 7 дней, заявки с дефицитом.
+ *
+ * Остаток для прогноза = сумма max(0, силос): минус в силосе цемента не даёт.
+ * Точность — до кг (3 знака в тоннах).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
@@ -25,16 +28,13 @@ function moscowDayBounds(dateKey: string): { start: string; end: string } {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
+/** До кг: 63.863 т. */
+function roundKgTons(n: number): number {
+  return Math.round(n * 1000) / 1000;
 }
 
 function kgToTons(kg: number): number {
-  return round2(kg / 1000);
+  return roundKgTons(kg / 1000);
 }
 
 function orderDateKey(raw: unknown): string {
@@ -55,6 +55,69 @@ function addDaysYmd(ymd: string, days: number): string {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 }
 
+type NeedRow = {
+  id: number;
+  grade: string;
+  client: string | null;
+  deliveryDate: string;
+  deliveryTime: string | null;
+  volumeM3: number;
+  remainingM3: number;
+  cementTons: number;
+};
+
+type ShortfallRow = NeedRow & { stockBeforeTons: number; deficitTons: number };
+
+type HorizonForecast = {
+  dateFrom: string;
+  dateTo: string;
+  neededTons: number;
+  /** Остаток склада на ВХОДЕ в горизонт (уже после предыдущих дней). */
+  stockTons: number;
+  bringTons: number;
+  shortage: boolean;
+  orderCount: number;
+  remainingVolumeM3: number;
+  shortfallOrders: ShortfallRow[];
+  /** Остаток после симуляции заявок горизонта (не ниже 0). */
+  remainingStockTons: number;
+};
+
+function buildHorizon(
+  needRows: NeedRow[],
+  stockTons: number,
+  dateFrom: string,
+  dateTo: string,
+): HorizonForecast {
+  const neededTons = roundKgTons(needRows.reduce((s, r) => s + r.cementTons, 0));
+  const bringTons = roundKgTons(Math.max(0, neededTons - stockTons));
+  let pool = stockTons;
+  const shortfallOrders: ShortfallRow[] = [];
+  for (const row of needRows) {
+    const before = roundKgTons(pool);
+    if (before + 1e-9 < row.cementTons) {
+      shortfallOrders.push({
+        ...row,
+        stockBeforeTons: before,
+        deficitTons: roundKgTons(row.cementTons - Math.max(0, before)),
+      });
+    }
+    pool = roundKgTons(pool - row.cementTons);
+  }
+  return {
+    dateFrom,
+    dateTo,
+    neededTons,
+    stockTons: roundKgTons(stockTons),
+    bringTons,
+    shortage: bringTons > 1e-9,
+    orderCount: needRows.length,
+    remainingVolumeM3: roundKgTons(needRows.reduce((s, r) => s + r.remainingM3, 0)),
+    shortfallOrders,
+    remainingStockTons: roundKgTons(Math.max(0, pool)),
+  };
+}
+
 export async function GET(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request);
   if (auth.error) return auth.error;
@@ -70,6 +133,7 @@ export async function GET(request: NextRequest) {
     const isFuture = dateIso > today;
     const { start, end } = moscowDayBounds(dateIso);
 
+    const tomorrowIso = addDaysYmd(dateIso, 1);
     const forecastDates: string[] = [];
     for (let i = 0; i < 7; i++) forecastDates.push(addDaysYmd(dateIso, i));
     const forecastSet = new Set(forecastDates);
@@ -120,7 +184,6 @@ export async function GET(request: NextRequest) {
 
     let mixerRows: { order_id: number; volume: number; status: string }[] = [];
     if (weekOrderIds.length > 0) {
-      // чанками — PostgREST лимит IN
       const chunk = 200;
       for (let i = 0; i < weekOrderIds.length; i += chunk) {
         const slice = weekOrderIds.slice(i, i + chunk);
@@ -133,7 +196,6 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Списания рейсов по силосам (кг)
     const consumedKgBySilo = new Map<number, number>();
     for (const spec of SILO_SPEC) consumedKgBySilo.set(spec.silo_id, 0);
     let tripsKg = 0;
@@ -147,7 +209,6 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Компенсация MEKA — как в cement-day
     const compensation = await getMekaCementCompensation(dateIso);
     let compensationAdjKg = 0;
     if (compensation?.status === 'applied') {
@@ -162,9 +223,8 @@ export async function GET(request: NextRequest) {
         }
       }
     }
-    const consumedLiveKg = round1(tripsKg + compensationAdjKg);
+    const consumedLiveKg = Math.round((tripsKg + compensationAdjKg) * 10) / 10;
 
-    // Операции дня: начало (old первой) и конец (new последней), внесения
     type OpAgg = {
       firstOldKg: number | null;
       lastNewKg: number | null;
@@ -198,43 +258,51 @@ export async function GET(request: NextRequest) {
       if (agg.firstOldKg != null) {
         startTons = kgToTons(agg.firstOldKg);
       } else if (isFuture) {
-        startTons = round2(live);
-      } else if (isToday) {
-        // Не было движений — на начало дня = сейчас; иначе восстановим от live + расход − внесения
-        startTons = round2(live + consumedTons - refillTons);
+        startTons = roundKgTons(live);
       } else {
-        startTons = round2(live + consumedTons - refillTons);
+        startTons = roundKgTons(live + consumedTons - refillTons);
       }
 
       let currentTons: number;
       if (isToday || isFuture) {
-        currentTons = round2(live);
+        currentTons = roundKgTons(live);
       } else if (agg.lastNewKg != null) {
         currentTons = kgToTons(agg.lastNewKg);
       } else {
-        currentTons = round2(startTons - consumedTons + refillTons);
+        currentTons = roundKgTons(startTons - consumedTons + refillTons);
       }
 
       return {
         siloId: spec.silo_id,
         name: siloNameById(spec.silo_id),
         maxTons: spec.max,
-        startTons: round2(startTons),
-        currentTons: round2(currentTons),
-        consumedTons: round2(Math.max(0, consumedTons)),
-        refillTons: round2(refillTons),
+        startTons: roundKgTons(startTons),
+        currentTons: roundKgTons(currentTons),
+        /** Для прогноза: минус не даёт цемента */
+        usableTons: roundKgTons(Math.max(0, currentTons)),
+        consumedTons: roundKgTons(Math.max(0, consumedTons)),
+        refillTons: roundKgTons(refillTons),
+        isNegative: currentTons < -1e-9,
       };
     });
 
+    const rawCurrentTons = roundKgTons(silos.reduce((s, x) => s + x.currentTons, 0));
+    const usableStockTons = roundKgTons(silos.reduce((s, x) => s + x.usableTons, 0));
+
     const totals = {
-      startTons: round2(silos.reduce((s, x) => s + x.startTons, 0)),
-      currentTons: round2(silos.reduce((s, x) => s + x.currentTons, 0)),
-      consumedTons: round2(kgToTons(consumedLiveKg)),
+      startTons: roundKgTons(silos.reduce((s, x) => s + Math.max(0, x.startTons), 0)),
+      /** Сырая сумма (может быть ниже usable из‑за минуса в силосе) */
+      currentTons: rawCurrentTons,
+      /** Доступный остаток для отгрузки: без отрицательных силосов */
+      usableTons: usableStockTons,
+      consumedTons: kgToTons(consumedLiveKg),
       maxTons: SILO_SPEC.reduce((s, x) => s + x.max, 0),
-      refillTons: round2(silos.reduce((s, x) => s + x.refillTons, 0)),
+      refillTons: roundKgTons(silos.reduce((s, x) => s + x.refillTons, 0)),
+      negativeSilosTons: roundKgTons(
+        silos.reduce((s, x) => s + (x.currentTons < 0 ? x.currentTons : 0), 0),
+      ),
     };
 
-    // Разгрузка по заявкам (статус Разгружен)
     const unloadedByOrder = new Map<number, number>();
     for (const m of mixerRows) {
       if (String(m.status) !== 'Разгружен') continue;
@@ -269,7 +337,6 @@ export async function GET(request: NextRequest) {
       )
       .filter((o) => forecastSet.has(o.delivery_date) && o.volume > 0);
 
-    // План/факт дня выбранной даты (как на карточке)
     let dayPlanKg = 0;
     let dayUnloadedKg = 0;
     for (const o of weekOrders) {
@@ -284,18 +351,6 @@ export async function GET(request: NextRequest) {
       dayUnloadedKg += calculateCementUsageKg(recipe, unloaded);
     }
 
-    // Остаток по заявкам недели, который ещё надо закрыть цементом
-    type NeedRow = {
-      id: number;
-      grade: string;
-      client: string | null;
-      deliveryDate: string;
-      deliveryTime: string | null;
-      volumeM3: number;
-      remainingM3: number;
-      cementTons: number;
-    };
-
     const needRows: NeedRow[] = [];
     for (const o of weekOrders) {
       const recipe = findRecipeByGrade(recipes, o.grade);
@@ -303,7 +358,7 @@ export async function GET(request: NextRequest) {
         o.status === 'completed'
           ? o.volume
           : Math.min(o.volume, unloadedByOrder.get(o.id) || 0);
-      const remainingM3 = Math.max(0, round2(o.volume - unloaded));
+      const remainingM3 = Math.max(0, roundKgTons(o.volume - unloaded));
       if (remainingM3 <= 0) continue;
       const cementKg = calculateCementUsageKg(recipe, remainingM3);
       if (!(cementKg > 0)) continue;
@@ -313,7 +368,7 @@ export async function GET(request: NextRequest) {
         client: o.client,
         deliveryDate: o.delivery_date,
         deliveryTime: o.delivery_time,
-        volumeM3: round2(o.volume),
+        volumeM3: roundKgTons(o.volume),
         remainingM3,
         cementTons: kgToTons(cementKg),
       });
@@ -325,26 +380,18 @@ export async function GET(request: NextRequest) {
       return String(a.deliveryTime || '').localeCompare(String(b.deliveryTime || ''));
     });
 
-    const weekNeededTons = round2(needRows.reduce((s, r) => s + r.cementTons, 0));
-    const stockTons = totals.currentTons;
-    const bringTons = round1(Math.max(0, weekNeededTons - stockTons));
+    const dayNeeds = needRows.filter((r) => r.deliveryDate === dateIso);
+    const tomorrowNeeds = needRows.filter((r) => r.deliveryDate === tomorrowIso);
 
-    // Симуляция: куда не хватит при текущем остатке
-    let pool = stockTons;
-    const shortfallOrders: Array<
-      NeedRow & { stockBeforeTons: number; deficitTons: number }
-    > = [];
-    for (const row of needRows) {
-      const before = round2(pool);
-      if (before + 1e-9 < row.cementTons) {
-        shortfallOrders.push({
-          ...row,
-          stockBeforeTons: before,
-          deficitTons: round2(row.cementTons - Math.max(0, before)),
-        });
-      }
-      pool = round2(pool - row.cementTons);
-    }
+    // День → завтра цепочкой: после выбранного дня на складе остаётся меньше.
+    const dayHorizon = buildHorizon(dayNeeds, usableStockTons, dateIso, dateIso);
+    const tomorrowHorizon = buildHorizon(
+      tomorrowNeeds,
+      dayHorizon.remainingStockTons,
+      tomorrowIso,
+      tomorrowIso,
+    );
+    const weekHorizon = buildHorizon(needRows, usableStockTons, dateIso, weekEnd);
 
     return NextResponse.json({
       date: dateIso,
@@ -357,17 +404,13 @@ export async function GET(request: NextRequest) {
         planTons: kgToTons(dayPlanKg),
         unloadedTons: kgToTons(dayUnloadedKg),
       },
-      week: {
-        dateFrom: dateIso,
-        dateTo: weekEnd,
-        neededTons: weekNeededTons,
-        stockTons: round2(stockTons),
-        bringTons,
-        shortage: bringTons > 0,
-        orderCount: needRows.length,
-        remainingVolumeM3: round2(needRows.reduce((s, r) => s + r.remainingM3, 0)),
-      },
-      shortfallOrders,
+      /** Остаток заявок выбранного дня vs доступный склад */
+      dayAhead: dayHorizon,
+      /** Следующий календарный день после выбранной даты */
+      tomorrow: tomorrowHorizon,
+      week: weekHorizon,
+      /** @deprecated совместимость со старым UI — то же, что week.shortfallOrders */
+      shortfallOrders: weekHorizon.shortfallOrders,
     });
   } catch (err: any) {
     console.error('cement-overview GET:', err);

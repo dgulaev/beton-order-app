@@ -1,6 +1,6 @@
 ---
 name: Развитие Техники (FMS)
-overview: "Поэтапное развитие раздела /adminCifra/mixers: электронная сервисная книга, ТО/ремонт, топливо и расходы, осмотры, водители, аналитика TCO. Интеграции: СКАУТ (СПИК), Платон (CSV), автовесы (UniServer), АСВГК через Платон. Берём лучшее из Завгар Онлайн, сохраняя связку с заявками и операционной логистикой бетона."
+overview: "Поэтапное развитие раздела /adminCifra/mixers: электронная сервисная книга, ТО/ремонт, топливо и расходы, осмотры, водители, аналитика TCO. Фаза 1 включает СКАУТ (СПИК, online/GPS). Прочие интеграции: Платон (CSV), автовесы (UniServer), АСВГК через Платон. Берём лучшее из Завгар Онлайн, сохраняя связку с заявками и операционной логистикой бетона."
 todos:
   - id: phase1-drawer
     content: "Фаза 1: drawer карточки ТС с вкладками (Паспорт, Рейсы, Документы)"
@@ -22,6 +22,18 @@ todos:
     status: pending
   - id: phase1-history-all
     content: "Фаза 1: история рейсов для всех видов техники (FleetHistoryDrawer)"
+    status: pending
+  - id: phase1-scout-client
+    content: "Фаза 1: СКАУТ — lib/integrations/scout/client.ts (Login, units, online)"
+    status: pending
+  - id: phase1-scout-db
+    content: "Фаза 1: СКАУТ — scout_unit_id в mixers + fleet_telemetry_snapshots"
+    status: pending
+  - id: phase1-scout-sync
+    content: "Фаза 1: СКАУТ — cron sync worker (Mac Mini / api route), poll 2 мин"
+    status: pending
+  - id: phase1-scout-ui
+    content: "Фаза 1: СКАУТ — badge online/offline в списке + блок телематики в drawer"
     status: pending
   - id: phase2-schedule
     content: "Фаза 2: график ТО — шаблоны по пробегу/моточасам/календарю"
@@ -64,9 +76,6 @@ todos:
     status: pending
   - id: int-weighbridge
     content: "Интеграция: автовесы (UniServer/VesySoft) — edge-agent, weighbridge_events, bulk"
-    status: pending
-  - id: int-scout-mvp
-    content: "Интеграция: СКАУТ СПИК — sync worker, fleet_telemetry, scout_unit_id"
     status: pending
   - id: int-platon-csv
     content: "Интеграция: Платон — импорт CSV (логистический отчёт, выписка), platon_charges"
@@ -170,7 +179,7 @@ isProject: true
 | Доп. расходы | `fleet_expenses` |
 | Напоминания | `fleet_reminders` |
 | Стоимость 1 км | Агрегация из рейсов + затрат |
-| GPS | Фаза 6, опционально |
+| GPS / телематика | **Фаза 1** — СКАУТ СПИК (INT-2) |
 | Путевые листы | Рейсы `order_mixers` (своя модель, не дублировать) |
 
 ---
@@ -186,8 +195,9 @@ isProject: true
         ├── Топливо      — Фаза 3
         ├── Расходы      — Фаза 3
         ├── Документы    — Фаза 1
+        ├── Телематика   — Фаза 1 (СКАУТ: карта, скорость, online/offline)
         ├── Осмотры      — Фаза 4
-        └── Интеграции   — СКАУТ, Платон, автовесы (см. раздел ниже)
+        └── Интеграции   — Платон, автовесы (Фаза 1+: СКАУТ уже в «Телематика»)
 ```
 
 **Решение v1:** drawer (как `MixerHistoryDrawer`), без отдельного URL `/mixers/[id]` — меньше рефакторинга.
@@ -203,19 +213,72 @@ isProject: true
 
 ---
 
-## Фаза 1 — Карточка ТС 2.0 (2–3 недели)
+## Фаза 1 — Карточка ТС 2.0 + СКАУТ (3–4 недели)
 
-**Цель:** электронная сервисная книга — фундамент для всех следующих модулей.
+**Цель:** электронная сервисная книга **и** живая телематика из СКАУТ — фундамент для всех следующих модулей.
 
 | Задача | Детали |
 |---|---|
-| `FleetUnitDrawer` | Боковая панель по клику на карточку; вкладки Паспорт / Рейсы / Документы |
+| `FleetUnitDrawer` | Боковая панель по клику на карточку; вкладки Паспорт / Рейсы / Документы / **Телематика** |
 | Паспорт | VIN, год выпуска, фото, одометр (`odometer_km`), моточасы (`engine_hours`), тип топлива, объём бака → `specs` или колонки |
 | `lifecycle_status` | `active` \| `repair` \| `conservation` \| `sold` \| `rented_out` — отдельно от операционного статуса рейса |
 | Документы | Таблица `fleet_documents`: type (sts, osago, inspection, lease), file_url, expires_at; upload в Supabase Storage |
 | Напоминания | `fleet_reminders`: kind, due_date, due_odometer, status; badge на карточке «ОСАГО через 14 дн.» |
 | Удаление UI | Кнопка + confirm → `DELETE /api/adminCifra/mixers?id=` |
 | История всех видов | `FleetHistoryDrawer` — не только `mixer`, но dump_truck, tonar и т.д. (где есть привязка к рейсам) |
+| **СКАУТ — client** | `lib/integrations/scout/client.ts`: Login → SessionId, `getAllUnitsPaged`, Subscribe + GetOnlineData |
+| **СКАУТ — sync** | Vercel Cron каждые **2 мин** (`*/2`) → `fleet_telemetry_snapshots`; env: `SCOUT_SERVER_URL`, `SCOUT_LOGIN`, `SCOUT_PASSWORD` |
+| **СКАУТ — маппинг** | Колонка `mixers.scout_unit_id`; первичная привязка по `Name` (СКАУТ) ≈ `mixers.number`; UI ручной override |
+| **СКАУТ — UI** | Badge 🟢/🔴 в списке техники; вкладка «Телематика»: lat/lon, скорость, адрес, время последнего сигнала, мини-карта |
+
+### СКАУТ — проверенное подключение (04.08.2026)
+
+| Параметр | Значение |
+|---|---|
+| BaseAddress | `http://724033.ru:8081` |
+| Пользователь API | Трейдком (UserId: 502) |
+| Объектов в СКАУТ | **13** (2490 ЕМ 32, 3310 ЕМ 32, 4323ЕН, К 332 КК, Н 627 УТ, О 011 ЕВ, О 021 УХ, О 157 РС, О 262 УА, О 270/271 УН, О 285 ЕХ, Р 961 АК) |
+| Login | ✅ `IsAuthenticated: true` |
+| OnlineData | ✅ Subscribe с `UnitIds` → координаты, скорость, адрес |
+| Offline | 3310 ЕМ 32 — последний сигнал 22.06.2026 (алерт в UI) |
+
+### СКАУТ — справочник UnitId и ручная привязка
+
+Если машина уже есть в adminCifra, но номер записан иначе, чем `Name` в СКАУТ — автопривязка не сработает.
+
+**Вариант B — ручная привязка**
+
+1. Открой **Карточка** → вкладка **Паспорт**
+2. Поле **СКАУТ UnitId** (например `3741` для «О 021 УХ»)
+3. **Сохранить паспорт** → sync подтянет телематику (автосинк после сохранения или кнопка «↻ Обновить GPS»)
+
+**UnitId из СКАУТ** (13 объектов на мониторинге):
+
+| UnitId | Название (СКАУТ) |
+|--------|------------------|
+| 2463 | 2490 ЕМ 32 |
+| 2602 | 3310 ЕМ 32 |
+| 3365 | 4323ЕН |
+| 3921 | К 332 КК |
+| 2855 | Н 627 УТ |
+| 3437 | О 011 ЕВ |
+| 3741 | О 021 УХ |
+| 3234 | О 157 РС |
+| 3617 | О 262 УА |
+| 3674 | О 270 УН |
+| 3675 | О 271 УН |
+| 3649 | О 285 ЕХ |
+| 3743 | Р 961 АК |
+
+**MVP Фазы 1 (только online):**
+1. Последняя точка: lat, lon, speed, `last_message_at`, адрес
+2. Статус online/offline (>15 мин без данных)
+3. Badge в списке mixers
+
+**Отложено на Фазу 3 (из INT-2 v2):**
+- Одометр из `StatisticsController` → автообновление `odometer_km`
+- Топливо из `FuelEvent` / датчиков → `fuel_entries`
+- ETA в планировщике
 
 ### Схема БД — Фаза 1
 
@@ -225,7 +288,23 @@ isProject: true
 ALTER TABLE mixers
   ADD COLUMN IF NOT EXISTS lifecycle_status TEXT DEFAULT 'active',
   ADD COLUMN IF NOT EXISTS odometer_km NUMERIC,
-  ADD COLUMN IF NOT EXISTS engine_hours NUMERIC;
+  ADD COLUMN IF NOT EXISTS engine_hours NUMERIC,
+  ADD COLUMN IF NOT EXISTS scout_unit_id INT;
+
+CREATE TABLE IF NOT EXISTS fleet_telemetry_snapshots (
+  id BIGSERIAL PRIMARY KEY,
+  mixer_id BIGINT NOT NULL REFERENCES mixers(id) ON DELETE CASCADE,
+  scout_unit_id INT,
+  lat NUMERIC,
+  lon NUMERIC,
+  speed_kmh NUMERIC,
+  address TEXT,
+  last_message_at TIMESTAMPTZ,
+  is_online BOOLEAN DEFAULT false,
+  raw JSONB,
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (mixer_id)
+);
 
 CREATE TABLE IF NOT EXISTS fleet_documents (
   id BIGSERIAL PRIMARY KEY,
@@ -256,7 +335,26 @@ CREATE TABLE IF NOT EXISTS fleet_reminders (
 |---|---|
 | `/api/adminCifra/fleet/documents` | GET, POST, DELETE |
 | `/api/adminCifra/fleet/reminders` | GET, POST, PATCH |
-| `/api/adminCifra/mixers` | PATCH — расширить для lifecycle, odometer |
+| `/api/adminCifra/mixers` | PATCH — расширить для lifecycle, odometer, scout_unit_id |
+| `/api/adminCifra/fleet/telemetry` | GET — последний snapshot по mixer_id / список для страницы mixers |
+| `/api/adminCifra/integrations/scout/sync` | POST — cron-trigger (секрет в заголовке); вызывает client + upsert snapshots |
+| `/api/adminCifra/integrations/scout/units` | GET — список объектов СКАУТ для UI маппинга |
+
+**Код интеграции (Фаза 1):**
+
+```
+lib/integrations/scout/
+  client.ts   — Login, getAllUnitsPaged, subscribeOnline, getOnlineData
+  sync.ts     — map units → mixers, upsert fleet_telemetry_snapshots
+  types.ts    — ScoutUnit, ScoutOnlinePoint
+scripts/fleet-lifecycle.sql  — scout_unit_id + fleet_telemetry_snapshots (вместе с documents)
+```
+
+**Cron (прод + локаль):**
+- **Vercel:** `/api/cron/scout-sync` каждые **2 мин** (`vercel.json`: `*/2 * * * *`)
+- **Локально (`next dev` / `next start` не на Vercel):** `instrumentation.ts` → `lib/localCrons.ts` (те же 2 мин); выкл. `ENABLE_LOCAL_CRONS=0`
+- **Mac mini после cutover:** crontab `*/2` + `scripts/cron-curl.sh scout-sync` (см. [`переход_на_mac_mini.plan.md`](переход_на_mac_mini.plan.md) Фаза 4); на сервере `ENABLE_LOCAL_CRONS=0`
+- Ручной вызов: `npm run cron:scout`
 
 ---
 
@@ -548,11 +646,13 @@ CREATE TABLE weighbridge_events (
 
 ---
 
-### INT-2 — СКАУТ (телематика / GPS)
+### INT-2 — СКАУТ (телематика / GPS) — **часть Фазы 1**
 
-**Когда:** если на машинах установлены блоки СКАУТ и есть доступ к СКАУТ-Платформе.
+**Статус:** подключение проверено 04.08.2026. BaseAddress: `http://724033.ru:8081`, 13 объектов, Login OK.
 
-**API:** [СПИК](https://university.scout-gps.ru/wiki/%D0%94%D0%BE%D0%BA%D1%83%D0%BC%D0%B5%D0%BD%D1%82%D0%B0%D1%86%D0%B8%D1%8F%20%D0%BF%D0%BE%20%D0%A1%D0%9F%D0%98%D0%9A/) — REST + SOAP. Документация: [база знаний СКАУТ](https://kb.scout-gps.ru/).
+**Когда:** блоки на машинах + доступ к СПИК — **уже есть**.
+
+**API:** [СПИК](https://university.scout-gps.ru/wiki/%D0%94%D0%BE%D0%BA%D1%83%D0%BC%D0%B5%D0%BD%D1%82%D0%B0%D1%86%D0%B8%D1%8F%20%D0%BF%D0%BE%20%D0%A1%D0%9F%D0%98%D0%9A/) — REST + SOAP. Локальная копия: «Документация СПИК» от интегратора.
 
 **Полезные сервисы СПИК:**
 
@@ -565,20 +665,23 @@ CREATE TABLE weighbridge_events (
 | `FuelEvent` / `fdstat` | Заправки / сливы |
 | `units/rest/getAllUnitsPaged` | Список объектов → маппинг на `mixers.number` |
 
-**MVP (v1):**
-1. Последняя точка: lat, lon, speed, `last_message_time`
-2. Пробег за день → обновление `mixers.odometer_km`
-3. Статус «на связи / offline» (>15 мин без данных)
+**MVP (v1) — в рамках Фазы 1:**
+1. Последняя точка: lat, lon, speed, `last_message_time`, адрес
+2. Статус «на связи / offline» (>15 мин без данных)
+3. Badge в списке + вкладка «Телематика» в drawer
+4. Маппинг `scout_unit_id` ↔ mixers (авто по Name + ручной override)
 
-**v2:**
-- Топливо (норма vs фact) → `fuel_entries` (Фаза 3)
+**v2 — Фаза 3+:**
+- Пробег за день → обновление `mixers.odometer_km` (`StatisticsController`)
+- Топливо (норма vs fact) → `fuel_entries`
 - Геозоны (завод / объект) → дополнение к статусам водительского приложения
 - ETA до объекта в планировщике
 
 **Связка с парком:**
-- `mixers.specs.scout_unit_id` или отдельная колонка
-- Первичный маппинг по госномеру при синхронизации
+- Колонка `mixers.scout_unit_id` (не specs)
+- Первичный маппинг по `Name` (СКАУТ) ≈ `mixers.number` — в СКАУТ `StateNumber` пустой
 - Приоритет видов: `mixer`, `dump_truck`, `tractor_unit`
+- **Ручная привязка и справочник UnitId** — см. раздел **«Фаза 1 → СКАУТ — справочник UnitId и ручная привязка»**
 
 **Архитектура:**
 ```
@@ -592,35 +695,26 @@ Realtime → карточка ТС, дашборд, планировщик
 ```
 
 **Нюансы:**
-- Нужен **ваш** `BaseAddress` сервера (не demo) — уточнить у интегратора
+- BaseAddress: `http://724033.ru:8081` (не demo, не scout365.ru)
+- `Subscribe` требует `{ "UnitIds": [...] }` — пустой body не работает
+- `GetOnlineData` — body `{ "Id": "<SessionId подписки>" }`
 - SessionId протухает — кешировать, не логиниться на каждый запрос
 - Polling, не webhook
 - GPS = «где машина»; водительское приложение = «что делает» — не подменять друг друга
+- Секреты только в `.env.local` / env на Mac Mini — не в браузере
+- **Broadcast UI:** топик `fleet_telemetry_snapshots:all` (`scripts/broadcast-fleet-telemetry-setup.sql`) + `hooks/useRealtimeFleetTelemetry.ts` — карта обновляется после cron/sync без client polling
 
-**Схема БД:**
-```sql
-ALTER TABLE mixers ADD COLUMN IF NOT EXISTS scout_unit_id INT;
+**Схема БД:** см. **Фаза 1** (`scout_unit_id`, `fleet_telemetry_snapshots` в `scripts/fleet-lifecycle.sql`).
 
-CREATE TABLE fleet_telemetry_snapshots (
-  id BIGSERIAL PRIMARY KEY,
-  mixer_id BIGINT NOT NULL REFERENCES mixers(id) ON DELETE CASCADE,
-  lat NUMERIC,
-  lon NUMERIC,
-  speed_kmh NUMERIC,
-  odometer_km NUMERIC,
-  fuel_level NUMERIC,
-  last_message_at TIMESTAMPTZ,
-  is_online BOOLEAN DEFAULT false,
-  raw JSONB,
-  updated_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE (mixer_id)
-);
-```
+**DoD (Фаза 1):**
+- [ ] Cron sync обновляет snapshots каждые 2 мин
+- [ ] На карточке ТС — последняя точка, адрес, статус online/offline
+- [ ] Badge 🟢/🔴 в списке mixers
+- [ ] Маппинг scout_unit_id ↔ mixers настроен (13 объектов)
+- [ ] Offline >24 ч — визуальный алерт (пример: 3310 ЕМ 32)
 
-**DoD:**
-- [ ] На карточке ТС — последняя точка и статус online/offline
-- [ ] Одометр обновляется из СКАУТ раз в сутки
-- [ ] Маппинг scout_unit_id ↔ mixers настроен
+**DoD (Фаза 3, расширение):**
+- [ ] Одометр обновляется из СКАУТ Statistics раз в сутки
 
 ---
 
@@ -722,28 +816,30 @@ CREATE TABLE weight_control_events (
 
 | Модуль FMS | Интеграция |
 |---|---|
-| Фаза 1 — одометр | СКАУТ Statistics |
+| **Фаза 1 — телематика, online/offline** | **СКАУТ OnlineDataService** |
+| Фаза 1 — одометр (ручной + позже авто) | СКАУТ Statistics (Фаза 3) |
 | Фаза 3 — топливо | СКАУТ FuelEvent + ручной ввод |
 | Фаза 3 — расходы | Платон → `fleet_expenses` (category: toll) |
 | Bulk-заявки | Автовесы → факт отгрузки |
 | Фаза 5 — TCO | Платон + топливо + ТО |
-| Карточка ТС | Вкладка «Интеграции»: СКАУТ online, Платон ₽/км, последнее взвешивание |
+| Карточка ТС | Вкладка «Телематика» (Фаза 1): СКАУТ online; позже «Интеграции»: Платон, весы |
 
 ### Рекомендуемый порядок интеграций
 
 | # | Интеграция | Условие старта |
 |---|---|---|
-| 1 | **Автовесы** | Есть весы на заводе |
-| 2 | **СКАУТ** | Блоки уже на машинах + BaseAddress СПИК |
+| 1 | **СКАУТ** | ✅ Блоки на машинах, BaseAddress проверен |
+| 2 | **Автовесы** | Есть весы на заводе |
 | 3 | **Платон CSV** | Есть ТС >12 т на трассах |
 | 4 | **АСВГК** | Данные в ЛК Платона / официальный API |
 
 ### Чеклист перед стартом (уточнить у себя / поставщиков)
 
 **СКАУТ:**
-- [ ] Договор и `BaseAddress` сервера СПИК
-- [ ] Какие ТС на мониторинге; датчики топлива?
-- [ ] Технический логин для API
+- [x] Договор и `BaseAddress` сервера СПИК — `http://724033.ru:8081`
+- [x] 13 ТС на мониторинге (список UnitId зафиксирован в Фазе 1)
+- [x] Технический логин для API — в `.env.local`
+- [ ] Датчики топлива — уточнить у интегратора (для Фазы 3)
 
 **Платон:**
 - [ ] Какие ТС зарегистрированы (>12 т)
@@ -769,17 +865,16 @@ CREATE TABLE weight_control_events (
 
 ## Рекомендуемый порядок внедрения
 
-1. **Фаза 1** — карточка + документы + напоминания (быстрый ROI)
+1. **Фаза 1** — карточка + документы + напоминания + **СКАУТ (online/GPS)**
 2. **INT-1 Автовесы** — если есть на заводе (bulk)
-3. **INT-2 СКАУТ** — если блоки на машинах
-4. **Фаза 2** — сервис/ТО (снижает простои)
-5. **Фаза 3 (тарифы в рейсах)** — завершить начатое в `fleetTariffs.ts`
-6. **INT-3 Платон CSV** — для тяжёлой техники на трассах
-7. **Фаза 4 (accept_status)** — план уже описан
-8. **Фаза 3 (топливо)** — СКАУТ + ручной ввод
-9. **Фаза 5** — аналитика TCO
-10. **INT-4 АСВГК** — когда появится канал в Платоне
-11. **Фаза 6+** — топливные карты, штрафы, 1С
+3. **Фаза 2** — сервис/ТО (снижает простои)
+4. **Фаза 3 (тарифы в рейсах)** — завершить начатое в `fleetTariffs.ts`
+5. **INT-3 Платон CSV** — для тяжёлой техники на трассах
+6. **Фаза 4 (accept_status)** — план уже описан
+7. **Фаза 3 (топливо + одометр из СКАУТ Statistics)** — расширение INT-2
+8. **Фаза 5** — аналитика TCO
+9. **INT-4 АСВГК** — когда появится канал в Платоне
+10. **Фаза 6+** — топливные карты, штрафы, 1С
 
 ---
 
@@ -792,6 +887,8 @@ flowchart TB
     A2[lifecycle_status]
     A3[Документы]
     A4[Напоминания]
+    A5[СКАУТ sync]
+    A6[Телематика UI]
   end
 
   subgraph p2 [Фаза 2]
@@ -820,7 +917,6 @@ flowchart TB
 
   subgraph int [Интеграции]
     I1[Автовесы]
-    I2[СКАУТ]
     I3[Платон]
     I4[АСВГК]
   end
@@ -831,8 +927,7 @@ flowchart TB
   p3 --> p5
   p4 --> p5
   I1 --> p3
-  I2 --> p1
-  I2 --> p3
+  A5 --> A6
   I3 --> p5
   I3 -.-> I4
 ```
@@ -854,10 +949,12 @@ flowchart TB
 ## Критерии готовности (Definition of Done)
 
 ### Фаза 1
-- [ ] Клик по любой единице техники открывает drawer с вкладками
+- [ ] Клик по любой единице техники открывает drawer с вкладками (в т.ч. «Телематика»)
 - [ ] Можно загрузить СТС/ОСАГО и увидеть напоминание за 14 дней до истечения
 - [ ] ТС со статусом `repair` визуально отличается в списке
 - [ ] Удаление техники работает из UI с подтверждением
+- [ ] СКАУТ: cron sync, badge online/offline в списке, точка на вкладке «Телематика»
+- [ ] Все 13 объектов СКАУТ привязаны к mixers через `scout_unit_id`
 
 ### Фаза 2
 - [ ] Механик создаёт сервисную запись; водитель может подать заявку на ремонт из mobile
@@ -875,6 +972,7 @@ flowchart TB
 
 ### Интеграции
 - [ ] Автовесы: событие взвешивания привязано к bulk-заявке
-- [ ] СКАУТ: на карточке ТС — точка на карте и online/offline
 - [ ] Платон: CSV импортирован, расходы по ТС за период
 - [ ] АСВГК: таблица готова; импорт — когда появится источник
+
+*(СКАУТ — критерии в разделе «Фаза 1»)*
