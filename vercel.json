@@ -31,10 +31,6 @@
     {
       "path": "/api/cron/planner-learn",
       "schedule": "20 20 * * *"
-    },
-    {
-      "path": "/api/cron/scout-sync",
-      "schedule": "*/2 * * * *"
     }
   ],
   "headers": [
