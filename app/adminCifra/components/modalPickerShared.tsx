@@ -164,10 +164,9 @@ export function PortalPopup({
         top: placeAbove ? undefined : rect.bottom + gap,
         bottom: placeAbove ? window.innerHeight - rect.top + gap : undefined,
         width: w,
-        // По умолчанию режем по краю; скролл — у внутреннего контента пикеров.
-        overflow: styleOverflow ?? 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
+        // Скролл по умолчанию на панели (пикеры без вложенного flex:1 не схлопываются).
+        overflow: styleOverflow ?? 'auto',
+        display: 'block',
         boxSizing: 'border-box',
         ...restStyle,
         // После style: лимит viewport важнее переданного maxHeight.

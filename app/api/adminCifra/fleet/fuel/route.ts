@@ -26,7 +26,10 @@ async function withReceiptUrl<T extends { receipt_path: string | null }>(
   }
 }
 
-/** GET ?mixer_id=&from=&to= */
+const DEFAULT_PAGE = 50;
+const MAX_PAGE = 200;
+
+/** GET ?mixer_id=&from=&to=&limit=&offset= */
 export async function GET(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request);
   if (auth.error) return auth.error;
@@ -38,18 +41,26 @@ export async function GET(request: NextRequest) {
 
   const from = request.nextUrl.searchParams.get('from');
   const to = request.nextUrl.searchParams.get('to');
+  const limitRaw = Number(request.nextUrl.searchParams.get('limit'));
+  const offsetRaw = Number(request.nextUrl.searchParams.get('offset'));
+  const limit = Number.isFinite(limitRaw)
+    ? Math.min(MAX_PAGE, Math.max(1, Math.floor(limitRaw)))
+    : DEFAULT_PAGE;
+  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.floor(offsetRaw) : 0;
 
   let query = supabaseAdmin
     .from('fuel_entries')
-    .select('*')
+    .select('*', { count: 'exact' })
     .eq('mixer_id', mixerId)
-    .order('filled_at', { ascending: false });
+    .order('filled_at', { ascending: false })
+    .order('id', { ascending: false })
+    .range(offset, offset + limit - 1);
 
   // Границы суток Europe/Moscow (завод)
   if (from) query = query.gte('filled_at', `${from}T00:00:00+03:00`);
   if (to) query = query.lte('filled_at', `${to}T23:59:59.999+03:00`);
 
-  const { data, error } = await query;
+  const { data, error, count } = await query;
   if (error) {
     return NextResponse.json(
       { success: false, error: fleetTableMissingMessage(error.message, 'fuel_entries') },
@@ -62,7 +73,17 @@ export async function GET(request: NextRequest) {
       withReceiptUrl(normalizeFuelEntry(row as Record<string, unknown>)),
     ),
   );
-  return NextResponse.json({ success: true, entries });
+  const total = count ?? entries.length;
+  const hasMore = offset + entries.length < total;
+
+  return NextResponse.json({
+    success: true,
+    entries,
+    total,
+    limit,
+    offset,
+    hasMore,
+  });
 }
 
 /** POST JSON или FormData (с чеком) */

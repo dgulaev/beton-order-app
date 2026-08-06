@@ -174,45 +174,53 @@ export default function ModalSelect({
         popupRef={popupRef}
         width="anchor"
         minWidth={minPopupWidth ?? 160}
-        estimatedHeight={Math.min(360, 48 + options.length * 44)}
-        style={{ padding: 6, overflow: 'hidden' }}
+        estimatedHeight={Math.min(360, 16 + Math.max(options.length, 1) * 44)}
+        // Скролл на самой панели — без вложенного flex:1/minHeight:0,
+        // иначе список схлопывается в тонкую полоску (maxHeight без явной высоты).
+        style={{ padding: 6, overflowX: 'hidden', overflowY: 'auto' }}
       >
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2,
-          overflowY: 'auto',
-          minHeight: 0,
-          flex: '1 1 auto',
-        }}>
-          {options.map((opt) => {
-            const active = opt.value === value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => {
-                  onChange(opt.value);
-                  setOpen(false);
-                }}
-                style={pickerItemStyle(active, {
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '9px 12px',
-                  borderRadius: 10,
-                  fontSize: 14,
-                  fontWeight: active ? 700 : 500,
-                  textAlign: 'left',
-                  width: '100%',
-                  flexShrink: 0,
-                })}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
+        {options.length === 0 ? (
+          <div
+            style={{
+              padding: '10px 12px',
+              color: '#94A3B8',
+              fontSize: 13,
+              lineHeight: 1.35,
+            }}
+          >
+            Нет вариантов
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {options.map((opt) => {
+              const active = opt.value === value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(opt.value);
+                    setOpen(false);
+                  }}
+                  style={pickerItemStyle(active, {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '9px 12px',
+                    borderRadius: 10,
+                    fontSize: 14,
+                    fontWeight: active ? 700 : 500,
+                    textAlign: 'left',
+                    width: '100%',
+                    flexShrink: 0,
+                  })}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </PortalPopup>
     </>
   );

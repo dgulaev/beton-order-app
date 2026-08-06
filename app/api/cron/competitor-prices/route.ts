@@ -4,6 +4,9 @@ import { syncCompetitorsCatalog } from '@/lib/competitors/syncCatalog';
 
 /**
  * Ежедневный крон: upsert каталога + парсинг прайсов с сайтов конкурентов.
+ *
+ * Расписание: 10:00 МСК (vercel 0 7 UTC; local crontab 0 10 * * *).
+ * Cutover local — задуманный интервал: scripts/cron-schedules.md
  */
 export async function GET(req: NextRequest) {
   const denied = requireCronAuth(req);

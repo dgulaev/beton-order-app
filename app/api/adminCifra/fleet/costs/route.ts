@@ -5,11 +5,16 @@ import {
   defaultCostPeriod,
 } from '@/lib/fleetCosts';
 import { fleetTableMissingMessage } from '@/lib/fleetDocumentsServer';
+import {
+  isScoutConfigured,
+  scoutFetchPeriodMileageKm,
+} from '@/lib/integrations/scout';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 /**
  * GET — стоимость 1 км и норма vs факт за период.
  * ?mixer_id=&from=&to=
+ * Пробег: одометры на заправках/ТО, иначе GPS-пробег СКАУТ за тот же период.
  */
 export async function GET(request: NextRequest) {
   const auth = await requireAdminCifraStaff(request);
@@ -26,7 +31,7 @@ export async function GET(request: NextRequest) {
 
   const { data: mixer } = await supabaseAdmin
     .from('mixers')
-    .select('id, odometer_km, specs')
+    .select('id, odometer_km, specs, scout_unit_id')
     .eq('id', mixerId)
     .maybeSingle();
 
@@ -64,7 +69,6 @@ export async function GET(request: NextRequest) {
       .lte('service_date', to),
   ]);
 
-  // Таблицы могут отсутствовать до SQL — не валим весь ответ
   const fuelErr = fuelRes.error;
   if (fuelErr && /fuel_entries/i.test(fuelErr.message)) {
     return NextResponse.json(
@@ -85,7 +89,6 @@ export async function GET(request: NextRequest) {
   const odometerReadings: number[] = [];
 
   for (const f of fuelRows) {
-    // Сливы из СКАУТ (fuel_type=drain) не считаем в «заправлено» / л/100км
     if (String(f.fuel_type || '') === 'drain') continue;
     fuelLiters += Number(f.liters) || 0;
     fuelRub += Number(f.amount_rub) || 0;
@@ -111,6 +114,33 @@ export async function GET(request: NextRequest) {
     odometerReadings.push(Number(mixer.odometer_km));
   }
 
+  // Если на заправках нет пары одометров — берём пробег GPS из СКАУТ за период
+  let periodMileageKm: number | null = null;
+  const unitId = mixer.scout_unit_id != null ? Number(mixer.scout_unit_id) : NaN;
+  const readingsSorted = [...odometerReadings]
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+  const hasOdoDelta =
+    readingsSorted.length >= 2 &&
+    readingsSorted[readingsSorted.length - 1]! > readingsSorted[0]!;
+
+  if (!hasOdoDelta && isScoutConfigured() && Number.isFinite(unitId) && unitId > 0) {
+    try {
+      const mil = await scoutFetchPeriodMileageKm({
+        unitId,
+        fromYmd: from <= to ? from : to,
+        toYmd: from <= to ? to : from,
+      });
+      // Берём больший из total/movement — иногда movement занижен
+      const a = mil.totalMileageKm;
+      const b = mil.movementMileageKm;
+      if (a != null && b != null) periodMileageKm = Math.max(a, b);
+      else periodMileageKm = a ?? b;
+    } catch {
+      periodMileageKm = null;
+    }
+  }
+
   const period = computeFleetCostPeriod({
     from,
     to,
@@ -120,6 +150,7 @@ export async function GET(request: NextRequest) {
     expensesRub,
     odometerReadings,
     fuelNormLPer100km: fuelNorm,
+    periodMileageKm,
   });
 
   return NextResponse.json({ success: true, period });

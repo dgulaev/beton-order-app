@@ -6,7 +6,8 @@ export const maxDuration = 300;
 
 /**
  * Опрос реестра контрактов ЕИС для pending-закупок обзвона.
- * Расписание: vercel.json → /api/cron/callout-winners (несколько раз в сутки).
+ * Расписание: 09:30 / 14:00 / 18:00 МСК (vercel 30 6, 0 11, 0 15 UTC).
+ * Cutover local — те же три слота в crontab МСК: scripts/cron-schedules.md
  *
  * Логика:
  * 1) вернуть в очередь часть missing/failed (реже 7 дней);

@@ -31,6 +31,10 @@
     {
       "path": "/api/cron/planner-learn",
       "schedule": "20 20 * * *"
+    },
+    {
+      "path": "/api/cron/scout-sensors-daily",
+      "schedule": "50 20 * * *"
     }
   ],
   "headers": [

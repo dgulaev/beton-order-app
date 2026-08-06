@@ -12,11 +12,13 @@ import {
   Save,
   AlertTriangle,
   Pencil,
+  RefreshCw,
 } from 'lucide-react';
 import FleetTripsPanel from './FleetTripsPanel';
 import FleetServicePanel from './FleetServicePanel';
 import FleetFuelPanel from './FleetFuelPanel';
 import FleetExpensesPanel from './FleetExpensesPanel';
+import FleetScoutOverviewPanel from './FleetScoutOverviewPanel';
 import FleetTripRoutesModal from './FleetTripRoutesModal';
 import FleetMap from '../components/FleetMap';
 import { buildYandexPlaceUrl } from '@/lib/fleetMapLinks';
@@ -35,6 +37,13 @@ import {
   type FleetTelemetrySnapshot,
   type LifecycleStatus,
 } from '@/lib/fleetLifecycle';
+import {
+  DRUM_DRIVE_OPTIONS,
+  drumHoursLabel,
+  isDrumDriveType,
+  resolveDrumDriveType,
+  type DrumDriveType,
+} from '@/lib/fleetDrumDrive';
 import type { Ownership, VehicleKind } from '@/lib/fleetCatalog';
 
 export type FleetDrawerUnit = {
@@ -114,6 +123,8 @@ export default function FleetUnitDrawer({
   const [lifecycle, setLifecycle] = useState<LifecycleStatus>('active');
   const [odometer, setOdometer] = useState('');
   const [engineHours, setEngineHours] = useState('');
+  const [drumDriveType, setDrumDriveType] = useState<DrumDriveType>('pto');
+  const [drumSensorIndex, setDrumSensorIndex] = useState('');
   const [vin, setVin] = useState('');
   const [year, setYear] = useState('');
   const [fuelType, setFuelType] = useState('');
@@ -125,6 +136,9 @@ export default function FleetUnitDrawer({
   const [localTelemetry, setLocalTelemetry] = useState<FleetTelemetrySnapshot | null>(null);
   const [telemetryLoading, setTelemetryLoading] = useState(false);
   const [syncingGps, setSyncingGps] = useState(false);
+  const [syncingPassportScout, setSyncingPassportScout] = useState(false);
+  const [passportScoutHint, setPassportScoutHint] = useState<string | null>(null);
+  const [telemetryReloadToken, setTelemetryReloadToken] = useState(0);
   const [trackDay, setTrackDay] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -132,6 +146,7 @@ export default function FleetUnitDrawer({
   const [routesModalOpen, setRoutesModalOpen] = useState(false);
 
   const activeTelemetry = pickFresherTelemetry(localTelemetry, telemetry ?? null);
+  const isMixer = (unit?.vehicle_kind || 'mixer') === 'mixer';
 
   // Broadcast/prop не должен «глушиться» локальным fetch — берём более свежий
   useEffect(() => {
@@ -175,11 +190,79 @@ export default function FleetUnitDrawer({
     }
   }, [unit, canMutate, fetchTelemetryForUnit, onUpdated]);
 
+  /** Привязка в БД (для sync). Локальный ввод без Save не считается. */
+  const hasScoutLinkSaved = Boolean(
+    unit?.scout_unit_id != null && Number(unit.scout_unit_id) > 0,
+  );
+
+  /** Одна кнопка: одометр + моточасы бочки → поля паспорта. */
+  const syncPassportFromScout = useCallback(async () => {
+    if (!unit) return;
+    if (!canMutate) {
+      alert('Нет прав на изменение паспорта');
+      return;
+    }
+    if (!hasScoutLinkSaved) {
+      alert('Сначала укажи UnitId СКАУТ в паспорте и сохрани карточку');
+      return;
+    }
+    setSyncingPassportScout(true);
+    setPassportScoutHint(null);
+    try {
+      const sensorIdx =
+        drumSensorIndex.trim() === '' ? undefined : Number(drumSensorIndex.trim());
+      const res = await fetch('/api/adminCifra/fleet/passport/scout-sync', {
+        method: 'POST',
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          mixer_id: unit.id,
+          ...(sensorIdx != null && Number.isFinite(sensorIdx)
+            ? { sensor_index: sensorIdx }
+            : {}),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        alert(data.error || 'Не удалось обновить данные из СКАУТ');
+        setPassportScoutHint(data.error || 'Ошибка синхронизации');
+        return;
+      }
+
+      if (data.odometer?.applied && data.odometer.km != null) {
+        setOdometer(String(data.odometer.km));
+      }
+      if (data.drum?.applied && data.drum.hours != null) {
+        setEngineHours(String(data.drum.hours));
+      }
+      if (data.drum?.sensorIndex != null) {
+        setDrumSensorIndex(String(data.drum.sensorIndex));
+      }
+      if (data.drum?.driveType && isDrumDriveType(data.drum.driveType)) {
+        setDrumDriveType(data.drum.driveType);
+      }
+
+      const msgs = Array.isArray(data.messages) ? data.messages : [];
+      setPassportScoutHint(msgs.join(' · ') || (data.wroteSomething ? 'Обновлено' : 'Нет данных для записи'));
+      onUpdated();
+    } catch {
+      alert('Ошибка соединения при запросе к СКАУТ');
+      setPassportScoutHint('Ошибка соединения');
+    } finally {
+      setSyncingPassportScout(false);
+    }
+  }, [unit, canMutate, hasScoutLinkSaved, drumSensorIndex, onUpdated]);
+
   const resetForm = useCallback(() => {
     if (!unit) return;
     setLifecycle((unit.lifecycle_status as LifecycleStatus) || 'active');
     setOdometer(unit.odometer_km != null ? String(unit.odometer_km) : '');
     setEngineHours(unit.engine_hours != null ? String(unit.engine_hours) : '');
+    setDrumDriveType(resolveDrumDriveType(unit.number, unit.specs ?? null));
+    setDrumSensorIndex(
+      unit.specs?.scout_drum_sensor_index != null && unit.specs.scout_drum_sensor_index !== ''
+        ? String(unit.specs.scout_drum_sensor_index)
+        : '',
+    );
     setVin(String(unit.specs?.vin ?? ''));
     setYear(String(unit.specs?.year ?? ''));
     setFuelType(String(unit.specs?.fuel_type ?? ''));
@@ -188,12 +271,33 @@ export default function FleetUnitDrawer({
     setScoutUnitId(unit.scout_unit_id != null ? String(unit.scout_unit_id) : '');
   }, [unit]);
 
+  // Сброс формы только при смене ТС — не при каждом обновлении объекта после sync
   useEffect(() => {
+    if (!unit) return;
     resetForm();
     setTab('passport');
     setLocalTelemetry(null);
     setRoutesModalOpen(false);
-  }, [unit, resetForm]);
+    setPassportScoutHint(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- только unit.id
+  }, [unit?.id]);
+
+  // Подтянуть одометр/моточасы из props, не затирая остальной ввод и подсказку СКАУТ
+  useEffect(() => {
+    if (!unit) return;
+    setOdometer(unit.odometer_km != null ? String(unit.odometer_km) : '');
+    setEngineHours(unit.engine_hours != null ? String(unit.engine_hours) : '');
+    if (unit.scout_unit_id != null) setScoutUnitId(String(unit.scout_unit_id));
+    if (unit.specs?.scout_drum_sensor_index != null && unit.specs.scout_drum_sensor_index !== '') {
+      setDrumSensorIndex(String(unit.specs.scout_drum_sensor_index));
+    }
+  }, [
+    unit?.id,
+    unit?.odometer_km,
+    unit?.engine_hours,
+    unit?.scout_unit_id,
+    unit?.specs?.scout_drum_sensor_index,
+  ]);
 
   const loadDocuments = useCallback(async () => {
     if (!unit) return;
@@ -247,6 +351,15 @@ export default function FleetUnitDrawer({
       }
       scoutId = n;
     }
+    let drumIdx: number | null = null;
+    if (isMixer && drumSensorIndex.trim()) {
+      const n = Number(drumSensorIndex.trim());
+      if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+        alert('Индекс дискрета бочки — целое число ≥ 0 (как в СКАУТ-Студии)');
+        return;
+      }
+      drumIdx = n;
+    }
     setSaving(true);
     try {
       const res = await fetch('/api/adminCifra/mixers', {
@@ -256,7 +369,10 @@ export default function FleetUnitDrawer({
           id: unit.id,
           lifecycle_status: lifecycle,
           odometer_km: odometer === '' ? null : Number(odometer),
-          engine_hours: engineHours === '' ? null : Number(engineHours),
+          // Моточасы бочки/смесителя — только у миксеров; на другой технике поле не трогаем
+          ...(isMixer
+            ? { engine_hours: engineHours === '' ? null : Number(engineHours) }
+            : {}),
           scout_unit_id: scoutId,
           specs: {
             vin: vin || undefined,
@@ -264,6 +380,12 @@ export default function FleetUnitDrawer({
             fuel_type: fuelType || undefined,
             tank_volume_l: tankVolume === '' ? undefined : Number(tankVolume),
             fuel_norm_l_per_100km: fuelNorm === '' ? null : Number(fuelNorm),
+            ...(isMixer
+              ? {
+                  drum_drive_type: isDrumDriveType(drumDriveType) ? drumDriveType : 'pto',
+                  scout_drum_sensor_index: drumIdx,
+                }
+              : {}),
           },
         }),
       });
@@ -534,6 +656,52 @@ export default function FleetUnitDrawer({
                   ))}
                 </select>
               </div>
+              {canMutate && (
+                <button
+                  type="button"
+                  disabled={syncingPassportScout || !hasScoutLinkSaved}
+                  onClick={() => void syncPassportFromScout()}
+                  title={
+                    hasScoutLinkSaved
+                      ? 'Одометр + моточасы бочки (для миксеров) из СКАУТ → в поля паспорта'
+                      : 'Сначала укажи UnitId СКАУТ ниже и сохрани'
+                  }
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                    width: '100%',
+                    padding: '12px 14px',
+                    borderRadius: 12,
+                    border: '1px solid rgba(56,189,248,0.45)',
+                    background: 'rgba(56,189,248,0.14)',
+                    color: '#38BDF8',
+                    fontWeight: 700,
+                    fontSize: 13,
+                    cursor: syncingPassportScout || !hasScoutLinkSaved ? 'not-allowed' : 'pointer',
+                    opacity: !hasScoutLinkSaved ? 0.5 : 1,
+                  }}
+                >
+                  <RefreshCw size={15} style={{ opacity: syncingPassportScout ? 0.5 : 1 }} />
+                  {syncingPassportScout ? 'Обновляю из СКАУТ…' : 'Обновить из СКАУТ'}
+                </button>
+              )}
+              {passportScoutHint && (
+                <div
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    background: 'rgba(56,189,248,0.08)',
+                    border: '1px solid rgba(56,189,248,0.25)',
+                    color: '#7DD3FC',
+                    fontSize: 12,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {passportScoutHint}
+                </div>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div>
                   <label style={labelStyle}>Одометр, км</label>
@@ -545,17 +713,72 @@ export default function FleetUnitDrawer({
                     style={fieldStyle}
                   />
                 </div>
-                <div>
-                  <label style={labelStyle}>Моточасы</label>
-                  <input
-                    type="number"
-                    value={engineHours}
-                    disabled={!canMutate}
-                    onChange={(e) => setEngineHours(e.target.value)}
-                    style={fieldStyle}
-                  />
-                </div>
+                {isMixer ? (
+                  <div>
+                    <label style={labelStyle}>{drumHoursLabel(drumDriveType)}</label>
+                    <input
+                      type="number"
+                      value={engineHours}
+                      disabled={!canMutate}
+                      onChange={(e) => setEngineHours(e.target.value)}
+                      style={fieldStyle}
+                      title={
+                        unit.specs?.scout_drum_hours_from && unit.specs?.scout_drum_hours_to
+                          ? `Часы работы бочки за ${unit.specs.scout_drum_hours_from} — ${unit.specs.scout_drum_hours_to} (после «Обновить из СКАУТ»).`
+                          : 'Часы работы бочки за последние 7–90 суток (после «Обновить из СКАУТ»).'
+                      }
+                    />
+                    {unit.specs?.scout_drum_hours_from && unit.specs?.scout_drum_hours_to ? (
+                      <div style={{ color: '#64748B', fontSize: 11, marginTop: 4 }}>
+                        период СКАУТ: {String(unit.specs.scout_drum_hours_from)} —{' '}
+                        {String(unit.specs.scout_drum_hours_to)}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div />
+                )}
               </div>
+              {isMixer && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <div>
+                    <label style={labelStyle}>Привод бочки</label>
+                    <select
+                      value={drumDriveType}
+                      disabled={!canMutate}
+                      onChange={(e) =>
+                        setDrumDriveType(
+                          isDrumDriveType(e.target.value) ? e.target.value : 'pto',
+                        )
+                      }
+                      style={fieldStyle}
+                    >
+                      {DRUM_DRIVE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    <div style={{ color: '#64748B', fontSize: 11, marginTop: 4, lineHeight: 1.35 }}>
+                      {DRUM_DRIVE_OPTIONS.find((o) => o.value === drumDriveType)?.hint}
+                    </div>
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Дискрет бочки в СКАУТ (индекс)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={drumSensorIndex}
+                      disabled={!canMutate}
+                      onChange={(e) => setDrumSensorIndex(e.target.value)}
+                      placeholder="авто"
+                      style={fieldStyle}
+                      title="0-based номер дискретного датчика в СКАУТ-Студии. Пусто = автоопределение."
+                    />
+                  </div>
+                </div>
+              )}
               <div>
                 <label style={labelStyle}>VIN</label>
                 <input value={vin} disabled={!canMutate} onChange={(e) => setVin(e.target.value)} style={fieldStyle} />
@@ -815,23 +1038,80 @@ export default function FleetUnitDrawer({
               {canMutate && (
                 <button
                   type="button"
-                  disabled={syncingGps}
-                  onClick={() => void refreshScoutGps()}
+                  disabled={syncingGps || syncingPassportScout}
+                  onClick={() => {
+                    void (async () => {
+                      await refreshScoutGps();
+                      if (hasScoutLinkSaved) {
+                        await syncPassportFromScout();
+                      }
+                      setTelemetryReloadToken((n) => n + 1);
+                    })();
+                  }}
                   style={{
                     marginBottom: 14,
-                    padding: '8px 14px',
-                    borderRadius: 10,
-                    border: '1px solid rgba(74,222,128,0.35)',
-                    background: 'rgba(74,222,128,0.1)',
-                    color: '#4ADE80',
-                    fontWeight: 600,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    justifyContent: 'center',
+                    padding: '12px 14px',
+                    borderRadius: 12,
+                    border: '1px solid rgba(56,189,248,0.45)',
+                    background: 'rgba(56,189,248,0.14)',
+                    color: '#38BDF8',
+                    fontWeight: 700,
                     fontSize: 13,
-                    cursor: syncingGps ? 'wait' : 'pointer',
+                    cursor: syncingGps || syncingPassportScout ? 'wait' : 'pointer',
                   }}
                 >
-                  {syncingGps ? 'Обновление…' : '↻ Обновить GPS из СКАУТ'}
+                  <RefreshCw
+                    size={15}
+                    style={{ opacity: syncingGps || syncingPassportScout ? 0.5 : 1 }}
+                  />
+                  {syncingGps || syncingPassportScout
+                    ? 'Обновляю из СКАУТ…'
+                    : 'Обновить из СКАУТ'}
                 </button>
               )}
+              {passportScoutHint && tab === 'telemetry' && (
+                <div
+                  style={{
+                    marginBottom: 12,
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    background: 'rgba(56,189,248,0.08)',
+                    border: '1px solid rgba(56,189,248,0.25)',
+                    color: '#7DD3FC',
+                    fontSize: 12,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {passportScoutHint}
+                </div>
+              )}
+
+              <div
+                style={{
+                  marginBottom: 16,
+                  padding: 14,
+                  borderRadius: 12,
+                  background: '#0F172A',
+                  border: '1px solid rgba(56,189,248,0.25)',
+                }}
+              >
+                <div style={{ fontWeight: 700, color: '#E2E8F0', fontSize: 14, marginBottom: 10 }}>
+                  Показания СКАУТ
+                </div>
+                <FleetScoutOverviewPanel
+                  mixerId={unit.id}
+                  isMixer={isMixer}
+                  reloadToken={telemetryReloadToken}
+                  hasScoutUnit={Boolean(
+                    scoutUnitId.trim() || (unit.scout_unit_id != null && unit.scout_unit_id > 0),
+                  )}
+                />
+              </div>
 
               {/* Маршруты рейсов за день */}
               <div
@@ -944,35 +1224,14 @@ export default function FleetUnitDrawer({
                           {activeTelemetry.address}
                         </div>
                       )}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                        <div style={{ background: '#1E2937', borderRadius: 10, padding: 12 }}>
-                          <div style={{ color: '#64748B', fontSize: 11 }}>Скорость</div>
-                          <div style={{ color: '#fff', fontSize: 18, fontWeight: 700 }}>
-                            {activeTelemetry.speed_kmh != null
-                              ? `${Math.round(activeTelemetry.speed_kmh)} км/ч`
-                              : '—'}
-                          </div>
-                        </div>
-                        <div style={{ background: '#1E2937', borderRadius: 10, padding: 12 }}>
-                          <div style={{ color: '#64748B', fontSize: 11 }}>UnitId</div>
-                          <div style={{ color: '#fff', fontSize: 18, fontWeight: 700 }}>
-                            {activeTelemetry.scout_unit_id ?? '—'}
-                          </div>
+                      <div style={{ background: '#1E2937', borderRadius: 10, padding: 12 }}>
+                        <div style={{ color: '#64748B', fontSize: 11 }}>Скорость</div>
+                        <div style={{ color: '#fff', fontSize: 18, fontWeight: 700 }}>
+                          {activeTelemetry.speed_kmh != null
+                            ? `${Math.round(activeTelemetry.speed_kmh)} км/ч`
+                            : '—'}
                         </div>
                       </div>
-                      {activeTelemetry.lat != null && activeTelemetry.lon != null && (
-                        <div
-                          style={{
-                            background: '#1E2937',
-                            borderRadius: 10,
-                            padding: 12,
-                            fontSize: 13,
-                            color: '#94A3B8',
-                          }}
-                        >
-                          {activeTelemetry.lat.toFixed(5)}, {activeTelemetry.lon.toFixed(5)}
-                        </div>
-                      )}
                     </>
                   )}
                 </div>

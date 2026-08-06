@@ -222,6 +222,8 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
   }, []);
 
   // Свёрнутый режим: flyout через portal (сайдбар overflow:hidden обрезает absolute-панель).
+  // Важно: кнопка «Продажи» внутри всё ещё 280px шириной (clip рейкой 68px),
+  // поэтому left берём от .sidebar-menu, а не от btn.getBoundingClientRect().right.
   useLayoutEffect(() => {
     if (!isCollapsed || !salesMenuOpen) {
       setSalesFlyoutPos(null);
@@ -230,11 +232,19 @@ export default function AdminCifraLayout({ children }: { children: React.ReactNo
     const updatePos = () => {
       const btn = salesButtonRef.current;
       if (!btn) return;
-      const rect = btn.getBoundingClientRect();
+      const btnRect = btn.getBoundingClientRect();
+      const rail = btn.closest('.sidebar-menu');
+      const railRect = rail?.getBoundingClientRect();
+      // Правый край видимой рейки (+ небольшой зазор)
+      const left = (railRect?.right ?? btnRect.left + SIDEBAR_COLLAPSED_W) + 8;
+      // Верх — по иконке (колонка 68px), иначе «уехавшая» ширина кнопки путает якорь
+      const iconEl = btn.querySelector(':scope > span');
+      const iconRect = iconEl?.getBoundingClientRect();
+      const anchorTop = iconRect?.top ?? btnRect.top;
       const estimatedH = 260;
       const maxTop = Math.max(8, window.innerHeight - estimatedH - 8);
-      const top = Math.min(Math.max(8, rect.top), maxTop);
-      setSalesFlyoutPos({ top, left: rect.right + 8 });
+      const top = Math.min(Math.max(8, anchorTop), maxTop);
+      setSalesFlyoutPos({ top, left });
     };
     updatePos();
     window.addEventListener('resize', updatePos);

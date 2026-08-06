@@ -6,9 +6,9 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// Vercel Cron Job — запускается каждый день в 00:01 МСК (21:01 UTC)
-// Защита: Vercel автоматически подставляет Authorization: Bearer CRON_SECRET
-// Несанкционированные запросы отклоняются с 401.
+// Расписание: 00:01 МСК (vercel UTC 1 21 *; local crontab 1 0 * * *).
+// При cutover на local — задуманный интервал: scripts/cron-schedules.md + план Mac mini Фаза 4.
+// Защита: Authorization Bearer CRON_SECRET.
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET;

@@ -14,7 +14,7 @@ export type FuelEntry = {
   receipt_url?: string;
   created_by: string | null;
   created_at: string;
-  /** manual | scout | driver */
+  /** manual | scout | driver | benza */
   source?: string | null;
 };
 
@@ -61,10 +61,12 @@ export type FleetCostPeriod = {
   odometerEnd: number | null;
   odometerDelta: number | null;
   costPerKm: number | null;
-  /** л/100км по заправкам между одометрами */
+  /** л/100км по заправкам между одометрами или по пробегу СКАУТ */
   litersPer100km: number | null;
   fuelNormLPer100km: number | null;
   fuelNormDeltaPct: number | null;
+  /** Откуда взят пробег для л/100км и ₽/км */
+  mileageSource?: 'odometer_readings' | 'scout_gps' | null;
 };
 
 /** Период по умолчанию — текущий календарный месяц (МСК). */
@@ -75,9 +77,16 @@ export function defaultCostPeriod(): { from: string; to: string } {
   return { from, to };
 }
 
+/** История заправок в карточке ТС — с 1 января текущего года (МСК). */
+export function defaultFuelHistoryPeriod(): { from: string; to: string } {
+  const to = todayMoscowYmd();
+  const y = to.slice(0, 4);
+  return { from: `${y}-01-01`, to };
+}
+
 /**
  * Cost per km и норма vs факт.
- * odometerDelta: max(odo fuel/service) − min за период; если нет — null.
+ * Пробег: max−min одометров на заправках/ТО; иначе periodMileageKm (СКАУТ GPS).
  */
 export function computeFleetCostPeriod(input: {
   from: string;
@@ -88,6 +97,8 @@ export function computeFleetCostPeriod(input: {
   expensesRub: number;
   odometerReadings: number[];
   fuelNormLPer100km?: number | null;
+  /** Пробег за период из СКАУТ trackPeriodsMileage, км */
+  periodMileageKm?: number | null;
 }): FleetCostPeriod {
   const readings = input.odometerReadings
     .map(Number)
@@ -96,10 +107,29 @@ export function computeFleetCostPeriod(input: {
 
   const odometerStart = readings.length ? readings[0] : null;
   const odometerEnd = readings.length ? readings[readings.length - 1] : null;
-  const odometerDelta =
+  let odometerDelta =
     odometerStart != null && odometerEnd != null && odometerEnd > odometerStart
       ? odometerEnd - odometerStart
       : null;
+  let mileageSource: FleetCostPeriod['mileageSource'] =
+    odometerDelta != null ? 'odometer_readings' : null;
+
+  const scoutKm =
+    input.periodMileageKm != null && Number.isFinite(Number(input.periodMileageKm))
+      ? Number(input.periodMileageKm)
+      : null;
+
+  // СКАУТ иногда отдаёт ~0–1 км при реальном пробеге — не считаем л/100км от мусора.
+  // Порог: ≥50 км и расход не выше 200 л/100км (иначе пробег явно занижен).
+  const scoutUsable =
+    scoutKm != null &&
+    scoutKm >= 50 &&
+    (input.fuelLiters <= 0 || (input.fuelLiters / scoutKm) * 100 <= 200);
+
+  if ((odometerDelta == null || odometerDelta <= 0) && scoutUsable) {
+    odometerDelta = scoutKm;
+    mileageSource = 'scout_gps';
+  }
 
   const totalRub = input.fuelRub + input.serviceRub + input.expensesRub;
   const costPerKm =
@@ -107,10 +137,19 @@ export function computeFleetCostPeriod(input: {
       ? totalRub / odometerDelta
       : null;
 
-  const litersPer100km =
+  let litersPer100km =
     odometerDelta != null && odometerDelta > 0 && input.fuelLiters > 0
       ? (input.fuelLiters / odometerDelta) * 100
       : null;
+
+  // Защита и для одометров: абсурдный расход = не показываем
+  if (litersPer100km != null && litersPer100km > 200) {
+    litersPer100km = null;
+    if (mileageSource === 'scout_gps') {
+      odometerDelta = null;
+      mileageSource = null;
+    }
+  }
 
   const norm =
     input.fuelNormLPer100km != null && Number.isFinite(Number(input.fuelNormLPer100km))
@@ -137,6 +176,7 @@ export function computeFleetCostPeriod(input: {
     litersPer100km,
     fuelNormLPer100km: norm,
     fuelNormDeltaPct,
+    mileageSource,
   };
 }
 

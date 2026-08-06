@@ -1,6 +1,8 @@
 /**
- * Ночной/утренний пересчёт метрик и калибровки интеллекта V2.
- * Защита: Authorization Bearer CRON_SECRET (как у других cron).
+ * Ночной пересчёт метрик и калибровки интеллекта V2.
+ * Расписание: 23:20 МСК (vercel 20 20 UTC; local crontab 20 23 * * *).
+ * Cutover local — задуманный интервал: scripts/cron-schedules.md
+ * Защита: Authorization Bearer CRON_SECRET.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { PLANNER_LEARN_DAYS } from '@/lib/plannerCalibration';

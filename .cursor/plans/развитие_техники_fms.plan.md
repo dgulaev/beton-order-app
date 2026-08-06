@@ -73,10 +73,10 @@ todos:
     status: pending
   - id: phase5-dashboard
     content: "Фаза 5: дашборд автопарка — загрузка, простой, расходы"
-    status: pending
+    status: completed
   - id: phase5-tco-reports
     content: "Фаза 5: отчёты TCO, сравнение own vs rented, экспорт Excel"
-    status: pending
+    status: completed
   - id: int-weighbridge
     content: "Интеграция: автовесы (UniServer/VesySoft) — edge-agent, weighbridge_events, bulk"
     status: pending
@@ -97,9 +97,10 @@ isProject: true
 
 # План: Развитие раздела «Техника» (FMS)
 
-## Статус: Фазы 1–3 в коде (SQL Фазы 3 — scripts/fleet-fuel-expenses.sql)
+## Статус: Фазы 1–3 и 5 в коде (Фаза 4 — осмотры/водители ещё нет)
 
-Дата фиксации: 03.08.2026 · Фаза 2: 05.08.2026 · Фаза 3: 05.08.2026  
+Дата фиксации: 03.08.2026 · Фаза 2: 05.08.2026 · Фаза 3: 05.08.2026 · Фаза 5: 06.08.2026  
+
 Источник анализа: [Завгар Онлайн](https://zavgar.online/), [документация модуля «Автопарк»](https://docs.zavgar.online/ru/wiki/fleet-control-system/)
 
 ---
@@ -419,10 +420,11 @@ scripts/fleet-lifecycle.sql  — scout_unit_id + fleet_telemetry_snapshots (вм
 ```
 
 **Cron (прод + локаль):**
-- **Vercel:** `/api/cron/scout-sync` каждые **2 мин** (`vercel.json`: `*/2 * * * *`)
-- **Локально (`next dev` / `next start` не на Vercel):** `instrumentation.ts` → `lib/localCrons.ts` (те же 2 мин); выкл. `ENABLE_LOCAL_CRONS=0`
-- **Mac mini после cutover:** crontab `*/2` + `scripts/cron-curl.sh scout-sync` (см. [`переход_на_mac_mini.plan.md`](переход_на_mac_mini.plan.md) Фаза 4); на сервере `ENABLE_LOCAL_CRONS=0`
-- Ручной вызов: `npm run cron:scout`
+- **Задумано (все среды после cutover):** `/api/cron/scout-sync` каждые **2 мин** — см. [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md)
+- **Vercel Hobby сейчас:** GPS `scout-sync` **не** в `vercel.json` (лимит); daily `scout-sensors-daily` — раз в сутки. Не считать облачное расписание целевым.
+- **Локально (`next dev` / `next start` не на Vercel):** `instrumentation.ts` → `lib/localCrons.ts` (GPS 2 мин + daily); выкл. `ENABLE_LOCAL_CRONS=0`
+- **Mac mini после cutover:** полный crontab с **задуманными** интервалами всех кронов + `scout-sync */2` (см. [`переход_на_mac_mini.plan.md`](переход_на_mac_mini.plan.md) Фаза 4); `ENABLE_LOCAL_CRONS=0`
+- Ручной вызов: `npm run cron:scout` / `npm run cron:scout-sensors`
 
 ---
 
@@ -1043,7 +1045,8 @@ flowchart TB
 - [ ] Водитель проходит предрейсовый осмотр; наёмный может отказаться от рейса (accept_status)
 
 ### Фаза 5
-- [ ] Дашборд показывает загрузку парка и сравнение own vs rented за выбранный период
+- [x] Дашборд показывает загрузку парка и сравнение own vs rented за выбранный период
+- [x] Вкладка «Аналитика» на `/adminCifra/mixers` + Excel (KPI, TCO по ТС, категории)
 
 ### Интеграции
 - [ ] Автовесы: событие взвешивания привязано к bulk-заявке

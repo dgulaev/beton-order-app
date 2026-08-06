@@ -5,7 +5,7 @@ import { Plus, Trash2, Fuel, RefreshCw } from 'lucide-react';
 import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 import { appConfirm } from '../components/appDialog';
 import {
-  defaultCostPeriod,
+  defaultFuelHistoryPeriod,
   type FleetCostPeriod,
   type FuelEntry,
 } from '@/lib/fleetCosts';
@@ -17,6 +17,8 @@ interface Props {
   canMutate: boolean;
   onUpdated?: () => void;
 }
+
+const PAGE_SIZE = 50;
 
 type ScoutFuelStats = {
   beginFuelVolumeL: number | null;
@@ -85,10 +87,13 @@ export default function FleetFuelPanel({
   canMutate,
   onUpdated,
 }: Props) {
-  const defaults = defaultCostPeriod();
+  const defaults = defaultFuelHistoryPeriod();
   const [from, setFrom] = useState(defaults.from);
   const [to, setTo] = useState(defaults.to);
   const [entries, setEntries] = useState<FuelEntry[]>([]);
+  const [entriesTotal, setEntriesTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [period, setPeriod] = useState<FleetCostPeriod | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -109,18 +114,23 @@ export default function FleetFuelPanel({
     setLoading(true);
     setError(null);
     try {
-      const q = `mixer_id=${mixerId}&from=${from}&to=${to}`;
+      const fuelQ = `mixer_id=${mixerId}&from=${from}&to=${to}&limit=${PAGE_SIZE}&offset=0`;
+      const costQ = `mixer_id=${mixerId}&from=${from}&to=${to}`;
       const [fRes, cRes] = await Promise.all([
-        fetch(`/api/adminCifra/fleet/fuel?${q}`, { headers: adminCifraAuthHeaders() }),
-        fetch(`/api/adminCifra/fleet/costs?${q}`, { headers: adminCifraAuthHeaders() }),
+        fetch(`/api/adminCifra/fleet/fuel?${fuelQ}`, { headers: adminCifraAuthHeaders() }),
+        fetch(`/api/adminCifra/fleet/costs?${costQ}`, { headers: adminCifraAuthHeaders() }),
       ]);
       const fData = await fRes.json();
       const cData = await cRes.json();
       if (!fData.success) {
         setError(fData.error || 'Не удалось загрузить заправки');
         setEntries([]);
+        setEntriesTotal(0);
+        setHasMore(false);
       } else {
         setEntries(fData.entries ?? []);
+        setEntriesTotal(Number(fData.total) || (fData.entries?.length ?? 0));
+        setHasMore(Boolean(fData.hasMore));
       }
       if (cData.success) setPeriod(cData.period);
     } catch {
@@ -129,6 +139,33 @@ export default function FleetFuelPanel({
       setLoading(false);
     }
   }, [mixerId, from, to]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const q = `mixer_id=${mixerId}&from=${from}&to=${to}&limit=${PAGE_SIZE}&offset=${entries.length}`;
+      const res = await fetch(`/api/adminCifra/fleet/fuel?${q}`, {
+        headers: adminCifraAuthHeaders(),
+      });
+      const fData = await res.json();
+      if (!fData.success) {
+        alert(fData.error || 'Не удалось подгрузить заправки');
+        return;
+      }
+      const next = (fData.entries ?? []) as FuelEntry[];
+      setEntries((prev) => {
+        const seen = new Set(prev.map((e) => e.id));
+        return [...prev, ...next.filter((e) => !seen.has(e.id))];
+      });
+      setEntriesTotal(Number(fData.total) || entriesTotal);
+      setHasMore(Boolean(fData.hasMore));
+    } catch {
+      alert('Ошибка соединения');
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore, mixerId, from, to, entries.length, entriesTotal]);
 
   useEffect(() => {
     void load();
@@ -317,8 +354,9 @@ export default function FleetFuelPanel({
           )}
         </div>
         <div style={{ color: '#64748B', fontSize: 11, lineHeight: 1.35 }}>
-          Период заправок и расхода ДУТ: {formatScoutPeriodRu(from, to)}. По умолчанию — с 1-го
-          числа текущего месяца по сегодня (МСК). Сводка СКАУТ подтягивается при открытии вкладки.
+          Период заправок и расхода ДУТ: {formatScoutPeriodRu(from, to)}. По умолчанию — с 1
+          января текущего года по сегодня (МСК). Benza и СКАУТ в одном списке. Сводка СКАУТ —
+          при открытии вкладки.
         </div>
       </div>
 
@@ -419,8 +457,24 @@ export default function FleetFuelPanel({
             <div style={{ color: '#64748B', fontSize: 11 }}>Расход л/100 км</div>
             <div style={{ color: '#E2E8F0', fontWeight: 700, fontSize: 14 }}>
               {period.litersPer100km != null
-                ? `${period.litersPer100km.toFixed(1)} л`
-                : '— (нужны одометры на заправках)'}
+                ? `${period.litersPer100km.toFixed(1)} л/100 км`
+                : '— (нет надёжного пробега за период)'}
+              {period.litersPer100km != null && period.mileageSource === 'scout_gps' && (
+                <span style={{ color: '#38BDF8', fontWeight: 500, marginLeft: 6 }}>
+                  по GPS СКАУТ
+                  {period.odometerDelta != null
+                    ? ` · ${Math.round(period.odometerDelta)} км`
+                    : ''}
+                </span>
+              )}
+              {period.litersPer100km != null && period.mileageSource === 'odometer_readings' && (
+                <span style={{ color: '#64748B', fontWeight: 500, marginLeft: 6 }}>
+                  по одометрам
+                  {period.odometerDelta != null
+                    ? ` · ${Math.round(period.odometerDelta)} км`
+                    : ''}
+                </span>
+              )}
               {period.fuelNormLPer100km != null && (
                 <span style={{ color: '#64748B', fontWeight: 500 }}>
                   {' '}· норма {period.fuelNormLPer100km} л
@@ -445,6 +499,12 @@ export default function FleetFuelPanel({
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ fontWeight: 700, color: '#E2E8F0', fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
           <Fuel size={16} color="#FBBF24" /> Заправки
+          {entriesTotal > 0 && (
+            <span style={{ color: '#64748B', fontWeight: 500, fontSize: 12 }}>
+              {entries.length}
+              {entriesTotal > entries.length ? ` / ${entriesTotal}` : ''}
+            </span>
+          )}
         </div>
         {canMutate && (
           <button
@@ -479,7 +539,9 @@ export default function FleetFuelPanel({
         </div>
       )}
 
-      {entries.length === 0 ? (
+      {loading && entries.length === 0 ? (
+        <div style={{ color: '#64748B', fontSize: 13 }}>Загрузка…</div>
+      ) : entries.length === 0 ? (
         <div style={{ color: '#64748B', fontSize: 13 }}>Заправок за период нет</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -509,9 +571,24 @@ export default function FleetFuelPanel({
                     {e.fuel_type === 'drain' ? 'Слив' : 'СКАУТ'}
                   </span>
                 )}
+                {e.source === 'benza' && (
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      padding: '2px 6px',
+                      borderRadius: 6,
+                      background: 'rgba(251,191,36,0.15)',
+                      color: '#FBBF24',
+                    }}
+                  >
+                    Benza
+                  </span>
+                )}
                 <span style={{ marginLeft: 'auto', color: '#64748B', fontSize: 11 }}>
                   {new Date(e.filled_at).toLocaleString('ru-RU', {
-                    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                    day: '2-digit', month: '2-digit', year: '2-digit',
+                    hour: '2-digit', minute: '2-digit',
                   })}
                 </span>
               </div>
@@ -535,6 +612,27 @@ export default function FleetFuelPanel({
               )}
             </div>
           ))}
+          {hasMore && (
+            <button
+              type="button"
+              disabled={loadingMore}
+              onClick={() => void loadMore()}
+              style={{
+                padding: 10,
+                borderRadius: 10,
+                border: '1px solid #334155',
+                background: '#0F172A',
+                color: '#E2E8F0',
+                fontWeight: 650,
+                fontSize: 13,
+                cursor: loadingMore ? 'wait' : 'pointer',
+              }}
+            >
+              {loadingMore
+                ? 'Загрузка…'
+                : `Показать ещё (${entries.length} из ${entriesTotal})`}
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -94,6 +94,16 @@ export type FleetPassportSpecs = {
   tank_volume_l?: number | string;
   /** Норма расхода л/100км (Фаза 3) */
   fuel_norm_l_per_100km?: number | string;
+  /**
+   * Привод смесителя: pto (ВОМ от шасси) | separate_engine (свой ДВС на бочке).
+   * Только для миксеров.
+   */
+  drum_drive_type?: 'pto' | 'separate_engine' | string;
+  /**
+   * Индекс дискретного датчика бочки/смесителя в СКАУТ (0-based, порядок в Студии).
+   * Только для миксеров; если задан — приоритетнее автоэвристики.
+   */
+  scout_drum_sensor_index?: number | string;
 };
 
 export const FUEL_TYPE_OPTIONS = [

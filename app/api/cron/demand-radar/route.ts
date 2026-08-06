@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { runDemandRadar } from '@/lib/demand/demandService';
 import { requireCronAuth } from '@/lib/cronAuth';
 
+/**
+ * Расписание: 09:00 МСК (vercel 0 6 UTC; local crontab 0 9 * * *).
+ * Cutover local — задуманный интервал: scripts/cron-schedules.md
+ */
 export async function GET(req: NextRequest) {
   const denied = requireCronAuth(req);
   if (denied) return denied;

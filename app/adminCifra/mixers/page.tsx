@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { OWN_UNLOAD_ALLOWANCE_MIN } from '@/lib/mixerConfig';
 import FleetUnitDrawer from './FleetUnitDrawer';
 import FleetMapModal from './FleetMapModal';
+import FleetAnalyticsTab from './FleetAnalyticsTab';
 import type { FleetMapMarker } from '../components/FleetMap';
 import DeliverySettingsTab from './DeliverySettingsTab';
 import { useUserRole } from '../../providers/UserRoleProvider';
@@ -322,7 +323,7 @@ interface FleetUnit {
   scout_unit_id?: number | null;
 }
 
-type PageTab = VehicleKind | 'delivery';
+type PageTab = VehicleKind | 'delivery' | 'analytics';
 
 export default function MixersPage() {
   const { isAdmin, user } = useUserRole();
@@ -334,13 +335,14 @@ export default function MixersPage() {
     if (unit.type === 'own') setDrawerUnit(unit);
   };
 
-  // Вкладки видов техники + «Тарифы доставки» (admin)
+  // Вкладки видов техники + «Аналитика» + «Тарифы доставки» (admin)
   const [activeTab, setActiveTab] = useState<PageTab>('mixer');
   useEffect(() => {
     if (activeTab === 'delivery' && !isAdmin) setActiveTab('mixer');
   }, [activeTab, isAdmin]);
 
-  const vehicleKind: VehicleKind = activeTab === 'delivery' ? 'mixer' : activeTab;
+  const vehicleKind: VehicleKind =
+    activeTab === 'delivery' || activeTab === 'analytics' ? 'mixer' : activeTab;
   const kindMeta = vehicleKindMeta(vehicleKind);
 
   const [mixers, setMixers] = useState<FleetUnit[]>([]);
@@ -369,7 +371,7 @@ export default function MixersPage() {
 
   // Broadcast: после cron/sync СКАУТ маркеры и GPS-бейджи обновляются без polling
   useRealtimeFleetTelemetry(setTelemetryMap, {
-    enabled: activeTab !== 'delivery',
+    enabled: activeTab !== 'delivery' && activeTab !== 'analytics',
   });
 
   // Список: число строк под высоту экрана (как в отчётах)
@@ -399,7 +401,7 @@ export default function MixersPage() {
 
   // ==================== ЗАГРУЗКА ТЕХНИКИ ====================
   useEffect(() => {
-    if (activeTab === 'delivery') return;
+    if (activeTab === 'delivery' || activeTab === 'analytics') return;
     fetchMixers();
     if (vehicleKind === 'mixer') fetchActiveTrips();
     if (vehicleKind === 'tractor_unit' || isTrailerKind(vehicleKind)) {
@@ -416,7 +418,14 @@ export default function MixersPage() {
       const res = await fetch(`/api/adminCifra/mixers?kind=${vehicleKind}`);
       if (res.ok) {
         const data = await res.json();
-        setMixers(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data) ? data : [];
+        setMixers(list);
+        // Обновить открытую карточку свежими полями (одометр / моточасы после СКАУТ)
+        setDrawerUnit((prev) => {
+          if (!prev) return prev;
+          const fresh = list.find((m: FleetUnit) => m.id === prev.id);
+          return fresh ? { ...prev, ...fresh } : prev;
+        });
       }
       void fetchTelemetry();
       void fetchServiceDue();
@@ -606,22 +615,44 @@ export default function MixersPage() {
   };
 
   const [trailerPickList, setTrailerPickList] = useState<FleetUnit[]>([]);
+  const [trailerPickLoading, setTrailerPickLoading] = useState(false);
   useEffect(() => {
     if (!coupleModal || coupleModal.mode !== 'tractor') {
       setTrailerPickList([]);
+      setTrailerPickLoading(false);
       return;
     }
     let cancelled = false;
+    setTrailerPickLoading(true);
     (async () => {
       const lists: FleetUnit[] = [];
       for (const kind of TRAILER_KINDS) {
-        const res = await fetch(`/api/adminCifra/mixers?kind=${kind}`);
+        const res = await fetch(`/api/adminCifra/mixers?kind=${kind}`, {
+          headers: adminCifraAuthHeaders(),
+        });
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data)) lists.push(...data);
         }
       }
-      if (!cancelled) setTrailerPickList(lists);
+      // fallback: весь парк → отфильтровать прицепы (если kind= не отдал строки)
+      if (lists.length === 0) {
+        const res = await fetch('/api/adminCifra/mixers?kind=all', {
+          headers: adminCifraAuthHeaders(),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            lists.push(
+              ...data.filter((u: FleetUnit) => isTrailerKind(u.vehicle_kind)),
+            );
+          }
+        }
+      }
+      if (!cancelled) {
+        setTrailerPickList(lists);
+        setTrailerPickLoading(false);
+      }
     })();
     return () => {
       cancelled = true;
@@ -669,7 +700,7 @@ export default function MixersPage() {
           speedKmh: tel?.speed_kmh != null ? Number(tel.speed_kmh) : null,
           address: tel?.address ?? null,
           lastMessageAt: tel?.last_message_at ?? null,
-          // dump_truck → /icons/samosval.png на карте
+          // dump_truck → samosval.png, tractor_unit → trailer.png на карте
           vehicleKind: m.vehicle_kind || 'mixer',
         },
       ];
@@ -862,8 +893,12 @@ export default function MixersPage() {
       if (res.ok) {
         fetchMixers();
         setShowModal(false);
-        if (json.warning) alert(json.warning);
-        else alert(editingMixer ? 'Сохранено' : `${kindMeta.singular} добавлен`);
+        const linked =
+          typeof json.benzaLinked === 'number' && json.benzaLinked > 0
+            ? `\nПодтянуто заправок Benza: ${json.benzaLinked}`
+            : '';
+        if (json.warning) alert(`${json.warning}${linked}`);
+        else alert(`${editingMixer ? 'Сохранено' : `${kindMeta.singular} добавлен`}${linked}`);
       } else {
         alert(json.error || 'Ошибка при сохранении');
       }
@@ -927,8 +962,34 @@ export default function MixersPage() {
   const effectiveStatus = (unit: FleetUnit) =>
     vehicleKind === 'mixer' ? (activeTripMap.get(unit.number) ?? 'Доступен') : 'Доступен';
 
+  const openUnitFromAnalytics = async (mixerId: number) => {
+    let unit = mixers.find((m) => m.id === mixerId);
+    if (!unit) {
+      try {
+        const res = await fetch('/api/adminCifra/mixers?kind=all', {
+          headers: adminCifraAuthHeaders(),
+        });
+        const rows = await res.json();
+        if (Array.isArray(rows)) {
+          unit = rows.find((m: FleetUnit) => m.id === mixerId) ?? undefined;
+        }
+      } catch {
+        return;
+      }
+    }
+    // Свои и техника в аренде в парке (не наёмные миксеры)
+    if (
+      unit &&
+      (unit.type === 'own' ||
+        (unit.type === 'rented' && (unit.vehicle_kind || 'mixer') !== 'mixer'))
+    ) {
+      setDrawerUnit(unit);
+    }
+  };
+
   const pageTabs: { key: PageTab; label: string }[] = [
     ...VEHICLE_KINDS.map((k) => ({ key: k.key as PageTab, label: k.label })),
+    { key: 'analytics', label: 'Аналитика' },
     ...(isAdmin ? [{ key: 'delivery' as const, label: 'Тарифы доставки' }] : []),
   ];
 
@@ -963,7 +1024,7 @@ export default function MixersPage() {
           <PageHelpButton title="Инструкция по технике" />
           {/* На «Тарифах» кнопку скрываем, но место оставляем — иначе шапка
               сжимается и вкладки прыгают вверх/вниз при переключении. */}
-          {activeTab !== 'delivery' ? (
+          {activeTab !== 'delivery' && activeTab !== 'analytics' ? (
             <button 
               onClick={openAddModal} 
               style={volumeCardSoftStyle({
@@ -1053,6 +1114,8 @@ export default function MixersPage() {
 
       {activeTab === 'delivery' ? (
         <DeliverySettingsTab />
+      ) : activeTab === 'analytics' ? (
+        <FleetAnalyticsTab onOpenUnit={(id) => void openUnitFromAnalytics(id)} />
       ) : (
       <>
       {/* ==================== ПАНЕЛЬ УПРАВЛЕНИЯ (ВИД + ФИЛЬТРЫ) ==================== */}
@@ -2265,7 +2328,12 @@ export default function MixersPage() {
             <ModalSelect
               value={couplePickId}
               onChange={setCouplePickId}
-              placeholder="— выберите —"
+              placeholder={
+                coupleModal.mode === 'tractor' && trailerPickLoading
+                  ? 'Загрузка прицепов…'
+                  : '— выберите —'
+              }
+              disabled={coupleModal.mode === 'tractor' && trailerPickLoading}
               options={
                 coupleModal.mode === 'trailer'
                   ? tractors.map((t) => ({
@@ -2288,6 +2356,14 @@ export default function MixersPage() {
                     })
               }
             />
+            {coupleModal.mode === 'tractor' &&
+              !trailerPickLoading &&
+              trailerPickList.length === 0 && (
+                <div style={{ color: '#F87171', fontSize: 12, marginTop: 8, lineHeight: 1.4 }}>
+                  Нет прицепов (бочка / тоннар) в справочнике. Добавь их на вкладках «Бочки» или
+                  «Тоннары».
+                </div>
+              )}
             <div style={{ display: 'flex', gap: 12, marginTop: 22 }}>
               <button
                 type="button"

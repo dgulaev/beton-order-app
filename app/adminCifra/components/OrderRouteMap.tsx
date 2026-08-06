@@ -106,6 +106,8 @@ export default function OrderRouteMap({ address, routeHref }: OrderRouteMapProps
         zoomControl: true,
         attributionControl: true,
       });
+      // Убираем префикс «🇺🇦 Leaflet |» — оставляем только © OpenStreetMap (и др. слоёв).
+      map.attributionControl?.setPrefix(false);
       mapRef.current = map;
 
       const baseLayers = makeBaseLayers(L);

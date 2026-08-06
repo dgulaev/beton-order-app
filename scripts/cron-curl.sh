@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Вызов cron-эндпоинта локального Next.js (для macOS crontab / ручной проверки).
 #
+# Интервалы (задумано / cutover): scripts/cron-schedules.md
+# План: .cursor/plans/переход_на_mac_mini.plan.md → Фаза 4
+#
 # Использование:
 #   ./scripts/cron-curl.sh scout-sync
+#   ./scripts/cron-curl.sh scout-sensors-daily
 #   ./scripts/cron-curl.sh dismiss-notifications
 #
 # Нужны: CRON_SECRET в окружении или в .env.local

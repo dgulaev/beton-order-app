@@ -21,7 +21,7 @@ todos:
     content: "Удалённое управление: SSH + Screen Sharing в LAN; снаружи — Tailscale; шпаргалка launchctl/docker/логи"
     status: pending
   - id: local-crons
-    content: "macOS crontab: dismiss/avito/demand + scout-sync */2; ENABLE_LOCAL_CRONS=0; curl-проверка"
+    content: "macOS crontab: ВСЕ кроны с задуманными интервалами (см. scripts/cron-schedules.md + Фаза 4), scout-sync */2, scout-sensors-daily 23:50; ENABLE_LOCAL_CRONS=0; curl-проверка"
     status: pending
   - id: local-backups-github
     content: Локальный pg_dump → скрипт → git push в GitHub; отключить облачный db-backup.yml после cutover
@@ -65,12 +65,60 @@ isProject: false
 7. Ключевые решения уже приняты (не пересогласовывать без нужды):
    - БД: **локальный Supabase в Docker**, не голый Postgres;
    - приложение: `npm run build` + `npm run start`, автозапуск через **launchd** + скрипт;
-   - кроны: **macOS crontab** + `CRON_SECRET`;
+   - кроны: **macOS crontab** с **задуманными** интервалами из [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md) + **Фаза 4** (не копировать урезанный Hobby/`vercel.json`);
    - админка удалённо: **SSH + Screen Sharing + Tailscale**;
    - публичный сайт: **Keenetic** домен **`https://tradecom.keenetic.link`**, проброс **80/443**, **Caddy** → `:3000` (не светить голый 3000 в интернет);
    - бэкапы после cutover: скрипт на mini → **git push** в `db-backups/`, облачный Action отключить.
 8. Секреты (`.env.local`, пароли, ключи) **не коммитить** и не светить лишний раз в чат.
-9. Если пользователь только копирует план без всего репо — всё равно вести по этому файлу; недостающие скрипты (`start-local-server.sh`, `backup-db-to-github.sh`, `Caddyfile`) создать на mini по тексту плана.
+9. Если пользователь только копирует план без всего репо — всё равно вести по этому файлу; недостающие скрипты (`start-local-server.sh`, `backup-db-to-github.sh`, `Caddyfile`, `cron-curl.sh`) создать на mini по тексту плана.
+
+### Кроны: Hobby vs задумано (агент — запомнить)
+
+**Лимит Vercel Hobby (почему сейчас урезано):**
+
+- cron job на Hobby может запускаться **не чаще 1 раза в сутки**; выражение чаще раза в день → деплой падает;
+- точность слота ~±59 мин (сработает когда-то в течение часа);
+- до 100 cron entries на проект, но **частота** — главное ограничение.
+
+**Что из-за этого сделано на облаке сейчас (`vercel.json`):**
+
+- суточные jobs оставлены (dismiss, avito, demand, callout×3, competitor-prices, planner-learn, scout-sensors-daily) — каждый слот ≤1×/сутки;
+- **`/api/cron/scout-sync` (GPS каждые 2 мин) в vercel.json НЕТ** — Hobby запрещает `*/2`;
+- до cutover GPS крутит [`lib/localCrons.ts`](lib/localCrons.ts) при `next dev`/`next start` вне Vercel (`ENABLE_LOCAL_CRONS` не `0`).
+
+**На Mac mini после cutover — вернуть ВСЁ как задумано** (источник правды: [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md)):
+
+- `scout-sync` → crontab `*/2 * * * *`
+- `scout-sensors-daily` → `50 23 * * *` МСК
+- остальные суточные слоты МСК как в Фазе 4
+- в `.env.local`: **`ENABLE_LOCAL_CRONS=0`** (чтобы не дублировать СКАУТ с процессом Next)
+- **запрещено** ставить на mini только то, что в `vercel.json`, без `scout-sync */2`
+
+### Чеклист агента: запуск проекта на Mac mini
+
+Когда Дмитрий пишет с сервера «продолжи / запускаем»:
+
+1. Прочитать этот план + `scripts/cron-schedules.md`.
+2. Зафиксировать `APP_DIR` (путь, который покажет Дмитрий).
+3. Проверить стек по порядку:
+   - Docker Desktop running → `docker info`
+   - `cd $APP_DIR && npx supabase status` (если down → `npx supabase start`)
+   - есть `.env.local` с локальными Supabase-ключами + `CRON_SECRET` + `ENABLE_LOCAL_CRONS=0` (после настройки crontab)
+   - `npm install` при необходимости → `npm run build` → приложение через launchd или временно `npm run start`
+   - `curl -I http://127.0.0.1:3000`
+4. Настроить **полный** crontab из **Фазы 4** (все строки, включая `*/2` scout-sync).
+5. Ручная проверка кронов:
+   ```bash
+   npm run cron:scout
+   npm run cron:scout-sensors
+   bash scripts/cron-curl.sh dismiss-notifications
+   bash scripts/cron-curl.sh avito-sync
+   bash scripts/cron-curl.sh demand-radar
+   bash scripts/cron-curl.sh callout-winners
+   bash scripts/cron-curl.sh competitor-prices
+   bash scripts/cron-curl.sh planner-learn
+   ```
+6. Дальше по плану: launchd автозапуск → Tailscale/SSH → KeenDNS `tradecom.keenetic.link` + Caddy → бэкапы в GitHub → cutover Vercel.
 
 **Фраза-триггер от Дмитрия (пример):**  
 «Сейчас пишу с Mac mini сервера. Папка: `~/….` Продолжаем `.cursor/plans/переход_на_mac_mini.plan.md`. Сейчас на шаге: …»
@@ -98,15 +146,19 @@ isProject: false
 
 ## Исходная точка (сейчас)
 
-- Приложение: Next.js на **Vercel**, кроны в `[vercel.json](vercel.json)`:
+> **⚠ Кроны при cutover:** на локальном сервере выставить **задуманные** интервалы для **всех** jobs — см. [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md) и **Фазу 4**.  
+> То, что сейчас в `vercel.json`, — облачный компромисс (Hobby: не чаще 1 cron/сутки на job; GPS `scout-sync` из vercel убран). **Не копировать урезанное облачное расписание на mini.**
+
+- Приложение: Next.js на **Vercel**, кроны в `[vercel.json](vercel.json)` (UTC):
   - `/api/cron/dismiss-notifications` — `1 21 * * *` UTC (= **00:01 МСК**)
   - `/api/cron/avito-sync` — `15 5 * * *` UTC (= **08:15 МСК**)
   - `/api/cron/demand-radar` — `0 6 * * *` UTC (= **09:00 МСК**)
-  - `/api/cron/callout-winners` — несколько раз в день UTC
-  - `/api/cron/competitor-prices` — `0 7 * * *` UTC
-  - `/api/cron/planner-learn` — `20 20 * * *` UTC
-  - **`/api/cron/scout-sync` — `*/2 * * * *` (каждые 2 мин)** — телематика СКАУТ → `fleet_telemetry_snapshots` → broadcast карта парка
-- **Локально (ноутбук / до cutover):** Vercel Cron не работает. Пока крутится `next dev` / `next start` **не на Vercel**, СКАУТ-синк поднимает `instrumentation.ts` → `[lib/localCrons.ts](lib/localCrons.ts)` (каждые 2 мин). Выключить: `ENABLE_LOCAL_CRONS=0`. Ручной вызов: `npm run cron:scout` (= `[scripts/cron-curl.sh](scripts/cron-curl.sh) scout-sync`).
+  - `/api/cron/callout-winners` — `30 6` / `0 11` / `0 15` UTC (= **09:30 / 14:00 / 18:00 МСК**)
+  - `/api/cron/competitor-prices` — `0 7 * * *` UTC (= **10:00 МСК**)
+  - `/api/cron/planner-learn` — `20 20 * * *` UTC (= **23:20 МСК**)
+  - `/api/cron/scout-sensors-daily` — `50 20 * * *` UTC (= **23:50 МСК**) — суточные датчики СКАУТ → БД
+  - **`/api/cron/scout-sync` (GPS каждые 2 мин)** — **задумано** `*/2`, на Vercel Hobby **не в расписании**; до cutover крутит `[lib/localCrons.ts](lib/localCrons.ts)` / crontab на Mac
+- **Локально (ноутбук / до cutover):** Vercel Cron не работает. Пока крутится `next dev` / `next start` **не на Vercel**, СКАУТ (GPS + проверка daily) поднимает `instrumentation.ts` → `[lib/localCrons.ts](lib/localCrons.ts)`. Выключить: `ENABLE_LOCAL_CRONS=0`. Ручной вызов: `npm run cron:scout` / `npm run cron:scout-sensors`.
 - БД: **Supabase Cloud**; ежедневный дамп в `[db-backups/](db-backups/)` (workflow `[.github/workflows/db-backup.yml](.github/workflows/db-backup.yml)`).
 - Свежий снимок уже в репо: `db-backups/backup-2026-07-28.sql.gz` (~500 КБ) — нормальный размер, не «пустой» 20-байтный gzip.
 - Приложение ходит в Supabase URL + anon/service_role + Realtime (`[lib/supabaseClient.ts](lib/supabaseClient.ts)`, `[lib/supabaseAdmin.ts](lib/supabaseAdmin.ts)`) — **голый Postgres в Docker недостаточен**. В Docker Desktop поднимаем **локальный стек Supabase** (`npx supabase start`).
@@ -896,9 +948,26 @@ npm run start
 
 ## Фаза 4. Кроны под локальный сервер (macOS crontab)
 
-Vercel Cron на Mac mini не работает. Оставляем обычный `next start`, расписание — **системный crontab** (часовой пояс Mac = МСК).
+Vercel Cron на Mac mini не работает. Оставляем обычный `next start`, расписание — **системный crontab** (часовой пояс Mac = **МСК**).
 
-**СКАУТ / карта парка:** эндпоинт `[/api/cron/scout-sync](app/api/cron/scout-sync/route.ts)`, интервал **каждые 2 минуты**. На ноутбуке до cutover тот же sync уже крутит `lib/localCrons.ts` через `instrumentation.ts`. На Mac mini после cutover — **crontab** (надёжнее логов и не зависит от hot-reload), а in-process выключить:
+### Обязательно: задуманные интервалы для ВСЕХ кронов
+
+На Vercel часть расписания урезана (Hobby). **На локальном сервере вернуть целевую схему** — полная таблица: [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md).
+
+| Job | crontab МСК (задумано) | Зачем |
+|-----|------------------------|--------|
+| dismiss-notifications | `1 0 * * *` | сброс уведомлений |
+| avito-sync | `15 8 * * *` | Авито polling |
+| demand-radar | `0 9 * * *` | радар спроса |
+| callout-winners | `30 9`, `0 14`, `0 18` | победители ЕИС |
+| competitor-prices | `0 10 * * *` | прайсы конкурентов |
+| planner-learn | `20 23 * * *` | калибровка планировщика |
+| **scout-sensors-daily** | **`50 23 * * *`** | суточные датчики СКАУТ → БД |
+| **scout-sync (GPS)** | **`*/2 * * * *`** | телематика → карта парка |
+
+Чеклист агента на Фазе 4: в crontab есть **каждая** строка из таблицы выше (не только dismiss/avito/demand/scout).
+
+**СКАУТ GPS:** эндпоинт [`/api/cron/scout-sync`](app/api/cron/scout-sync/route.ts), интервал **каждые 2 минуты** — как задумано изначально. На ноутбуке до cutover тот же sync крутит `lib/localCrons.ts`. На Mac mini после cutover — **только crontab**, in-process выключить:
 
 ```bash
 # в .env.local на Mac mini:
@@ -911,35 +980,38 @@ ENABLE_LOCAL_CRONS=0
 crontab -e
 ```
 
-Добавить (подставить свой `CRON_SECRET`):
+Полный набор (подставить `CRON_SECRET` и путь `ИМЯ`; предпочтительно `scripts/cron-curl.sh` — секрет из `.env.local`):
 
 ```cron
+# === Задуманные интервалы (МСК). См. scripts/cron-schedules.md ===
 1 0 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/dismiss-notifications >> /tmp/cron-dismiss.log 2>&1
 15 8 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/avito-sync >> /tmp/cron-avito.log 2>&1
 0 9 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/demand-radar >> /tmp/cron-demand.log 2>&1
-# Телематика СКАУТ → карта парка (каждые 2 мин, МСК)
+30 9 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/callout-winners >> /tmp/cron-callout.log 2>&1
+0 14 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/callout-winners >> /tmp/cron-callout.log 2>&1
+0 18 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/callout-winners >> /tmp/cron-callout.log 2>&1
+0 10 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/competitor-prices >> /tmp/cron-competitors.log 2>&1
+20 23 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/planner-learn >> /tmp/cron-planner.log 2>&1
+50 23 * * * /Users/ИМЯ/concrete-beton-app/scripts/cron-curl.sh scout-sensors-daily >> /tmp/cron-scout-sensors.log 2>&1
+# Телематика СКАУТ GPS → карта парка (каждые 2 мин) — ОБЯЗАТЕЛЬНО на local
 */2 * * * * /Users/ИМЯ/concrete-beton-app/scripts/cron-curl.sh scout-sync >> /tmp/cron-scout.log 2>&1
-```
-
-Либо без скрипта (секрет прямо в crontab — хуже для утечек):
-
-```cron
-*/2 * * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/scout-sync >> /tmp/cron-scout.log 2>&1
 ```
 
 Проверка сразу (не ждать расписания):
 
 ```bash
 npm run cron:scout
+npm run cron:scout-sensors
 # или
 bash scripts/cron-curl.sh scout-sync
+bash scripts/cron-curl.sh scout-sensors-daily
 ```
 
-Ожидание: HTTP 200, JSON с `success`, `mapped`, `snapshotsUpdated`. В UI «Парк на карте» бейдж **«Обновлено N мин назад»** уходит к 0–2 мин.
+Ожидание GPS: HTTP 200, JSON с `success`, `mapped`, `snapshotsUpdated`. В UI «Парк на карте» бейдж **«Обновлено N мин назад»** уходит к 0–2 мин.
 
-Остальные `curl` — как в «Рекомендациях». Ожидание: HTTP 200 и JSON без `Unauthorized`.
+Остальные `curl` — HTTP 200 и JSON без `Unauthorized`.
 
-Секцию `"crons"` в `[vercel.json](vercel.json)` на Mac mini можно не трогать (файл просто не используется без Vercel); после окончательного ухода с Vercel — убрать, чтобы не путать. **Строку scout-sync из vercel.json при уходе с Vercel тоже удалить** — на mini источник правды crontab.
+Секцию `"crons"` в `[vercel.json](vercel.json)` на Mac mini можно не трогать (без Vercel не используется); после окончательного ухода с Vercel — убрать, чтобы не путать. **Источник правды на mini — crontab + [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md), не облачный vercel.json.**
 
 ---
 

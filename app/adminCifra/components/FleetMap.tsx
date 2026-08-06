@@ -26,7 +26,7 @@ export type FleetMapMarker = {
   lastMessageAt?: string | null;
   /** vehicle — ТС; plant/destination — круги на карте маршрутов */
   kind?: 'vehicle' | 'plant' | 'destination';
-  /** Вид техники: mixer → mixer-truck.png, dump_truck → samosval.png */
+  /** Вид техники: mixer → mixer-truck.png, dump_truck → samosval.png, tractor_unit → trailer.png */
   vehicleKind?: FleetMapVehicleKind | string | null;
   color?: string;
 };
@@ -80,12 +80,14 @@ function escapeHtml(value: string): string {
 
 const MIXER_TRUCK_ICON = '/icons/mixer-truck.png';
 const DUMP_TRUCK_ICON = '/icons/samosval.png';
+const TRACTOR_UNIT_ICON = '/icons/trailer.png';
 
-/** Иконка по виду ТС — самосвалы готовы, остальные пока миксер. */
+/** Иконка по виду ТС на карте. */
 export function fleetMapVehicleIconSrc(
   vehicleKind?: FleetMapVehicleKind | string | null,
 ): string {
   if (vehicleKind === 'dump_truck') return DUMP_TRUCK_ICON;
+  if (vehicleKind === 'tractor_unit') return TRACTOR_UNIT_ICON;
   return MIXER_TRUCK_ICON;
 }
 
@@ -461,6 +463,8 @@ export default function FleetMap({
         zoomControl: true,
         attributionControl: true,
       });
+      // Убираем префикс «🇺🇦 Leaflet |» — оставляем только © OpenStreetMap (и др. слоёв).
+      map.attributionControl?.setPrefix(false);
       mapRef.current = map;
 
       const baseLayers = makeBaseLayers(L);

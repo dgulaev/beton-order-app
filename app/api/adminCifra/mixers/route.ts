@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { FLEET_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
+import { linkBenzaPendingForMixerNumber } from '@/lib/benzaFuelLink';
 import {
   isVehicleKind,
   syncVolumeIntoSpecs,
@@ -10,6 +11,20 @@ import {
 } from '@/lib/fleetCatalog';
 import { isLifecycleStatus } from '@/lib/fleetLifecycle';
 import { mergeTariffIntoSpecs, sanitizeFleetSpecs } from '@/lib/fleetTariffs';
+
+async function afterMixerNumberSaved(
+  mixerId: number | undefined | null,
+  number: string | undefined | null,
+): Promise<number> {
+  if (!mixerId || !number) return 0;
+  try {
+    const r = await linkBenzaPendingForMixerNumber(mixerId, String(number));
+    return r.linked;
+  } catch (e) {
+    console.warn('[mixers] benza pending link:', e);
+    return 0;
+  }
+}
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -286,15 +301,18 @@ export async function POST(request: NextRequest) {
             .select()
             .single();
           if (e2) throw e2;
+          const benzaLinked = await afterMixerNumberSaved(d2?.id, d2?.number ?? number);
           return NextResponse.json({
             success: true,
             data: d2,
+            benzaLinked,
             warning: 'Выполните scripts/fleet-vehicle-kind.sql — колонки vehicle_kind/specs ещё не в БД',
           });
         }
         throw error;
       }
-      return NextResponse.json({ success: true, data });
+      const benzaLinked = await afterMixerNumberSaved(data?.id, data?.number ?? number);
+      return NextResponse.json({ success: true, data, benzaLinked });
     }
 
     const { updated_at: _ua, ...insertPayload } = payload;
@@ -316,15 +334,18 @@ export async function POST(request: NextRequest) {
           .select()
           .single();
         if (e2) throw e2;
+        const benzaLinked = await afterMixerNumberSaved(d2?.id, d2?.number ?? number);
         return NextResponse.json({
           success: true,
           data: d2,
+          benzaLinked,
           warning: 'Выполните scripts/fleet-vehicle-kind.sql — колонки vehicle_kind/specs ещё не в БД',
         });
       }
       throw error;
     }
-    return NextResponse.json({ success: true, data });
+    const benzaLinked = await afterMixerNumberSaved(data?.id, data?.number ?? number);
+    return NextResponse.json({ success: true, data, benzaLinked });
   } catch (error: any) {
     console.error('Mixers POST error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

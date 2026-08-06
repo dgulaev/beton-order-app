@@ -55,6 +55,29 @@ export default function FleetMapModal({
     ? Date.now() - new Date(lastUpdatedAt).getTime() > 10 * 60_000
     : true;
 
+  // Легенда по иконкам видов, которые реально на карте
+  type LegendKind = 'mixer' | 'dump_truck' | 'tractor_unit';
+  const legendIconKind = (vk?: string | null): LegendKind => {
+    if (vk === 'dump_truck') return 'dump_truck';
+    if (vk === 'tractor_unit') return 'tractor_unit';
+    return 'mixer';
+  };
+  const presentKinds = new Set(markers.map((m) => legendIconKind(m.vehicleKind)));
+  const multiKind = presentKinds.size > 1;
+  const legendKinds: Array<{ kind: LegendKind; labelOnline: string; labelOffline: string }> = [];
+  const addLegend = (kind: LegendKind, noun: string) => {
+    if (presentKinds.size > 0 && !presentKinds.has(kind)) return;
+    if (presentKinds.size === 0 && kind !== 'mixer') return;
+    legendKinds.push({
+      kind,
+      labelOnline: multiKind ? `${noun} · на связи` : 'На связи',
+      labelOffline: multiKind ? `${noun} · offline` : 'Offline',
+    });
+  };
+  addLegend('mixer', 'Миксер');
+  addLegend('dump_truck', 'Самосвал');
+  addLegend('tractor_unit', 'Голова');
+
   return (
     <>
       <style>{`
@@ -331,44 +354,34 @@ export default function FleetMapModal({
             }}
           >
             <div className="fleet-map-modal-legend" style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  fontSize: 16,
-                  fontWeight: 700,
-                  color: '#F8FAFC',
-                }}
-              >
-                <FleetMapLegendIcon online size={28} vehicleKind="mixer" />
-                На связи
-              </span>
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  fontSize: 16,
-                  fontWeight: 700,
-                  color: '#CBD5E1',
-                }}
-              >
-                <FleetMapLegendIcon online={false} size={28} vehicleKind="mixer" />
-                Offline
-              </span>
-              {markers.some((m) => m.vehicleKind === 'dump_truck') && (
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    fontSize: 16,
-                    fontWeight: 700,
-                    color: '#F8FAFC',
-                  }}
-                >
-                  <FleetMapLegendIcon online size={28} vehicleKind="dump_truck" />
-                  Самосвал
+              {legendKinds.map(({ kind, labelOnline, labelOffline }) => (
+                <span key={kind} style={{ display: 'inline-flex', gap: 20, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      fontSize: 16,
+                      fontWeight: 700,
+                      color: '#F8FAFC',
+                    }}
+                  >
+                    <FleetMapLegendIcon online size={28} vehicleKind={kind} />
+                    {labelOnline}
+                  </span>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      fontSize: 16,
+                      fontWeight: 700,
+                      color: '#CBD5E1',
+                    }}
+                  >
+                    <FleetMapLegendIcon online={false} size={28} vehicleKind={kind} />
+                    {labelOffline}
+                  </span>
                 </span>
-              )}
+              ))}
             </div>
             {markers.length > 0 && (
               <div className="fleet-map-modal-units" style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>

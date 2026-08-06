@@ -10,6 +10,9 @@ import { requireCronAuth } from '@/lib/cronAuth';
 /**
  * Fallback: если webhook Авито протух — подтягиваем непрочитанные чаты в Спрос
  * и синхронизируем объявления.
+ *
+ * Расписание: 08:15 МСК (vercel 15 5 UTC; local crontab 15 8 * * *).
+ * Cutover local — задуманный интервал: scripts/cron-schedules.md
  */
 export async function GET(req: NextRequest) {
   const denied = requireCronAuth(req);
