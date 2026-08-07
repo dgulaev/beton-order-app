@@ -132,6 +132,7 @@ export default function MobileOrderDetailModal({
   const sc = statusCfg(editedOrder.status);
   const isFinal = editedOrder.status === 'completed' || editedOrder.status === 'cancelled';
   const canDelete = currentRole === 'admin';
+  const canEditFinalStatus = (currentRole || '').toLowerCase().trim() === 'admin';
 
   const set = (field: string, value: any) => {
     setEditedOrder((p: any) => {
@@ -270,9 +271,11 @@ export default function MobileOrderDetailModal({
               Заявка #{editedOrder.id}
             </span>
 
-            {/* Статус — select для активных, пилюля для финальных */}
-            {isFinal ? (
-              <span style={{
+            {/* Статус — select для активных; финальные тоже можно менять админу */}
+            {isFinal && !canEditFinalStatus ? (
+              <span
+                title="Конечный статус — менять может только админ"
+                style={{
                 padding: '4px 10px', borderRadius: '9999px', fontSize: '11px', fontWeight: 700,
                 background: `${sc.color}20`, color: sc.color, whiteSpace: 'nowrap',
               }}>
@@ -283,6 +286,7 @@ export default function MobileOrderDetailModal({
                 <select
                   value={editedOrder.status || 'new'}
                   onChange={e => set('status', e.target.value)}
+                  title={isFinal ? 'Сменить конечный статус (только админ)' : 'Сменить статус'}
                   style={{
                     appearance: 'none',
                     padding: '4px 22px 4px 10px',

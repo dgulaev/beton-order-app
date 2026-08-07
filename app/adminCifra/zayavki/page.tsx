@@ -3328,8 +3328,8 @@ ${order.customer_type?.includes('Юридическое')
 
                                 <div style={{ color: '#94A3B8' }}>Статус заявки</div>
                 
-                {getStatusConfig(selectedOrder.status).final ? (
-                  // ==================== ФИНАЛЬНЫЕ СТАТУСЫ — ЗАЩИЩЕНЫ ====================
+                {getStatusConfig(selectedOrder.status).final && !isAdmin(currentRole) ? (
+                  // ==================== ФИНАЛЬНЫЕ СТАТУСЫ — ЗАЩИЩЕНЫ (кроме админа) ====================
                   <div style={volumeCardSoftStyle({
                     background: getStatusConfig(selectedOrder.status).bg,
                     color: getStatusConfig(selectedOrder.status).color,
@@ -3347,9 +3347,14 @@ ${order.customer_type?.includes('Юридическое')
                     {getStatusConfig(selectedOrder.status).label} — конечный статус
                   </div>
                 ) : (
-                  // Можно менять
+                  // Можно менять; для админа — и конечные статусы
                   <ModalSelect
                     value={selectedOrder.status || 'new'}
+                    title={
+                      getStatusConfig(selectedOrder.status).final
+                        ? 'Сменить конечный статус (только админ)'
+                        : 'Сменить статус заявки'
+                    }
                     onChange={(newStatus) => {
                       setSelectedOrder({
                         ...selectedOrder,

@@ -257,8 +257,11 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
               Заявка #{order.id}
             </span>
 
-            {isFinal ? (
-              <span style={{ padding: '4px 10px', borderRadius: '9999px', fontSize: '11px', fontWeight: 700, background: `${sc.color}20`, color: sc.color, whiteSpace: 'nowrap' }}>
+            {isFinal && !isAdmin ? (
+              <span
+                title="Конечный статус — менять может только админ"
+                style={{ padding: '4px 10px', borderRadius: '9999px', fontSize: '11px', fontWeight: 700, background: `${sc.color}20`, color: sc.color, whiteSpace: 'nowrap' }}
+              >
                 {sc.label}
               </span>
             ) : (
@@ -266,6 +269,7 @@ export default function MobileDashboardOrderModal(props: MobileOrderDetailModalP
                 <select
                   value={localOrder.status || 'new'}
                   onChange={handleOrderStatusChange}
+                  title={isFinal ? 'Сменить конечный статус (только админ)' : 'Сменить статус'}
                   style={{ appearance: 'none', padding: '4px 22px 4px 10px', borderRadius: '9999px', border: `1px solid ${sc.color}50`, background: `${sc.color}20`, color: sc.color, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
                 >
                   {STATUS_OPTIONS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}

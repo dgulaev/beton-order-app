@@ -23,6 +23,7 @@ import { siloNameById } from '@/lib/siloConfig';
 import { formatRuDateWithWeekday, pluralRu } from '@/lib/ruLocale';
 import { findRecipeByGrade } from '@/lib/recipeAdditives';
 import { isPickupOrder } from '@/lib/logisticsPlanner';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 const LAB_MENU_ITEMS: { key: LabTab; label: string }[] = [
   { key: 'orders', label: 'Заявки' },
@@ -610,13 +611,12 @@ export default function OperatorBSUPage() {
     try {
       const res = await fetch('/api/adminCifra/order-mixers/status', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ 
           id: trip.id, 
           status: 'Загрузка',
           loading_started_at: now,
           userName: operatorName,
-          userRole: operatorRole,
           // Строка попадает в очередь только когда её статус "Загрузка" (см.
           // queueTrips выше) — если к моменту обработки запроса статус в БД
           // уже другой (диспетчер успел вручную его сменить), сервер отобьёт
@@ -1235,7 +1235,7 @@ export default function OperatorBSUPage() {
           '/api/adminCifra/order-mixers/status',
           {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(statusBody),
           },
           {
@@ -2425,7 +2425,7 @@ export default function OperatorBSUPage() {
                             try {
                               await fetch('/api/adminCifra/order-mixers/status', {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
+                                headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
                                 body: JSON.stringify({
                                   id: trip.id,
                                   podvizhnost: newPodvizhnost,

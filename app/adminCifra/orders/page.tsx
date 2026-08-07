@@ -4,6 +4,7 @@ import { useState, useEffect, Fragment } from 'react';
 import { Order } from '../hooks/useCalendarOrders';
 import { useRealtimeOrders } from '../../../hooks/useRealtimeOrders';
 import ModalSelect from '../components/ModalSelect';
+import { adminCifraAuthHeaders } from '@/lib/adminCifraClientHeaders';
 
 export default function OrdersPage() {
   const [allOrders, setAllOrders] = useState<Order[]>([]);
@@ -64,34 +65,46 @@ export default function OrdersPage() {
   }, [allOrders, search, statusFilter]);
 
   const updateStatus = async (orderId: string | number, newStatus: string) => {
-    const stringId = String(orderId);   // ← безопасное приведение
+    const stringId = String(orderId);
+    const prevStatus = allOrders.find((o) => String(o.id) === stringId)?.status;
 
-    // Оптимистическое обновление
-    setAllOrders(prev =>
-      prev.map(order =>
-        String(order.id) === stringId 
-          ? { ...order, status: newStatus } 
-          : order
-      )
+    setAllOrders((prev) =>
+      prev.map((order) =>
+        String(order.id) === stringId ? { ...order, status: newStatus } : order,
+      ),
     );
 
     try {
       const res = await fetch('/api/adminCifra/orders/status', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           orderId: stringId,
           status: newStatus,
           userName: localStorage.getItem('userName') || undefined,
-          userRole: localStorage.getItem('userRole') || undefined,
         }),
       });
 
       if (!res.ok) {
-        alert('Не удалось изменить статус');
+        const data = await res.json().catch(() => ({}));
+        if (prevStatus != null) {
+          setAllOrders((prev) =>
+            prev.map((order) =>
+              String(order.id) === stringId ? { ...order, status: prevStatus } : order,
+            ),
+          );
+        }
+        alert(data.message || data.error || 'Не удалось изменить статус');
       }
     } catch (err) {
       console.error(err);
+      if (prevStatus != null) {
+        setAllOrders((prev) =>
+          prev.map((order) =>
+            String(order.id) === stringId ? { ...order, status: prevStatus } : order,
+          ),
+        );
+      }
       alert('Ошибка соединения');
     }
   };

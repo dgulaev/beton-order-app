@@ -267,12 +267,11 @@ const handleStatusChangeLocal = async (mixerId: number, newStatus: string) => {
   try {
     const res = await fetch('/api/adminCifra/order-mixers/status', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         id: mixerId,
         status: newStatus,
         userName: getCurrentUserName(),
-        userRole: getCurrentRole(),
         // Статус, который мы видели на экране перед отправкой — если в БД к
         // моменту обработки он уже другой (кто-то успел изменить его первым,
         // например оператор нажал "Начать"/"Загружен"), сервер отобьёт явным
@@ -599,7 +598,7 @@ const formatVolume = (value: number | string) => {
                   flexShrink: 0,
                 }}
               >
-                {getStatusConfig(localOrder.status).final ? (
+                {getStatusConfig(localOrder.status).final && getCurrentRole() !== 'admin' ? (
                   <div
                     style={{
                       backgroundColor: getStatusConfig(localOrder.status).bg,
@@ -613,13 +612,18 @@ const formatVolume = (value: number | string) => {
                       whiteSpace: 'nowrap',
                       flexShrink: 0,
                     }}
+                    title="Конечный статус — менять может только админ"
                   >
                     {getStatusConfig(localOrder.status).label}
                   </div>
                 ) : (
                   <ModalSelect
                     value={localOrder.status || 'new'}
-                    title="Сменить статус заявки"
+                    title={
+                      getStatusConfig(localOrder.status).final
+                        ? 'Сменить конечный статус (только админ)'
+                        : 'Сменить статус заявки'
+                    }
                     chevronColor={getStatusConfig(localOrder.status).color}
                     triggerStyle={{
                       background: getStatusConfig(localOrder.status).bg,
@@ -1479,7 +1483,7 @@ const formatVolume = (value: number | string) => {
 
     const res = await fetch('/api/adminCifra/order-mixers', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         orderId: order.id,
         mixerName: name,
@@ -1488,7 +1492,6 @@ const formatVolume = (value: number | string) => {
         sortOrder: newSortOrder,
         status: 'Загрузка',
         userName: getCurrentUserName(),
-        userRole: getCurrentRole(),
         ...assignMeta,
       })
     });

@@ -2,8 +2,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { ORDER_MUTATION_ROLES, requireAdminCifraStaff } from '@/lib/adminCifraAuth';
-import { pruneGhostTripsFromLogisticsPlan } from '@/lib/pruneLogisticsPlanGhosts';
 import { computeRoadMinutes } from '@/lib/travelTime';
+import {
+  ORDER_STATUS_RU,
+  applyOrderStatusSideEffects,
+  assertManualCompleteAllowed,
+  isFinalOrderStatus,
+  isOrderStatus,
+} from '@/lib/orderStatusTransition';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -40,20 +46,42 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: false, message: 'Заявка не найдена' }, { status: 404 });
     }
 
-    // ==================== 2. ЗАПРЕТ ИЗМЕНЕНИЯ СТАТУСА ДЛЯ ФИНАЛЬНЫХ ЗАЯВОК ====================
-    const finalStatuses = ['completed', 'cancelled'];
-    const isFinalOrder = finalStatuses.includes(currentOrder.status);
+    // ==================== 2. СТАТУС: whitelist + финал только админ ====================
+    const isFinalOrder = isFinalOrderStatus(currentOrder.status);
+    const isAdmin = auth.user.role === 'admin';
+    const nextStatusRaw = updateData.status !== undefined ? String(updateData.status) : null;
 
-    if (isFinalOrder && updateData.status !== undefined) {
-      delete updateData.status;
-    //  console.log('⚠️ Попытка изменить статус финальной заявки — отклонено');
+    if (nextStatusRaw != null) {
+      if (!isOrderStatus(nextStatusRaw)) {
+        return NextResponse.json(
+          { success: false, message: 'Недопустимый статус заявки' },
+          { status: 400 },
+        );
+      }
+      if (isFinalOrder && !isAdmin && nextStatusRaw !== String(currentOrder.status)) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: `Заявка уже в финальном статусе "${ORDER_STATUS_RU[currentOrder.status] || currentOrder.status}" — менять может только админ`,
+          },
+          { status: 400 },
+        );
+      }
     }
 
+    const nextStatus = nextStatusRaw;
+    const leavingCompleted =
+      currentOrder.status === 'completed'
+      && nextStatus != null
+      && nextStatus !== 'completed';
+
     // ==================== 2a. ЗАПРЕТ СМЕНЫ ОБЪЁМА У «ВЫПОЛНЕНА» ====================
-    // Кейс #646: заявка автозакрылась по 30 м³, менеджер потом поднял объём
-    // до 37 — сверка с MEKA разъехалась, а новый рейс уже нельзя было нормально
-    // догрузить. Объём у завершённой заявки больше не трогаем.
-    if (currentOrder.status === 'completed' && updateData.volume !== undefined) {
+    // Если админ в том же запросе уводит заявку из completed — объём можно менять.
+    if (
+      currentOrder.status === 'completed'
+      && updateData.volume !== undefined
+      && !leavingCompleted
+    ) {
       const oldVol = Number(currentOrder.volume);
       const newVol = Number(updateData.volume);
       if (Number.isFinite(newVol) && Math.abs(oldVol - newVol) > 0.001) {
@@ -66,36 +94,15 @@ export async function PUT(request: NextRequest) {
     }
 
     // ==================== 2b. ЗАПРЕТ РУЧНОГО ПЕРЕВОДА В "ВЫПОЛНЕНА" БЕЗ РЕАЛЬНОЙ РАЗГРУЗКИ ====================
-    // Заявка #604 (18.07.2026) показала обходной путь бага #589: диспетчер
-    // руками выбрала в селекторе статус "Выполнена", пока миксер так и
-    // остался в статусе "Загрузка" (даже не выехал). В отличие от
-    // автозавершения при разгрузке (см. lib/orderMixers.ts), эта ручная
-    // смена статуса вообще не проверяла миксеры — отсюда и заявки
-    // "Выполнена" с рейсом, зависшим в очереди на загрузку у оператора.
-    // Правило то же самое, что и для автозавершения: все рейсы разгружены
-    // и их суммарный объём покрывает объём заявки. Если рейсов нет вообще —
-    // не блокируем (могут быть заявки без миксеров, напр. отменённые).
-    if (!isFinalOrder && updateData.status === 'completed') {
-      const { data: mixersForCheck } = await supabase
-        .from('order_mixers')
-        .select('volume, status')
-        .eq('order_id', id);
-
-      const mixers = mixersForCheck || [];
-      if (mixers.length > 0) {
-        const allUnloaded = mixers.every((m: any) => m?.status === 'Разгружен');
-        const totalDelivered = mixers.reduce((sum: number, m: any) => sum + Number(m?.volume || 0), 0);
-        const effectiveVolume = updateData.volume !== undefined ? Number(updateData.volume) : Number(currentOrder.volume || 0);
-        const VOLUME_EPSILON = 0.01;
-
-        if (!allUnloaded || totalDelivered < effectiveVolume - VOLUME_EPSILON) {
-          return NextResponse.json({
-            success: false,
-            message: allUnloaded
-              ? `Нельзя завершить заявку — разгружено ${totalDelivered} м³ из ${effectiveVolume} м³. Добавьте недостающий объём или поправьте объём миксера.`
-              : 'Нельзя завершить заявку — не все рейсы разгружены. Переведите миксеры в статус "Разгружен".',
-          }, { status: 400 });
-        }
+    // В т.ч. админский override cancelled/completed → completed.
+    if (nextStatus === 'completed' && currentOrder.status !== 'completed') {
+      const effectiveVolume =
+        updateData.volume !== undefined
+          ? Number(updateData.volume)
+          : Number(currentOrder.volume || 0);
+      const check = await assertManualCompleteAllowed(supabase, id, effectiveVolume);
+      if (!check.ok) {
+        return NextResponse.json({ success: false, message: check.message }, { status: 400 });
       }
     }
 
@@ -132,14 +139,6 @@ export async function PUT(request: NextRequest) {
       user_id: 'клиента'
     };
 
-    // Русские названия статусов
-    const statusNames: Record<string, string> = {
-      new: 'Новая',
-      processing: 'В работе',
-      completed: 'Выполнена',
-      cancelled: 'Отменена'
-    };
-
     // Метку «Под вопросом» обновляем отдельно через compare-and-swap:
     // несколько параллельных PUT (баг чекбокса / двойной клик) иначе все читают
     // старое false и пишут в историю по 3–4 одинаковые записи за одну секунду.
@@ -174,9 +173,12 @@ export async function PUT(request: NextRequest) {
         let actionText = `Изменил ${fieldNames[field] || field}`;
 
         if (field === 'status') {
-          const oldStatusName = statusNames[oldStr] || oldStr;
-          const newStatusName = statusNames[newStr] || newStr;
+          const oldStatusName = ORDER_STATUS_RU[oldStr] || oldStr;
+          const newStatusName = ORDER_STATUS_RU[newStr] || newStr;
           actionText = `Изменил статус заявки с "${oldStatusName}" на "${newStatusName}"`;
+          if (isFinalOrder && isAdmin) {
+            actionText += ' (админ: правка конечного статуса)';
+          }
         } 
         else if (field === 'grade') {
           actionText = `Изменил марку бетона с ${oldStr || '—'} на ${newStr || '—'}`;
@@ -321,24 +323,18 @@ export async function PUT(request: NextRequest) {
 
    // console.log(`✅ Заявка #${id} успешно обновлена. Новый статус: ${updateData.status || currentOrder.status}`);
 
-    // Закрытие/отмена → вычистить призраков плана («нет в заявке»)
     const newStatus = updateData.status != null ? String(updateData.status) : null;
-    if (
-      newStatus &&
-      (newStatus === 'completed' || newStatus === 'cancelled') &&
-      String(currentOrder.status) !== newStatus
-    ) {
-      try {
-        await pruneGhostTripsFromLogisticsPlan({
-          supabase,
-          orderIds: [id],
-          deliveryDate: currentOrder.delivery_date,
-          removeAllOrderIds: newStatus === 'cancelled' ? [id] : undefined,
-          actorName: finalUserName,
-        });
-      } catch (e) {
-        console.warn('pruneGhostTrips after order status:', e);
-      }
+    if (newStatus && String(currentOrder.status) !== newStatus) {
+      await applyOrderStatusSideEffects({
+        supabase,
+        orderId: Number(id),
+        oldStatus: String(currentOrder.status),
+        newStatus,
+        deliveryDate: currentOrder.delivery_date,
+        referredBy: currentOrder.referred_by,
+        volume: updateData.volume !== undefined ? updateData.volume : currentOrder.volume,
+        actorName: finalUserName,
+      });
     }
 
     return NextResponse.json({ 

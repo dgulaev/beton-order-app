@@ -130,7 +130,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Заявка не найдена' }, { status: 404 });
     }
 
-    if (FINAL_STATUSES.includes(currentOrder.status)) {
+    const addAuth = await requireAdminCifraStaff(request, ORDER_MIXER_DELETE_ROLES);
+    if (addAuth.error) {
+      return NextResponse.json({ error: 'Нет доступа к назначению рейса' }, { status: 403 });
+    }
+
+    if (FINAL_STATUSES.includes(currentOrder.status) && addAuth.user.role !== 'admin') {
       return NextResponse.json({
         error: `Заявка уже в финальном статусе "${STATUS_LABELS_RU[currentOrder.status] || currentOrder.status}" — добавление миксеров запрещено`
       }, { status: 400 });

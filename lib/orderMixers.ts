@@ -90,6 +90,8 @@ export interface UpdateOrderMixerStatusParams {
    * на уровне самого UPDATE (см. ниже), просто без подробного сообщения.
    */
   expectedStatus?: string;
+  /** Админ может менять рейсы даже на финальной заявке. */
+  allowAdminFinalOverride?: boolean;
 }
 
 export interface UpdateOrderMixerStatusResult {
@@ -140,7 +142,17 @@ export async function resolveUnloadAllowanceMinutes(mixerName: string | null | u
 }
 
 export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParams): Promise<UpdateOrderMixerStatusResult> {
-  const { id, status, loading_started_at, podvizhnost, userName, userRole, timestampOverride, expectedStatus } = params;
+  const {
+    id,
+    status,
+    loading_started_at,
+    podvizhnost,
+    userName,
+    userRole,
+    timestampOverride,
+    expectedStatus,
+    allowAdminFinalOverride,
+  } = params;
 
   if (!id) {
     return { httpStatus: 400, body: { success: false, message: 'id обязателен' } };
@@ -203,7 +215,12 @@ export async function updateOrderMixerStatus(params: UpdateOrderMixerStatusParam
     };
   }
 
-  if (effectiveStatus && FINAL_ORDER_STATUSES.includes(orderStatus)) {
+  // Админ может править рейсы и на финальной заявке (после ошибочного статуса).
+  if (
+    effectiveStatus
+    && FINAL_ORDER_STATUSES.includes(orderStatus)
+    && !allowAdminFinalOverride
+  ) {
     return {
       httpStatus: 400,
       body: {

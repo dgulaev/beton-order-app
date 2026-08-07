@@ -1016,12 +1016,11 @@ useEffect(() => {
     try {
       const res = await fetch('/api/adminCifra/order-mixers/status', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminCifraAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           id: mixerId,
           status: newStatus,
           userName: userFullName || 'Диспетчер',
-          userRole: userRole || 'admin',
           expectedStatus: oldStatus,
         })
       });
