@@ -1,0 +1,70 @@
+---
+description: Прод на Mac mini — разработка, деплой, БД, бекапы, откаты
+alwaysApply: true
+---
+
+# Прод = Mac mini (после cutover 08.08.2026)
+
+## Где что живёт
+
+| Что | Где |
+|-----|-----|
+| Прод-сайт | `https://tradecom.keenetic.link` (Caddy → Next `:3000`) |
+| Прод-БД | локальный **Supabase в Docker на Mac mini** — **главная / единственная боевая** |
+| Avito webhook | `https://tradecom.keenetic.link/api/webhooks/avito?...` |
+| Vercel | production **на паузе** — не прод |
+| Облачный Supabase | не прод; оплату отключить после 1–2 дней стабильности |
+| Ноут | свой Docker Supabase `127.0.0.1:54321` — только разработка |
+
+## Цикл разработки (ноут → завод)
+
+1. На ноуте: Docker + `npx supabase start` + `npm run dev` (локальная БД).
+2. Правки → коммит (русский, дата/время, bump при деплое) → `git push origin main`.
+3. На Mac mini: `~/concrete-beton-app/scripts/deploy-from-git.sh`
+   (`git pull` → `npm install` → `npm run build` → `launchctl kickstart` Next).
+4. Push **сам** сайт на заводе не обновляет — без `deploy-from-git.sh` выкатки нет.
+
+Если менялась **схема БД** (SQL/RLS/таблицы): файл в git → проверить на ноуте → push → на mini `psql -f …` на **прод-БД**, затем/вместе с deploy кода.
+
+См. также `deploy-workflow.mdc`.
+
+## База данных (mini — главная)
+
+| Направление | Можно? |
+|-------------|--------|
+| Mini → GitHub (`db-backups/backup-*.sql.gz`) | да, штатный ночной бэкап |
+| GitHub → ноут (restore для dev) | да |
+| Ноут → mini полным дампом | **нет** |
+| Постоянно писать с ноута в БД mini | **нет** (только редкий хотфикс) |
+| Схема/RLS | SQL в git → `psql` на каждой машине отдельно |
+
+- `.env.local` разный; с mini на ноут **не** копировать `tradecom...`.
+- На mini: `NEXT_PUBLIC_SUPABASE_URL=https://tradecom.keenetic.link/supabase`, `SUPABASE_URL=http://127.0.0.1:54321`.
+- На ноуте: оба URL `http://127.0.0.1:54321`.
+
+### Broadcast / «Нет связи»
+
+Не чинить в `lib/supabase*`. Нужны Caddy `handle /supabase*` + правильный `NEXT_PUBLIC_SUPABASE_URL` + rebuild после смены `NEXT_PUBLIC_*`.
+
+## Бекапы на GitHub
+
+- Источник правды по данным бэкапа: **прод на mini** → `scripts/backup-db-to-github.sh` → push в `db-backups/`.
+- Crontab на mini ~05:00 МСК (см. план Шаг 8).
+- Облачный GitHub Action `db-backup.yml` после стабилизации **отключить** (иначе путаница со старыми облачными дампами).
+
+## Откаты
+
+- **Код:** `git revert` / откат коммита на ноуте → push → на mini снова `deploy-from-git.sh`. История — GitHub `main`.
+- **Данные:** restore из `db-backups/backup-*.sql.gz` **только на mini** и только по явной команде Дмитрия (это простой прод).
+- Откат кода **не** откатывает данные автоматически.
+
+## Роли агентов
+
+- **Агент ноута** — код, коммиты, push, локальная БД ноута, сборка. Не делает restore/webhook на прод без роли mini.
+- **Агент mini** — `deploy-from-git.sh`, Caddy/launchd/cron, smoke, бэкапы, restore прода, webhook — по явной команде.
+- Статусы между чатами: `ноут: …` / `mini: …`.
+- Триггеры: «задеплой» / «закоммить и задеплой», «накати бекап», «можно Avito webhook», «стоп, ждём другую сторону».
+
+## План
+
+`.cursor/plans/переход_на_mac_mini.plan.md` + `mac-mini-migration-plan.mdc`.
