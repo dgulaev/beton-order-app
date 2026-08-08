@@ -1,9 +1,13 @@
 # Автоматические бэкапы базы данных
 
-Эта папка хранит ежедневные сжатые дампы Supabase-базы (`backup-YYYY-MM-DD.sql.gz`).
-Создаются автоматически GitHub Action'ом `.github/workflows/db-backup.yml`
-каждый день в 05:00 по Москве. Хранятся последние 30 дней, старые удаляются
-автоматически.
+Эта папка хранит ежедневные сжатые дампы (`backup-YYYY-MM-DD.sql.gz`).
+
+**После cutover (08.08.2026):** источник — **прод на Mac mini**  
+(`scripts/backup-db-to-github.sh`, crontab `0 5 * * *` МСК).  
+Облачный GitHub Action `.github/workflows/db-backup.yml` **отключён**
+(`if: false`, без schedule) — чтобы не класть устаревшие дампы из supabase.com.
+
+Хранятся roughly последние 30 дней (ротация в скрипте на mini / раньше в Action).
 
 Дамп: `pg_dump --no-owner` (без привязки к OWNER), **с ACL** — в файл
 попадают `GRANT`/`REVOKE` для ролей `anon` / `authenticated` / `service_role`

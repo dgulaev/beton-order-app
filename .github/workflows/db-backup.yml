@@ -1,18 +1,19 @@
 name: Database Backup
 
-# Ежедневный бэкап базы Supabase в этот же репозиторий (папка db-backups/).
-# Требует секрет SUPABASE_DB_URL (см. инструкцию в db-backups/README.md).
+# ОТКЛЮЧЕНО после cutover на Mac mini (08.08.2026).
+# Прод-бэкапы: scripts/backup-db-to-github.sh на mini (crontab 05:00 МСК).
+# Этот workflow больше не должен писать облачные дампы в db-backups/.
+# Ручной запуск из Actions тоже отключён (if: false). Файл оставлен для истории.
 
 on:
-  schedule:
-    - cron: '0 2 * * *' # 02:00 UTC = 05:00 (МСК)
-  workflow_dispatch: {} # позволяет запустить бэкап вручную из вкладки Actions
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
 jobs:
   backup:
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
