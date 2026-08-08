@@ -1,0 +1,17 @@
+# Публичный HTTPS (Шаг 9).
+# Next :3000 + локальный Supabase Kong :54321 под префиксом /supabase
+# NEXT_PUBLIC_SUPABASE_URL=https://tradecom.keenetic.link/supabase
+# SUPABASE_URL (сервер Next) может оставаться http://127.0.0.1:54321
+
+tradecom.keenetic.link {
+	encode gzip
+
+	# Важно: /supabase* (не /supabase/*) — иначе /supabase/rest/v1/... не матчится
+	handle /supabase* {
+		uri strip_prefix /supabase
+		reverse_proxy 127.0.0.1:54321
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}

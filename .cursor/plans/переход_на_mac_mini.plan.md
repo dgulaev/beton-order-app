@@ -1,6 +1,6 @@
 ---
 name: Переход на Mac mini
-overview: "Пошаговый перенос продакшена с Vercel/Supabase Cloud на Mac mini M4 (16/256): локальный Supabase в Docker Desktop, Next.js через `npm run start`, кроны через macOS crontab, проверка дампа и смоук-тесты до/после cutover."
+overview: "ЕДИНСТВЕННЫЙ план перехода. Шаги 0–12 (Шаг 11 = деплой на mini; Шаг 12 = бэкап кода в GitHub как раньше). Полный текст: .cursor/plans/переход_на_mac_mini.plan.md — открой как файл (Cmd+P). Фраза с Mac mini: «Сейчас пишу с Mac mini сервера. Папка: ~/…. Продолжаем .cursor/plans/переход_на_mac_mini.plan.md. Сейчас на шаге: …»"
 todos:
   - id: precheck-dev
     content: "Перед cutover: финальный коммит+деплой на Vercel (уже делали, повторить), свежий GitHub db-backup, ручной curl трёх кронов"
@@ -21,7 +21,7 @@ todos:
     content: "Удалённое управление: SSH + Screen Sharing в LAN; снаружи — Tailscale; шпаргалка launchctl/docker/логи"
     status: pending
   - id: local-crons
-    content: "macOS crontab: ВСЕ кроны с задуманными интервалами (см. scripts/cron-schedules.md + Фаза 4), scout-sync */2, scout-sensors-daily 23:50; ENABLE_LOCAL_CRONS=0; curl-проверка"
+    content: "Шаг 6: crontab со ВСЕМИ задуманными интервалами (cron-schedules.md), scout-sync */2; ENABLE_LOCAL_CRONS=0"
     status: pending
   - id: local-backups-github
     content: Локальный pg_dump → скрипт → git push в GitHub; отключить облачный db-backup.yml после cutover
@@ -32,10 +32,55 @@ todos:
   - id: local-backups-cutover
     content: Cutover закладок операторов, пауза Vercel production
     status: pending
+  - id: post-cutover-deploy-db-sync
+    content: "Шаг 11: деплой с ноутбука на mini (git+deploy.sh); локальный Supabase на ноуте; миграции SQL в git"
+    status: pending
+  - id: code-backup-github
+    content: "Шаг 12: бэкап кода на GitHub — commit+push в main как раньше (история = бэкап); .env.local не коммитить"
+    status: pending
 isProject: false
 ---
 
 # План перехода на локальный сервер (Mac mini M4)
+
+> **Защита файла:** это единственный полный план. Не перезаписывать через CreatePlan / старую копию панели Plan.  
+> Маркеры целостности: есть `## Порядок исполнения` и `## Шаг 12`. Если их нет — файл битый, восстановить из `~/.cursor/plans/переход_на_mac_mini_*.plan.md` или git.  
+> Правило: `.cursor/rules/mac-mini-migration-plan.mdc`.
+
+## Порядок исполнения (оглавление)
+
+Идти **строго сверху вниз: Шаг 0 → Шаг 12**. В этом файле разделы идут **в том же порядке**, что и номера шагов.  
+Блоки «Для агента», «Исходная точка», «Железо», «SQL-дамп» — справочно.
+
+- **Шаг 0.** До переноса (ноутбук) — коммит, build, свежий db-backup  
+- **Шаг 1.** Подготовка Mac mini — Docker, Node, sleep off, копия проекта  
+- **Шаг 2.** База: Docker + Supabase + restore дампа  
+- **Шаг 3.** `.env.local` на Mac mini  
+- **Шаг 4.** Приложение: `npm run build` + `npm run start`  
+- **Шаг 5.** Автозапуск после сбоя питания (launchd)  
+- **Шаг 6.** Кроны — задуманные интервалы (включая scout-sync `*/2`)  
+- **Шаг 7.** Удалённый доступ (SSH, Tailscale, Screen Sharing)  
+- **Шаг 8.** Бэкапы **прод-БД с Mac mini** → GitHub по cron каждую ночь (`db-backups/*.sql.gz`) — как сейчас облачный backup, только источник = локальный Supabase  
+- **Шаг 9.** Интернет: Keenetic + `tradecom.keenetic.link` + Caddy  
+- **Шаг 10.** Cutover — день переключения с Vercel  
+- **Шаг 11.** Деплой с ноутбука на Mac mini + синхронизация БД ← аналог деплоя на Vercel  
+- **Шаг 12.** Бэкап кода на GitHub ← **как раньше: commit + push, история в репо**
+
+После переезда ежедневно: **Шаг 12** (сохранить код в GitHub) → **Шаг 11** (выкатить на mini).
+
+### Фраза-триггер с Mac mini (для пустого чата)
+
+```
+Сейчас пишу с Mac mini сервера. Папка: ~/ПУТЬ_К_ПРОЕКТУ.
+Продолжаем .cursor/plans/переход_на_mac_mini.plan.md. Сейчас на шаге: N.
+```
+
+Агент обязан прочитать этот файл и продолжить с указанного шага (история чата с ноутбука не переносится).
+
+> **Где читать план:** открой файл `.cursor/plans/переход_на_mac_mini.plan.md` через `Cmd+P` / Explorer.  
+> Боковая панель «Plan» в Cursor часто показывает только краткий overview и todos — **не весь текст** (поэтому «Порядок исполнения» и фраза-триггер там могут быть не видны).
+
+---
 
 ## Для агента Cursor — пустой чат на Mac mini (прочитай первым)
 
@@ -65,10 +110,12 @@ isProject: false
 7. Ключевые решения уже приняты (не пересогласовывать без нужды):
    - БД: **локальный Supabase в Docker**, не голый Postgres;
    - приложение: `npm run build` + `npm run start`, автозапуск через **launchd** + скрипт;
-   - кроны: **macOS crontab** с **задуманными** интервалами из [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md) + **Фаза 4** (не копировать урезанный Hobby/`vercel.json`);
+   - кроны: **macOS crontab** с **задуманными** интервалами из [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md) + **Шаг 6** (не копировать урезанный Hobby/`vercel.json`);
    - админка удалённо: **SSH + Screen Sharing + Tailscale**;
    - публичный сайт: **Keenetic** домен **`https://tradecom.keenetic.link`**, проброс **80/443**, **Caddy** → `:3000` (не светить голый 3000 в интернет);
-   - бэкапы после cutover: скрипт на mini → **git push** в `db-backups/`, облачный Action отключить.
+   - бэкапы БД после cutover: скрипт на mini → **git push** в `db-backups/` (**Шаг 8**);
+   - бэкап кода: с ноута commit + `git push origin main` как раньше (**Шаг 12**);
+   - после cutover: деплой на mini «push → pull+build» (**Шаг 11**); БД: две среды + миграции в git.
 8. Секреты (`.env.local`, пароли, ключи) **не коммитить** и не светить лишний раз в чат.
 9. Если пользователь только копирует план без всего репо — всё равно вести по этому файлу; недостающие скрипты (`start-local-server.sh`, `backup-db-to-github.sh`, `Caddyfile`, `cron-curl.sh`) создать на mini по тексту плана.
 
@@ -82,7 +129,7 @@ isProject: false
 
 **Что из-за этого сделано на облаке сейчас (`vercel.json`):**
 
-- суточные jobs оставлены (dismiss, avito, demand, callout×3, competitor-prices, planner-learn, scout-sensors-daily) — каждый слот ≤1×/сутки;
+- суточные jobs оставлены (dismiss, avito, demand, callout×3, competitor-prices, planner-learn, scout-sensors-daily, **nerudas-road-control** раз в месяц) — каждый слот ≤1×/сутки;
 - **`/api/cron/scout-sync` (GPS каждые 2 мин) в vercel.json НЕТ** — Hobby запрещает `*/2`;
 - до cutover GPS крутит [`lib/localCrons.ts`](lib/localCrons.ts) при `next dev`/`next start` вне Vercel (`ENABLE_LOCAL_CRONS` не `0`).
 
@@ -90,7 +137,8 @@ isProject: false
 
 - `scout-sync` → crontab `*/2 * * * *`
 - `scout-sensors-daily` → `50 23 * * *` МСК
-- остальные суточные слоты МСК как в Фазе 4
+- `nerudas-road-control` → `40 6 1 * *` МСК (1-го числа; прогон ~10–20 мин — на mini без таймаута Vercel)
+- остальные суточные слоты МСК как в Шаге 6
 - в `.env.local`: **`ENABLE_LOCAL_CRONS=0`** (чтобы не дублировать СКАУТ с процессом Next)
 - **запрещено** ставить на mini только то, что в `vercel.json`, без `scout-sync */2`
 
@@ -106,7 +154,7 @@ isProject: false
    - есть `.env.local` с локальными Supabase-ключами + `CRON_SECRET` + `ENABLE_LOCAL_CRONS=0` (после настройки crontab)
    - `npm install` при необходимости → `npm run build` → приложение через launchd или временно `npm run start`
    - `curl -I http://127.0.0.1:3000`
-4. Настроить **полный** crontab из **Фазы 4** (все строки, включая `*/2` scout-sync).
+4. Настроить **полный** crontab из **Шага 6** (все строки, включая `*/2` scout-sync).
 5. Ручная проверка кронов:
    ```bash
    npm run cron:scout
@@ -120,8 +168,7 @@ isProject: false
    ```
 6. Дальше по плану: launchd автозапуск → Tailscale/SSH → KeenDNS `tradecom.keenetic.link` + Caddy → бэкапы в GitHub → cutover Vercel.
 
-**Фраза-триггер от Дмитрия (пример):**  
-«Сейчас пишу с Mac mini сервера. Папка: `~/….` Продолжаем `.cursor/plans/переход_на_mac_mini.plan.md`. Сейчас на шаге: …»
+Фраза-триггер — см. блок сразу под **«Порядок исполнения»** (начало файла).
 
 ### Как перенести `.cursor` на Mac mini (скрытая папка)
 
@@ -146,7 +193,7 @@ isProject: false
 
 ## Исходная точка (сейчас)
 
-> **⚠ Кроны при cutover:** на локальном сервере выставить **задуманные** интервалы для **всех** jobs — см. [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md) и **Фазу 4**.  
+> **⚠ Кроны при cutover:** на локальном сервере выставить **задуманные** интервалы для **всех** jobs — см. [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md) и **Шаг 6**.  
 > То, что сейчас в `vercel.json`, — облачный компромисс (Hobby: не чаще 1 cron/сутки на job; GPS `scout-sync` из vercel убран). **Не копировать урезанное облачное расписание на mini.**
 
 - Приложение: Next.js на **Vercel**, кроны в `[vercel.json](vercel.json)` (UTC):
@@ -157,8 +204,9 @@ isProject: false
   - `/api/cron/competitor-prices` — `0 7 * * *` UTC (= **10:00 МСК**)
   - `/api/cron/planner-learn` — `20 20 * * *` UTC (= **23:20 МСК**)
   - `/api/cron/scout-sensors-daily` — `50 20 * * *` UTC (= **23:50 МСК**) — суточные датчики СКАУТ → БД
+  - `/api/cron/nerudas-road-control` — `40 3 1 * *` UTC (= **06:40 МСК 1-го числа**) — весы/Платон с nerudas.ru → слой на карте (~10–20 мин; на Vercel может оборваться по `maxDuration`, на mini — без лимита)
   - **`/api/cron/scout-sync` (GPS каждые 2 мин)** — **задумано** `*/2`, на Vercel Hobby **не в расписании**; до cutover крутит `[lib/localCrons.ts](lib/localCrons.ts)` / crontab на Mac
-- **Локально (ноутбук / до cutover):** Vercel Cron не работает. Пока крутится `next dev` / `next start` **не на Vercel**, СКАУТ (GPS + проверка daily) поднимает `instrumentation.ts` → `[lib/localCrons.ts](lib/localCrons.ts)`. Выключить: `ENABLE_LOCAL_CRONS=0`. Ручной вызов: `npm run cron:scout` / `npm run cron:scout-sensors`.
+- **Локально (ноутбук / до cutover):** Vercel Cron не работает. Пока крутится `next dev` / `next start` **не на Vercel**, СКАУТ (GPS + проверка daily) поднимает `instrumentation.ts` → `[lib/localCrons.ts](lib/localCrons.ts)`. Выключить: `ENABLE_LOCAL_CRONS=0`. Ручной вызов: `npm run cron:scout` / `npm run cron:scout-sensors` / `npm run cron:nerudas`.
 - БД: **Supabase Cloud**; ежедневный дамп в `[db-backups/](db-backups/)` (workflow `[.github/workflows/db-backup.yml](.github/workflows/db-backup.yml)`).
 - Свежий снимок уже в репо: `db-backups/backup-2026-07-28.sql.gz` (~500 КБ) — нормальный размер, не «пустой» 20-байтный gzip.
 - Приложение ходит в Supabase URL + anon/service_role + Realtime (`[lib/supabaseClient.ts](lib/supabaseClient.ts)`, `[lib/supabaseAdmin.ts](lib/supabaseAdmin.ts)`) — **голый Postgres в Docker недостаточен**. В Docker Desktop поднимаем **локальный стек Supabase** (`npx supabase start`).
@@ -252,7 +300,7 @@ M4 для этого стека избыточен в хорошем смысл�
 
 ---
 
-## Рекомендации до переноса (проверить на текущем компе)
+## Шаг 0. До переноса (проверить на ноутбуке)
 
 Сделай это **до** копирования папки на Mac mini.
 
@@ -277,17 +325,306 @@ M4 для этого стека избыточен в хорошем смысл�
 
 ---
 
-## Фаза 0. Подготовка Mac mini (железо и софт)
+## Шаг 1. Подготовка Mac mini (железо и софт)
 
-1. Установить: **Docker Desktop**, **Node.js LTS** (20 или 22; сейчас на дев-машине v25 — на сервере лучше LTS), **Git**, клиент Postgres (`brew install libpq` → `psql`, `pg_dump`).
-2. Включить Docker Desktop, дождаться «Engine running».
-3. Отключить sleep, включить автологин и «Restart after power failure» (см. раздел автозапуска ниже), зафиксировать статический LAN IP (через роутер DHCP reservation).
-4. Скопировать проект на Mac mini (AirDrop / внешний диск / `rsync` / `git clone` + свежий дамп). Рекомендуемый путь: `~/concrete-beton-app`.
-5. **Не копировать** `node_modules` и `.next` — на месте: `npm ci` или `npm install`.
+Цель шага: на чистом (или почти чистом) Mac mini поставить всё ПО, настроить питание/сеть и положить проект в `~/concrete-beton-app` **без** `node_modules` / `.next`.  
+После этого шага ещё нет работающего сайта — только готовая машина. Дальше → **Шаг 2** (БД).
+
+### 1.1. Обновить macOS и открыть Терминал
+
+1. Системные настройки → Основные → Обновление ПО — поставить доступные обновления (по возможности).
+2. Открыть **Терминал** (Программы → Утилиты → Терминал).
+3. Все команды ниже — в Терминале на Mac mini, если не сказано иное.
+
+### 1.2. Установить Homebrew (если ещё нет)
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+После установки Apple Silicon обычно нужно добавить brew в PATH (скрипт установки сам подскажет), например:
+
+```bash
+echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
+eval "$(/opt/homebrew/bin/brew shellenv)"
+brew --version
+```
+
+### 1.3. Docker Desktop
+
+1. Скачать с https://www.docker.com/products/docker-desktop/ вариант **Mac (Apple chip)** для M4.
+2. Открыть `.dmg` → перетащить Docker в Программы → запустить **Docker**.
+3. Принять лицензию / войти в аккаунт Docker (можно Skip, если предлагает).
+4. Дождаться в строке меню иконки кита и статуса вроде **Docker Desktop is running** / Engine running.
+5. Проверка:
+
+```bash
+docker version
+docker info
+```
+
+Оба без ошибки «Cannot connect to the Docker daemon».
+
+6. **Resources** (Docker Desktop → Settings → Resources):
+   - Memory: **8 GB** (на Mac mini 16 GB);
+   - Swap: 1–2 GB;
+   - Disk image: не раздувать заранее (ориентир до ~64 GB).
+7. General: включить **Start Docker Desktop when you sign in** (пригодится на Шаге 5).
+
+Русского интерфейса у Docker Desktop нет — это нормально.
+
+### 1.4. Node.js LTS (не v25 с дев-машины)
+
+На сервере лучше **LTS 20 или 22**, не bleeding-edge.
+
+Вариант через Homebrew:
+
+```bash
+brew install node@22
+# если brew напишет про PATH — выполнить его подсказку, затем:
+node -v    # ожидаем v22.x
+npm -v
+```
+
+Или через официальный установщик с https://nodejs.org/ (кнопка LTS).
+
+Не ставь на сервер то же v25 «потому что на ноуте так» — LTS стабильнее для `npm run start` 24/7.
+
+### 1.5. Git
+
+```bash
+brew install git
+git --version
+```
+
+Настройка имени для коммитов на mini нужна в основном боту бэкапов БД (Шаг 8); для обычного кода push идёт с ноутбука:
+
+```bash
+git config --global user.name "Mac mini server"
+git config --global user.email "server@local"
+```
+
+### 1.6. Клиент Postgres (`psql`, `pg_dump`)
+
+Нужен для restore дампа (Шаг 2) и ночных бэкапов (Шаг 8):
+
+```bash
+brew install libpq
+brew link --force libpq
+# или добавить в PATH, если brew так подскажет:
+# echo 'export PATH="/opt/homebrew/opt/libpq/bin:$PATH"' >> ~/.zprofile
+# source ~/.zprofile
+
+psql --version
+pg_dump --version
+```
+
+### 1.7. Проверка установленных версий (чеклист)
+
+```bash
+brew --version
+docker info >/dev/null && echo docker_ok
+node -v
+npm -v
+git --version
+psql --version
+pg_dump --version
+```
+
+Все команды должны отвечать без «command not found».
+
+### 1.8. Питание: sleep off, автологин, restart after power failure
+
+Чтобы после блекаута машина сама ожила (детали автозапуска приложения — **Шаг 5**):
+
+```bash
+sudo pmset -a autorestart 1
+sudo pmset -a sleep 0 displaysleep 10 disksleep 0
+pmset -g | grep -E 'autorestart|sleep'
+```
+
+Ожидание: `autorestart 1`, `sleep 0`.
+
+**Автологин:** Системные настройки → Пользователи и группы → Параметры входа → **Автоматический вход** → пользователь сервера.  
+Без автологина Docker Login Items и launchd пользователя после блекаута могут не стартовать.
+
+**FileVault:** для сервера без присмотра лучше выключен (иначе после сбоя нужен пароль диска вручную).
+
+### 1.9. Статический LAN IP (через Keenetic)
+
+Чтобы проброс портов и закладки не «плыли»:
+
+1. На Mac mini узнать текущий IP и MAC:
+
+```bash
+ipconfig getifaddr en0    # Wi‑Fi; для Ethernet часто en1
+ifconfig en0 | grep ether
+```
+
+2. В веб-морде Keenetic → список устройств → найти Mac mini → **постоянный IP** / DHCP reservation (например `192.168.1.50`).
+3. Переподключить сеть / перезагрузить mini → снова `ipconfig getifaddr en0` — адрес должен совпасть с зарезервированным.
+4. Записать IP в заметки — понадобится на Шагах 7 и 9.
+
+### 1.10. Скопировать проект на Mac mini
+
+Рекомендуемый путь: **`~/concrete-beton-app`**.
+
+**Что копировать:** код, `.cursor/` (план!), `db-backups/` со свежим дампом, `.env.local` можно отдельно (не в git).  
+**Что НЕ копировать:** `node_modules/`, `.next/` — тяжёлые и под другую машину; ставятся на месте.
+
+#### Способ A — git clone (предпочтительно, если код уже в GitHub)
+
+```bash
+cd ~
+git clone <URL_РЕПО> concrete-beton-app
+cd concrete-beton-app
+git checkout main
+git pull
+ls .cursor/plans/переход_на_mac_mini.plan.md
+ls db-backups/backup-*.sql.gz | tail -3
+```
+
+`.env.local` после clone создать вручную (Шаг 3) — в git его нет.
+
+#### Способ B — копия папки с ноутбука (флешка / AirDrop / диск)
+
+На **ноутбуке** (пример на внешний том `USB`):
+
+```bash
+rsync -a --exclude node_modules --exclude .next \
+  ~/concrete-beton-app/ /Volumes/USB/concrete-beton-app/
+```
+
+Или в Finder: `Cmd+Shift+.` чтобы видеть `.cursor`, копировать всю папку проекта.  
+На Mac mini: перенести в `~/concrete-beton-app`.
+
+Проверка:
+
+```bash
+ls ~/concrete-beton-app/package.json
+ls ~/concrete-beton-app/.cursor/plans/переход_на_mac_mini.plan.md
+```
+
+### 1.11. Установить зависимости npm (без запуска сайта)
+
+```bash
+cd ~/concrete-beton-app
+npm install
+# или, если есть package-lock.json и хочешь строгую установку:
+# npm ci
+```
+
+Пока **не** обязательно `npm run build` — это Шаг 4, после БД и `.env.local`.  
+Сейчас достаточно, что `node_modules` появился.
+
+### 1.12. Чеклист Шага 1 — можно идти дальше?
+
+- [ ] Homebrew установлен
+- [ ] Docker Desktop: Engine running, Memory 8 GB, Start at login
+- [ ] Node LTS 20/22 (`node -v`), npm ок
+- [ ] Git, `psql`, `pg_dump` в PATH
+- [ ] `autorestart 1`, sleep выключен, автологин включён
+- [ ] Постоянный LAN IP на Keenetic, IP записан
+- [ ] Проект в `~/concrete-beton-app`, план `.cursor/plans/переход_на_mac_mini.plan.md` на месте
+- [ ] Свежий `db-backups/backup-*.sql.gz` есть (для Шага 2)
+- [ ] `npm install` выполнен; `node_modules` есть; `.next` ещё может не быть
+
+**Следующий шаг: Шаг 2** — поднять локальный Supabase и накатить дамп.
 
 ---
 
-## Автозапуск после сбоя питания / закрытия терминала
+## Что входит в SQL-дамп (ответ про скрипты / RLS)
+
+Дамп — это снимок **живого состояния облачной Postgres на момент `pg_dump`**, не «файлов скриптов из репо».
+
+**Да, подтянется всё, что уже применено в облаке:**
+
+- таблицы и данные (`CREATE TABLE` + `COPY`/inserts);
+- RLS (`ENABLE ROW LEVEL SECURITY`) и политики (`CREATE POLICY`);
+- функции/триггеры склада и прочего (`warehouse_*`, broadcast, balance и т.д.);
+- `GRANT` / `REVOKE` (ACL) для `anon` / `authenticated` / `service_role`;
+- схемы `auth` (пользователи логина), `public`, служебные куски Supabase.
+
+Проверка по текущему `backup-2026-07-28.sql.gz`: около 89 таблиц, ~72 RLS, ~36 политик, десятки функций — дамп полноценный (~4 МБ в разжатом виде).
+
+**Правило про ваши SQL-скрипты:**
+
+- скрипт **уже выполняли** в Supabase Cloud (SQL Editor / `psql`) → изменения в БД → попадут в следующий backup;
+- скрипт только лежит в `scripts/*.sql`, но в облако **не накатывали** → в дампе его **не будет** (нужно либо накатить в облако до backup, либо прогнать на локали после restore).
+
+**Не входит / отдельно:**
+
+- бинарные файлы Storage (сами объекты); метаданные buckets могут быть, файлы — нет (у вас Storage почти пустой — ок);
+- секреты из Vercel / `.env.local` — это не БД;
+- код Next.js — только через git/копию папки.
+
+Перед cutover: финальный Database Backup **после** последних правок схемы в облаке.
+
+---
+
+## Шаг 2. База: Docker + локальный Supabase + restore
+
+1. В корне проекта:
+  ```bash
+   npx supabase init   # если ещё нет supabase/config.toml
+   npx supabase start
+   npx supabase status # URL, anon key, service_role key, DB URL
+  ```
+2. Восстановить **самый свежий** дамп (после ручного backup в день переноса):
+  ```bash
+   gunzip -c db-backups/backup-YYYY-MM-DD.sql.gz | psql "$LOCAL_DB_URL"
+  ```
+   `LOCAL_DB_URL` — из `supabase status` (обычно `postgresql://postgres:postgres@127.0.0.1:54322/postgres`).
+3. Нюансы restore (ожидаемо):
+  - дамп содержит `public` + системные схемы Supabase; при ошибках на `auth`/`storage`/`realtime` — оставить системные схемы стека, главное чтобы поднялись таблицы приложения (`warehouse_*`, заказы, `mobile_notifications`, `integration_settings`, MEKA и т.д.);
+  - роли `anon` / `authenticated` / `service_role` уже есть в локальном стеке; ACL из дампа как раз для них.
+4. Проверка БД:
+  - несколько ключевых таблиц (`\dt public.*` в `psql`);
+  - свежие строки заказов/отгрузок по датам;
+  - логин пользователя админки (Auth).
+
+---
+
+## Шаг 3. `.env.local` на Mac mini
+
+Собрать env из текущего `.env.local` + Vercel Dashboard + ключей `supabase status`.
+
+Обязательные:
+
+- `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_URL` → локальный API (обычно `http://127.0.0.1:54321`)
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `SUPABASE_ANON_KEY` → локальный anon
+- `SUPABASE_SERVICE_ROLE_KEY` → локальный service_role
+- `CRON_SECRET` — тот же или новый длинный секрет
+- `NEXT_PUBLIC_APP_URL` → сначала `http://<LAN-IP>:3000`, после интернета — `https://tradecom.keenetic.link`
+
+Перенести без потерь (если используются):
+
+- `DADATA_API_KEY`
+- `MAX_BOT_TOKEN`, `MANAGER_CHAT_ID`
+- `AVITO_CLIENT_ID`, `AVITO_CLIENT_SECRET`, `AVITO_USER_ID`, `AVITO_WEBHOOK_SECRET`, `AVITO_DEMAND_MESSENGER`
+- `GOSPLAN_*`, `DEMAND_*` (см. `[scripts/leads-marketplace-env.example](scripts/leads-marketplace-env.example)`)
+
+Важно: после переключения URL/ключей на локальный Supabase облачная БД больше не используется приложением на Mac mini. Облако можно оставить как read-only fallback до финального cutover.
+
+---
+
+## Шаг 4. Приложение: build + `npm run start`
+
+```bash
+cd ~/concrete-beton-app
+npm install
+npm run build
+npm run start
+# слушает :3000
+```
+
+Смоук с другого ПК/телефона в LAN: `http://<IP-Mac-mini>:3000` — логин, заказы, склад, мобильная админка.
+
+Для повседневной работы завода **не держать** Terminal открытым: подключить launchd (раздел «Автозапуск»). Ручной `npm run start` — только для первой проверки или отладки (перед этим остановить агент через `launchctl bootout`).
+
+---
+
+## Шаг 5. Автозапуск после сбоя питания
 
 Цель: после отключения электричества Mac mini сам включается, логинится, поднимает Docker → Supabase → `npm run start`, без открытия окна Terminal вручную.
 
@@ -456,7 +793,83 @@ launchctl bootout gui/$(id -u)/com.concrete.local-server
 
 ---
 
-## Удалённый доступ к Mac mini (управление процессами)
+## Шаг 6. Кроны (macOS crontab, задуманные интервалы)
+
+Vercel Cron на Mac mini не работает. Оставляем обычный `next start`, расписание — **системный crontab** (часовой пояс Mac = **МСК**).
+
+### Обязательно: задуманные интервалы для ВСЕХ кронов
+
+На Vercel часть расписания урезана (Hobby). **На локальном сервере вернуть целевую схему** — полная таблица: [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md).
+
+| Job | crontab МСК (задумано) | Зачем |
+|-----|------------------------|--------|
+| dismiss-notifications | `1 0 * * *` | сброс уведомлений |
+| avito-sync | `15 8 * * *` | Авито polling |
+| demand-radar | `0 9 * * *` | радар спроса |
+| callout-winners | `30 9`, `0 14`, `0 18` | победители ЕИС |
+| competitor-prices | `0 10 * * *` | прайсы конкурентов |
+| planner-learn | `20 23 * * *` | калибровка планировщика |
+| **scout-sensors-daily** | **`50 23 * * *`** | суточные датчики СКАУТ → БД |
+| **scout-sync (GPS)** | **`*/2 * * * *`** | телематика → карта парка |
+| **nerudas-road-control** | **`40 6 1 * *`** (1-го числа 06:40) | весы/Платон nerudas.ru → слой карты; лог в `road_control_sync_runs` |
+
+Чеклист агента на Фазе 4: в crontab есть **каждая** строка из таблицы выше (не только dismiss/avito/demand/scout).
+
+**СКАУТ GPS:** эндпоинт [`/api/cron/scout-sync`](app/api/cron/scout-sync/route.ts), интервал **каждые 2 минуты** — как задумано изначально. На ноутбуке до cutover тот же sync крутит `lib/localCrons.ts`. На Mac mini после cutover — **только crontab**, in-process выключить:
+
+```bash
+# в .env.local на Mac mini:
+ENABLE_LOCAL_CRONS=0
+```
+
+Иначе СКАУТ будут дергать и crontab, и процесс Next — лишняя нагрузка.
+
+```bash
+crontab -e
+```
+
+Полный набор (подставить `CRON_SECRET` и путь `ИМЯ`; предпочтительно `scripts/cron-curl.sh` — секрет из `.env.local`):
+
+```cron
+# === Задуманные интервалы (МСК). См. scripts/cron-schedules.md ===
+1 0 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/dismiss-notifications >> /tmp/cron-dismiss.log 2>&1
+15 8 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/avito-sync >> /tmp/cron-avito.log 2>&1
+0 9 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/demand-radar >> /tmp/cron-demand.log 2>&1
+30 9 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/callout-winners >> /tmp/cron-callout.log 2>&1
+0 14 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/callout-winners >> /tmp/cron-callout.log 2>&1
+0 18 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/callout-winners >> /tmp/cron-callout.log 2>&1
+0 10 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/competitor-prices >> /tmp/cron-competitors.log 2>&1
+20 23 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/planner-learn >> /tmp/cron-planner.log 2>&1
+50 23 * * * /Users/ИМЯ/concrete-beton-app/scripts/cron-curl.sh scout-sensors-daily >> /tmp/cron-scout-sensors.log 2>&1
+# Телематика СКАУТ GPS → карта парка (каждые 2 мин) — ОБЯЗАТЕЛЬНО на local
+*/2 * * * * /Users/ИМЯ/concrete-beton-app/scripts/cron-curl.sh scout-sync >> /tmp/cron-scout.log 2>&1
+# Весы / Платон (nerudas.ru) — 1-го числа 06:40 МСК; прогон ~10–20 мин, без лимита Vercel
+40 6 1 * * /Users/ИМЯ/concrete-beton-app/scripts/cron-curl.sh nerudas-road-control >> /tmp/cron-nerudas.log 2>&1
+```
+
+Проверка сразу (не ждать расписания):
+
+```bash
+npm run cron:scout
+npm run cron:scout-sensors
+npm run cron:nerudas
+# или
+bash scripts/cron-curl.sh scout-sync
+bash scripts/cron-curl.sh scout-sensors-daily
+bash scripts/cron-curl.sh nerudas-road-control
+```
+
+Ожидание GPS: HTTP 200, JSON с `success`, `mapped`, `snapshotsUpdated`. В UI «Парк на карте» бейдж **«Обновлено N мин назад»** уходит к 0–2 мин.
+
+Ожидание nerudas: HTTP 200, JSON с `success`, `upserted`, `inserted`, `updated`; в UI легенды карты — **«обновлено ДД.ММ · N точ.»** (таблица `road_control_sync_runs`).
+
+Остальные `curl` — HTTP 200 и JSON без `Unauthorized`.
+
+Секцию `"crons"` в `[vercel.json](vercel.json)` на Mac mini можно не трогать (без Vercel не используется); после окончательного ухода с Vercel — убрать, чтобы не путать. **Источник правды на mini — crontab + [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md), не облачный vercel.json.**
+
+---
+
+## Шаг 7. Удалённый доступ (SSH, Tailscale, Screen Sharing)
 
 Цель: с ноутбука/телефона перезапустить Next/Docker/Supabase, смотреть логи, обновлять код — **без поездки к серверу**.  
 Операторы по-прежнему ходят в приложение по LAN (`http://<IP>:3000`). Удалёнка ниже — для **тебя как админа**.
@@ -855,171 +1268,15 @@ sudo lsof -iTCP:5900 -sTCP:LISTEN
 
 ---
 
-## Что входит в SQL-дамп (ответ про скрипты / RLS)
+## Шаг 8. Бэкапы локальной БД → GitHub
 
-Дамп — это снимок **живого состояния облачной Postgres на момент `pg_dump`**, не «файлов скриптов из репо».
+**Да — прод-база на Mac mini будет бэкапиться на GitHub по cron**, как сейчас облачная.  
+Сейчас: GitHub Action раз в сутки → `db-backups/backup-YYYY-MM-DD.sql.gz`.  
+После cutover: **crontab на mini в 05:00 МСК** → `pg_dump` локального Supabase → тот же `db-backups/` → `git push` в GitHub. Файлы в репо те же по смыслу.
 
-**Да, подтянется всё, что уже применено в облаке:**
+После cutover прод — Postgres в Docker на Mac mini. Облачный Action `[.github/workflows/db-backup.yml](.github/workflows/db-backup.yml)` на `SUPABASE_DB_URL` **уже не отражает прод** (раннер не видит БД на mini) — его отключаем; вместо него скрипт на сервере.
 
-- таблицы и данные (`CREATE TABLE` + `COPY`/inserts);
-- RLS (`ENABLE ROW LEVEL SECURITY`) и политики (`CREATE POLICY`);
-- функции/триггеры склада и прочего (`warehouse_*`, broadcast, balance и т.д.);
-- `GRANT` / `REVOKE` (ACL) для `anon` / `authenticated` / `service_role`;
-- схемы `auth` (пользователи логина), `public`, служебные куски Supabase.
-
-Проверка по текущему `backup-2026-07-28.sql.gz`: около 89 таблиц, ~72 RLS, ~36 политик, десятки функций — дамп полноценный (~4 МБ в разжатом виде).
-
-**Правило про ваши SQL-скрипты:**
-
-- скрипт **уже выполняли** в Supabase Cloud (SQL Editor / `psql`) → изменения в БД → попадут в следующий backup;
-- скрипт только лежит в `scripts/*.sql`, но в облако **не накатывали** → в дампе его **не будет** (нужно либо накатить в облако до backup, либо прогнать на локали после restore).
-
-**Не входит / отдельно:**
-
-- бинарные файлы Storage (сами объекты); метаданные buckets могут быть, файлы — нет (у вас Storage почти пустой — ок);
-- секреты из Vercel / `.env.local` — это не БД;
-- код Next.js — только через git/копию папки.
-
-Перед cutover: финальный Database Backup **после** последних правок схемы в облаке.
-
----
-
-## Фаза 1. База: Docker Desktop + локальный Supabase + restore
-
-1. В корне проекта:
-  ```bash
-   npx supabase init   # если ещё нет supabase/config.toml
-   npx supabase start
-   npx supabase status # URL, anon key, service_role key, DB URL
-  ```
-2. Восстановить **самый свежий** дамп (после ручного backup в день переноса):
-  ```bash
-   gunzip -c db-backups/backup-YYYY-MM-DD.sql.gz | psql "$LOCAL_DB_URL"
-  ```
-   `LOCAL_DB_URL` — из `supabase status` (обычно `postgresql://postgres:postgres@127.0.0.1:54322/postgres`).
-3. Нюансы restore (ожидаемо):
-  - дамп содержит `public` + системные схемы Supabase; при ошибках на `auth`/`storage`/`realtime` — оставить системные схемы стека, главное чтобы поднялись таблицы приложения (`warehouse_*`, заказы, `mobile_notifications`, `integration_settings`, MEKA и т.д.);
-  - роли `anon` / `authenticated` / `service_role` уже есть в локальном стеке; ACL из дампа как раз для них.
-4. Проверка БД:
-  - несколько ключевых таблиц (`\dt public.*` в `psql`);
-  - свежие строки заказов/отгрузок по датам;
-  - логин пользователя админки (Auth).
-
----
-
-## Фаза 2. `.env.local` на Mac mini
-
-Собрать env из текущего `.env.local` + Vercel Dashboard + ключей `supabase status`.
-
-Обязательные:
-
-- `NEXT_PUBLIC_SUPABASE_URL` / `SUPABASE_URL` → локальный API (обычно `http://127.0.0.1:54321`)
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `SUPABASE_ANON_KEY` → локальный anon
-- `SUPABASE_SERVICE_ROLE_KEY` → локальный service_role
-- `CRON_SECRET` — тот же или новый длинный секрет
-- `NEXT_PUBLIC_APP_URL` → сначала `http://<LAN-IP>:3000`, после интернета — `https://tradecom.keenetic.link`
-
-Перенести без потерь (если используются):
-
-- `DADATA_API_KEY`
-- `MAX_BOT_TOKEN`, `MANAGER_CHAT_ID`
-- `AVITO_CLIENT_ID`, `AVITO_CLIENT_SECRET`, `AVITO_USER_ID`, `AVITO_WEBHOOK_SECRET`, `AVITO_DEMAND_MESSENGER`
-- `GOSPLAN_*`, `DEMAND_*` (см. `[scripts/leads-marketplace-env.example](scripts/leads-marketplace-env.example)`)
-
-Важно: после переключения URL/ключей на локальный Supabase облачная БД больше не используется приложением на Mac mini. Облако можно оставить как read-only fallback до финального cutover.
-
----
-
-## Фаза 3. Приложение: build + `npm run start`
-
-```bash
-cd ~/concrete-beton-app
-npm install
-npm run build
-npm run start
-# слушает :3000
-```
-
-Смоук с другого ПК/телефона в LAN: `http://<IP-Mac-mini>:3000` — логин, заказы, склад, мобильная админка.
-
-Для повседневной работы завода **не держать** Terminal открытым: подключить launchd (раздел «Автозапуск»). Ручной `npm run start` — только для первой проверки или отладки (перед этим остановить агент через `launchctl bootout`).
-
----
-
-## Фаза 4. Кроны под локальный сервер (macOS crontab)
-
-Vercel Cron на Mac mini не работает. Оставляем обычный `next start`, расписание — **системный crontab** (часовой пояс Mac = **МСК**).
-
-### Обязательно: задуманные интервалы для ВСЕХ кронов
-
-На Vercel часть расписания урезана (Hobby). **На локальном сервере вернуть целевую схему** — полная таблица: [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md).
-
-| Job | crontab МСК (задумано) | Зачем |
-|-----|------------------------|--------|
-| dismiss-notifications | `1 0 * * *` | сброс уведомлений |
-| avito-sync | `15 8 * * *` | Авито polling |
-| demand-radar | `0 9 * * *` | радар спроса |
-| callout-winners | `30 9`, `0 14`, `0 18` | победители ЕИС |
-| competitor-prices | `0 10 * * *` | прайсы конкурентов |
-| planner-learn | `20 23 * * *` | калибровка планировщика |
-| **scout-sensors-daily** | **`50 23 * * *`** | суточные датчики СКАУТ → БД |
-| **scout-sync (GPS)** | **`*/2 * * * *`** | телематика → карта парка |
-
-Чеклист агента на Фазе 4: в crontab есть **каждая** строка из таблицы выше (не только dismiss/avito/demand/scout).
-
-**СКАУТ GPS:** эндпоинт [`/api/cron/scout-sync`](app/api/cron/scout-sync/route.ts), интервал **каждые 2 минуты** — как задумано изначально. На ноутбуке до cutover тот же sync крутит `lib/localCrons.ts`. На Mac mini после cutover — **только crontab**, in-process выключить:
-
-```bash
-# в .env.local на Mac mini:
-ENABLE_LOCAL_CRONS=0
-```
-
-Иначе СКАУТ будут дергать и crontab, и процесс Next — лишняя нагрузка.
-
-```bash
-crontab -e
-```
-
-Полный набор (подставить `CRON_SECRET` и путь `ИМЯ`; предпочтительно `scripts/cron-curl.sh` — секрет из `.env.local`):
-
-```cron
-# === Задуманные интервалы (МСК). См. scripts/cron-schedules.md ===
-1 0 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/dismiss-notifications >> /tmp/cron-dismiss.log 2>&1
-15 8 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/avito-sync >> /tmp/cron-avito.log 2>&1
-0 9 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/demand-radar >> /tmp/cron-demand.log 2>&1
-30 9 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/callout-winners >> /tmp/cron-callout.log 2>&1
-0 14 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/callout-winners >> /tmp/cron-callout.log 2>&1
-0 18 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/callout-winners >> /tmp/cron-callout.log 2>&1
-0 10 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/competitor-prices >> /tmp/cron-competitors.log 2>&1
-20 23 * * * curl -s -H "Authorization: Bearer CRON_SECRET" http://127.0.0.1:3000/api/cron/planner-learn >> /tmp/cron-planner.log 2>&1
-50 23 * * * /Users/ИМЯ/concrete-beton-app/scripts/cron-curl.sh scout-sensors-daily >> /tmp/cron-scout-sensors.log 2>&1
-# Телематика СКАУТ GPS → карта парка (каждые 2 мин) — ОБЯЗАТЕЛЬНО на local
-*/2 * * * * /Users/ИМЯ/concrete-beton-app/scripts/cron-curl.sh scout-sync >> /tmp/cron-scout.log 2>&1
-```
-
-Проверка сразу (не ждать расписания):
-
-```bash
-npm run cron:scout
-npm run cron:scout-sensors
-# или
-bash scripts/cron-curl.sh scout-sync
-bash scripts/cron-curl.sh scout-sensors-daily
-```
-
-Ожидание GPS: HTTP 200, JSON с `success`, `mapped`, `snapshotsUpdated`. В UI «Парк на карте» бейдж **«Обновлено N мин назад»** уходит к 0–2 мин.
-
-Остальные `curl` — HTTP 200 и JSON без `Unauthorized`.
-
-Секцию `"crons"` в `[vercel.json](vercel.json)` на Mac mini можно не трогать (без Vercel не используется); после окончательного ухода с Vercel — убрать, чтобы не путать. **Источник правды на mini — crontab + [`scripts/cron-schedules.md`](../../scripts/cron-schedules.md), не облачный vercel.json.**
-
----
-
-## Фаза 5. Бэкапы локальной БД → GitHub
-
-После cutover прод — это Postgres внутри Docker на Mac mini. GitHub Action `[.github/workflows/db-backup.yml](.github/workflows/db-backup.yml)` ходит в **облачный** `SUPABASE_DB_URL` и **больше не отражает прод** (раннер GitHub не видит `127.0.0.1` на mini).
-
-Схема: **Mac mini сам** делает `pg_dump`, кладёт файл в `db-backups/`, коммитит и пушит в GitHub — тот же каталог и идея, что сейчас.
+Схема: **Mac mini сам** делает `pg_dump`, кладёт файл в `db-backups/`, коммитит и пушит в GitHub.
 
 ```mermaid
 flowchart LR
@@ -1182,7 +1439,7 @@ gunzip -c db-backups/backup-YYYY-MM-DD.sql.gz | psql "postgresql://postgres:post
 
 ---
 
-## Доступ из интернета: Keenetic Ultra + KeenDNS (staff и водители)
+## Шаг 9. Доступ из интернета (Keenetic + tradecom.keenetic.link)
 
 Цель: staff и водители открывают приложение с телефона/дома по красивому имени, **бесплатно**, сервис **не зарубежный** (Keenetic / KeenDNS стабильно работает в РФ).  
 У тебя на роутере уже есть **статический (белый) IP** — это как раз нужный режим.
@@ -1293,9 +1550,22 @@ brew install caddy
 
 ```caddyfile
 tradecom.keenetic.link {
-  reverse_proxy 127.0.0.1:3000
+	encode gzip
+
+	# Важно: /supabase* (не /supabase/*) — иначе /supabase/rest/v1/... не матчится
+	# Фикс broadcast / «Нет связи»: браузер ходит в /supabase, не в 127.0.0.1 клиента
+	handle /supabase* {
+		uri strip_prefix /supabase
+		reverse_proxy 127.0.0.1:54321
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
 }
 ```
+
+На mini в `.env.local`: `NEXT_PUBLIC_SUPABASE_URL=https://tradecom.keenetic.link/supabase`,
+`SUPABASE_URL=http://127.0.0.1:54321`. На ноуте оба URL — `http://127.0.0.1:54321` (не копировать tradecom).
 
 Проверка и запуск:
 
@@ -1396,16 +1666,310 @@ https://tradecom.keenetic.link/api/webhooks/avito?secret=...
 
 ---
 
-## Фаза 6. Cutover (день переключения)
+## Шаг 10. Cutover (день переключения)
 
 1. Заморозить запись в облако / договориться о «тихом часе» (или принять небольшой рассинхрон).
 2. Финальный manual backup из облака → скачать/забрать `backup-*.sql.gz`.
-3. Restore на локальный Supabase (Фаза 1).
-4. Обновить `.env.local`, `npm run build` + автозапуск.
-5. Проверить кроны вручную.
-6. Проброс + Caddy на **`https://tradecom.keenetic.link`** → выдать staff/водителям эту ссылку.
+3. Restore на локальный Supabase (**Шаг 2**).
+4. Обновить `.env.local`, `npm run build` + автозапуск (**Шаги 3–5**).
+5. Проверить кроны вручную (**Шаг 6**).
+6. Проброс + Caddy на **`https://tradecom.keenetic.link`** (**Шаг 9**) → выдать staff/водителям эту ссылку.
 7. На Vercel: поставить на паузу / отключить production (чтобы не писали в старую облачную БД параллельно).
 8. Avito: webhook на `https://tradecom.keenetic.link/api/webhooks/avito?secret=...`; до этого — `avito-sync` по cron.
+9. Со следующего дня работать по **Шагу 11** (деплой с ноутбука + синхронизация БД).
+10. **После стабилизации cutover** (сайт/кроны/бэкапы с mini ок, Vercel не прод, ноут на своём локальном Supabase): на [supabase.com](https://supabase.com) — **pause или удалить облачный проект / отменить платный план**, чтобы не платить за неиспользуемую облачную БД. Не делать в день cutover «сразу»; сначала 1–2 дня уверенности + свежие дампы уже с mini в GitHub. Облачный `db-backup.yml` к этому моменту уже отключён (**Шаг 8**).
+
+---
+
+## Шаг 11. Деплой с ноутбука на Mac mini и синхронизация БД
+
+> **Это пункт про деплой «как на Vercel.com» после переезда.**  
+> Номер в оглавлении: **Шаг 11**. Ежедневная работа после cutover — здесь.
+
+Цель: дорабатывать программу на своём компе «как раньше», а выкатывать на завод **примерно как push в Vercel** — но на Mac mini. База прод — Docker на mini; на ноутбуке — **своя** локальная БД; схема/RLS/настройки ездят через **git + SQL-миграции**, а не через «две базы пишут друг в друга».
+
+```mermaid
+flowchart TB
+  subgraph laptop [Ноутбук Дмитрия]
+    CodeDev[код + SQL миграции]
+    SupaDev[локальный Supabase Docker]
+    CodeDev --> SupaDev
+    CodeDev --> GitHub[GitHub main]
+  end
+  subgraph mini [Mac mini завод]
+    Deploy[deploy.sh pull build restart]
+    SupaProd[Supabase Docker ПРОД]
+    App[Next npm start]
+    Deploy --> App
+    Migrate[psql apply migration] --> SupaProd
+    App --> SupaProd
+  end
+  GitHub --> Deploy
+  GitHub --> Migrate
+  SupaProd -->|ночные дампы db-backups| GitHub
+  GitHub -->|редко: restore дампа для теста| SupaDev
+```
+
+### Главное правило (не ломать прод)
+
+- **Код Next.js:** ноут → GitHub → Mac mini (`git push` + `deploy-from-git.sh`).
+- **Схема БД / RLS / функции / новые таблицы:** ноут → файл в git → `psql -f` на mini.
+- **Секреты `.env.local`:** не в git; правятся руками на каждой машине.
+- **Боевые данные (заказы, склад, GPS):** mini → дампы в GitHub → иногда restore на ноут для теста; с ноута полным дампом **не** затирать прод.
+- **Настройки интеграций в таблице:** SQL/seed в git или правка на mini + тот же SQL в репо (не два «правды» без файла).
+
+**Не делать:** постоянно работать ноутбуком напрямую в прод-БД на mini (через Tailscale). Для срочного хотфикса — можно один раз, для фич — нет.
+
+---
+
+### A. База на ноутбуке после отказа от облака
+
+1. На ноутбуке тоже Docker Desktop + `npx supabase start` (отдельный стек, не путать с mini).
+2. `.env.local` на ноуте указывает на **локальные** URL/ключи ноутбука (`127.0.0.1:54321` и т.д.).
+3. Один раз наполнить dev-данные: свежий `db-backups/backup-*.sql.gz` с GitHub (это снимок **прода с mini**) → restore в локальный Supabase ноута.
+4. Дальше крутишь `npm run dev` против своей БД: можно ломать, откатывать, накатывать скрипты без страха за завод.
+
+Периодически (раз в неделю / перед крупной фичей) обновлять копию:
+
+```bash
+git pull
+gunzip -c db-backups/backup-YYYY-MM-DD.sql.gz | psql "$NOTEBOOK_LOCAL_DB_URL"
+```
+
+(или пересоздать volume и restore заново, если схема сильно разъехалась).
+
+---
+
+### B. Деплой кода: аналог «задеплоил на Vercel»
+
+Как сейчас: правка → коммит → push в `main` → Vercel сам собирает.  
+Как будет: правка → коммит → push в `main` → **на Mac mini** pull + build + рестарт.
+
+#### B1. Скрипт на Mac mini `scripts/deploy-from-git.sh`
+
+Создать на сервере (агент может положить в репо):
+
+```bash
+#!/bin/bash
+set -euo pipefail
+APP_DIR="${APP_DIR:-$HOME/concrete-beton-app}"
+cd "$APP_DIR"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+echo "$(date '+%F %T') deploy start" | tee -a logs/deploy.log
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+
+npm install
+npm run build
+
+# перезапуск Next (launchd)
+launchctl kickstart -k "gui/$(id -u)/com.concrete.local-server"
+
+echo "$(date '+%F %T') deploy done" | tee -a logs/deploy.log
+```
+
+`chmod +x scripts/deploy-from-git.sh`
+
+#### B2. Одна команда с ноутбука (как «задеплой»)
+
+Через Tailscale / LAN SSH:
+
+```bash
+ssh ИМЯ@100.x.x.x '~/concrete-beton-app/scripts/deploy-from-git.sh'
+# или
+ssh ИМЯ@192.168.x.x '~/concrete-beton-app/scripts/deploy-from-git.sh'
+```
+
+Можно алиас на ноуте в `~/.zshrc`:
+
+```bash
+alias deploy-zavod='ssh ИМЯ@100.x.x.x ~/concrete-beton-app/scripts/deploy-from-git.sh'
+```
+
+Дальше привычный цикл:
+
+```bash
+# на ноутбуке
+git add -A && git commit -m "…" && git push origin main
+deploy-zavod
+```
+
+#### B3. Порядок как у Vercel (дисциплина)
+
+1. Проверить локально: `npm run build`, смоук на своём Supabase.
+2. Закоммитить и запушить в `main` (или PR → merge — как решите; для завода достаточно `main`).
+3. `deploy-zavod` — дождаться build на mini.
+4. Проверить `https://tradecom.keenetic.link` и критичный сценарий.
+5. Если менялась БД — **сначала** миграция на mini (п. C), потом или вместе с деплоем кода (часто: миграция → deploy кода, если код ждёт новые колонки).
+
+**Не коммитить с Mac mini обычный код** — mini только `git pull` (+ бот бэкапов в `db-backups/`). Иначе будут конфликты с ноутбуком.
+
+---
+
+### C. Синхронизация схемы и настроек БД (полная «логическая» синхронизация)
+
+Сейчас DDL часто лежит в `scripts/*-schema.sql` и накатывается вручную. После cutover закрепляем процесс:
+
+#### C1. Любое изменение БД = файл в git
+
+Примеры:
+
+- новая таблица / колонка / индекс;
+- RLS / `CREATE POLICY`;
+- функция склада / триггер;
+- строка-настройка в `system_settings` / шаблон, которую должны видеть обе среды.
+
+Кладём в репо, например:
+
+- `scripts/migrations/2026-08-06-add-foo.sql`  
+  или продолжаем `scripts/foo-schema.sql`, но **всегда коммитим до деплоя кода**, который это использует.
+
+В начале файла — комментарий: зачем, идемпотентность (`IF NOT EXISTS` где возможно).
+
+#### C2. Накатить у себя (ноут)
+
+```bash
+psql "$NOTEBOOK_LOCAL_DB_URL" -f scripts/migrations/2026-08-06-add-foo.sql
+# проверить в приложении на localhost
+```
+
+#### C3. Накатить на прод (Mac mini)
+
+После `git pull` (или внутри `deploy-from-git.sh` отдельным шагом / вручную по SSH):
+
+```bash
+ssh ИМЯ@100.x.x.x
+cd ~/concrete-beton-app
+git pull --ff-only
+psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" -f scripts/migrations/2026-08-06-add-foo.sql
+# затем deploy / kickstart если ещё не делали
+```
+
+Опционально позже: `npm run db:migrate` который гоняет все ещё не применённые файлы из папки (таблица `schema_migrations`) — можно добавить, когда надоест руками.
+
+#### C4. Настройки интеграций и «как в облаке правили SQL Editor»
+
+- Секреты Avito/СКАУТ и т.п. — в `.env.local` на mini (и при необходимости на ноуте для теста).
+- Значения в `integration_settings` / справочники: либо SQL upsert в миграции, либо один раз правишь на mini после проверки на ноуте и **дублируешь SQL в git**, чтобы не потерять.
+- Не считать «я поправил только в Studio на mini» достаточным — через месяц на ноуте схемы не будет.
+
+#### C5. Чего не делать с данными
+
+- **Не** делать `pg_dump` с ноута и restore поверх прод-БД mini «чтобы синхронизировать» — сотрёшь заказы завода.
+- **Не** поднимать два приложения (ноут + mini), пишущих в одну БД.
+- Дампы mini → GitHub — это бэкап и источник для **обновления dev-копии**, не канал деплоя схемы.
+
+---
+
+### D. Ежедневный рабочий цикл (шпаргалка)
+
+**Фича только в коде**
+
+1. Ноут: код против локального Supabase → ок.
+2. `git push origin main`
+3. `deploy-zavod`
+4. Смоук на `tradecom.keenetic.link`
+
+**Фича с БД**
+
+1. Ноут: написать `scripts/migrations/….sql` → `psql` на локальную БД → код → ок.
+2. Коммит: SQL + код вместе (или SQL чуть раньше).
+3. На mini: `git pull` → `psql -f …` → `deploy-from-git.sh` (или сначала миграция, потом deploy).
+4. Смоук на проде.
+
+**Нужны свежие боевые данные на ноуте**
+
+1. Дождаться ночного бэкапа с mini в GitHub (или ручной `backup-db-to-github.sh`).
+2. `git pull` на ноуте → restore дампа в **свой** локальный Supabase (не в прод).
+
+---
+
+### E. Чеклист «как Vercel + синхрон БД»
+
+- [ ] На ноуте свой `supabase start` + `.env.local` на локаль
+- [ ] Прод-БД только на Mac mini; ноут в неё не пишет при обычной работе
+- [ ] `scripts/deploy-from-git.sh` на mini; с ноута `ssh … deploy-from-git.sh`
+- [ ] Алиас `deploy-zavod` (по желанию)
+- [ ] Любой DDL/RLS/настройка → файл в git → apply на ноуте → apply на mini
+- [ ] Секреты только в `.env.local` каждой машины
+- [ ] Дампы: mini → GitHub → иногда restore на ноут; никогда ноут-дамп → прод
+- [ ] Код с mini не пушить (кроме бота `db-backups/`)
+- [ ] После стабилизации: supabase.com — pause/удалить проект / отменить оплату (не в день cutover)
+
+### F. Инструкция агенту на Mac mini / ноуте после cutover
+
+Если Дмитрий говорит «задеплой на завод» / «как на Vercel»:
+
+1. Убедиться, что изменения закоммичены и в `origin/main`.
+2. По SSH на mini запустить `deploy-from-git.sh` (или создать скрипт, если ещё нет).
+3. Если в коммите есть SQL — напомнить/выполнить `psql -f` на mini **до или сразу после** деплоя кода (порядок: сначала миграция, если код ломается без колонок).
+4. Не предлагать «просто восстановить дамп с ноута на mini».
+5. Для проверки фичи на ноуте — локальный Supabase; для проверки «как у завода» — после деплоя смоук на `tradecom.keenetic.link`.
+
+---
+
+## Шаг 12. Бэкап кода на GitHub (как раньше)
+
+> Отдельно от **Шага 8** (там бэкап **базы** `db-backups/*.sql.gz`).  
+> Здесь — бэкап **исходного кода** приложения в том же GitHub-репозитории.
+
+### Зачем
+
+После ухода с Vercel код всё равно должен жить на GitHub: история коммитов = бэкап, откат, копия не только на диске Mac mini / ноутбука.  
+Схема **та же, что была**: поработал → закоммитил → `git push origin main`. Раньше push ещё и деплоил на Vercel; теперь push = сохранить код (+ потом **Шаг 11** выкатывает на mini).
+
+### Что хранится на GitHub
+
+- Весь код Next.js, `scripts/`, планы в `.cursor/plans/` (если закоммичены), конфиги без секретов.
+- История веток/коммитов — можно откатиться на любой день.
+- Вместе с **Шагом 8**: в репо же лежат дампы БД в `db-backups/` (их пушит mini по ночам).
+
+### Что НЕ класть в git
+
+- `.env.local`, пароли, ключи Avito/СКАУТ/CRON (только на машинах).
+- `node_modules/`, `.next/` — ставятся заново (`npm install` / `build`).
+
+### Как делать каждый день (с ноутбука)
+
+После осмысленной порции работы (или перед деплоем на завод):
+
+```bash
+cd ~/concrete-beton-app   # путь на ноуте
+git status
+git add -A
+# не добавлять .env.local — проверить git status
+git commit -m "$(cat <<'EOF'
+Кратко что сделали — ДД.ММ.ГГГГ ЧЧ:ММ
+
+EOF
+)"
+git push origin main
+```
+
+Сообщения коммитов — **на русском**, с датой/временем (как в правилах репо).
+
+Потом при необходимости деплой на mini (**Шаг 11**):
+
+```bash
+deploy-zavod
+# или: ssh … ~/concrete-beton-app/scripts/deploy-from-git.sh
+```
+
+### Дисциплина
+
+- Не оставлять готовый код только на ноуте или только на mini без push.
+- С Mac mini **не** пушить обычный код (только бот бэкапов БД из Шага 8). Разработка и push кода — с ноутбука.
+- Репозиторий на GitHub должен быть **private** (как сейчас), раз в коде/дампах могут быть чувствительные данные завода.
+- По желанию: теги релизов `git tag -a v2026-08-06 -m "…" && git push --tags` перед крупным cutover.
+
+### Чеклист Шага 12
+
+- [ ] Репо на GitHub private, доступ с ноута на `git push` есть
+- [ ] После правок стабильно: commit + `git push origin main`
+- [ ] `.env.local` в `.gitignore`, в remote не уезжает
+- [ ] Понятно: Шаг 8 = БД, Шаг 12 = код, Шаг 11 = выкатка на mini
 
 ---
 
@@ -1419,13 +1983,16 @@ https://tradecom.keenetic.link/api/webhooks/avito?secret=...
 - [ ] Cron-эндпоинты (dismiss / avito / demand / **scout-sync**) отвечают 200 с `CRON_SECRET`
 - [ ] crontab записан (МСК-времена), включая **`*/2` scout-sync**; на mini `ENABLE_LOCAL_CRONS=0`
 - [ ] Карта парка: после 2–4 мин без ручной кнопки бейдж «Обновлено» свежий; broadcast двигает маркеры
-- [ ] Nightly `backup-db-to-github.sh`: дамп + push в `db-backups/` на GitHub
+- [ ] Nightly `backup-db-to-github.sh`: дамп + push в `db-backups/` на GitHub (**Шаг 8**)
+- [ ] Код регулярно в GitHub: commit + push с ноута (**Шаг 12**)
 - [ ] Облачный `db-backup.yml` отключён после cutover
 - [ ] Mac mini не уходит в sleep; `autorestart 1`; автологин
 - [ ] Docker Start at login + launchd агент; после ребута сайт поднимается сам
 - [ ] SSH + Screen Sharing; Tailscale **Connected** на mini/ноутбуке, Start at login, `ssh`/`vnc` по `100.x.x.x`; удалённый `kickstart` работает
 - [ ] `https://tradecom.keenetic.link` (проброс 80/443 + Caddy); с LTE staff/водители логинятся
 - [ ] Vercel больше не является продом (после стабилизации)
+- [ ] После cutover: ноут со своим Supabase; `deploy-from-git.sh` + цикл push→deploy; миграции БД только через SQL в git
+- [ ] Облачный проект на supabase.com: pause/удалён / платный план отменён (после 1–2 дней стабильной работы на mini; чтобы не платить за облако)
 
 ## Оценка времени
 
@@ -1433,7 +2000,8 @@ https://tradecom.keenetic.link/api/webhooks/avito?secret=...
 - Restore + env + build/start: ~1–2 ч
 - Кроны + смоук + cutover: ~1–2 ч
 - Удалёнка (SSH + Screen Sharing + Tailscale): ~30–60 мин
-- Локальный бэкап → GitHub (скрипт + crontab + отключение облачного Action): ~30–45 мин
+- Локальный бэкап БД → GitHub (скрипт + crontab): ~30–45 мин
+- Бэкап кода → GitHub: тот же привычный commit/push (без отдельного времени)
 - Keenetic KeenDNS + проброс + Caddy HTTPS: ~1–2 ч
 - Avito webhook на новый домен — после стабильного HTTPS
 

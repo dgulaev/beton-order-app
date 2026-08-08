@@ -34,9 +34,12 @@ async function runScoutSync() {
       return;
     }
     const result = await syncScoutTelemetry();
-    console.log(
-      `[local-cron scout-sync] ok=${result.ok} mapped=${result.mapped ?? 0} snapshots=${result.snapshotsUpdated ?? 0}`,
-    );
+    // Успех молча — иначе каждые 2 мин засоряет терминал next dev.
+    if (!result.ok) {
+      console.warn(
+        `[local-cron scout-sync] ok=false mapped=${result.mapped ?? 0} snapshots=${result.snapshotsUpdated ?? 0}`,
+      );
+    }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error('[local-cron scout-sync]', message);
